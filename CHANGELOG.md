@@ -345,12 +345,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   program at its usual 1500 Hz sent at 14.1505 MHz, past a General's 14.150 MHz data limit. A key already held drops
   if you retune that close to an edge, and stays off until the program keys again; the connection
   log says how far the program's audio could reach. If the radio reports a different sideband
-  than Nexus set (DATA-L after a front-panel change), that side is checked too. In a CW-only
+  than Nexus set (DATA-L after a front-panel change), that side is checked too; AM is checked on
+  both sides of the dial and FM as Nexus checks its own FM, so a General at 14.026 MHz whose radio
+  was switched to AM is refused. A retune from Nexus keeps the radio's last reported mode for this
+  check until the radio is read again. The mode is read between overs, so a change at the radio
+  during an over counts from the next one. In a CW-only
   segment, such as 50.0-50.1 MHz, other programs can key only while the radio is in CW. In Phone
   and CW the check is the one Nexus applies to its own voice and CW, and Nexus's own transmissions
   are judged as before. On 60 m, a key from a channel's USB dial (5.3305, 5.3465, 5.3715 or
   5.4035 MHz, within 50 Hz) is judged at the channel as before, since a channel is narrower than
-  3 kHz; anywhere else on a channel, and in the 60 m segment, the whole passband is checked.
+  3 kHz, and only while the radio reports upper sideband (USB or its DATA form) or nothing;
+  anywhere else on a channel, and in the 60 m segment, the whole passband is checked.
+- **With Follow the radio's split on, a long over on a split set at the radio runs to its end.**
+  Nexus cannot read the radio's split while it transmits, and the last reading counted as too old
+  after 6 seconds, so an FT8 over or a phone over was cut off part way. The reading now holds until
+  the over ends, for up to 2 minutes, and is read again right after; this covers another program's
+  over through Nexus too. A reading already too old when you key is still refused, and a key held
+  past 2 minutes on a split set at the radio is refused as before.
 - **Driving the shack from another computer, Skip Tx1 shows and sets the shack's own setting**, as
   at the shack; a refused change is shown.
 - **Nothing else can key the radio while a voice-keyer message is playing.** A Remote microphone

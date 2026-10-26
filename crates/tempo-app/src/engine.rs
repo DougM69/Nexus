@@ -1687,10 +1687,20 @@ const ZERO_RF_POWER: f32 = 0.005;
 
 /// How long a rig's own report of its split may be trusted before the gate stops granting on it.
 ///
-/// The heavy poll refreshes well inside this. Expiry LOCKS — it never reverts to the dial — so
-/// an operator who cancels split at the front panel on a rig we then stop hearing from gets a
-/// refusal, not a transmission on the receive frequency.
+/// The heavy poll refreshes well inside this, and while a key Nexus applies (its own or another
+/// program's through Nexus) holds that poll off the reading does not age, for at most
+/// [`OBSERVED_SPLIT_HOLD_MAX_SECS`] ([`Engine::hold_observed_split_age`]). Expiry LOCKS — it never
+/// reverts to the dial — so an operator who cancels split at the front panel on a rig we then stop
+/// hearing from gets a refusal, not a transmission on the receive frequency.
 const OBSERVED_SPLIT_TTL_SECS: u64 = 6;
+
+/// The longest a key may hold a rig's split reading fresh ([`Engine::hold_observed_split_age`]).
+///
+/// 120 s is well past the longest over that should run on one reading: an FT8 over (12.6 s), a
+/// JS8 Slow frame (30 s) and a tune (60 s at most). Past it the reading ages again, so a key held
+/// far longer on a radio split (a program's PTT that never releases) refuses after this plus the
+/// TTL, as it did after the TTL alone before the hold.
+const OBSERVED_SPLIT_HOLD_MAX_SECS: u64 = 120;
 
 /// How long the rig's own report of WHICH VFO it is on may stand before the indicator goes back
 /// to reporting the last commanded selection.
@@ -2136,6 +2146,18 @@ pub enum TxFreqVerdict {
     /// and falling back to it is how a legal-looking receive frequency permits an illegal
     /// transmit one.
     SplitUnverified,
+}
+
+/// What the radio's read-back mode says a program outside Nexus sends
+/// ([`Engine::readback_emission`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Readback {
+    /// One sideband: below the dial when `true`.
+    Side(bool),
+    /// The carrier and both sidebands: AM, DSB, synchronous AM.
+    BothSides,
+    /// FM, judged as the gate's phone model judges FM.
+    Fm,
 }
 
 /// `frame` and the bookkeeping (`pass`/`slot`/`epoch`) the engine needs to fold it.
@@ -3995,6 +4017,11 @@ pub struct Engine {
     /// asymmetry is the safety: "split off" REVOKES a confirmation unconditionally, while
     /// "split on at X" may only GRANT when the operator opted in and the reading is fresh.
     observed_split: Option<(bool, Option<u64>, u64)>,
+    /// Since when (unix secs) a key Nexus applies has held the heavy poll off, so `observed_split`
+    /// cannot be re-read: while set, the reading is aged only up to this moment, for at most
+    /// [`OBSERVED_SPLIT_HOLD_MAX_SECS`] ([`Self::hold_observed_split_age`]). `None` while the
+    /// poll may run.
+    observed_split_held_since: Option<u64>,
     /// RIT / XIT clarifier offsets in Hz (0 = off) and the active VFO — the CAT-panel controls.
     /// RIT and XIT are write-only + optimistic (no read-back): the loop applies a change once
     /// and the snapshot mirrors the last commanded value, like the RF-power / filter-width path.
@@ -4280,6 +4307,12 @@ pub struct Engine {
     /// DISPLAY-ONLY — the cockpit flags a mismatch with the commanded mode, but this
     /// never overwrites the canonical commanded sideband (App-side invariant).
     rig_mode: Option<String>,
+    /// The outside-key gate's copy of `rig_mode`: the same reading, kept across a retune Nexus
+    /// commands ([`Self::clear_rig_mode_for_retune`]) until the next poll reads the radio again,
+    /// and cleared with it on a CAT drop or a radio switch ([`Self::clear_rig_mode`]). A reading
+    /// can only refuse an outside key that no reading would, so the window a retune opens is
+    /// judged on the last one rather than on none.
+    gate_rig_mode: Option<String>,
     /// Rig CAT DSP-function states, per `[nb, nr, notch(ANF), comp, vox]`, from the radio-loop
     /// poll. `None` = the rig doesn't support that func (hide the toggle); `Some(bool)` =
     /// supported + current on/off. Observed-only, same `None = can't do it` idiom as `rig_smeter_db`.
@@ -6592,6 +6625,7 @@ impl Engine {
             tx_split_confirmed_rx: crate::dualrx::ReceiverId::Main,
             sat_uplink_acked_hz: None,
             observed_split: None,
+            observed_split_held_since: None,
             split_dirty: false,
             pending_voice_mem: None,
             pending_voice_mem_stand_down: 0,
@@ -6675,6 +6709,7 @@ impl Engine {
             rig_tx_po_w: None,
             rig_tx_comp_db: None,
             rig_mode: None,
+            gate_rig_mode: None,
             rig_funcs: [None; 7],
             rig_rx_ranges: None,
             rig_refused_dial_mhz: None,
@@ -12434,6 +12469,7 @@ impl Engine {
         let m = mode.trim();
         if !m.is_empty() {
             self.rig_mode = Some(m.to_string());
+            self.gate_rig_mode = Some(m.to_string());
         }
     }
 
@@ -12628,6 +12664,14 @@ impl Engine {
     /// and right after the app commands a retune, so a stale pre-change mode can't flash a
     /// false "rig: X" mismatch until the next poll reads the rig's true mode.
     pub fn clear_rig_mode(&mut self) {
+        self.rig_mode = None;
+        self.gate_rig_mode = None;
+    }
+
+    /// [`Self::clear_rig_mode`] for the display only, right after the app commands a retune: the
+    /// outside-key gate keeps the last reading until the next poll replaces it, so a key in that
+    /// window is judged on it (`gate_rig_mode`).
+    pub fn clear_rig_mode_for_retune(&mut self) {
         self.rig_mode = None;
     }
 
@@ -20745,6 +20789,54 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
     }
 
+    /// The radio loop's word, every tick, on whether a key Nexus applies (its own over, tune or
+    /// held PTT, or another program's key through Nexus) is holding off the heavy poll, the only
+    /// reader of the rig's split. While it is, the split reading does not age (operator ruling,
+    /// 2026-10-25) for up to [`OBSERVED_SPLIT_HOLD_MAX_SECS`]: a reading fresh when the key went
+    /// down stays fresh until the over ends, so a long over on a front-panel split is not cut off
+    /// half way for want of a read the loop itself suppressed. A reading already stale at the key
+    /// stays stale and still refuses, and past the cap it ages again. When the hold ends the
+    /// reading resumes the age it had at the key plus anything past the cap, and this returns
+    /// `true` so the loop reads the split again on its next poll.
+    pub fn hold_observed_split_age(&mut self, keyed: bool) -> bool {
+        let now = now_unix_secs();
+        match (keyed, self.observed_split_held_since) {
+            (true, None) => {
+                self.observed_split_held_since = Some(now);
+                false
+            }
+            (false, Some(_)) => {
+                let held = self.observed_split_held_secs(now);
+                self.observed_split_held_since = None;
+                if let Some((_, _, at)) = self.observed_split.as_mut() {
+                    *at = (*at + held).min(now);
+                }
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// For tests outside this crate: the clock moving on `secs` for the rig's split reading and
+    /// any hold on it, which both count in whole unix seconds.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn age_observed_split_for_test(&mut self, secs: u64) {
+        if let Some((_, _, at)) = self.observed_split.as_mut() {
+            *at -= secs;
+        }
+        if let Some(since) = self.observed_split_held_since.as_mut() {
+            *since -= secs;
+        }
+    }
+
+    /// How many seconds up to `now` the split reading has not aged under the current hold:
+    /// the hold's length, capped at [`OBSERVED_SPLIT_HOLD_MAX_SECS`]; 0 with no hold.
+    fn observed_split_held_secs(&self, now: u64) -> u64 {
+        self.observed_split_held_since.map_or(0, |since| {
+            now.saturating_sub(since).min(OBSERVED_SPLIT_HOLD_MAX_SECS)
+        })
+    }
+
     /// [`Self::rig_split_applied_on`] for a split on MAIN — its VFO B, which is every terrestrial
     /// split and every satellite pair not riding the Sub band.
     pub fn rig_split_applied(&mut self, tx_hz: u64) {
@@ -25838,28 +25930,34 @@ contact yourself."
     /// drops when a retune carries the passband across an edge; an un-key is never judged.
     /// Nexus's own transmissions keep their own judgement.
     ///
-    /// The radio's own reported mode counts too ([`Self::readback_side_is_lsb`]): when it names a
+    /// The radio's own reported mode counts too ([`Self::readback_emission`]): when it names a
     /// sideband, the passband is judged on that side as well as on the commanded one, a front-panel
     /// flip to DATA-L that the radio loop does not re-assert included; in Phone it is judged as a
-    /// voice on that side. A read-back that names no side changes nothing. Under a split the
-    /// read-back may be the receiving VFO's, so it can refuse a key near an edge that the
-    /// transmitting VFO's side would allow; it never allows one.
+    /// voice on that side. An AM-family read-back (AM, DSB, SAM) is judged across both sides of
+    /// the carrier, in Phone as the gate's AM; an FM one as the gate's phone model judges FM. A
+    /// read-back that names no emission (CW, RTTY, an unknown word) changes nothing. Under a split
+    /// the read-back may be the receiving VFO's, so it can refuse a key near an edge that the
+    /// transmitting VFO's side would allow; it never allows one. The read-back is judged when the
+    /// key is granted and on each tick while it is held, but the poll that reads the mode is held
+    /// off while the radio is keyed, so a front-panel flip during an over is judged when the over
+    /// has ended and the poll has read it, not mid-over. A retune Nexus commands keeps the last
+    /// reading for this judgement until the next poll (`gate_rig_mode`).
     ///
     /// In a CW-only segment the key is allowed only while the radio is in CW
     /// ([`Self::outside_key_cw_only_allowed`]). On a 60 m channel dial (a channel's phone carrier,
     /// [`crate::privileges::on_sixty_meter_channel_dial`]) the key is judged at the channel, as
-    /// [`Self::tx_allowed`] judges it, with no lower-sideband read-back: a channel is 2.8 kHz wide,
-    /// so no 3 kHz passband fits one (operator rulings, 2026-10-25). Anywhere else on a channel,
-    /// and in the 60 m segment, the passband rule applies.
+    /// [`Self::tx_allowed`] judges it, with no read-back or an upper-sideband one (USB, PKTUSB,
+    /// DATA-U) only: a channel is 2.8 kHz wide, so no 3 kHz passband fits one (operator rulings,
+    /// 2026-10-25). Anywhere else on a channel, and in the 60 m segment, the passband rule applies.
     pub fn outside_key_passband_allowed(&self) -> bool {
         use crate::settings::OperatingMode;
         let om = self.settings.operating_mode;
-        let readback = self.readback_side_is_lsb();
+        let readback = self.readback_emission();
         if !self.outside_key_cw_only_allowed() {
             return false;
         }
         if self.every_tx_frequency(om, crate::privileges::on_sixty_meter_channel_dial) {
-            return self.tx_allowed() && readback != Some(true);
+            return self.tx_allowed() && self.sixty_dial_readback_allowed();
         }
         let class = self.settings.license_class;
         let side_allowed = |mhz: f64, lsb: bool| {
@@ -25873,12 +25971,18 @@ contact yourself."
                         // CW, AM, FM: the gate's own judgement of that emission.
                         Self::side_is_lsb(&word).is_none_or(|lsb| side_allowed(mhz, lsb))
                     });
+                let phone = om == OperatingMode::Phone;
                 let reported = match readback {
                     None => true,
-                    Some(lsb) if om == OperatingMode::Phone => {
+                    Some(Readback::Side(lsb)) if phone => {
                         self.phone_emission_allowed(mhz, if lsb { "LSB" } else { "USB" })
                     }
-                    Some(lsb) => side_allowed(mhz, lsb),
+                    Some(Readback::Side(lsb)) => side_allowed(mhz, lsb),
+                    Some(Readback::BothSides) if phone => self.phone_emission_allowed(mhz, "AM"),
+                    Some(Readback::BothSides) => {
+                        side_allowed(mhz, true) && side_allowed(mhz, false)
+                    }
+                    Some(Readback::Fm) => self.phone_emission_allowed(mhz, "FM"),
                 };
                 commanded && reported
             })
@@ -25895,14 +25999,14 @@ contact yourself."
         let in_cw = self
             .commanded_tx_words()
             .all(|word| Self::is_cw_word(&word))
-            && self.rig_mode.as_deref().is_none_or(Self::is_cw_word);
+            && self.gate_rig_mode.as_deref().is_none_or(Self::is_cw_word);
         if in_cw {
             return true;
         }
         let mut sides: Vec<bool> = self
             .commanded_tx_words()
             .filter_map(|word| Self::side_is_lsb(&word))
-            .chain(self.readback_side_is_lsb())
+            .chain(self.readback_sides())
             .collect();
         if sides.is_empty() {
             sides = vec![true, false];
@@ -25922,22 +26026,45 @@ contact yourself."
         std::iter::once(self.tx_mode_effective()).chain(self.sat_uplink_word())
     }
 
-    /// Which side of the dial the radio's own read-back mode puts a soundcard signal:
-    /// `Some(true)` below it (`LSB`, `PKTLSB`, `DATA-L`), `Some(false)` above it (`USB`,
-    /// `PKTUSB`, `DATA-U`), `None` when it names no side or the radio has reported nothing.
-    fn readback_side_is_lsb(&self) -> Option<bool> {
+    /// What the radio's own read-back mode (the gate's copy, `gate_rig_mode`) says a program's
+    /// audio goes out as: on one side of the dial (`LSB`, `PKTLSB`, `DATA-L` below it; `USB`,
+    /// `PKTUSB`, `DATA-U` above it), on both (`AM`, `AMN`, `AMS`, `PKTAM`, `SAM`, `SAL`, `SAH`,
+    /// `DSB`), or as FM (`FM`, `FMN`, `WFM`, `PKTFM`, `PKTFMN`, `DATA-FM`). `None` when it names
+    /// none of these (CW, RTTY, a word nobody mapped) or the radio has reported nothing.
+    fn readback_emission(&self) -> Option<Readback> {
         match self
-            .rig_mode
+            .gate_rig_mode
             .as_deref()?
             .trim()
             .to_ascii_uppercase()
             .replace('-', "")
             .as_str()
         {
-            "LSB" | "PKTLSB" | "DATAL" => Some(true),
-            "USB" | "PKTUSB" | "DATAU" => Some(false),
+            "LSB" | "PKTLSB" | "DATAL" => Some(Readback::Side(true)),
+            "USB" | "PKTUSB" | "DATAU" => Some(Readback::Side(false)),
+            "AM" | "AMN" | "AMS" | "PKTAM" | "SAM" | "SAL" | "SAH" | "DSB" => {
+                Some(Readback::BothSides)
+            }
+            "FM" | "FMN" | "WFM" | "PKTFM" | "PKTFMN" | "DATAFM" => Some(Readback::Fm),
             _ => None,
         }
+    }
+
+    /// The sides of the dial [`Self::readback_emission`] puts a program's passband on: its one
+    /// side, both for an AM-family read-back, none for FM (judged at its carrier) or no read-back.
+    fn readback_sides(&self) -> Vec<bool> {
+        match self.readback_emission() {
+            Some(Readback::Side(lsb)) => vec![lsb],
+            Some(Readback::BothSides) => vec![true, false],
+            Some(Readback::Fm) | None => Vec::new(),
+        }
+    }
+
+    /// On a 60 m channel dial, may an outside key go with the radio's read-back? Only with none,
+    /// or an upper-sideband one (`USB`, `PKTUSB`, `DATA-U`): a channel's dial is its upper
+    /// sideband's carrier, and any other emission leaves the channel.
+    fn sixty_dial_readback_allowed(&self) -> bool {
+        self.gate_rig_mode.is_none() || self.readback_emission() == Some(Readback::Side(false))
     }
 
     /// Is `word` a CW mode, the rig's normal or reverse CW in any spelling (`CW`, `CWR`, `CW-R`,
@@ -25968,7 +26095,8 @@ contact yourself."
     /// says so. Otherwise it names the frequency the program's audio could reach, from the first
     /// transmit frequency and side the passband is refused on ([`Self::outside_key_reach`]), and
     /// whether that crosses a segment edge or the band's; when no side's span is what refused (an
-    /// AM or FM word, a phone-model term) it names no frequency rather than a wrong one.
+    /// AM or FM word, an FM read-back, a phone-model term) it names no frequency rather than a
+    /// wrong one. On a 60 m channel dial it says the radio is not in upper sideband.
     pub fn outside_key_passband_refusal(&self) -> Option<String> {
         if self.outside_key_passband_allowed() {
             return None;
@@ -25977,6 +26105,16 @@ contact yourself."
             return Some(
                 "outside your license privileges: only CW is allowed here, and the radio is not \
                  in CW"
+                    .to_string(),
+            );
+        }
+        let om = self.settings.operating_mode;
+        if self.tx_allowed()
+            && self.every_tx_frequency(om, crate::privileges::on_sixty_meter_channel_dial)
+        {
+            return Some(
+                "outside your license privileges: on a 60 m channel the radio must be in upper \
+                 sideband"
                     .to_string(),
             );
         }
@@ -26002,8 +26140,8 @@ contact yourself."
     /// The first transmit frequency ([`Self::every_tx_frequency`], so the split and XIT ones too)
     /// and side whose span the class may not send, as `(carrier, reach)`: the far end of that span.
     /// The sides are those [`Self::outside_key_passband_allowed`] judges: every commanded word's,
-    /// the read-back's, and in Digital the stored sideband's. Phone's span is its 2.8 kHz voice
-    /// passband, every other section's the program's [`tci::PASSBAND`].
+    /// the read-back's (both for an AM-family one), and in Digital the stored sideband's. Phone's
+    /// span is its 2.8 kHz voice passband, every other section's the program's [`tci::PASSBAND`].
     fn outside_key_reach(&self) -> Option<(f64, f64)> {
         use crate::settings::OperatingMode;
         let om = self.settings.operating_mode;
@@ -26011,7 +26149,7 @@ contact yourself."
         let mut sides: Vec<bool> = self
             .commanded_tx_words()
             .filter_map(|word| Self::side_is_lsb(&word))
-            .chain(self.readback_side_is_lsb())
+            .chain(self.readback_sides())
             .collect();
         if om == OperatingMode::Digital {
             sides.push(self.settings.sideband.eq_ignore_ascii_case("LSB"));
@@ -26236,7 +26374,11 @@ contact yourself."
             // The rig told us it is split. Whether that GRANTS anything depends on the opt-in,
             // on freshness, and on our knowing the frequency at all.
             Some((true, tx, at)) => {
-                let fresh = now_unix_secs().saturating_sub(at) <= OBSERVED_SPLIT_TTL_SECS;
+                // Not aged while a key Nexus applies holds the poll off, for up to the cap
+                // ([`Self::hold_observed_split_age`]).
+                let now = now_unix_secs();
+                let as_of = now - self.observed_split_held_secs(now);
+                let fresh = as_of.saturating_sub(at) <= OBSERVED_SPLIT_TTL_SECS;
                 match tx {
                     Some(hz) if self.settings.split_detect_enabled && fresh => {
                         TxFreqVerdict::Split(hz as f64 / 1e6)
