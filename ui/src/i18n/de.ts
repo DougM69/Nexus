@@ -7559,6 +7559,8 @@ export const DE: PartialCatalog = {
   "phone.keyer.hint": "Slot anklicken oder seine F-Taste drücken zum Senden · Esc stoppt",
   "phone.keyer.hint.mac": "Slot anklicken oder Fn mit seiner F-Taste drücken zum Senden · Esc stoppt",
   "phone.keyer.fd.hint": "Contest: einen Slot mit Ihrem Austausch <b>„{{exchange}}“</b> aufnehmen, dann reicht ein Tastendruck.",
+  "phone.keyer.flexDax.note": "Flex-Geräte senden in SSB über ihr eigenes Mikrofon, solange DAX für Sprache nicht eingeschaltet ist. Schalten Sie DAX im P/CW-Bereich von SmartSDR ein, damit die Sprachnachrichten von Nexus ausgesendet werden.",
+  "phone.keyer.flexDax.dismiss": "Verstanden",
   "phone.keyer.slot.play.title": "F{{slot}} abspielen ({{label}})",
   "phone.keyer.slot.record.title": "F{{slot}} aufnehmen. Nimmt von Ihrem EINGABEGERÄT auf — oft das RX-Audio des Funkgeräts, nicht ein Mikrofon. Wenn das so ist, die Ansage anderswo aufnehmen und Import (⤓) nutzen.",
   "phone.keyer.slot.unnamed": "Slot {{slot}}",

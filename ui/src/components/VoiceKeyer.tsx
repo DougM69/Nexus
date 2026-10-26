@@ -25,6 +25,7 @@ import {
   subscribeVoiceDeletes,
   supersedeVoiceDelete,
 } from '../features/voiceDelete'
+import { dismissFlexDaxNote, flexDaxNoteDismissed } from '../features/flexDaxNote'
 import { IS_MAC, FN_KEY_HINT } from '../platform'
 import { t } from '../i18n'
 import { T } from '../i18n/T'
@@ -58,6 +59,10 @@ interface Props {
     onStop: () => void
     onPlay: (slot: number) => void
   }
+  /** The active radio is a Flex on SmartSDR CAT or Hamlib (features/flexDaxNote): the first message
+   *  the engine takes brings a note, once, that SSB goes out only with DAX on for voice in SmartSDR.
+   *  Information only; the message is sent first. Absent on every other radio. */
+  flexDaxNote?: boolean
 }
 
 /** What the keyer lends Enter Sends Message: its slots as they stand, whether it is recording,
@@ -114,7 +119,7 @@ function endedOnAir(p: { fellAt: number | null }): boolean {
  * button (two do), not that its unmount cleanup is itself a stop. The cleanup below is not
  * what buys the entry — it is what the entry's note has to WARN ABOUT.
  */
-export function VoiceKeyer({ txEnabled, keyed, voicePlaying, fdExchange, esm }: Props) {
+export function VoiceKeyer({ txEnabled, keyed, voicePlaying, fdExchange, esm, flexDaxNote }: Props) {
   const [stored, setMsgs] = useState<VoiceMessage[]>([])
   // A deleted slot inside its Undo window still has its recording in the backend; everything
   // here (the slot, its F-key, Enter Sends Message) treats it as empty until Undo or the clear.
@@ -158,6 +163,15 @@ export function VoiceKeyer({ txEnabled, keyed, voicePlaying, fdExchange, esm }: 
   }
   const refused = (gen: number) => {
     if (playingRef.current?.gen === gen) playingRef.current = null
+  }
+  // THE FLEX DAX NOTE: raised by a message the engine TOOK (a refused one played nothing), never
+  // before the send, and shown until dismissed. The prop is read through a ref: Enter Sends
+  // Message's player resolves after a render that may have changed it.
+  const [daxNote, setDaxNote] = useState(false)
+  const flexDaxNoteRef = useRef(flexDaxNote)
+  flexDaxNoteRef.current = flexDaxNote
+  const tookMessage = () => {
+    if (flexDaxNoteRef.current && !flexDaxNoteDismissed()) setDaxNote(true)
   }
   // The same flag the cleanup can read — it captures [] deps and cannot see the prop.
   const onAirRef = useRef(false)
@@ -270,6 +284,7 @@ export function VoiceKeyer({ txEnabled, keyed, voicePlaying, fdExchange, esm }: 
     void withErrorToast(() => playVoiceMessage(slot), t('phone.keyer.playFailed', { slot })).then(
       (snap) => {
         if (snap === null) refused(gen)
+        else tookMessage()
       },
     )
   }
@@ -288,6 +303,7 @@ export function VoiceKeyer({ txEnabled, keyed, voicePlaying, fdExchange, esm }: 
     const gen = send(slot)
     try {
       await playVoiceMessage(slot)
+      tookMessage()
       return null
     } catch (e) {
       refused(gen)
@@ -403,6 +419,21 @@ export function VoiceKeyer({ txEnabled, keyed, voicePlaying, fdExchange, esm }: 
       {fdExchange && (
         <p className="vk-fd-hint">
           <T k="phone.keyer.fd.hint" tags={{ b: <strong /> }} vals={{ exchange: fdExchange }} />
+        </p>
+      )}
+      {flexDaxNote && daxNote && (
+        <p className="vk-flex-dax-note" role="note">
+          {t('phone.keyer.flexDax.note')}{' '}
+          <button
+            type="button"
+            className="settings-linkbtn"
+            onClick={() => {
+              dismissFlexDaxNote()
+              setDaxNote(false)
+            }}
+          >
+            {t('phone.keyer.flexDax.dismiss')}
+          </button>
         </p>
       )}
       <div className="vk-grid">

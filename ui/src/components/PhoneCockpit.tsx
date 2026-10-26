@@ -258,6 +258,9 @@ interface Props {
   /** Enter Sends Message's switch for this cockpit and the voice keyer's step mapping (App, from
    *  Settings). Absent on the hosted page. */
   esmSetting?: EsmSetting
+  /** The active radio is a Flex on SmartSDR CAT or Hamlib (App, from Settings): the voice keyer
+   *  notes once that SSB goes out only with DAX on for voice. Absent on the hosted page. */
+  flexDaxNote?: boolean
   /** Contest mode is on but this station is out of the contest (App's: the switch on, the session not):
    *  the log line says so, with Resume, which re-enters the contest in S&P. Absent otherwise. */
   onResumeContest?: () => void
@@ -623,7 +626,7 @@ const FLEX_SPANS = [
  *  notch, the scope references and the scope's G and Z move one of their own steps. */
 const LEVEL_WHEEL_STEP = 2
 
-export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, tciSpots, onTciSpot, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, onEntryCall, panels, spotsBoard, neededBoard, boxes }: Props) {
+export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active = true, snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, tciSpots, onTciSpot, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, onEntryCall, panels, spotsBoard, neededBoard, boxes }: Props) {
   // Live S-meter (shared 100 ms poll, lock-free backend) — used to arrive via the 300 ms
   // snapshot on top of the backend's own sampling, which read as a laggy needle. smeterDb-only
   // subscription: the cockpit re-renders when the S-meter changes, never on RX-level churn.
@@ -1942,6 +1945,7 @@ export function PhoneCockpit({ esmSetting, onResumeContest, active = true, snap,
         keyed={keyed}
         voicePlaying={snap.radio.voicePlaying}
         fdExchange={fdExchange}
+        flexDaxNote={flexDaxNote}
         esm={{
           lit: esmLitKeys(esm.preview),
           report: setKeyerForEnter,

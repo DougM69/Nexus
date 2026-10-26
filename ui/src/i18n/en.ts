@@ -12865,6 +12865,11 @@ export const EN = {
   // from the call site.
   'phone.keyer.fd.hint':
     'Contest: record a slot with your exchange <b>“{{exchange}}”</b> for one-key sends.',
+  // Shown once, after the first voice message on a Flex driven over SmartSDR CAT or Hamlib
+  // (features/flexDaxNote). Flex, SSB, DAX, SmartSDR, P/CW and Nexus are names and stay as they are.
+  'phone.keyer.flexDax.note':
+    "Flex radios transmit from their own mic in SSB unless DAX is on for voice. In SmartSDR's P/CW panel, turn on DAX so Nexus's voice messages go out.",
+  'phone.keyer.flexDax.dismiss': 'Got it',
   'phone.keyer.slot.play.title': 'Play F{{slot}} ({{label}})',
   // ONE sentence, not a stem plus a shared tail: recording the rig's RX audio into a slot puts
   // the WRONG AUDIO on the air the moment the slot is played, so the warning rides both

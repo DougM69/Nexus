@@ -56,6 +56,7 @@ import {
 import { withErrorToast, pushToast, dismissToast, setPopupNotifications, setPopupMinSeconds } from './toast'
 import { contestStartWarning } from './features/contestLocation'
 import { keptFileMessage } from './features/keptFiles'
+import { flexVoiceNeedsDax } from './features/flexDaxNote'
 import { useActivationNotices } from './useActivationNotices'
 import { t } from './i18n'
 import { resolveUnits, setUnitsMirror } from './units'
@@ -3335,6 +3336,7 @@ function App() {
   const phoneWorkspace = (
     <PhoneCockpit
       esmSetting={esmSettingFor('phone')}
+      flexDaxNote={settings ? flexVoiceNeedsDax(settings) : false}
       onResumeContest={resumeContest}
       onOpenLogbook={openLogbookFor}
       onEntryCall={reportEntry.phone}

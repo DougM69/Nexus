@@ -12428,6 +12428,13 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--accent);
   line-height: 1.4;
 }
+.vk-flex-dax-note {
+  margin: 0 0 10px;
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
 .vk-fd-hint strong {
   font-family: var(--font-mono);
   font-weight: 800;
