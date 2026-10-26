@@ -130,6 +130,30 @@ board a club watches all weekend stays a board. The checklist keeps its own cap
 and scrolls inside itself: all fifteen rows are there, in a list of their own,
 rather than 290 px of checkboxes between you and the log.
 
+### Stats
+
+**Stats**, the tab beside **Scoreboard** above the score, shows how the contest is going while you
+operate; the log stays below it. It reads your contest log and nothing else:
+
+- **Totals**: contacts, on time and breaks, the overall rate over your on time, your best 60
+  minutes, the current rate (over your last ten contacts), the time since your last contact, and
+  today's contacts (UTC). A break of 30 minutes or more between two contacts is off time; the
+  contest rules data names no minimum yet, so the tab states the 30 minutes it uses.
+- **Contacts per hour**: a bar for each UTC hour of the contest window. Contacts logged outside the
+  window (test contacts before the start) are counted under the chart, not drawn.
+- **Distance**: your longest contact, with its call and country, and the average. Each is measured
+  from your grid (Settings) to the grid the station sent, where the exchange carries one, otherwise
+  to the centre of its country.
+- **Bands**, **Modes** and **Countries**, busiest first, with **Show all** past ten countries, the
+  number of DX contacts, and the grids worked where the contest exchanges a grid.
+- **Score** and **Multipliers**: the score's arithmetic, and the contest's own multiplier board,
+  worked and still needed.
+
+Dupes and contacts in a banned mode are left out, as the score leaves them out. **Share stats** saves
+a picture of the stats to your Downloads folder for you to share where you like; nothing is posted.
+The checklist that opens when you turn Contest mode off offers **See the contest stats**, which opens
+the tab and leaves Contest mode on.
+
 ### FT8 and FT4 in each contest
 
 On FT8 and FT4, **Running** on the Contest screen calls CQ and works whoever

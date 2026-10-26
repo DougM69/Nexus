@@ -124,6 +124,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("contest_removed",                RunsAtShack, "The contest contacts taken back at the shack."),
     ("contest_restore",                RunsAtShack, "Puts a taken-back contact back in the shack's contest log."),
     ("contest_self_spot",              RunsAtShack, "Posts the operator's own spot to the shack's DX cluster, one per press, as post_spot does."),
+    ("contest_stats_places",           RunsAtShack, "From the shack's country file: the contest log's calls placed for the Stats tab; changes nothing."),
     ("contest_unmerged",               RunsAtShack, "The aged-out contest contacts the shack's logbook does not hold."),
     ("contest_working",                RunsAtShack, "Binds a contest serial to a station at the shack."),
     ("cw_clear",                       RunsAtShack, "Clears the shack's CW decoder transcript."),

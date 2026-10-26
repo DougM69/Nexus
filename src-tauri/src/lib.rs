@@ -9147,6 +9147,36 @@ fn contest_place(call: String, event: String) -> Option<ContestPlace> {
     })
 }
 
+/// Where the contest's Stats tab places a call: the country its scorer counts the call as (as
+/// [`contest_place`] names it) and the country file's point for it, which a contact's distance is
+/// measured to when its exchange sent no grid.
+#[derive(Debug, serde::Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct ContestStatsPlace {
+    entity: &'static str,
+    lat: f64,
+    lon: f64,
+}
+
+/// The Contest screen's Stats tab: every call of the log placed in ONE call, in order, `None` where
+/// the country file cannot place it. Read-only and local — the country file, nothing else.
+#[tauri::command]
+fn contest_stats_places(calls: Vec<String>, event: String) -> Vec<Option<ContestStatsPlace>> {
+    let wae = tempo_core::fd_rules::ruleset_by_id(&event, tempo_core::fd_rules::CURRENT_RULES_YEAR)
+        .is_some_and(|rs| rs.scoring.counts_wae_areas());
+    calls
+        .iter()
+        .map(|call| {
+            let info = propagation::dxcc::resolve(call)?;
+            Some(ContestStatsPlace {
+                entity: tempo_core::contest::counted_country(info.entity, wae),
+                lat: info.lat,
+                lon: info.lon,
+            })
+        })
+        .collect()
+}
+
 /// Install [`contest_place_call`] once, at startup. Logged either way; a second install is
 /// an ordering regression rather than a state to accept, exactly as for cty and the rules
 /// table.
@@ -40002,6 +40032,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         log_qso,
         resolve_entity,
         contest_place,
+        contest_stats_places,
         contest_logged_qth,
         edit_qso,
         mark_qsl_sent,
@@ -41695,6 +41726,31 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&dl).unwrap(),
             serde_json::json!({ "entity": "Fed. Rep. of Germany", "cqZone": 14 })
+        );
+    }
+
+    /// ⭐ **The Stats tab places every call in one answer, in order**, naming the country as the
+    /// contest's scorer counts it (the strip's [`contest_place`]) and giving the country file's
+    /// point — East-positive, so Germany is east of Greenwich and the United States west of it.
+    #[test]
+    fn the_stats_places_are_the_scorers_countries_with_their_points_in_order() {
+        let _ = tempo_core::contest::install_wae_parent(propagation::dxcc::wae_parent);
+        let calls = ["IT9XYZ", "W1AW", "", "DL1ABC"].map(String::from).to_vec();
+        let ww = super::contest_stats_places(calls.clone(), "cqww_cw".into());
+        assert_eq!(ww.len(), 4);
+        assert_eq!(ww[0].as_ref().map(|p| p.entity), Some("Sicily"));
+        assert_eq!(ww[1].as_ref().map(|p| p.entity), Some("United States"));
+        assert!(ww[2].is_none(), "nothing to place, no place");
+        let dl = ww[3].as_ref().expect("DL1ABC places");
+        assert_eq!(dl.entity, "Fed. Rep. of Germany");
+        assert!(dl.lon > 0.0 && dl.lat > 45.0, "{dl:?}");
+        assert!(ww[1].as_ref().unwrap().lon < 0.0);
+        // Another contest counts Sicily as Italy, exactly as the strip names it.
+        let ss = super::contest_stats_places(calls, "arrlss_cw".into());
+        assert_eq!(ss[0].as_ref().map(|p| p.entity), Some("Italy"));
+        assert_eq!(
+            serde_json::to_value(dl).unwrap()["entity"],
+            serde_json::json!("Fed. Rep. of Germany")
         );
     }
 

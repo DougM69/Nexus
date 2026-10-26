@@ -88,6 +88,9 @@ const ALLOWED = new Set([
   // Spot me: one DX cluster spot of the station's call per press, posted over the internet, keying
   // nothing (contest_spot.rs)
   'contest_self_spot',
+  // the Stats tab: every call of the log placed by the country file, and its picture saved to
+  // Downloads — reads and a file, keying nothing (ContestStats.tsx)
+  'contest_stats_places', 'save_png_to_downloads',
 ])
 
 /** What transmits, or decides whether or what the station transmits: the stop-line census's verbs,
@@ -229,9 +232,11 @@ async function sweepClicks(): Promise<number> {
       return true
     })
     if (fresh.length === 0) break
-    // Entry only takes the screen out of the window, so it is pressed LAST in its round: everything it
-    // hides has been clicked by then, and the rounds after it sweep the entry-only window.
-    const hides = (el: HTMLElement) => el.textContent === t('contestLogger.layout.label')
+    // Entry only takes the screen out of the window, and the Stats tab the scoreboard, so they are
+    // pressed LAST in their round: everything they hide has been clicked by then, and the rounds after
+    // sweep what they show.
+    const hides = (el: HTMLElement) =>
+      el.textContent === t('contestLogger.layout.label') || el.textContent === t('contestStats.tab.stats')
     fresh.sort((a, b) => Number(hides(a)) - Number(hides(b)))
     for (const el of fresh) {
       if (!el.isConnected) continue
