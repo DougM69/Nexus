@@ -1727,6 +1727,7 @@ export const EN = {
   'contactCard.recent.qsl': 'QSL',
   'contactCard.recent.open': 'Open this contact on the card',
   'contactCard.readOnly': 'Read only here: contacts are edited at the station.',
+  'contactCard.lotwNotResent': 'Already uploaded to LoTW — not sent again: {{fields}}',
   'contactCard.cancel': 'Cancel',
   'logbook.confirmations.all.label': 'Download confirmations',
   'logbook.confirmations.all.title': 'Download new confirmations from every service you have set up: LoTW, QRZ and eQSL',

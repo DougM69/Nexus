@@ -246,6 +246,22 @@ describe('Save is the edit form’s save, with only what was changed', () => {
     expect(api.editQsoById).not.toHaveBeenCalled()
   })
 
+  it('an own-station field changed on a contact LoTW has: saved, and the card says it is not sent again', async () => {
+    engine.log = (engine.log as LoggedQso[]).map((r) =>
+      r.id === 'id-dl' ? { ...r, upload: { lotw: { outcome: 'accepted', whenUnix: 1_700_000_100 } } } : r,
+    )
+    engine.revision += 1
+    await mounted()
+    const card = await openCard()
+    const note = () => card.querySelector('.contact-card-lotw-note')
+    expect(note(), 'nothing changed yet').toBeNull()
+    fireEvent.change(box(card, t('logbook.field.myGrid.label')), { target: { value: 'EN53' } })
+    expect(note()?.textContent).toBe(t('contactCard.lotwNotResent', { fields: 'MY_GRIDSQUARE' }))
+    save(card)
+    await waitFor(() => expect(api.editQsoById).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(api.editQsoById).mock.calls[0][1].myGrid, 'still saved').toBe('EN53')
+  })
+
   it('Save is not offered until something changed', async () => {
     await mounted()
     const card = await openCard()

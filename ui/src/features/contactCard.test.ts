@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cardDirty, cardSave, draftOf, fieldChanges, fieldsOf, storedEdit, type CardDraft, type CardField } from './contactCard'
+import { cardDirty, cardSave, draftOf, fieldChanges, fieldsOf, ownStationNotResent, storedEdit, type CardDraft, type CardField } from './contactCard'
 import type { LoggedQso } from '../types'
 
 const Q: LoggedQso = {
@@ -102,5 +102,28 @@ describe('a merged contest contact', () => {
     expect(cardSave(C, start, start, added)).toEqual({ ok: false, error: { code: 'contest', tag: 'CQZ' } })
     const other = [...fieldsOf(C), { tag: 'ITUZ', orig: null, value: '8', removed: false }]
     expect(cardSave(C, start, start, other)).toEqual({ ok: true, edit: storedEdit(C), fields: [{ tag: 'ITUZ', old: null, new: '8' }] })
+  })
+})
+
+describe('own-station fields on a contact already uploaded to LoTW', () => {
+  const UP: LoggedQso = { ...Q, myGrid: 'EN52', upload: { lotw: { outcome: 'accepted', whenUnix: 1 } } }
+  const own = (q: LoggedQso, over: Partial<CardDraft>, fields: CardField[] = fieldsOf(q)) =>
+    ownStationNotResent(q, draftOf(q), { ...draftOf(q), ...over }, fields)
+
+  it('names each one changed — the grid box and MY_ or OWNER_CALLSIGN fields — and nothing else', () => {
+    const fields: CardField[] = [
+      ...fieldsOf(UP),
+      { tag: 'MY_STATE', orig: null, value: 'IL', removed: false },
+      { tag: 'OWNER_CALLSIGN', orig: null, value: 'KD9XXX', removed: false },
+      { tag: 'ITUZ', orig: null, value: '8', removed: false },
+    ]
+    expect(own(UP, { myGrid: 'EN53', name: 'Hiram' }, fields)).toEqual(['MY_GRIDSQUARE', 'MY_STATE', 'OWNER_CALLSIGN'])
+    expect(own(UP, { name: 'Hiram' })).toEqual([])
+  })
+
+  it('says nothing where LoTW has not taken the contact, or a corrected call sends it again anyway', () => {
+    expect(own({ ...UP, upload: { lotw: { outcome: 'pending', whenUnix: 1 } } }, { myGrid: 'EN53' })).toEqual([])
+    expect(own({ ...UP, upload: undefined }, { myGrid: 'EN53' })).toEqual([])
+    expect(own(UP, { myGrid: 'EN53', call: 'W1AX' })).toEqual([])
   })
 })

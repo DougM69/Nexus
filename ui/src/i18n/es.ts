@@ -9209,6 +9209,7 @@ export const ES: PartialCatalog = {
   "contactCard.recent.qsl": "QSL",
   "contactCard.recent.open": "Abrir este contacto en la tarjeta",
   "contactCard.readOnly": "Solo lectura aquí: los contactos se editan en la estación.",
+  "contactCard.lotwNotResent": "Ya subido a LoTW — no se vuelve a enviar: {{fields}}",
   "contactCard.cancel": "Cancelar",
   "logbook.confirmations.all.label": "Descargar confirmaciones",
   "logbook.confirmations.all.title": "Descargar las confirmaciones nuevas de cada servicio configurado: LoTW, QRZ y eQSL",

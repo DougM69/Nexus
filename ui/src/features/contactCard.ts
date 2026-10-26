@@ -186,6 +186,29 @@ export function fieldChanges(fields: readonly CardField[]): FieldEdit[] {
   return out
 }
 
+/** A field kept as written that says where YOUR station was, or whose station it was. */
+function ownStationTag(tag: string): boolean {
+  const t = tag.trim().toUpperCase()
+  return t.startsWith('MY_') || t === 'OWNER_CALLSIGN'
+}
+
+/** The own-station fields this save changes on a contact LoTW has already taken, by ADIF name:
+ *  your grid's box and any `MY_…` or `OWNER_CALLSIGN` field kept as written.
+ *
+ *  ⚠️ They are saved, and NOT sent to LoTW again: a contact's upload is queued again only when its
+ *  call is corrected (the edit policy), and LoTW keeps the contact it was sent. So the card says
+ *  so, rather than let the operator believe LoTW now holds the correction. Empty when LoTW has not
+ *  taken the contact, or the call is corrected too (then everything goes again). */
+export function ownStationNotResent(q: LoggedQso, start: CardDraft, d: CardDraft, fields: readonly CardField[]): string[] {
+  const lotw = q.upload?.lotw?.outcome
+  if (lotw !== 'accepted' && lotw !== 'duplicate') return []
+  if (d.call.trim().toUpperCase() !== start.call.trim().toUpperCase()) return []
+  const out: string[] = []
+  if (d.myGrid !== start.myGrid && d.myGrid.trim().toUpperCase() !== (q.myGrid ?? '')) out.push('MY_GRIDSQUARE')
+  for (const c of fieldChanges(fields)) if (ownStationTag(c.tag)) out.push(c.tag)
+  return out
+}
+
 /** A box whose empty value the backend reads as "leave it" (or both park boxes at once). */
 export type Unclearable = 'state' | 'timeOff' | 'iota' | 'myGrid' | 'myRig' | 'parks'
 

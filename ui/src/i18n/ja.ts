@@ -9192,6 +9192,7 @@ export const JA: PartialCatalog = {
   "contactCard.recent.qsl": "QSL",
   "contactCard.recent.open": "この交信をカードで開く",
   "contactCard.readOnly": "ここでは閲覧のみです。交信の編集は局側で行います。",
+  "contactCard.lotwNotResent": "LoTWにアップロード済み — 再送信しません: {{fields}}",
   "contactCard.cancel": "キャンセル",
   "logbook.confirmations.all.label": "コンファームをダウンロード",
   "logbook.confirmations.all.title": "設定済みの各サービス（LoTW、QRZ、eQSL）から新しいコンファームをダウンロードします",

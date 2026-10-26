@@ -46,6 +46,7 @@ import {
   fieldsOf,
   multiLine,
   ownField,
+  ownStationNotResent,
   typedLines,
   type CardDraft,
   type CardError,
@@ -160,6 +161,7 @@ function CardBody({
   const [busy, setBusy] = useState(false)
   const [looking, setLooking] = useState(false)
   const dirty = cardDirty(start, draft, fields)
+  const notResent = ownStationNotResent(q, start, draft, fields)
   const canSave = contact.ref !== null
   const id = useId()
   const book = useSyncExternalStore(subscribeCallbookAnswers, () => callbookAnswer(q.call))
@@ -536,6 +538,12 @@ function CardBody({
             </span>
           )}
           {!canSave && <span className="logbook-editing-note">{t('contactCard.readOnly')}</span>}
+          {/* Your own station's fields are saved, and LoTW keeps the contact it was sent: say so. */}
+          {canSave && notResent.length > 0 && (
+            <span className="logbook-editing-note contact-card-lotw-note" role="status">
+              {t('contactCard.lotwNotResent', { fields: notResent.join(', ') })}
+            </span>
+          )}
           <button type="button" className="logconfirm-discard" onClick={() => void leave(onClose)}>
             {t('contactCard.cancel')}
           </button>
