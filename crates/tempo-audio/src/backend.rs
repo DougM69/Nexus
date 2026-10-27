@@ -139,7 +139,7 @@ pub trait AudioBackend {
     /// monitor.
     fn set_monitor_tx_mute(&mut self, _muted: bool) {}
     /// The headphone monitor's way in for a receive source other than this backend's own capture
-    /// (Nexus's TCI client), with the monitor's gates and rate. `None` for backends with no
+    /// (Nexus's TCI client, native Flex audio), with the monitor's gates and rate. `None` for backends with no
     /// monitor; the real sound card overrides it.
     fn monitor_feed(&self) -> Option<crate::monitor::MonitorFeed> {
         None

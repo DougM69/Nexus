@@ -107,12 +107,14 @@ impl MonoResampler {
 
 /// The headphone monitor's way in for a receive source that is not the sound card's capture
 /// callback: Nexus's TCI client, whose receive audio arrives over the network on its session's
-/// thread and is what the decoders hear while Audio over TCI is on (#372: the monitor kept playing
-/// the idle sound card, so "Play receive audio here" was silent).
+/// thread and is what the decoders hear while Audio over TCI is on, or native Flex audio, which the
+/// radio loop takes from Nexus's Flex client (#372: the monitor kept playing the idle sound card,
+/// so "Play receive audio here" was silent).
 ///
-/// It is a second [`SpscRing`] of the monitor's, at the monitor's own rate, with the session's
-/// thread as its one producer and the monitor's output callback as its one consumer, so neither
-/// ring ever has two producers. The output plays this ring while the feed is active and the
+/// It is a second [`SpscRing`] of the monitor's, at the monitor's own rate, with the source of the
+/// moment (the TCI session's thread, or the radio loop for the Flex) as its one producer and the
+/// monitor's output callback as its one consumer, so neither ring ever has two producers: a source
+/// lets go of the feed before another takes it, even a TCI session a switch keeps alive. The output plays this ring while the feed is active and the
 /// card's otherwise ([`Playout`]). It shares the card path's two gates: nothing is written unless
 /// the operator's monitor is on (the TX-device guard has already refused a collision before the
 /// monitor turns on) and the monitor is not muted for a transmission.

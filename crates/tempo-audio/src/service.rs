@@ -4070,6 +4070,12 @@ struct RadioLoop {
     /// ([`RadioLoop::reconcile_tci_audio`]): the session it comes from, the receive tap's ring it
     /// feeds, and the receive floor's clocks.
     tci_rx: Option<TciRx>,
+    /// The headphone monitor's way in while native Flex audio is the receive source, and the
+    /// resampler from the DAX stream's rate to the monitor's ([`RadioLoop::feed_flex_monitor`]).
+    flex_monitor: Option<(
+        crate::monitor::MonitorFeed,
+        crate::capture_resample::CaptureResampler,
+    )>,
     /// The radio name the active radio's TCI server reported, as last handed to the engine
     /// ([`RadioLoop::note_tci_device`]), so the engine is told only when it changes.
     tci_device: Option<String>,
@@ -4688,6 +4694,7 @@ impl RadioLoop {
             flex_client_audio: false,
             flex_client_audio_failed: false,
             tci_rx: None,
+            flex_monitor: None,
             tci_device: None,
             tci_rx_failed: None,
             flex_mic_off_pushed: None,
@@ -5765,6 +5772,39 @@ impl RadioLoop {
             if on {
                 self.clear_audio_error_if_owned(engine, ErrOwner::Dax);
             }
+        }
+    }
+
+    /// "Play receive audio here" with native Flex audio on: the monitor plays the DAX receive audio
+    /// the decoders take (`dax`, this tick's, the operator's RX gain already applied), resampled to
+    /// the monitor's rate, in the sound card's place, as it plays Nexus's TCI client's audio
+    /// (`reconcile_tci_audio`), through the same jitter buffer (`monitor::Playout`). The loop is the
+    /// feed's one producer, because it is what takes the client's audio: a client a switch moved to
+    /// the monitor pool writes nothing. Written only while the feed is open: the operator's monitor
+    /// on (its TX-device guard passed) and not muted for a transmission. When native audio stops
+    /// being the source, or the sound card is rebuilt with another monitor, the monitor plays the
+    /// sound card again.
+    fn feed_flex_monitor<B: AudioBackend>(&mut self, backend: &B, dax: Option<&[f32]>) {
+        let feed = dax.and_then(|_| backend.monitor_feed());
+        if let Some((held, _)) = &self.flex_monitor {
+            if !feed.as_ref().is_some_and(|f| f.is(held)) {
+                held.set_active(false);
+                self.flex_monitor = None;
+            }
+        }
+        let (Some(samples), Some(feed)) = (dax, feed) else {
+            return;
+        };
+        let (held, resampler) = self.flex_monitor.get_or_insert_with(|| {
+            let rs = crate::capture_resample::CaptureResampler::new(
+                crate::flex::audio::MODEM_RATE,
+                feed.rate(),
+            );
+            (feed, rs)
+        });
+        held.set_active(true);
+        if held.open() && !samples.is_empty() {
+            held.push(&resampler.process(samples));
         }
     }
 
@@ -7035,6 +7075,11 @@ impl RadioLoop {
                 r.set_monitor(None);
             }
         }
+        // A Flex radio's native audio leaves the headphones with it: the monitor plays the sound
+        // card until the next radio's source takes it.
+        if let Some((m, _)) = self.flex_monitor.take() {
+            m.set_active(false);
+        }
         let mut old_transport = std::mem::replace(&mut self.applied, conn.transport);
         // The demoted transport keeps the broker's port, which the monitor's own want carries
         // too (`monitor_want`), so ordinary reconciliation keeps the connection. Not the keying
@@ -7319,6 +7364,8 @@ impl RadioLoop {
             crate::flex::audio::MODEM_RATE,
             dax_is_the_source.then_some(captured.as_slice()),
         );
+        // The headphone monitor plays what the decoders hear: the DAX audio, while it is the source.
+        self.feed_flex_monitor(&*backend, dax_is_the_source.then_some(captured.as_slice()));
         // ⚠️ RX FLOOR. Taking DAX audio means IGNORING the sound card, so a DAX source that never
         // streams (wrong IP, firewall, DAX off on the radio, slice never bound) — or one that
         // streamed and then STOPPED (a WAN drop, a radio reboot, SmartSDR restarted) — leaves the
