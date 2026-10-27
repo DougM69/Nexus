@@ -11,7 +11,7 @@ jobs:
 
     steps:
     - name: Checkout Code
-      uses: actions/checkout@v4 # <--- Mandated so isolated workspace has repository files
+      uses: actions/checkout@v4
 
     - name: Install System Dependencies
       run: |
@@ -43,10 +43,11 @@ jobs:
         export PKG_CONFIG_PATH="$(brew --prefix)/lib/pkgconfig"
         export NEXUS_ALLOW_MISSING_AICW=1
         
+        # Fixed: Passed beforeBuildCommand: "" to prevent Tauri from looking for remote folders
         cargo tauri build \
           --features radio,custom-protocol \
           --bundles app,dmg \
-          --config '{"bundle":{"createUpdaterArtifacts":false}}'
+          --config '{"build":{"beforeBuildCommand":""},"bundle":{"createUpdaterArtifacts":false}}'
 
     - name: Upload Finished Intel Installer (.dmg)
       uses: actions/upload-artifact@v4
