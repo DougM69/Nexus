@@ -16614,6 +16614,34 @@ impl Engine {
         }
     }
 
+    /// The satellite stamp (`PROP_MODE` SAT with its `SAT_NAME`), under the three guards
+    /// described where the log funnel calls it. A record carrying a propagation mode or a
+    /// satellite name of its own is left as it came.
+    fn stamp_satellite(&self, rec: &mut QsoRecord) {
+        if rec.prop_mode.is_some() || rec.sat_name.is_some() {
+            return;
+        }
+        // A HELD transponder first; after LOS/"None"/a track stop, the bird last worked —
+        // the guide's promise that you can log once your hands are free.
+        let Some(st) = self.sat_tune.as_ref().or(self.sat_last_worked.as_ref()) else {
+            return;
+        };
+        let Some(name) = Self::lotw_sat_name(&st.label) else {
+            return;
+        };
+        let f_hz = if rec.freq_mhz > 0.0 {
+            (rec.freq_mhz * 1e6) as i64
+        } else {
+            (self.settings.dial_mhz * 1e6) as i64
+        };
+        let centre = st.transponder.downlink_centre_hz as i64;
+        let guard = st.transponder.half_width_hz as i64 + 20_000;
+        if centre > 0 && (f_hz - centre).abs() <= guard {
+            rec.prop_mode = Some("SAT".into());
+            rec.sat_name = Some(name.to_string());
+        }
+    }
+
     /// What a contact held for the operator's confirm takes when it is HELD: the station call, the
     /// activation and the station as they are now. The confirm can come after Stop, or after a
     /// Start, and the contact then logs the park it was made from, with that park's grid and state
@@ -16624,9 +16652,13 @@ impl Engine {
         }
         self.stamp_activation(rec);
         self.stamp_station_now(rec);
+        // ⛔ The satellite FIRST, as the bird held now: the popup then opens on SAT with its name,
+        // and the propagation mode it remembers below never takes a satellite contact's place.
+        // Remembered ES or EME over a satellite contact logged it with no satellite name: no
+        // LoTW satellite credit, and a 70 cm contact counted toward terrestrial VUCC.
+        self.stamp_satellite(rec);
         // The propagation mode the popup was last given, offered for this one
-        // ([`Settings::log_prop_mode`]). A contact carrying its own (the satellite stamp's) keeps
-        // it.
+        // ([`Settings::log_prop_mode`]). A contact carrying its own (the satellite's) keeps it.
         if rec.prop_mode.is_none() && !self.settings.log_prop_mode.is_empty() {
             rec.prop_mode = Some(self.settings.log_prop_mode.clone());
         }
@@ -16799,25 +16831,10 @@ impl Engine {
         // Nexus's own Satellite VUCC / sat-needs boards (`qso_is_sat` reads PROP_MODE).
         // docs/guide/satellites.md and the CHANGELOG no longer tell the operator to edit
         // ADIF by hand; the Sat VUCC card's caveat line is gone with them.
-        if rec.prop_mode.is_none() && rec.sat_name.is_none() {
-            // A HELD transponder first; after LOS/"None"/a track stop, the bird last worked —
-            // the guide's promise that you can log once your hands are free.
-            if let Some(st) = self.sat_tune.as_ref().or(self.sat_last_worked.as_ref()) {
-                if let Some(name) = Self::lotw_sat_name(&st.label) {
-                    let f_hz = if rec.freq_mhz > 0.0 {
-                        (rec.freq_mhz * 1e6) as i64
-                    } else {
-                        (self.settings.dial_mhz * 1e6) as i64
-                    };
-                    let centre = st.transponder.downlink_centre_hz as i64;
-                    let guard = st.transponder.half_width_hz as i64 + 20_000;
-                    if centre > 0 && (f_hz - centre).abs() <= guard {
-                        rec.prop_mode = Some("SAT".into());
-                        rec.sat_name = Some(name.to_string());
-                    }
-                }
-            }
-        }
+        //
+        // A contact held for the popup was stamped at the hold ([`Self::stamp_hold`]); this is
+        // the stamp for one logged straight away.
+        self.stamp_satellite(&mut rec);
 
         // Duplicate-contact guard — the LAST line of defense against logging the same
         // QSO twice. The per-Station `qso_logged` latch only blocks a re-log within ONE
@@ -58092,6 +58109,65 @@ mod tests {
         assert!(confirm_held(&mut e, sent.into()));
         assert_eq!(e.stored_log()[0].prop_mode, None);
         assert_eq!(e.settings().log_prop_mode, "", "never remembered");
+    }
+
+    /// SO-50 held, as the Satellites section holds it for a pass.
+    fn hold_so50(e: &mut Engine) {
+        e.set_sat_transponder(Some((
+            "SAUDISAT 1C (SO-50)|FM Voice Repeater".into(),
+            0,
+            tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000),
+        )));
+    }
+
+    /// ⛔ **A satellite contact is logged as a satellite contact whatever propagation mode the
+    /// popup remembers.** The remembered mode went on when the contact was held, and the satellite
+    /// stamp, at log time, only fills an empty mode: with ES remembered from a terrestrial opening,
+    /// an SO-50 contact logged ES with no satellite name, so no LoTW satellite credit and a 70 cm
+    /// contact counted toward terrestrial VUCC. The satellite is now stamped at the hold, before the
+    /// remembered mode, so the popup opens on SAT with its name; the remembered mode is kept for
+    /// the next contact that is not on a satellite.
+    #[test]
+    fn a_satellite_contact_logs_as_satellite_whatever_prop_mode_is_remembered() {
+        // CONTROL "": nothing remembered, the case that always worked.
+        for remembered in ["ES", ""] {
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            e.settings.prompt_to_log = true;
+            e.settings.log_prop_mode = remembered.into();
+            hold_so50(&mut e);
+            e.settings.dial_mhz = 436.7935;
+            complete_a_contact(&mut e, "W9XYZ", 1);
+            let shown = e.snapshot().pending_log.expect("shown for confirm");
+            assert_eq!(
+                shown.prop_mode.as_deref(),
+                Some("SAT"),
+                "the popup opens on SAT (remembered {remembered:?})"
+            );
+            assert!(confirm_held(&mut e, shown.into()));
+            let logged = &e.stored_log()[0];
+            assert_eq!(
+                (logged.prop_mode.as_deref(), logged.sat_name.as_deref()),
+                (Some("SAT"), Some("SO-50")),
+                "remembered {remembered:?}, logged at {}",
+                logged.freq_mhz
+            );
+            assert_eq!(
+                e.settings().log_prop_mode,
+                remembered,
+                "the satellite contact leaves the remembered mode alone"
+            );
+            // The next contact, off the bird's downlink, takes the remembered mode as before.
+            e.settings.dial_mhz = 50.313;
+            complete_a_contact(&mut e, "K1ABC", 5);
+            let next = e.snapshot().pending_log.expect("the next one");
+            assert_eq!(
+                next.prop_mode.as_deref(),
+                Some(remembered).filter(|m| !m.is_empty()),
+                "a 6 m contact is offered the remembered mode"
+            );
+            assert!(confirm_held(&mut e, next.into()));
+            assert_eq!(e.stored_log()[1].sat_name, None);
+        }
     }
 
     /// Confirm the popup's contact the way the desktop does: with the key the snapshot showed.
