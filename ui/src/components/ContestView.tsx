@@ -42,7 +42,7 @@ import { contestRate, RATE_WINDOWS } from '../features/contestRate'
 import { bandRank, operatorSummaryLines } from '../features/contestOperators'
 import { formatOpTime, OFF_TIME_MIN_SEC, offTimeRule, operatingTime } from '../features/contestOpTime'
 import { OperatorStatsBoard } from './ContestOperators'
-import { stationMode, usePskName } from '../features/contestMode'
+import { stationMode, useKeyboardMode } from '../features/contestMode'
 import { CLEAR_TOAST_MS, REMOVE_CONFIRM_MS, SERVICE_NAMES, clearText, contactCount, contactLabel, newestContact, removalText, restoreText, utcHhmm } from '../features/contestRemoval'
 import { ContestContactEdit, focusOpenContestEdit, type EditNote } from './ContestContactEdit'
 import { ContestSpotMe } from './ContestSpotMe'
@@ -69,7 +69,7 @@ import { modeClassOf } from '../features/needs'
 import { CONTEST_LOG_MAX_SHARE, CONTEST_LOG_SPLIT_MAX, CONTEST_LOG_SPLIT_MIN } from '../features/paneSeam'
 import { PaneSeam } from './PaneSeam'
 import { UtcClock } from './UtcClock'
-import { askMainToWorkIn, dismissWorkInHint, workInHintSeen, type WorkInView } from '../features/contestWorkIn'
+import { askMainToWorkIn, dismissWorkInHint, workInHintSeen, workInLabel, workInTitle, workInViewsFor, type WorkInView } from '../features/contestWorkIn'
 import { useFeatures } from '../useFeatures'
 import { upperTyped } from '../typedInput'
 
@@ -204,6 +204,9 @@ interface Props {
    *  the others (`stationMode`) — so a station on phone at a contest that bans FT8 is not told FT8 is
    *  not permitted. Absent (the Remote page, whose observation carries no section), it reads `tier`. */
   section?: string
+  /** The Keyboard section's mode on the air (`snap.radio.keyboardMode`: PSK31, QPSK31 or JTTY), which
+   *  the chip names on that section: PSK and JTTY are one section, so `section` cannot say which. */
+  keyboardMode?: string
   /** Open Settings at a section (App's `openSettingsAt`): where the mode switch sends an
    *  operator whose contest cannot start yet. */
   onOpenSettings?: (target: string) => void
@@ -3048,6 +3051,7 @@ export function ContestView({
   fdRuleset = null,
   tier,
   section,
+  keyboardMode: keyboardModeProp,
   observation,
   onOpenSettings,
   onSettingsSaved,
@@ -3062,8 +3066,8 @@ export function ContestView({
 }: Props) {
   const observed = observation !== undefined
   // The mode the banned-mode chip names: the station's own, given its section.
-  const pskName = usePskName(observed ? undefined : section)
-  const activeMode = section === undefined ? tier : stationMode(section, tier, pskName)
+  const keyboardMode = useKeyboardMode(observed ? undefined : section, keyboardModeProp)
+  const activeMode = section === undefined ? tier : stationMode(section, tier, keyboardMode)
   // The clock the spot advisory judges the event window by.
   const nowUnix = useNowUnix()
   // Log tail: bottom-pinned via the shared discipline. The old unconditional
@@ -3085,9 +3089,10 @@ export function ContestView({
   // The work-in hint, until it is dismissed on this computer (features/contestWorkIn).
   const [workInHint, setWorkInHint] = useState(() => !workInHintSeen())
   // The route to the cockpits that send: only with Contest mode on, and never on a page that watches;
-  // one button per cockpit this station shows (Settings ▸ Features, read as the rail reads it).
+  // one button per cockpit this station shows (Settings ▸ Features, read as the rail reads it), and
+  // per cockpit whose mode the contest allows (RTTY alone for the RTTY Roundup, `workInViewsFor`).
   const features = useFeatures()
-  const workInViews = (['cw', 'phone'] as const).filter((v) => features.enabled[v] !== false)
+  const workInViews = workInViewsFor(fdRuleset?.bannedModes, (v) => features.enabled[v] !== false)
   const workIn = fdActive && !observed && workInViews.length > 0
   const openedForRun = useRef(false)
 
@@ -3878,10 +3883,10 @@ export function ContestView({
                 key={view}
                 type="button"
                 className="export-btn"
-                title={view === 'cw' ? t('fieldDay.workIn.cw.title') : t('fieldDay.workIn.phone.title')}
+                title={workInTitle(view)}
                 onClick={() => (onWorkIn ?? askMainToWorkIn)(view)}
               >
-                {view === 'cw' ? t('fieldDay.workIn.cw') : t('fieldDay.workIn.phone')}
+                {workInLabel(view)}
               </button>
             ))}
           </div>

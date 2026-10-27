@@ -1677,6 +1677,12 @@ pub struct RadioStatus {
     /// mode, not the sideband it was generated on) without a settings round-trip.
     #[serde(default)]
     pub operating_mode: String,
+    /// The mode the Keyboard section's contacts log under: "JTTY" on the JTTY modem, else the PSK
+    /// sub-mode picked in the PSK cockpit ("PSK31" | "QPSK31"). PSK and JTTY are ONE section
+    /// ("keyboard" above), so the section alone cannot say which is on the air. Always filled;
+    /// read it while `operating_mode` is "keyboard". Empty from a station older than this field.
+    #[serde(default)]
+    pub keyboard_mode: String,
     /// The rig keyed by something that is NOT Nexus (mic PTT / straight key), read back
     /// over CAT (#57). Display-only — feeds the TX badge and the meter pane.
     #[serde(default)]

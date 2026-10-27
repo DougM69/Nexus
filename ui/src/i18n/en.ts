@@ -5140,6 +5140,8 @@ export const EN = {
   'contestSetup.ready.mode': 'You are on {{mode}}.',
   'contestSetup.ready.banned':
     '{{contest}} does not allow {{mode}}: contacts in it are logged but score nothing. Work it in CW or Phone instead.',
+  'contestSetup.ready.bannedRtty':
+    '{{contest}} does not allow {{mode}}: contacts in it are logged but score nothing. Work it in RTTY instead.',
   'contestSetup.ready.sp':
     'Start turns the contest on in S&P. The setup never calls CQ: Running is your own press, on the Contest screen or a cockpit.',
   'contestSetup.start.title': 'Start {{contest}}',
@@ -5281,6 +5283,10 @@ export const EN = {
   'fieldDay.workIn.phone': 'Work this contest in Phone',
   'fieldDay.workIn.phone.title':
     'Go to the Phone screen in the main window, with this contest on its log line: Enter Sends Message, Running / S&P and the F-key messages are there.',
+  // Offered instead of CW and Phone where a contest takes RTTY alone (the ARRL RTTY Roundup).
+  'fieldDay.workIn.rtty': 'Work this contest in RTTY',
+  'fieldDay.workIn.rtty.title':
+    'Go to the RTTY screen in the main window, with this contest on its log line: its macros and the exchange grab are there.',
   'fieldDay.workIn.hint.aria': 'Where sending happens',
   'fieldDay.workIn.hint':
     'This screen logs and keeps score. Its Running button turns TX on and calls CQ on an FT mode. To send on CW or Phone, work the contest from the CW or Phone screen: its log line has Enter Sends Message, Running / S&P and the F-key messages.',

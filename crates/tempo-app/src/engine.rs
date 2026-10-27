@@ -9718,6 +9718,19 @@ impl Engine {
             && self.settings.keyboard_modem == crate::settings::KeyboardModem::Psk
     }
 
+    /// The mode the Keyboard section's contacts log under, as its cockpits log them: JTTY on the
+    /// JTTY modem, else the PSK sub-mode picked in the PSK cockpit. PSK and JTTY are one section,
+    /// so anything naming the Keyboard section's mode names it from here, never from the section.
+    pub fn keyboard_mode_name(&self) -> &'static str {
+        match self.settings.keyboard_modem {
+            crate::settings::KeyboardModem::Jtty => "JTTY",
+            crate::settings::KeyboardModem::Psk => match self.psk_mode {
+                tempo_core::psk::PskModeKind::Bpsk31 => "PSK31",
+                tempo_core::psk::PskModeKind::Qpsk31 => "QPSK31",
+            },
+        }
+    }
+
     /// The operator is in the JTTY section: the Keyboard section with JTTY as its modem
     /// ([`crate::settings::KeyboardModem`]).
     pub fn jtty_section(&self) -> bool {
@@ -27942,6 +27955,7 @@ contact yourself."
             crate::settings::OperatingMode::Keyboard => "keyboard",
         }
         .to_string();
+        s.radio.keyboard_mode = self.keyboard_mode_name().to_string();
         s.radio.cw_wpm = self.settings.cw_wpm;
         s.radio.split_tx_mhz = self.split_tx_mhz;
         s.radio.cw_keyer = match self.settings.cw_keyer {
@@ -31160,7 +31174,7 @@ contact yourself."
     ///
     /// Both legs are the on-air RF: the dial plus the audio offset the section's signal sits at
     /// ([`Self::logged_signal_offset`]) — FT's TX offset sideband-signed (USB adds, LSB
-    /// subtracts) exactly as WSJT-X logs it, PSK31's centre, RTTY's mark, and none for voice or
+    /// subtracts) exactly as WSJT-X logs it, PSK31's centre, JTTY's Tx, RTTY's mark, and none for voice or
     /// the rig's own CW. For FT the bare dial alone would log two stations at different audio
     /// offsets as identical.
     ///
@@ -31268,10 +31282,12 @@ contact yourself."
                     )
                 }
             }
-            // PSK31: the netted centre, on the side the dial is commanded — USB, the section's
-            // convention.
+            // PSK31: the netted centre; JTTY: its Tx frequency, as WSJT-X logs JTTY (the dial plus
+            // `TxFreqSpinBox`, which JTTY's Tx box sets) — the low edge of `keyboard_span_hz`,
+            // which names each modem's own. On the side the dial is commanded — USB, the
+            // section's convention.
             OperatingMode::Keyboard => (
-                self.psk_center_hz() as f64 / 1e6,
+                self.keyboard_span_hz().0 / 1e6,
                 Self::side_is_lsb(&self.rig_mode_effective()).unwrap_or(false),
             ),
         }
@@ -75756,6 +75772,91 @@ mod logged_frequency_tests {
                 dial: 14.070,
                 band: "20m",
                 sideband: "LSB",
+                class: "DIG",
+                submode: Some("PSK31"),
+                word: "PKTUSB",
+                on_air_hz: 14_071_000,
+            },
+            // Netted off 1000 Hz: the centre the operator netted on, the same number the PSK
+            // screen's log strip adds outside a contest — and QPSK31 the same.
+            Case {
+                name: "PSK31 at 14.070, netted on 1200 Hz",
+                section: "keyboard",
+                setup: psk_net_1200,
+                dial: 14.070,
+                band: "20m",
+                sideband: "USB",
+                class: "DIG",
+                submode: Some("PSK31"),
+                word: "PKTUSB",
+                on_air_hz: 14_071_200,
+            },
+            Case {
+                name: "QPSK31 at 14.070, netted on 1200 Hz",
+                section: "keyboard",
+                setup: qpsk_net_1200,
+                dial: 14.070,
+                band: "20m",
+                sideband: "USB",
+                class: "DIG",
+                submode: Some("QPSK31"),
+                word: "PKTUSB",
+                on_air_hz: 14_071_200,
+            },
+        ]);
+    }
+
+    fn psk_net_1200(e: &mut Engine) {
+        e.psk_net(1200.0);
+    }
+
+    fn qpsk_net_1200(e: &mut Engine) {
+        e.set_psk_mode(tempo_core::psk::PskModeKind::Qpsk31, false)
+            .expect("PSK idle");
+        e.psk_net(1200.0);
+    }
+
+    fn jtty_tx_1800(e: &mut Engine) {
+        e.set_jtty_tx(1800.0).expect("JTTY idle");
+    }
+
+    /// ⭐ JTTY: the dial plus JTTY's Tx frequency, as WSJT-X logs a JTTY contact (the dial plus
+    /// `TxFreqSpinBox`, which JTTY's own Tx box sets) — never PSK's centre, which JTTY does not
+    /// transmit on. The control: PSK31 with JTTY's Tx moved still logs at PSK's centre.
+    #[test]
+    fn a_jtty_contest_contact_is_logged_at_its_tx_frequency() {
+        assert_cases(&[
+            Case {
+                name: "JTTY at 14.090, Tx 1800 Hz",
+                section: "jtty",
+                setup: jtty_tx_1800,
+                dial: 14.090,
+                band: "20m",
+                sideband: "USB",
+                class: "DIG",
+                submode: Some("JTTY"),
+                word: "PKTUSB",
+                on_air_hz: 14_091_800,
+            },
+            Case {
+                name: "JTTY at 14.090, Tx where selecting JTTY puts it",
+                section: "jtty",
+                setup: no_setup,
+                dial: 14.090,
+                band: "20m",
+                sideband: "USB",
+                class: "DIG",
+                submode: Some("JTTY"),
+                word: "PKTUSB",
+                on_air_hz: 14_091_500,
+            },
+            Case {
+                name: "PSK31 at 14.070, JTTY's Tx moved",
+                section: "keyboard",
+                setup: jtty_tx_1800,
+                dial: 14.070,
+                band: "20m",
+                sideband: "USB",
                 class: "DIG",
                 submode: Some("PSK31"),
                 word: "PKTUSB",

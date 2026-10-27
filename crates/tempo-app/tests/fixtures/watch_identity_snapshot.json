@@ -74,6 +74,7 @@
     "holdTxFreq": false,
     "hrdLinkUp": null,
     "hrdQueued": 0,
+    "keyboardMode": "PSK31",
     "manualNotch": null,
     "micGain": null,
     "monitor": null,

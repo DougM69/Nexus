@@ -308,13 +308,15 @@ const OPERATE_TIERS: Tier[] = [
  *  no top bar, so no Stop TX of its own (the operator's 2026-10-01 ruling). */
 const ESC_HALT_VIEWS: ReadonlySet<View> = new Set<View>(['chat', 'phone', 'jtty', 'sstv', 'aprs', 'sats', 'connect'])
 /** The screen of each section the station reports (`radio.operatingMode`), for a computer driving
- *  it to follow. 'keyboard' is PSK's screen, the section's own landing. */
+ *  it to follow. 'keyboard' is PSK's screen, the section's own landing; 'jtty' is the Keyboard
+ *  section while the station names JTTY as its modem (`radio.keyboardMode`). */
 const SCREEN_BY_SECTION: Partial<Record<string, View>> = {
   digital: 'operate',
   phone: 'phone',
   cw: 'cw',
   rtty: 'rtty',
   keyboard: 'psk',
+  jtty: 'jtty',
 }
 function App() {
   const [theme, setTheme, themeChoice] = useTheme()
@@ -1267,20 +1269,25 @@ function App() {
   // Keyed on the station's value alone, so the operator's own pick (sent by the rig-mode effect)
   // is never pulled back by a snapshot taken before the station answered it. A screen with no
   // section of its own (Map, Logbook…) stays put, as does a section whose screen is switched off.
+  // PSK and JTTY are one section, so in it the screen is the modem the station names on the air
+  // (`keyboardMode`). A station too old to name it reports the section alone, where either keyboard
+  // screen is the station's and a screen from elsewhere lands on PSK's, as before.
   const stationSection = snap?.radio.operatingMode
+  const stationModem = stationSection === 'keyboard' ? snap?.radio.keyboardMode : undefined
+  const stationScreen = stationModem === 'JTTY' ? 'jtty' : stationSection
   useEffect(() => {
-    if (!drivesAnotherStation() || !stationSection) return
+    if (!drivesAnotherStation() || !stationScreen) return
     const own = RIG_MODE_BY_VIEW[viewRef.current]
     if (!own) return
-    if ((own === 'jtty' ? 'keyboard' : own) === stationSection) return
-    const target = SCREEN_BY_SECTION[stationSection]
+    if (own === stationScreen || (!stationModem && own === 'jtty' && stationScreen === 'keyboard')) return
+    const target = SCREEN_BY_SECTION[stationScreen]
     if (!target || !features.isOn(target)) return
     lastOpModeRef.current = RIG_MODE_BY_VIEW[target] ?? 'digital'
     lastHomedModeRef.current = lastOpModeRef.current
     afarEntryRef.current = target
     setView(target)
     // The station's section alone: a re-run on the screen changing would pull the operator's pick back.
-  }, [stationSection])
+  }, [stationScreen])
   // Declared here (rather than beside bandPlan below) because the need gate reads it: the
   // band scopes live in settings and everything derived from `needAlerts` sits right below.
   const [settings, setSettings] = useState<Settings | null>(null)
@@ -3144,7 +3151,7 @@ function App() {
     // and mode it is spotted on? If so, Hide worked leaves it alone.
     needAlerts: boardAlerts,
     // The Spot me in the board's head (SpotsSpotMe): the station's mode, which its comment names.
-    spotMe: { section: snap.radio.operatingMode, sideband: snap.radio.sideband, tier },
+    spotMe: { section: snap.radio.operatingMode, keyboardMode: snap.radio.keyboardMode, sideband: snap.radio.sideband, tier },
   }
   const neededBoard = {
     // Un-gated by MODE FEATURE — the board's own per-mode toggles decide what shows,
@@ -3463,6 +3470,7 @@ function App() {
                 fdRuleset={fdRuleset}
                 tier={tier}
                 section={snap.radio.operatingMode}
+                keyboardMode={snap.radio.keyboardMode}
                 onOpenSettings={openSettingsAt}
                 onSettingsSaved={handleSettingsSaved}
                 contestSwitch={contestSwitch}

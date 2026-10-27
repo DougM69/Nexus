@@ -63,6 +63,7 @@ vi.mock('./RfScopePane', () => ({ RfScopePane: () => null }))
 type StubProps = {
   cwLive?: { call: string | null; confirmed: boolean } | null
   mode: string
+  logOffsetHz?: number
   logRequest?: { id: number; call: string; claim: () => Promise<boolean> } | null
   onLogRequest?: (id: number, outcome: { kind: string; held?: string }) => void
 }
@@ -71,7 +72,7 @@ vi.mock('./LogEntry', () => ({
   LogEntry: (p: StubProps) => {
     strip.last = p
     return (
-      <div data-testid="log-stub" data-mode={p.mode}>
+      <div data-testid="log-stub" data-mode={p.mode} data-offset={p.logOffsetHz}>
         <span className="stub-call">{p.cwLive?.call ?? ''}</span>
       </div>
     )
@@ -193,6 +194,16 @@ describe('the JTTY cockpit shows what the engine decoded', () => {
     fireEvent.click(all.getByRole('button', { name: 'W1AW' }))
     expect(screen.getByTestId('log-stub').querySelector('.stub-call')?.textContent).toBe('W1AW')
     expect(screen.getByTestId('log-stub').dataset.mode).toBe('JTTY')
+  })
+})
+
+describe('the JTTY log strip logs the frequency WSJT-X logs', () => {
+  it('a contact logs at the dial plus JTTY’s Tx frequency, never PSK’s centre; a station that sends no transmitter logs the dial', async () => {
+    await mount(state({ tx: txState({ txHz: 1800 }) }))
+    await waitFor(() => expect(screen.getByTestId('log-stub').dataset.offset).toBe('1800'))
+    cleanup()
+    await mount(state())
+    expect(screen.getByTestId('log-stub').dataset.offset, 'no transmitter: the dial, as before').toBeUndefined()
   })
 })
 

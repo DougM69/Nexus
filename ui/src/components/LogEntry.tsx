@@ -546,7 +546,11 @@ export function LogEntry({
   type DraftContext = { band: string; freqMhz: number; mode: string }
   const [remoteDraftContext, setRemoteDraftContext] = useState<DraftContext | null>(null)
   const [remoteWorkOffer, setRemoteWorkOffer] = useState<({ call: string; ts: number } & { context: DraftContext }) | null>(null)
-  const currentDraftContext = (): DraftContext => ({ band: snap.radio.band, freqMhz: snap.radio.dialMhz, mode })
+  // The frequency a contact logged now is on: the dial, plus the host's audio offset where it logs
+  // one (`logOffsetHz`), to the hertz. A Remote draft captures the same frequency.
+  const liveFreqMhz =
+    logOffsetHz == null ? snap.radio.dialMhz : Math.round(snap.radio.dialMhz * 1e6 + logOffsetHz) / 1e6
+  const currentDraftContext = (): DraftContext => ({ band: snap.radio.band, freqMhz: liveFreqMhz, mode })
   const rememberRemoteContext = () => {
     if (remoteMode) setRemoteDraftContext(current => current ?? currentDraftContext())
   }
@@ -1997,10 +2001,6 @@ export function LogEntry({
   // Remote drafts survive navigation and other operators' QSYs. Keep their
   // captured contact context; the explicit other-radio override still wins.
   const draftContext = remoteMode ? remoteDraftContext : null
-  // The frequency a contact logged now is on: the dial, plus the host's audio offset where it logs
-  // one (`logOffsetHz`), to the hertz.
-  const liveFreqMhz =
-    logOffsetHz == null ? snap.radio.dialMhz : Math.round(snap.radio.dialMhz * 1e6 + logOffsetHz) / 1e6
   const effBand = overrideOpen ? ovBand : draftContext?.band ?? snap.radio.band
   const effFreqMhz = overrideOpen ? ovFreqNum : draftContext?.freqMhz ?? liveFreqMhz
   const effMode = overrideOpen ? ovMode : draftContext?.mode ?? mode

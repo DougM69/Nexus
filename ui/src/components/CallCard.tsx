@@ -250,7 +250,8 @@ export function liveMode(snap: Pick<AppSnapshot, 'radio' | 'link'>): string {
     case 'rtty':
       return 'RTTY'
     case 'keyboard':
-      return 'PSK31'
+      // PSK and JTTY are one section: the mode on the air is the station's `keyboardMode`.
+      return snap.radio.keyboardMode || 'PSK31'
     default:
       return snap.link.tier
   }

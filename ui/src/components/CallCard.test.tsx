@@ -13,6 +13,7 @@ import {
   callCardTrigger,
   closeCallCard,
   historyGrid,
+  liveMode,
   localTime,
   placeCallCard,
   type Box,
@@ -367,5 +368,18 @@ describe('hover to open', () => {
       vi.advanceTimersByTime(400)
     })
     expect(card()).toBeNull()
+  })
+})
+
+// NEW MODE is new against the mode the radio is working. PSK and JTTY are one operating section, so
+// the section alone named a JTTY station PSK31; the snapshot's `keyboardMode` says which.
+describe('the mode the radio is working', () => {
+  const at = (radio: Partial<AppSnapshot['radio']>) =>
+    liveMode({ radio: { band: '20m', sideband: 'USB', ...radio } as AppSnapshot['radio'], link: { tier: 'FT8' } as AppSnapshot['link'] })
+  it('names the keyboard mode on the air, and PSK31 from a station too old to say', () => {
+    expect(at({ operatingMode: 'keyboard', keyboardMode: 'JTTY' })).toBe('JTTY')
+    expect(at({ operatingMode: 'keyboard', keyboardMode: 'QPSK31' })).toBe('QPSK31')
+    expect(at({ operatingMode: 'keyboard' })).toBe('PSK31')
+    expect(at({ operatingMode: 'rtty', keyboardMode: 'JTTY' }), 'another section: its own mode').toBe('RTTY')
   })
 })

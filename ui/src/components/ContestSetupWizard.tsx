@@ -26,7 +26,7 @@
 // ⚠️ A CONTEST ALREADY RUNNING ends when a different one starts (`save_switches_contest`); its
 // contacts stay in its own journal. The pick step says so and asks for a tick before it goes on.
 // ---------------------------------------------------------------------------
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { Dialog } from './ui/Dialog'
 import { t } from '../i18n'
 import type { MessageKey } from '../i18n'
@@ -45,8 +45,8 @@ import { patchSettings } from '../settings/patch'
 import { CONTESTS, contestName, contestRoleWords, isFieldDay } from '../fdEvent'
 import { blockerText, startBlocker } from '../features/contestStart'
 import { locationWarningText } from '../features/contestLocation'
-import { stationMode } from '../features/contestMode'
-import { askMainToWorkIn, type WorkInView } from '../features/contestWorkIn'
+import { stationMode, useKeyboardMode } from '../features/contestMode'
+import { askMainToWorkIn, workInLabel, workInViewsFor, type WorkInView } from '../features/contestWorkIn'
 import { upperTyped } from '../typedInput'
 
 /** Raised on this window after the setup saves, for App to read the settings and snapshot again (the
@@ -384,8 +384,12 @@ export function ContestSetupWizard({
   const liveSends = session?.composingText ?? ''
 
   // Step 4: the station as it is now. Read-only; nothing here is a refusal.
-  const mode = snap ? stationMode(snap.radio.operatingMode, snap.link?.tier, null) : ''
+  // PSK and JTTY are one section: the mode on the air is the snapshot's `keyboardMode`.
+  const keyboardMode = useKeyboardMode(snap?.radio.operatingMode, snap?.radio.keyboardMode)
+  const mode = snap ? stationMode(snap.radio.operatingMode, snap.link?.tier, keyboardMode) : ''
   const banned = !!mode && (preview?.bannedModes ?? []).some((m) => m.toUpperCase() === mode.toUpperCase())
+  // Where to work it instead: CW and Phone, or RTTY where the contest takes RTTY alone.
+  const workInViews = workInViewsFor(preview?.bannedModes)
   const catOk = snap?.radio.catOk
   const workIn = (view: WorkInView) => (onWorkIn ?? askMainToWorkIn)(view)
 
@@ -829,14 +833,18 @@ export function ContestSetupWizard({
             {mode && <li>{t('contestSetup.ready.mode', { mode })}</li>}
             {banned && (
               <li className="warn" data-banned>
-                {t('contestSetup.ready.banned', { contest: name, mode })}{' '}
+                {workInViews.includes('rtty')
+                  ? t('contestSetup.ready.bannedRtty', { contest: name, mode })
+                  : t('contestSetup.ready.banned', { contest: name, mode })}{' '}
                 <span className="contest-setup-workin">
-                  <button type="button" className="settings-linkbtn" onClick={() => workIn('cw')}>
-                    {t('fieldDay.workIn.cw')}
-                  </button>{' '}
-                  <button type="button" className="settings-linkbtn" onClick={() => workIn('phone')}>
-                    {t('fieldDay.workIn.phone')}
-                  </button>
+                  {workInViews.map((view, i) => (
+                    <Fragment key={view}>
+                      {i > 0 && ' '}
+                      <button type="button" className="settings-linkbtn" onClick={() => workIn(view)}>
+                        {workInLabel(view)}
+                      </button>
+                    </Fragment>
+                  ))}
                 </span>
               </li>
             )}

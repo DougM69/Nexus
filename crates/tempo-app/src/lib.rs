@@ -281,6 +281,8 @@ impl AppState {
                 band: "20m".to_string(),
                 sideband: "USB".to_string(),
                 operating_mode: "digital".to_string(),
+                // The engine fills it from the Keyboard section's modem every snapshot.
+                keyboard_mode: String::new(),
                 rig_keyed: false,
                 hrd_link_up: None,
                 hrd_queued: 0,

@@ -52,7 +52,7 @@ const COUNTY_LISTS: Record<string, { state: string }> = {
 }
 
 /** The lists of US states and Canadian provinces, and the ARRL/RAC section lists. */
-const STATE_LISTS: ReadonlySet<string> = new Set(['cqp_states', 'cqww_rtty_qth', 'il_mults', 'ny_mults', 'oh_mults'])
+const STATE_LISTS: ReadonlySet<string> = new Set(['arrl_rtty_qth', 'cqp_states', 'cqww_rtty_qth', 'il_mults', 'ny_mults', 'oh_mults'])
 const SECTION_LISTS: ReadonlySet<string> = new Set(['arrl_sections', 'fd_sections', 'ss_sections'])
 
 /** The roles of a station OUTSIDE the state whose QSO party it works (`contestRoleWords`' ids).

@@ -194,10 +194,10 @@ fn pota_mode(engine: &Engine) -> Option<&'static str> {
         }
         OperatingMode::Cw => Some("CW"),
         OperatingMode::Rtty => Some("RTTY"),
-        OperatingMode::Keyboard => Some(match engine.psk_mode().0 {
-            tempo_core::psk::PskModeKind::Bpsk31 => "PSK31",
-            tempo_core::psk::PskModeKind::Qpsk31 => "QPSK31",
-        }),
+        // PSK31, QPSK31 or JTTY: the Keyboard section is all three, and pota.app lists no JTTY.
+        OperatingMode::Keyboard => {
+            Some(engine.keyboard_mode_name()).filter(|m| POTA_APP_MODES.contains(m))
+        }
     }
 }
 
@@ -1245,6 +1245,14 @@ mod tests {
             engine.set_operating_mode(section, false);
             assert_eq!(mode(&engine), Some(expected), "{section}");
         }
+        // JTTY is the Keyboard section too, and pota.app lists no JTTY: no mode, never PSK31.
+        engine.set_operating_mode("jtty", false);
+        assert_eq!(mode(&engine), None, "JTTY");
+        engine.set_operating_mode("keyboard", false);
+        engine
+            .set_psk_mode(tempo_core::psk::PskModeKind::Qpsk31, false)
+            .unwrap();
+        assert_eq!(mode(&engine), Some("QPSK31"), "control: PSK's own sub-mode");
         // Every name Nexus can send is one pota.app lists.
         for tier in Tier::ALL {
             let mut e = Engine::new("W9XYZ", "EN52", 0);

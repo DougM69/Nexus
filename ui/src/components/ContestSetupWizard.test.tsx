@@ -9,6 +9,15 @@ import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-li
 import { ContestSetupWizard, contestSoon, enteredContest, fdPowerAnswer, fdPowerFrom, SOON_SECS } from './ContestSetupWizard'
 import type { AppSnapshot, Settings } from '../types'
 import type { ContestWindow, FdRulesetDto } from '../api'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+
+/** The ARRL RTTY Roundup's banned modes, as the rules seed ships them. */
+const RRU_BANNED: string[] = (
+  JSON.parse(readFileSync(resolve(process.cwd(), '../crates/tempo-core/src/fd_rules.seed.json'), 'utf8')) as {
+    rulesets: { event: string; banned_modes: string[] }[]
+  }
+).rulesets.find((r) => r.event === 'arrlrtty')!.banned_modes
 
 const api = vi.hoisted(() => {
   const spies: Record<string, ReturnType<typeof vi.fn>> = {}
@@ -65,7 +74,28 @@ function preview(patch: Partial<Settings>): FdRulesetDto {
       entryClasses: ['ILLINOIS FIXED HIGH POWER', 'UNLIMITED'],
     }
   }
+  // The ARRL RTTY Roundup, as the engine previews it (src-tauri's
+  // `the_preview_offers_the_declarations_the_sponsor_names`): a W/VE station sends its state, heads its
+  // file with its ARRL section (LOCATION), and the contest takes RTTY alone.
+  if (event === 'arrlrtty') {
+    const state = (s.contestQthState ?? '').trim()
+    return {
+      event,
+      rulesYear: 2026,
+      bannedModes: RRU_BANNED,
+      spottingAllowed: true,
+      clusterAllowed: true,
+      enforcement: 'warn',
+      role: 'w_ve',
+      exchange: ['599', state],
+      problem: '',
+      sentSettings: ['contest_qth_state', 'fd_section'],
+      cabrilloHeaders: ['CATEGORY-ASSISTED', 'CATEGORY-MODE', 'CATEGORY-POWER', 'CLAIMED-SCORE', 'CLUB', 'OPERATORS'],
+      transmitterCategories: ['ONE', 'TWO', 'UNLIMITED'],
+    }
+  }
   // The ARRL VHF contests send the grid, from the station's own grid: not a location "I moved" changes.
+  // They head the file with the ARRL section (LOCATION), as the engine previews it.
   if (event.startsWith('arrlvhf')) {
     return {
       event,
@@ -77,7 +107,7 @@ function preview(patch: Partial<Settings>): FdRulesetDto {
       role: '',
       exchange: [s.mygrid ?? ''],
       problem: '',
-      sentSettings: ['mygrid'],
+      sentSettings: ['mygrid', 'fd_section'],
     }
   }
   return {
@@ -258,6 +288,60 @@ describe('the steps', () => {
     expect(screen.getByRole('button', { name: 'Next' })).toHaveProperty('disabled', false)
     next()
     expect(screen.getByRole('button', { name: 'Start Illinois QSO Party' })).toHaveProperty('disabled', false)
+  })
+
+  it('the ARRL RTTY Roundup: the state alone, its entry lines, and FT8 or CW a warning with a way to RTTY, never a refusal', async () => {
+    await open({ initial: { fdEvent: 'arrlrtty' } })
+    next()
+    await screen.findByText('You send: 599 IL')
+    // Only what a W/VE station sends (Special Rules 4.2.1): no county, no zone, no class.
+    expect(screen.getByLabelText('State or province')).toBeTruthy()
+    // …and the ARRL section its log is filed under (the Cabrillo LOCATION ARRL's upload asks for).
+    expect(screen.getByLabelText('ARRL Section')).toBeTruthy()
+    expect(screen.queryByLabelText('County')).toBeNull()
+    expect(screen.queryByLabelText('FD Class')).toBeNull()
+    next()
+    expect(screen.getByLabelText('Power category')).toBeTruthy()
+    expect(screen.getByLabelText('Club')).toBeTruthy()
+    expect(screen.getByLabelText('Other operators')).toBeTruthy()
+    expect(screen.queryByLabelText('Band category')).toBeNull()
+    expect(screen.queryByLabelText('Entry class')).toBeNull()
+    next()
+    // The station is on FT8 (the snapshot's digital tier).
+    const warn = document.querySelector('[data-banned]')!
+    expect(warn.textContent).toContain(
+      'ARRL RTTY Roundup does not allow FT8: contacts in it are logged but score nothing. Work it in RTTY instead.',
+    )
+    const ways = within(warn as HTMLElement).getAllByRole('button').map((b) => b.textContent)
+    expect(ways).toEqual(['Work this contest in RTTY'])
+    expect(screen.getByRole('button', { name: 'Next' })).toHaveProperty('disabled', false)
+    next()
+    expect(screen.getByRole('button', { name: 'Start ARRL RTTY Roundup' })).toHaveProperty('disabled', false)
+  })
+
+  it('the ARRL RTTY Roundup on CW and on PSK31 warns too, and on RTTY it does not', async () => {
+    for (const [operatingMode, banned, keyboardMode] of [
+      ['cw', 'CW', undefined],
+      ['keyboard', 'PSK31', 'PSK31'],
+      // PSK and JTTY are one section: on the JTTY screen the warning names JTTY, never PSK31.
+      ['keyboard', 'JTTY', 'JTTY'],
+      ['keyboard', 'QPSK31', 'QPSK31'],
+      ['rtty', null, undefined],
+    ] as const) {
+      api.get('getSnapshot').mockImplementation(() =>
+        Promise.resolve({ fieldDay: null, mode: 'chat', radio: { catOk: true, operatingMode, keyboardMode }, link: { tier: 'FT8' } }),
+      )
+      await open({ initial: { fdEvent: 'arrlrtty' } })
+      next()
+      await screen.findByText('You send: 599 IL')
+      next()
+      next()
+      const warn = document.querySelector('[data-banned]')
+      if (banned) expect(warn?.textContent, operatingMode).toContain(`does not allow ${banned}`)
+      else expect(warn, operatingMode).toBeNull()
+      expect(screen.getByRole('button', { name: 'Next' })).toHaveProperty('disabled', false)
+      cleanup()
+    }
   })
 
   it('Cancel saves nothing', async () => {
@@ -642,8 +726,9 @@ describe('Change setup… on other contests', () => {
     await screen.findByText('You send: EN52')
     expect(screen.queryByText('A change here is "I moved": it takes effect on your next contact.')).toBeNull()
     expect(screen.queryByRole('textbox')).toBeNull()
+    // …and the ARRL section the file is headed with (LOCATION), read at start as the grid is.
     expect(document.querySelector('[data-read-at-start]')!.textContent).toBe(
-      'Read when the contest starts: Grid square. To change it, stop the contest, then start it again.',
+      'Read when the contest starts: Grid square, ARRL Section. To change them, stop the contest, then start it again.',
     )
     await nextWhenChecked()
     next()

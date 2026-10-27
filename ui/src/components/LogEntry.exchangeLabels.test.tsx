@@ -180,6 +180,10 @@ const TABLE: [string, string, string[], string[]][] = [
   ['arrlvhf_jan', '', ['Grid'], ['']],
   ['arrlvhf_jun', '', ['Grid'], ['']],
   ['arrlvhf_sep', '', ['Grid'], ['']],
+  // The RTTY Roundup's two received boxes, either of which a contact fills: a W/VE station's state
+  // or province, a DX station's serial.
+  ['arrlrtty', 'w_ve', ['RST', 'State', 'Serial'], ['', '', '']],
+  ['arrlrtty', 'dx', ['RST', 'State', 'Serial'], ['', '', '']],
 ]
 
 describe('every received box in every shipped contest says what it holds', () => {
