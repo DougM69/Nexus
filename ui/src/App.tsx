@@ -236,6 +236,7 @@ import { GettingStartedGuide } from './components/GettingStartedGuide'
 import { RadioPicker } from './components/RadioPicker'
 import { PROFILES, type ProfileId } from './features/profiles'
 import { CallCardHost } from './components/CallCard'
+import { useRadioSwitchNotice } from './useRadioSwitchNotice'
 
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). It is the shell: it
 // renders no cockpit control of its own, so what moved is its OWN prose — the loading line,
@@ -2635,6 +2636,18 @@ function App() {
     },
     [],
   )
+
+  // When Nexus switches radio by itself and the station asked to be told: one line with Undo
+  // (the operator's own radio pick, back to the radio it left) and Why? (the routing rules).
+  useRadioSwitchNotice({
+    snap,
+    policy: settings?.radioSwitchPolicy,
+    selectRadio: (id) =>
+      apiSetActiveRadio(id).then((s) => {
+        if (s) setSnap(s)
+      }),
+    openSettingsAt,
+  })
 
   const handleTier = useCallback((next: Tier) => {
     void withErrorToast(() => apiSetTier(next), t('shell.tier.failed')).then((s) => {

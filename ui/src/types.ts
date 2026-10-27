@@ -5708,12 +5708,32 @@ export interface Settings {
   routingRules?: RoutingRule[]
   /** Fallback radio when no rule and no band coverage claims a (band, mode). Absent = stay put. */
   defaultRadio?: number | null
+  /** Whether a radio switch Nexus makes by itself is said on screen: `tell` (a notice with Undo,
+   *  a new install's default) or `act` (silent, what an existing settings file keeps). Not written
+   *  by a settings save: write it with `setRadioSwitchPolicy` (api.ts), its one writer. */
+  radioSwitchPolicy?: RadioSwitchPolicy
 }
 
 /** The mode granularity radio routing decides on — a refinement of the app's CW/Phone/Digital
  * classes (FM and SSB are both Phone; digital and RTTY are both Digital). The refinement is what
  * makes "2 m FT8 to one rig, 2 m FM to another" expressible. Mirrors the Rust `RouteMode`. */
 export type RouteMode = 'digital' | 'fm' | 'ssb' | 'cw' | 'rtty'
+
+/** Mirrors the Rust `RadioSwitchPolicy`: `tell` = switch and say so with Undo, `act` = switch
+ *  silently. */
+export type RadioSwitchPolicy = 'act' | 'tell'
+
+/** One radio switch Nexus made BY ITSELF (the routing handed the band to another radio). Mirrors
+ *  the Rust `AutoRadioSwitch`; `seq` grows by one per switch. */
+export interface AutoRadioSwitch {
+  seq: number
+  /** The radio that was active before: what Undo selects again. */
+  fromId: number
+  toId: number
+  /** The band asked for ("2m"); empty for a dial off the band plan. */
+  band: string
+  mode: RouteMode
+}
 
 /** Non-mode context a routing rule can be DESIGNATED for instead of a mode class: satellite work.
  * A satellite rule is matched only by satellite-originated tunes (a transponder pick), at a tier
@@ -5858,6 +5878,8 @@ export interface AppSnapshot {
   activeRadioId?: number
   /** Peg-lock: band selection won't auto-switch the active radio when true. */
   radioPegged?: boolean
+  /** The last radio switch Nexus made by itself this session (absent until one happens). */
+  autoRadioSwitch?: AutoRadioSwitch
   /** Mirror of Settings b4MatchMode — the B4/Dupe scope every surface applies. */
   b4MatchMode?: boolean
   /** AI CW decoder (beta): toggle state, status line, rolling stitched transcript. */

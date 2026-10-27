@@ -515,6 +515,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("set_qrz_password",               RefusedHere, "Credentials are set at the shack only."),
     ("set_radio_bands",                RunsAtShack, "The shack's band routing."),
     ("set_radio_enabled",              RunsAtShack, "Disables or enables a radio in the shack's roster."),
+    ("set_radio_switch_policy",        RunsAtShack, "Whether the shack says on screen when it switches radio by itself; switches nothing."),
     ("set_repeaterbook_token",         RefusedHere, "Credentials are set at the shack only."),
     ("set_rf_gain",                    RunsAtShack, "The shack's rig control."),
     ("set_rf_power",                   RunsAtShack, "The shack's rig control."),

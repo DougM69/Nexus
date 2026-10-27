@@ -857,6 +857,9 @@ export const EN = {
     'Nothing matches “{{query}}”. Try the words on the control — “sound card”, “COM port”, “WPM”.',
   // `{{term}}` is a registry keyword — data, not prose. Never translated at this call site.
   'settings.search.matched': 'matched “{{term}}”',
+  // #343. "⊞ Panels" and "TX Meters" are the menu's and the pane's own names in this locale.
+  'settings.search.panelHint.txMeters':
+    'Meters are not a setting: on the FT8, Phone and CW screens, ⊞ Panels ▸ TX Meters shows power, ALC, SWR and compression.',
 
   // ── First-run nudge ─────────────────────────────────────────────────────────────────
   // Stored as plain text with a real `&`. The panel's JSX wrote `&amp;`; React escapes text
@@ -4153,7 +4156,7 @@ export const EN = {
     'Show only spots someone on your continent actually heard. A station reported solely from another continent says nothing about a path from your station — the same test the Needed board uses. Turn it off for the worldwide cluster feed.',
   'spots.filter.privileges.label': 'My privileges',
   'spots.filter.privileges.title':
-    'Show only spots you may transmit to under your license class (Settings ▸ license). Open class sees everything either way.',
+    'Show only spots you may transmit to under your license class (Settings ▸ Station). Open class sees everything either way.',
   'spots.filter.clear.label': 'Clear',
   'spots.filter.clear.title': 'Clear all filters',
   // Hide worked (operator decisions, 2026-09-17). DEFAULT ON, with the count of what it hides
@@ -5192,7 +5195,7 @@ export const EN = {
   'spotMe.cooling': 'Wait {{secs}} s',
   'spotMe.posted': 'Spotted to the DX cluster: {{line}}',
   'spotMe.refused.noCall': 'Not spotted: set your callsign in Settings first.',
-  'spotMe.refused.noCluster': 'Not spotted: no DX cluster is connected. Set a cluster in Settings ▸ Spot Sources.',
+  'spotMe.refused.noCluster': 'Not spotted: no DX cluster is connected. Set a cluster in Settings ▸ Logging & Connectors ▸ Integrations & Feeds ▸ Spot Sources.',
   'spotMe.refused.cooldown': 'Not spotted again yet: one spot a minute. {{secs}} s to go.',
   'spotMe.refused.offBand': 'Not spotted: the dial is outside the amateur bands.',
   'spotMe.refused.noContest': 'Not spotted: Contest mode is off.',
@@ -7295,6 +7298,7 @@ export const EN = {
   'freq.channel.rxOnly.title':
     'Your licence class has no transmit privileges on this band. You can tune here and listen; transmitting will be refused.',
   'freq.channel.custom': '{{band}} (custom)',
+  'freq.channel.custom.title': 'The dial is not on a listed channel for this mode. Pick a channel here, or type a frequency.',
   'freq.dial.label': 'Dial (MHz)',
   'freq.band.title': 'Current band',
   'freq.mode.aria': 'Phone mode',
@@ -7727,6 +7731,22 @@ export const EN = {
   'settings.routing.test.mode.aria': 'Test mode',
   'settings.routing.test.action': 'Where would this go?',
   'settings.routing.test.result': '{{band}} {{mode}} → <b>{{radio}}</b>',
+  // The routing in plain words (describeRouting.ts), on each radio card and above the rules.
+  // `{{list}}` joins the lines below with "; ". `{{bands}}` is a band list and `{{mode}}` a routing
+  // mode name, both tokens.
+  'settings.radios.routes.lead': 'Nexus uses it for: {{list}}',
+  'settings.radios.routes.rule': 'rule {{n}}, {{bands}} · {{mode}}',
+  'settings.radios.routes.catchAll': 'any band no other radio lists',
+  'settings.radios.routes.default': 'everything else',
+  'settings.radios.routes.disabled': 'nothing, it is disabled',
+  'settings.routing.plain.aria': 'The routing in plain words',
+  'settings.routing.plain.line': '{{radio}}: {{list}}',
+  'settings.routing.policy.label': 'When Nexus switches radio by itself',
+  'settings.routing.policy.tell': 'Tell me, with Undo',
+  'settings.routing.policy.act': 'Switch without telling me',
+  'settings.routing.policy.hint':
+    'A band or mode your rules give to another radio switches to it, and transmitting stops first. “Tell me” shows one line saying so, with Undo and Why? buttons. Peg-lock in the radio switcher keeps the active radio and stops the switching.',
+  'settings.routing.policy.failed': 'Could not save the radio switch choice',
 
   // ── Settings ▸ Radio ▸ Profiles ─────────────────────────────────────────────────────
   // A whole-station config saved under a name the operator types. The example name is human
@@ -10695,6 +10715,9 @@ export const EN = {
   'aprs.inet.note':
     'Changing the radius or watched calls reconnects the feed — the server does the filtering, so a new subscription has to be sent. Server, port, traffic types and the iGate live in Settings ▸ APRS.',
   'aprs.inet.note.open': 'Open them',
+  // #330. `<link>` is the Settings place, a button that opens it.
+  'aprs.beacon.gridNote':
+    'The map centres on your grid, set in <link>Settings ▸ Station</link>. Lat and Lon set only where your beacon says you are.',
   // The feed's four states. `{{gate}}` is the iGate sentence below — a WHOLE sentence with
   // its own leading space, empty when the iGate is off, interpolated so a translation can
   // place it rather than having it glued on after the fact.
@@ -14188,6 +14211,14 @@ export const EN = {
   // arrive already translated from whoever raised them.
   'toast.action.default': 'Work',
   'toast.dismiss': 'Dismiss notification',
+  // ── The radio switch notice (useRadioSwitchNotice.ts): Nexus switched radio by itself. ──
+  // `{{radio}}` is the radio's own name and `{{band}}` a band token ("2m"), both data. `{{mode}}`
+  // is a routing mode name ("Weak-signal digital"), an invariant token like the editor's dropdown.
+  'radioSwitch.notice': 'Switched to {{radio}} for {{band}} · {{mode}}',
+  'radioSwitch.notice.noBand': 'Switched to {{radio}} · {{mode}}',
+  'radioSwitch.radio': 'Radio {{id}}',
+  'radioSwitch.undo': 'Undo',
+  'radioSwitch.why': 'Why?',
 
   // ── The link pill ───────────────────────────────────────────────────────────────────
   // `dB` is a unit and `RV` the report's own field name; the verdict words are prose.

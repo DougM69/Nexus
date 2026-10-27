@@ -5016,6 +5016,23 @@ pub struct AiCwStatus {
     pub text: String,
 }
 
+/// One radio switch Nexus made BY ITSELF: the routing handed a band (and mode class) to another
+/// radio (`Settings::route_radio`). The UI tells the operator, with Undo, when the station's
+/// `radio_switch_policy` says to. `seq` grows by one per switch, so a screen tells a new switch
+/// from one it has already shown.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoRadioSwitch {
+    pub seq: u64,
+    /// The radio that was active before: what Undo selects again.
+    pub from_id: u32,
+    pub to_id: u32,
+    /// The band that was asked for ("2m"); empty for a dial off the band plan.
+    pub band: String,
+    /// The mode class the routing decided on.
+    pub mode: crate::settings::RouteMode,
+}
+
 /// The full application snapshot the UI renders from.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -5034,6 +5051,10 @@ pub struct AppSnapshot {
     /// Peg-lock state (band selection won't auto-switch when true).
     #[serde(default)]
     pub radio_pegged: bool,
+    /// The last time Nexus switched the active radio BY ITSELF, for the switch notice. Absent
+    /// until a band or mode the routing hands to another radio has switched one this session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_radio_switch: Option<AutoRadioSwitch>,
     /// Mirror of `Settings::b4_match_mode` so display surfaces (the recall Dupe badge) apply
     /// the same B4/Dupe scope the engine's worked-band sets were built with — two readers of
     /// one setting must never disagree about what "worked before" means.

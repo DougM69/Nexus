@@ -20084,6 +20084,22 @@ fn set_default_radio(
     Ok(eng.snapshot())
 }
 
+/// Whether an automatic radio switch is said on screen (Settings ▸ Radio ▸ Radios), and the ONE
+/// write path for it: narrow for `set_beta_updates`' stale-snapshot reason, and
+/// `Engine::apply_settings` keeps the live value. Changes no routing. Returns the snapshot.
+#[tauri::command(async)]
+fn set_radio_switch_policy(
+    state: State<'_, SharedEngine>,
+    policy: tempo_app::settings::RadioSwitchPolicy,
+) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    let s = eng.set_radio_switch_policy(policy);
+    persist_settings(s.clone(), |e| {
+        eprintln!("tempo: set_radio_switch_policy save failed: {e}")
+    });
+    Ok(eng.snapshot())
+}
+
 /// Where a `(band, mode class)` WOULD route right now, as the radio's id + name — the Settings rule
 /// editor's "test" affordance. Read-only: it never moves a rig.
 #[tauri::command(async)]
@@ -40488,6 +40504,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         set_radio_bands,
         set_routing_rules,
         set_default_radio,
+        set_radio_switch_policy,
         route_preview,
         update_radio_profile,
         set_tune,
