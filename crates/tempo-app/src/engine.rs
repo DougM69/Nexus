@@ -9656,6 +9656,19 @@ impl Engine {
             && self.settings.keyboard_modem == crate::settings::KeyboardModem::Psk
     }
 
+    /// The mode the Keyboard section's contacts log under, as its cockpits log them: JTTY on the
+    /// JTTY modem, else the PSK sub-mode picked in the PSK cockpit. PSK and JTTY are one section,
+    /// so anything naming the Keyboard section's mode names it from here, never from the section.
+    pub fn keyboard_mode_name(&self) -> &'static str {
+        match self.settings.keyboard_modem {
+            crate::settings::KeyboardModem::Jtty => "JTTY",
+            crate::settings::KeyboardModem::Psk => match self.psk_mode {
+                tempo_core::psk::PskModeKind::Bpsk31 => "PSK31",
+                tempo_core::psk::PskModeKind::Qpsk31 => "QPSK31",
+            },
+        }
+    }
+
     /// The operator is in the JTTY section: the Keyboard section with JTTY as its modem
     /// ([`crate::settings::KeyboardModem`]).
     pub fn jtty_section(&self) -> bool {
@@ -27758,6 +27771,7 @@ contact yourself."
             crate::settings::OperatingMode::Keyboard => "keyboard",
         }
         .to_string();
+        s.radio.keyboard_mode = self.keyboard_mode_name().to_string();
         s.radio.cw_wpm = self.settings.cw_wpm;
         s.radio.split_tx_mhz = self.split_tx_mhz;
         s.radio.cw_keyer = match self.settings.cw_keyer {

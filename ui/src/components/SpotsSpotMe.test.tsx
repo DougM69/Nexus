@@ -25,7 +25,7 @@ vi.mock('../toast', async (importOriginal) => ({
 
 import { SpotsPanel } from './SpotsPanel'
 
-type Station = { section?: string; sideband?: string; tier?: string }
+type Station = { section?: string; keyboardMode?: string; sideband?: string; tier?: string }
 
 const board = (spotMe?: Station) => (
   <SpotsPanel spots={[]} bandPlan={[]} selectedCall={null} onSelect={() => {}} onWork={() => {}} pane={{ scope: 'phone' }} spotMe={spotMe} />
@@ -78,6 +78,10 @@ describe('Spot me on the Spots board', () => {
     rerender(board({ section: 'keyboard', sideband: 'PKTUSB' }))
     await settle()
     expect(comment().value).toBe('CQ QPSK31')
+    // PSK and JTTY are one section: the station's own word for the mode on the air wins.
+    rerender(board({ section: 'keyboard', sideband: 'PKTUSB', keyboardMode: 'JTTY' }))
+    await settle()
+    expect(comment().value).toBe('CQ JTTY')
   })
 
   it('keeps the last comment typed for each mode, and an emptied box gives the default back', () => {

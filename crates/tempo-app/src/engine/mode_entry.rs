@@ -335,6 +335,27 @@ mod tests {
         assert!(!e.jtty_section());
     }
 
+    /// ⭐ THE STATUS NAMES THE KEYBOARD SECTION'S MODE. PSK and JTTY are one section
+    /// ("keyboard"), so the section alone cannot say which is on the air: a surface reading it
+    /// named a JTTY station PSK31, and the contest logger window logged its contacts as PSK31.
+    /// `keyboard_mode` is the mode the section's contacts log under: JTTY on the JTTY modem, the
+    /// PSK sub-mode picked in the PSK cockpit on PSK.
+    #[test]
+    fn the_status_names_the_keyboard_mode_on_the_air() {
+        let mut e = station();
+        let mode = |e: &Engine| e.snapshot().radio.keyboard_mode;
+        e.set_operating_mode("jtty", true);
+        assert_eq!(e.snapshot().radio.operating_mode, "keyboard");
+        assert_eq!(mode(&e), "JTTY");
+        e.set_operating_mode("keyboard", true);
+        assert_eq!(mode(&e), "PSK31", "control: PSK, on its default sub-mode");
+        e.set_psk_mode(tempo_core::psk::PskModeKind::Qpsk31, false)
+            .unwrap();
+        assert_eq!(mode(&e), "QPSK31");
+        e.set_operating_mode("jtty", true);
+        assert_eq!(mode(&e), "JTTY", "the modem, not the PSK sub-mode");
+    }
+
     /// JTTY keeps no dial memory, and above all never writes a JTTY dial into PSK's: both modems
     /// are the Keyboard section, and its (band, section) cell is PSK's. PSK on 14.0712, JTTY
     /// tuned off its frequency, then PSK again comes back to 14.0712, and JTTY to 14.090.

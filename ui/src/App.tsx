@@ -3137,7 +3137,7 @@ function App() {
     // and mode it is spotted on? If so, Hide worked leaves it alone.
     needAlerts: boardAlerts,
     // The Spot me in the board's head (SpotsSpotMe): the station's mode, which its comment names.
-    spotMe: { section: snap.radio.operatingMode, sideband: snap.radio.sideband, tier },
+    spotMe: { section: snap.radio.operatingMode, keyboardMode: snap.radio.keyboardMode, sideband: snap.radio.sideband, tier },
   }
   const neededBoard = {
     // Un-gated by MODE FEATURE — the board's own per-mode toggles decide what shows,
@@ -3456,6 +3456,7 @@ function App() {
                 fdRuleset={fdRuleset}
                 tier={tier}
                 section={snap.radio.operatingMode}
+                keyboardMode={snap.radio.keyboardMode}
                 onOpenSettings={openSettingsAt}
                 onSettingsSaved={handleSettingsSaved}
                 contestSwitch={contestSwitch}

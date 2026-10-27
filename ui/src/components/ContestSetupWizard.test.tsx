@@ -317,13 +317,16 @@ describe('the steps', () => {
   })
 
   it('the ARRL RTTY Roundup on CW and on PSK31 warns too, and on RTTY it does not', async () => {
-    for (const [operatingMode, banned] of [
-      ['cw', 'CW'],
-      ['keyboard', 'PSK31'],
-      ['rtty', null],
+    for (const [operatingMode, banned, keyboardMode] of [
+      ['cw', 'CW', undefined],
+      ['keyboard', 'PSK31', 'PSK31'],
+      // PSK and JTTY are one section: on the JTTY screen the warning names JTTY, never PSK31.
+      ['keyboard', 'JTTY', 'JTTY'],
+      ['keyboard', 'QPSK31', 'QPSK31'],
+      ['rtty', null, undefined],
     ] as const) {
       api.get('getSnapshot').mockImplementation(() =>
-        Promise.resolve({ fieldDay: null, mode: 'chat', radio: { catOk: true, operatingMode }, link: { tier: 'FT8' } }),
+        Promise.resolve({ fieldDay: null, mode: 'chat', radio: { catOk: true, operatingMode, keyboardMode }, link: { tier: 'FT8' } }),
       )
       await open({ initial: { fdEvent: 'arrlrtty' } })
       next()

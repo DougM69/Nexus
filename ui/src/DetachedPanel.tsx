@@ -751,7 +751,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     onWork: (s: SpotRow) => void workNeed(spotNeed(s)),
     needAlerts: boardAlerts,
     spotMe: snap
-      ? { section: snap.radio.operatingMode, sideband: snap.radio.sideband, tier: snap.link.tier }
+      ? { section: snap.radio.operatingMode, keyboardMode: snap.radio.keyboardMode, sideband: snap.radio.sideband, tier: snap.link.tier }
       : undefined,
   }
 

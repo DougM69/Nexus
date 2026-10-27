@@ -1398,6 +1398,11 @@ export interface RadioStatus {
    * state, so section-dependent surfaces (the Satellites log strip's mode fold) don't
    * need a settings round-trip. */
   operatingMode?: string
+  /** The mode the Keyboard section's contacts log under: 'JTTY' on the JTTY modem, else the PSK
+   * cockpit's sub-mode ('PSK31' | 'QPSK31'). PSK and JTTY are ONE section ('keyboard'), so the
+   * section alone cannot say which is on the air. Read it while `operatingMode` is 'keyboard'.
+   * Absent from a station older than it. */
+  keyboardMode?: string
   /** The rig keyed by something that is NOT Nexus (mic PTT / straight key), read back
    * over CAT (#57). Display-only — the TX badge and meter pane light for it. */
   rigKeyed?: boolean

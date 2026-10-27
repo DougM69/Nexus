@@ -82,7 +82,7 @@ import { contactLabel } from '../features/contestRemoval'
 import { isStreamInput } from '../remote-native/stream-input'
 import { useOperatorBoxAsk } from '../features/contestKeys'
 import { useLoggerLayout } from '../features/contestLoggerLayout'
-import { contestLogMode, stationMode, usePskName } from '../features/contestMode'
+import { contestLogMode, stationMode, useKeyboardMode } from '../features/contestMode'
 import { closedText } from '../features/contestEdit'
 import { ContestContactEdit, focusOpenContestEdit, type EditNote } from './ContestContactEdit'
 import { annotate, ContestLogHead, ContestLogRow, ContestView, logIsNumbered, OperatorBox } from './ContestView'
@@ -350,8 +350,9 @@ export function ContestLargeEntry({
   entryOnly?: boolean
 }) {
   const section = snap.radio.operatingMode
-  const pskName = usePskName(section)
-  const m = contestLogMode(section, pskName, snap.link.tier)
+  // PSK and JTTY are one section: the mode on the air is the snapshot's `keyboardMode`.
+  const keyboardMode = useKeyboardMode(section, snap.radio.keyboardMode)
+  const m = contestLogMode(section, keyboardMode, snap.link.tier)
   // THE TEXT SIZE (A− / A+): a factor on the app's Text size for the entry and the last contacts,
   // remembered on this computer for this window and clamped as it is read back.
   const [textScale, setTextScale] = useState(() => loggerTextScale(surfaceGet(TEXT_SCALE_KEY)))
@@ -418,7 +419,7 @@ export function ContestLargeEntry({
             fdSubmode={m.fdSubmode}
             sharedEntry={sharedEntry}
             noCreditChip={
-              <NoCreditChip fdActive={fdActive} ruleset={fdRuleset} activeMode={stationMode(section, snap.link.tier, pskName)} />
+              <NoCreditChip fdActive={fdActive} ruleset={fdRuleset} activeMode={stationMode(section, snap.link.tier, keyboardMode)} />
             }
             operatorBox={
               <OperatorBox
@@ -547,6 +548,7 @@ export function ContestLogger({
           fdRuleset={fdRuleset}
           tier={snap.link.tier}
           section={snap.radio.operatingMode}
+          keyboardMode={snap.radio.keyboardMode}
           logger
           contestSwitch={contestSwitch}
           operatorAsk={operatorAsk}

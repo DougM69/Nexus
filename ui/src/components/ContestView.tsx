@@ -42,7 +42,7 @@ import { contestRate, RATE_WINDOWS } from '../features/contestRate'
 import { bandRank, operatorSummaryLines } from '../features/contestOperators'
 import { formatOpTime, OFF_TIME_MIN_SEC, offTimeRule, operatingTime } from '../features/contestOpTime'
 import { OperatorStatsBoard } from './ContestOperators'
-import { stationMode, usePskName } from '../features/contestMode'
+import { stationMode, useKeyboardMode } from '../features/contestMode'
 import { CLEAR_TOAST_MS, REMOVE_CONFIRM_MS, SERVICE_NAMES, clearText, contactCount, contactLabel, newestContact, removalText, restoreText, utcHhmm } from '../features/contestRemoval'
 import { ContestContactEdit, focusOpenContestEdit, type EditNote } from './ContestContactEdit'
 import { ContestSpotMe } from './ContestSpotMe'
@@ -204,6 +204,9 @@ interface Props {
    *  the others (`stationMode`) — so a station on phone at a contest that bans FT8 is not told FT8 is
    *  not permitted. Absent (the Remote page, whose observation carries no section), it reads `tier`. */
   section?: string
+  /** The Keyboard section's mode on the air (`snap.radio.keyboardMode`: PSK31, QPSK31 or JTTY), which
+   *  the chip names on that section: PSK and JTTY are one section, so `section` cannot say which. */
+  keyboardMode?: string
   /** Open Settings at a section (App's `openSettingsAt`): where the mode switch sends an
    *  operator whose contest cannot start yet. */
   onOpenSettings?: (target: string) => void
@@ -3048,6 +3051,7 @@ export function ContestView({
   fdRuleset = null,
   tier,
   section,
+  keyboardMode: keyboardModeProp,
   observation,
   onOpenSettings,
   onSettingsSaved,
@@ -3062,8 +3066,8 @@ export function ContestView({
 }: Props) {
   const observed = observation !== undefined
   // The mode the banned-mode chip names: the station's own, given its section.
-  const pskName = usePskName(observed ? undefined : section)
-  const activeMode = section === undefined ? tier : stationMode(section, tier, pskName)
+  const keyboardMode = useKeyboardMode(observed ? undefined : section, keyboardModeProp)
+  const activeMode = section === undefined ? tier : stationMode(section, tier, keyboardMode)
   // The clock the spot advisory judges the event window by.
   const nowUnix = useNowUnix()
   // Log tail: bottom-pinned via the shared discipline. The old unconditional

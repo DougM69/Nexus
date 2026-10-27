@@ -45,7 +45,7 @@ import { patchSettings } from '../settings/patch'
 import { CONTESTS, contestName, contestRoleWords, isFieldDay } from '../fdEvent'
 import { blockerText, startBlocker } from '../features/contestStart'
 import { locationWarningText } from '../features/contestLocation'
-import { stationMode } from '../features/contestMode'
+import { stationMode, useKeyboardMode } from '../features/contestMode'
 import { askMainToWorkIn, workInLabel, workInViewsFor, type WorkInView } from '../features/contestWorkIn'
 import { upperTyped } from '../typedInput'
 
@@ -384,7 +384,9 @@ export function ContestSetupWizard({
   const liveSends = session?.composingText ?? ''
 
   // Step 4: the station as it is now. Read-only; nothing here is a refusal.
-  const mode = snap ? stationMode(snap.radio.operatingMode, snap.link?.tier, null) : ''
+  // PSK and JTTY are one section: the mode on the air is the snapshot's `keyboardMode`.
+  const keyboardMode = useKeyboardMode(snap?.radio.operatingMode, snap?.radio.keyboardMode)
+  const mode = snap ? stationMode(snap.radio.operatingMode, snap.link?.tier, keyboardMode) : ''
   const banned = !!mode && (preview?.bannedModes ?? []).some((m) => m.toUpperCase() === mode.toUpperCase())
   // Where to work it instead: CW and Phone, or RTTY where the contest takes RTTY alone.
   const workInViews = workInViewsFor(preview?.bannedModes)
