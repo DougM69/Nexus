@@ -19,6 +19,9 @@
 // it always was.
 pub use tempo_codec::ring::SpscRing;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 /// The TX-device guard, as a pure predicate: `true` when opening the monitor on
 /// `monitor_device` would feed the received band into the rig's TX audio device
 /// (`audio_out`) and thus transmit it back out. When it returns `true` the monitor
@@ -97,12 +100,110 @@ impl MonoResampler {
     }
 }
 
+/// The headphone monitor's way in for a receive source that is not the sound card's capture
+/// callback: Nexus's TCI client, whose receive audio arrives over the network on its session's
+/// thread and is what the decoders hear while Audio over TCI is on (#372: the monitor kept playing
+/// the idle sound card, so "Play receive audio here" was silent).
+///
+/// It is a second [`SpscRing`] of the monitor's, at the monitor's own rate, with the session's
+/// thread as its one producer and the monitor's output callback as its one consumer, so neither
+/// ring ever has two producers. The output plays this ring while the feed is active and the
+/// card's otherwise ([`playing`]). It shares the card path's two gates: nothing is written unless
+/// the operator's monitor is on (the TX-device guard has already refused a collision before the
+/// monitor turns on) and the monitor is not muted for a transmission.
+#[derive(Clone)]
+pub struct MonitorFeed {
+    ring: Arc<SpscRing>,
+    rate: u32,
+    enabled: Arc<AtomicBool>,
+    tx_mute: Arc<AtomicBool>,
+    active: Arc<AtomicBool>,
+}
+
+impl MonitorFeed {
+    /// A feed at `rate` sharing the monitor's two gates, inactive.
+    pub fn new(rate: u32, enabled: Arc<AtomicBool>, tx_mute: Arc<AtomicBool>) -> MonitorFeed {
+        MonitorFeed {
+            // ~0.5 s, as the card's monitor ring.
+            ring: Arc::new(SpscRing::new((rate as usize / 2).max(4096))),
+            rate,
+            enabled,
+            tx_mute,
+            active: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// The rate the monitor plays this feed at: what a source resamples to before [`Self::push`].
+    pub fn rate(&self) -> u32 {
+        self.rate
+    }
+
+    /// Whether `other` is this same feed (the same monitor), not another backend's.
+    pub fn is(&self, other: &MonitorFeed) -> bool {
+        Arc::ptr_eq(&self.ring, &other.ring)
+    }
+
+    /// Play this feed in the sound card's place, or the sound card again. The radio loop's.
+    pub fn set_active(&self, active: bool) {
+        self.active.store(active, Ordering::Release);
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.active.load(Ordering::Acquire)
+    }
+
+    /// Whether audio pushed now would be played: the feed is the monitor's source, the operator's
+    /// monitor is on, and it is not muted for a transmission.
+    pub fn open(&self) -> bool {
+        self.is_active()
+            && self.enabled.load(Ordering::Acquire)
+            && !self.tx_mute.load(Ordering::Acquire)
+    }
+
+    /// Producer: queue `samples` (at [`Self::rate`]) for the monitor. Never blocks; a full ring
+    /// drops, as the card's does. The caller checks [`Self::open`] first.
+    pub fn push(&self, samples: &[f32]) {
+        self.ring.push_slice(samples);
+    }
+
+    /// Queued samples, for tests and diagnostics.
+    pub fn queued(&self) -> usize {
+        self.ring.len()
+    }
+
+    /// Consumer: the oldest queued sample, as the monitor's output takes it. For tests.
+    #[cfg(all(test, feature = "device"))]
+    pub(crate) fn pop(&self) -> Option<f32> {
+        self.ring.pop()
+    }
+
+    /// Discard what is queued. As the card ring's clear on a keying edge (see
+    /// `Monitor::set_tx_mute`).
+    #[cfg(feature = "device")]
+    fn clear(&self) {
+        self.ring.clear();
+    }
+}
+
+/// The ring the monitor's output plays this callback: the feed's while it is active, the sound
+/// card's otherwise. The output callback is both rings' one consumer, so it empties the other one
+/// here: nothing a source queued before a switch plays after it.
+pub fn playing<'a>(card: &'a SpscRing, feed: &'a MonitorFeed) -> &'a SpscRing {
+    if feed.is_active() {
+        card.clear();
+        &feed.ring
+    } else {
+        feed.ring.clear();
+        card
+    }
+}
+
 #[cfg(feature = "device")]
 pub use device_monitor::Monitor;
 
 #[cfg(feature = "device")]
 mod device_monitor {
-    use super::{MonoResampler, SpscRing};
+    use super::{playing, MonitorFeed, MonoResampler, SpscRing};
     use crate::device::{dispatch_format, AUDIO_HOST_LOCK};
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     use cpal::{SampleFormat, Stream};
@@ -138,6 +239,9 @@ mod device_monitor {
         /// The device name `out_stream` targets ("" = system default), so a device
         /// change rebuilds only the output stream.
         active_device: String,
+        /// The way in for a receive source other than the capture callback (Nexus's TCI client),
+        /// at `in_rate`, on the same two gates; the output plays it while it is active.
+        feed: MonitorFeed,
     }
 
     impl Monitor {
@@ -148,6 +252,7 @@ mod device_monitor {
             level_bits: Arc<AtomicU32>,
             in_rate: u32,
         ) -> Self {
+            let feed = MonitorFeed::new(in_rate, enabled.clone(), tx_mute.clone());
             Self {
                 ring,
                 enabled,
@@ -156,7 +261,13 @@ mod device_monitor {
                 in_rate,
                 out_stream: None,
                 active_device: String::new(),
+                feed,
             }
+        }
+
+        /// The monitor's way in for a receive source other than the sound card's capture.
+        pub fn feed(&self) -> MonitorFeed {
+            self.feed.clone()
         }
 
         /// Reconfigure the monitor in place. `enabled` is the guard-resolved decision
@@ -179,6 +290,7 @@ mod device_monitor {
             let was = self.tx_mute.swap(muted, Ordering::Release);
             if muted && !was {
                 self.ring.clear();
+                self.feed.clear();
             }
         }
 
@@ -187,6 +299,7 @@ mod device_monitor {
             self.out_stream = None;
             self.active_device.clear();
             self.ring.clear();
+            self.feed.clear();
         }
         pub fn apply(&mut self, enabled: bool, device: &str, level: f32) -> Result<(), String> {
             self.level_bits
@@ -201,13 +314,21 @@ mod device_monitor {
                 }
                 self.active_device.clear();
                 self.ring.clear();
+                self.feed.clear();
                 return Ok(());
             }
             if self.out_stream.is_none() || self.active_device != device {
                 let _guard = AUDIO_HOST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
                 self.out_stream = None; // drop the old stream (frees the device) first
                 self.ring.clear();
-                let stream = build_output(device, self.in_rate, &self.ring, &self.level_bits)?;
+                self.feed.clear();
+                let stream = build_output(
+                    device,
+                    self.in_rate,
+                    &self.ring,
+                    &self.feed,
+                    &self.level_bits,
+                )?;
                 self.out_stream = Some(stream);
                 self.active_device = device.to_string();
             }
@@ -274,9 +395,11 @@ mod device_monitor {
         in_rate: u32,
         out_rate: u32,
         ring: &Arc<SpscRing>,
+        feed: &MonitorFeed,
         level_bits: &Arc<AtomicU32>,
     ) -> Result<Stream, String> {
         let ring_cb = ring.clone();
+        let feed_cb = feed.clone();
         let level_cb = level_bits.clone();
         let mut rs = MonoResampler::new(in_rate, out_rate);
         dev.build_output_stream(
@@ -284,10 +407,12 @@ mod device_monitor {
             *config,
             move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
                 let level = f32::from_bits(level_cb.load(Ordering::Relaxed));
+                // The capture's ring, or another source's while it is the station's (TCI audio).
+                let source = playing(&ring_cb, &feed_cb);
                 for frame in data.chunks_mut(out_ch) {
                     // Clamped HERE, on every format including f32: unlike the TX path this is a
                     // product of two operator-set gains and can genuinely exceed unity.
-                    let s = (rs.next(&ring_cb) * level).clamp(-1.0, 1.0);
+                    let s = (rs.next(source) * level).clamp(-1.0, 1.0);
                     let v = T::from_unit(s);
                     for x in frame.iter_mut() {
                         *x = v;
@@ -315,6 +440,7 @@ mod device_monitor {
         device_name: &str,
         in_rate: u32,
         ring: &Arc<SpscRing>,
+        feed: &MonitorFeed,
         level_bits: &Arc<AtomicU32>,
     ) -> Result<Stream, String> {
         let host = cpal::default_host();
@@ -346,6 +472,7 @@ mod device_monitor {
             in_rate,
             out_rate,
             ring,
+            feed,
             level_bits,
         )?;
         stream.play().map_err(|e| e.to_string())?;
@@ -562,6 +689,60 @@ mod tests {
             enabled.load(Ordering::Relaxed),
             "the operator's monitor setting survives a transmission unchanged"
         );
+    }
+
+    /// Another source's audio (TCI) queued for the monitor is discarded on the keying edge too, and
+    /// its writes see the same mute gate as the capture callback.
+    #[cfg(feature = "device")]
+    #[test]
+    fn muting_for_a_transmission_also_discards_another_sources_audio() {
+        let enabled = Arc::new(AtomicBool::new(true));
+        let tx_mute = Arc::new(AtomicBool::new(false));
+        let mut m = Monitor::new(
+            Arc::new(SpscRing::new(64)),
+            enabled,
+            tx_mute,
+            Arc::new(AtomicU32::new(0.5f32.to_bits())),
+            48_000,
+        );
+        let feed = m.feed();
+        feed.set_active(true);
+        assert!(feed.open(), "control: on, unmuted, the source");
+        feed.push(&[0.5; 16]);
+        m.set_tx_mute(true);
+        assert!(!feed.open(), "the mute closes another source's gate too");
+        assert_eq!(feed.queued(), 0, "and its pre-TX audio went with it");
+        m.set_tx_mute(false);
+        assert!(feed.open(), "reopened after the over");
+    }
+
+    /// ⭐ THE OUTPUT PLAYS THE SOURCE THE STATION HEARS. With no other source active it plays the
+    /// capture's ring as it always did (the card path unchanged); while one is active it plays that
+    /// one's, and each switch empties the ring it leaves, so nothing from before a switch plays
+    /// after it.
+    #[test]
+    fn the_monitor_plays_the_active_source_and_the_card_otherwise() {
+        let card = SpscRing::new(16);
+        let feed = MonitorFeed::new(
+            48_000,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        );
+        card.push_slice(&[0.1, 0.2]);
+        feed.push(&[0.9]);
+        let src = playing(&card, &feed);
+        assert!(std::ptr::eq(src, &card), "inactive: the card's ring");
+        assert_eq!(src.pop(), Some(0.1), "the card's audio, in order");
+        assert_eq!(feed.queued(), 0, "the inactive source's audio was dropped");
+        feed.set_active(true);
+        feed.push(&[0.7, 0.8]);
+        let src = playing(&card, &feed);
+        assert_eq!(src.pop(), Some(0.7), "active: the other source's audio");
+        assert!(card.is_empty(), "the card's leftover went at the switch");
+        feed.set_active(false);
+        card.push(0.3);
+        assert_eq!(playing(&card, &feed).pop(), Some(0.3), "the card again");
+        assert_eq!(feed.queued(), 0);
     }
     use super::*;
 

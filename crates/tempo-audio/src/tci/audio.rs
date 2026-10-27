@@ -19,7 +19,12 @@
 //!   thread is that ring's one producer; the waterfall's FFT and Remote Listen drain it on their own
 //!   thread (`crate::rxtap`), so no CAT wait in the radio loop (a TCI write waits for the server's
 //!   report) can stall them. The ring is held weakly: once the tap has moved on to another source,
-//!   nothing more is written.
+//!   nothing more is written;
+//! - to the headphone monitor ("Play receive audio here"), while the radio loop has handed over its
+//!   way in ([`Receive::set_monitor`]): resampled from the modem rate to the monitor's own with the
+//!   same resampler, and written only while the monitor is on (its TX-device guard has passed), not
+//!   muted for a transmission, and playing this audio in the sound card's place
+//!   ([`crate::monitor::MonitorFeed::open`]). This thread is that ring's one producer.
 //!
 //! ## Transmit
 //! [`TciTx`] is the radio loop's alternate transmit route ([`crate::backend::TxTee`]) while the
@@ -56,7 +61,7 @@ use tempo_net::tci::frame::Block;
 use tempo_net::tci::session::{Connection, Streams};
 
 use crate::capture_resample::CaptureResampler;
-use crate::monitor::SpscRing;
+use crate::monitor::{MonitorFeed, SpscRing};
 
 /// The decoders' rate: what [`Receive::take`] hands the radio loop and the tap is fed at.
 pub const MODEM_RATE: u32 = 12_000;
@@ -83,6 +88,9 @@ pub struct Receive {
     gain: AtomicU32,
     /// The receive tap's ring while TCI audio is what the station hears.
     tap: Mutex<Weak<SpscRing>>,
+    /// The headphone monitor's way in while TCI audio is what the station hears, and the resampler
+    /// from the modem rate to the monitor's.
+    monitor: Mutex<Option<(MonitorFeed, CaptureResampler)>>,
 }
 
 impl Default for Receive {
@@ -92,6 +100,7 @@ impl Default for Receive {
             last_block: Mutex::new(None),
             gain: AtomicU32::new(1.0f32.to_bits()),
             tap: Mutex::new(Weak::new()),
+            monitor: Mutex::new(None),
         }
     }
 }
@@ -117,7 +126,16 @@ impl Receive {
         *lock(&self.tap) = ring.map_or_else(Weak::new, Arc::downgrade);
     }
 
-    /// One block's modem-rate audio: kept for the radio loop and written to the tap.
+    /// Feed the headphone monitor through `feed` from the next block on, or stop feeding it.
+    pub fn set_monitor(&self, feed: Option<MonitorFeed>) {
+        *lock(&self.monitor) = feed.map(|f| {
+            let resampler = CaptureResampler::new(MODEM_RATE, f.rate());
+            (f, resampler)
+        });
+    }
+
+    /// One block's modem-rate audio: kept for the radio loop, written to the tap, and played on
+    /// the monitor.
     fn push(&self, samples: &[f32]) {
         {
             let mut ring = lock(&self.ring);
@@ -130,6 +148,11 @@ impl Receive {
         let tap = lock(&self.tap).upgrade();
         if let Some(tap) = tap {
             tap.push_slice(samples);
+        }
+        if let Some((feed, resampler)) = lock(&self.monitor).as_mut() {
+            if feed.open() {
+                feed.push(&resampler.process(samples));
+            }
         }
     }
 }
@@ -333,6 +356,7 @@ impl Streams for SessionAudio {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicBool;
     use tempo_net::tci::frame::{
         decode, encode_block, BlockHeader, BlockKind, Channels, Frame, LengthMeaning, SampleFormat,
     };
@@ -451,5 +475,84 @@ mod tests {
         assert!(weak.upgrade().is_none());
         feed(&mut audio, &block_bytes(48_000, 2_048, 0.1));
         assert!(!receive.take().is_empty(), "the loop's audio goes on");
+    }
+
+    /// A monitor feed and its gates: on, unmuted, and the monitor's source.
+    fn open_feed(rate: u32) -> (MonitorFeed, Arc<AtomicBool>, Arc<AtomicBool>) {
+        let enabled = Arc::new(AtomicBool::new(true));
+        let tx_mute = Arc::new(AtomicBool::new(false));
+        let mon = MonitorFeed::new(rate, enabled.clone(), tx_mute.clone());
+        mon.set_active(true);
+        (mon, enabled, tx_mute)
+    }
+
+    fn drain(mon: &MonitorFeed) -> Vec<f32> {
+        std::iter::from_fn(|| mon.pop()).collect()
+    }
+
+    /// ⭐ THE HEADPHONE MONITOR HEARS WHAT THE DECODERS HEAR (#372): the same audio, with the
+    /// operator's RX gain, at the monitor's own rate (48 kHz here: four times the modem's samples)
+    /// with the tone's level kept.
+    #[test]
+    fn the_monitor_gets_the_decoders_audio_at_its_own_rate() {
+        let receive = Arc::new(Receive::default());
+        let mut audio = SessionAudio::new(receive.clone(), Arc::default());
+        let (mon, _, _) = open_feed(48_000);
+        receive.set_monitor(Some(mon.clone()));
+        receive.set_gain(2.0);
+        for _ in 0..4 {
+            feed(&mut audio, &block_bytes(48_000, 2_048, 0.2));
+        }
+        let decoders = receive.take();
+        let played = drain(&mon);
+        assert!(
+            played.len() + 256 >= 4 * decoders.len() && played.len() <= 4 * decoders.len(),
+            "{} monitor samples for {} at the modem rate",
+            played.len(),
+            decoders.len()
+        );
+        let (p, d) = (peak(&played[800..]), peak(&decoders[200..]));
+        assert!(
+            (0.36..=0.44).contains(&d),
+            "gain 2 at the decoders: peak {d}"
+        );
+        assert!((p - d).abs() < 0.03, "monitor peak {p}, decoders {d}");
+    }
+
+    /// ⛔ NOTHING IS QUEUED FOR THE MONITOR WHILE IT IS OFF (the TX-device guard keeps it off),
+    /// MUTED FOR A TRANSMISSION, OR NOT PLAYING THIS SOURCE; and nothing once the feed is taken
+    /// away. The decoders' audio goes on throughout.
+    #[test]
+    fn the_monitor_is_fed_only_while_it_is_open() {
+        let receive = Arc::new(Receive::default());
+        let mut audio = SessionAudio::new(receive.clone(), Arc::default());
+        let (mon, enabled, tx_mute) = open_feed(48_000);
+        receive.set_monitor(Some(mon.clone()));
+        feed(&mut audio, &block_bytes(48_000, 2_048, 0.1));
+        assert!(mon.queued() > 0, "control: an open feed is fed");
+        let _ = drain(&mon);
+        let shut: [(&str, &dyn Fn(bool)); 3] = [
+            ("monitor off", &|on| enabled.store(!on, Ordering::SeqCst)),
+            ("muted while keyed", &|on| {
+                tx_mute.store(on, Ordering::SeqCst)
+            }),
+            ("not the source", &|on| mon.set_active(!on)),
+        ];
+        for (what, close) in shut {
+            close(true);
+            feed(&mut audio, &block_bytes(48_000, 2_048, 0.1));
+            assert_eq!(mon.queued(), 0, "{what}: audio queued for the monitor");
+            assert!(
+                !receive.take().is_empty(),
+                "{what}: the decoders' audio goes on"
+            );
+            close(false);
+            feed(&mut audio, &block_bytes(48_000, 2_048, 0.1));
+            assert!(mon.queued() > 0, "{what}: fed again once reopened");
+            let _ = drain(&mon);
+        }
+        receive.set_monitor(None);
+        feed(&mut audio, &block_bytes(48_000, 2_048, 0.1));
+        assert_eq!(mon.queued(), 0, "taken away: nothing written");
     }
 }

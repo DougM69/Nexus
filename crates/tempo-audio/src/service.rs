@@ -3359,6 +3359,9 @@ struct TciRx {
     receive: std::sync::Weak<crate::tci::audio::Receive>,
     /// The receive tap's ring the session feeds (the waterfall, Remote Listen).
     ring: Arc<crate::monitor::SpscRing>,
+    /// The headphone monitor's way in, playing this audio in the sound card's place ("Play
+    /// receive audio here" plays what the decoders hear); `None` for a backend with no monitor.
+    monitor: Option<crate::monitor::MonitorFeed>,
     /// The receive floor's clocks, as `dax_started`/`dax_last_audio` are native DAX's: when the
     /// TCI audio became the source, and when the loop last took a sample of it.
     started: Instant,
@@ -5772,7 +5775,9 @@ impl RadioLoop {
     /// card's ring goes back on the tap when TCI audio stops being the source: the session goes (a
     /// switch, a rebuild, a lost link), the receive floor gives up on it, or the tap was given
     /// another ring (a sound-card rebuild publishes its own, and TCI's is published again over it).
-    /// The operator's RX gain reaches the session's thread every tick (an atomic store).
+    /// The operator's RX gain reaches the session's thread every tick (an atomic store). The
+    /// headphone monitor follows the same source: the session feeds it while TCI audio is the
+    /// source, and it plays the sound card again when it stops being (#372).
     fn reconcile_tci_audio<B: AudioBackend>(&mut self, engine: &Arc<Mutex<Engine>>, backend: &B) {
         let tci = self.rigctld_proc.as_ref().and_then(CatDaemon::tci);
         // A failure is about the session it happened on: another one tries again.
@@ -5795,8 +5800,14 @@ impl RadioLoop {
                 .current()
                 .is_some_and(|s| Arc::ptr_eq(&s.ring, ring))
         };
+        let monitor = backend.monitor_feed();
+        let same_monitor = |held: &Option<crate::monitor::MonitorFeed>| match (held, &monitor) {
+            (Some(a), Some(b)) => a.is(b),
+            (None, None) => true,
+            _ => false,
+        };
         if let (Some(rx), Some(d)) = (&self.tci_rx, want) {
-            if is_receive_of(d, &rx.receive) && on_the_tap(&rx.ring) {
+            if is_receive_of(d, &rx.receive) && on_the_tap(&rx.ring) && same_monitor(&rx.monitor) {
                 if let Some(r) = d.receive() {
                     r.set_gain(self.applied.rx_gain);
                 }
@@ -5804,6 +5815,11 @@ impl RadioLoop {
             }
         }
         if let Some(rx) = self.tci_rx.take() {
+            // The headphone monitor plays the sound card again, and a session anywhere stops
+            // writing to it (`MonitorFeed::open`).
+            if let Some(m) = &rx.monitor {
+                m.set_active(false);
+            }
             // The session stops feeding the old ring, if it is still the loop's; a session moved
             // to the monitor pool stops once the tap lets the ring go (it holds the ring weakly).
             if let Some(r) = tci
@@ -5811,6 +5827,7 @@ impl RadioLoop {
                 .and_then(crate::tci::TciDaemon::receive)
             {
                 r.set_tap(None);
+                r.set_monitor(None);
             }
             // The sound card back on the tap, unless it already has another source.
             if on_the_tap(&rx.ring) {
@@ -5840,9 +5857,15 @@ impl RadioLoop {
         // No capture device to name: the audio is the SDR program's, over the network.
         self.rx_tap
             .publish_card_with_origin(ring.clone(), crate::tci::audio::MODEM_RATE, None);
+        // The headphone monitor plays what the decoders hear: this audio, in the card's place.
+        receive.set_monitor(monitor.clone());
+        if let Some(m) = &monitor {
+            m.set_active(true);
+        }
         self.tci_rx = Some(TciRx {
             receive: Arc::downgrade(receive),
             ring,
+            monitor,
             started: Instant::now(),
             last_audio: None,
         });
