@@ -22,6 +22,7 @@ import { WatchTile } from './WatchTile'
 import { SpotsSpotMe, type SpotMeStation } from './SpotsSpotMe'
 import { SpotDialog } from './SpotDialog'
 import { WorkedWindowSelect, isWorkedWindow, workedWithin, type WorkedWindow } from './WorkedWindowSelect'
+import { setPounceSpotterFilter } from '../api'
 
 type SortKey = 'age' | 'call' | 'entity' | 'state' | 'band' | 'freq' | 'mode'
 
@@ -297,6 +298,14 @@ export function SpotsPanel({ spots, bandPlan, selectedCall, onSelect, onWork, on
   // chip, which asks the narrower question "heard on MY continent".
   const [spotterConts, setSpotterConts] = useSessionState<string[]>('nexus.spots.spotterConts', [], host)
   const [spotterEntities, setSpotterEntities] = useSessionState<string[]>('nexus.spots.spotterEntities', [], host)
+  // Pounce follows the Spots view's own Spotted-from chips (#174), so narrowing the board to
+  // France also keeps the rare-DX alert to spots heard from France. Only the view's copy: a pane
+  // on another screen keeps chips of its own for its own box. Sent on every change and on mount;
+  // the station applies them before its alert gate, and nothing is saved.
+  useEffect(() => {
+    if (host !== undefined) return
+    setPounceSpotterFilter(spotterConts, spotterEntities).catch(() => {})
+  }, [host, spotterConts, spotterEntities])
 
   const knownBands = useMemo(() => new Set(bandPlan.map((b) => b.band)), [bandPlan])
 

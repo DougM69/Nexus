@@ -106,8 +106,9 @@ function reportLabel(rx: number | null | undefined): string | null {
 
 /**
  * The ONE always-visible operating strip of the Operate cockpit (~36 px one row
- * at xl; two stable rows below): Call CQ / S&P and the TX cluster (TX On / Tune /
- * Stop TX / Hold Tx) anchored FIRST so they never move as a QSO runs, then the
+ * at xl; two stable rows below): the TX cluster (TX On / Tune / Stop TX / Hold Tx,
+ * in the other screens' order) and Call CQ / S&P anchored FIRST so they never move
+ * as a QSO runs, then the
  * live TX/RX + sequencer readout with the DX call, "Now sending" with Resend,
  * the compact Tx5 free-text field, the transmit-period + Skip Tx1 controls, the
  * next-slot countdown and the fixed-width TX telemetry cell — so you work a
@@ -213,29 +214,9 @@ export function OperateQsoStrip({
           the strip's start. Every state-variable readout member (state cap,
           AUTO-CQ pill, sequencer state, DX call, report) renders AFTER them —
           before the fix, Stop TX drifted ~270 px as a QSO populated and again on
-          every 15 s TX transition. */}
-      <div className="cq-roles" role="group" aria-label={t('operate.strip.roles.aria')}>
-        <button
-          type="button"
-          className={`cq-role cq-call${running ? ' active' : ''}`}
-          aria-pressed={running}
-          onClick={() => (onCallCq ? onCallCq() : onSetMode('qso-run'))}
-          disabled={noQso}
-          title={noQso ? noQsoWhy : t('operate.strip.callCq.title')}
-        >
-          {t('operate.strip.callCq.label')}
-        </button>
-        <button
-          type="button"
-          className={`cq-role${!running ? ' active' : ''}`}
-          aria-pressed={!running}
-          onClick={() => onSetMode('qso-monitor')}
-          disabled={noQso}
-          title={noQso ? noQsoWhy : t('operate.strip.sandp.title')}
-        >
-          {t('operate.strip.sandp.label')}
-        </button>
-      </div>
+          every 15 s TX transition. The TX cluster comes first of the two, as it
+          opens every other screen's TX strip (CockpitTxStrip), so Tune sits right
+          after TX On/Off in the same spot on all eight screens (#287). */}
       {radio && (
         <div className="op-controls cq-txctl" role="group" aria-label={t('operate.strip.txControls.aria')}>
           {/* ⚠️ DEFERRED, all four of the controls below: TX On/Off's tooltip states the abort
@@ -302,6 +283,28 @@ export function OperateQsoStrip({
           </button>
         </div>
       )}
+      <div className="cq-roles" role="group" aria-label={t('operate.strip.roles.aria')}>
+        <button
+          type="button"
+          className={`cq-role cq-call${running ? ' active' : ''}`}
+          aria-pressed={running}
+          onClick={() => (onCallCq ? onCallCq() : onSetMode('qso-run'))}
+          disabled={noQso}
+          title={noQso ? noQsoWhy : t('operate.strip.callCq.title')}
+        >
+          {t('operate.strip.callCq.label')}
+        </button>
+        <button
+          type="button"
+          className={`cq-role${!running ? ' active' : ''}`}
+          aria-pressed={!running}
+          onClick={() => onSetMode('qso-monitor')}
+          disabled={noQso}
+          title={noQso ? noQsoWhy : t('operate.strip.sandp.title')}
+        >
+          {t('operate.strip.sandp.label')}
+        </button>
+      </div>
       {/* A connection that transmits nothing says so, with its reason on hover, as the other
           screens' TX strip does (`CockpitTxStrip`), rather than "Receiving" over a Call CQ that
           cannot key. What is on the air is still shown first. */}

@@ -21,6 +21,7 @@ import {
   addMemoryDeduped,
   deleteGroup,
   deleteMemories,
+  addMemoriesToGroup,
   deleteMemory,
   isSendOnlyDcs,
   memoriesStore,
@@ -655,6 +656,15 @@ function MemoriesContent({
     })()
   }
 
+  // #360: every selected row ON SCREEN joins the group, Delete's rule, so a row narrowed out of
+  // view is never moved. Rows keep the groups they are in already.
+  const addSelectedToGroup = (groupId: string) => {
+    const group = bank.groups.find((g) => g.id === groupId)
+    if (!group || selectedShown.length === 0) return
+    commit((b) => addMemoriesToGroup(b, selectedShown.map((m) => m.id), groupId))
+    pushToast(t('memories.select.grouped', { count: selectedShown.length, group: group.name }), 'success', 2500)
+  }
+
   const exportCsv = () => {
     if (shown.length === 0) {
       pushToast(t('memories.export.empty'), 'info', 2500)
@@ -1232,6 +1242,24 @@ function MemoriesContent({
             <button type="button" className="mv-tool" onClick={() => setSelected(new Set())}>
               {t('memories.select.clear')}
             </button>
+            {bank.groups.length > 0 && (
+              <select
+                className="mv-tool"
+                aria-label={t('memories.select.group.aria')}
+                value=""
+                disabled={selectedShown.length === 0}
+                onChange={(e) => addSelectedToGroup(e.target.value)}
+              >
+                <option value="" disabled>
+                  {t('memories.select.group.label')}
+                </option>
+                {bank.groups.map((g) => (
+                  <option key={g.id} value={g.id}>
+                    {g.name}
+                  </option>
+                ))}
+              </select>
+            )}
             <button
               type="button"
               className="mv-tool mv-selbar-del"

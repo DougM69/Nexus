@@ -31,6 +31,7 @@ import {
   resetSettings,
   importSettingsBundle,
   saveTextToDownloads,
+  saveTextAs,
   setBlockedCalls as apiSetBlockedCalls,
   type SerialPortInfo,
 } from '../api'
@@ -1239,6 +1240,8 @@ export function SettingsPanel({
     stationOnly(key) ? (
       <span className="settings-hint" data-set-at-station={key}>{t('settings.stationOnly.hint')}</span>
     ) : null
+  // #165: where sharing really is — the station's answer while it serves, else the setting.
+  const sharePort = radio?.catSharePort ?? (form?.catBrokerPort || 4532)
   // #289 — the data + log folder. Read once when Settings opens; a change applies at the next
   // launch, so the readout keeps saying what THIS run is using until then.
   const [dataFolder, setDataFolderInfo] = useState<DataFolderInfo | null>(null)
@@ -4265,6 +4268,23 @@ export function SettingsPanel({
                     title={t('settings.transmit.backup.title')}
                   >
                     {t('settings.transmit.backup.action')}
+                  </button>
+                  {/* #306: the same file, in a folder the operator picks. The dialog opens in
+                      Downloads with the dated name filled in; cancelling saves nothing. */}
+                  <button
+                    type="button"
+                    className="settings-linkbtn"
+                    onClick={() =>
+                      withErrorToast(async () => {
+                        const text = withAppearance(await exportSettingsBundle(), appearanceNow())
+                        const stamp = new Date().toISOString().slice(0, 10)
+                        const path = await saveTextAs(`nexus-settings-${stamp}.json`, text)
+                        if (path) pushToast(t('settings.transmit.backup.done', { path }), 'success')
+                      }, t('settings.transmit.backup.failed'))
+                    }
+                    title={t('settings.transmit.backup.saveAs.title')}
+                  >
+                    {t('settings.transmit.backup.saveAs')}
                   </button>
                   <input
                     ref={backupFileRef}
@@ -8116,17 +8136,20 @@ export function SettingsPanel({
                     {radio.catShareError}
                   </span>
                 )}
+                {/* #165: the port sharing REALLY serves on. When another program already holds
+                    the port in Settings, the broker leaves it alone and moves to the next free
+                    one, so the address to paste is the station's answer, not the setting. */}
                 {form.catBroker && !radio?.catShareError && (
                   <>
                     <code className="rig-share-addr mono">
-                      127.0.0.1:{form.catBrokerPort || 4532}
+                      127.0.0.1:{sharePort}
                     </code>
                     <button
                       type="button"
                       className="settings-linkbtn"
                       onClick={() => {
                         void navigator.clipboard
-                          ?.writeText(`127.0.0.1:${form.catBrokerPort || 4532}`)
+                          ?.writeText(`127.0.0.1:${sharePort}`)
                           .catch(() => {})
                       }}
                       title={t('settings.transmit.share.copy.title')}
@@ -8136,6 +8159,11 @@ export function SettingsPanel({
                   </>
                 )}
               </div>
+              {form.catBroker && !radio?.catShareError && sharePort !== (form.catBrokerPort || 4532) && (
+                <span className="settings-hint rig-share-moved" role="status">
+                  {t('settings.transmit.share.moved', { wanted: form.catBrokerPort || 4532, port: sharePort })}
+                </span>
+              )}
               {/* The PROGRAM NAMES (VarAC, FreeDV, WSJT-X, JS8Call, fldigi) and the rig-model
                   name `Hamlib NET rigctl` are the other software's own, so they are written in
                   the sentence and emphasised by the markers this call site supplies. */}

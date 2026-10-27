@@ -434,9 +434,11 @@ fn seed_line_declarations(t: &mut Transport, s: &tempo_app::settings::Settings) 
 /// ([`seed_line_declarations`]), a NET rigctl address one of Nexus's own listeners holds
 /// ([`AddressRefusal`]): the launch is the open a clash an older build stored meets first, and the
 /// TCI connection's server with the port of Nexus's own TCI server ([`seed_tci`]).
-fn launch_transport(cfg: &RadioConfig, s: &Settings) -> Transport {
+fn launch_transport(cfg: &RadioConfig, s: &Settings, serving: Option<u16>) -> Transport {
     let mut t = Transport::from_cfg(cfg);
     seed_line_declarations(&mut t, s);
+    // Where the CAT broker is, as every later transport carries it (#165).
+    t.broker_self_port = tempo_app::settings::sharing_self_port(s, serving);
     t.address_refusal = AddressRefusal::of(&t, s);
     seed_tci(&mut t, s);
     t
@@ -2119,7 +2121,7 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
     let (applied, remote_radio_id) = {
         let eng = engine_lock(&engine);
         (
-            launch_transport(&cfg, eng.settings()),
+            launch_transport(&cfg, eng.settings(), eng.cat_share_port()),
             eng.settings().active_radio,
         )
     };
@@ -2657,7 +2659,10 @@ fn monitor_loop(
             return;
         }
         // Desired monitor set (enabled, non-active, has a rig model), snapshot under a brief lock.
-        let (active, want) = monitor_want(engine_lock(&engine).settings());
+        let (active, want) = {
+            let e = engine_lock(&engine);
+            monitor_want(e.settings(), e.cat_share_port())
+        };
         // A switch is mid-flight: stay off the pool entirely so the handoff's try_lock wins
         // on its next 20 ms tick (a monitor poll can hold the lock for whole read bursts).
         if pending.load(std::sync::atomic::Ordering::Relaxed) {
@@ -2672,7 +2677,7 @@ fn monitor_loop(
 
 /// The monitor's desired set: the active radio, and `(id, transport)` for every enabled, non-active
 /// radio with a rig model.
-fn monitor_want(s: &Settings) -> (u32, Vec<(u32, Transport)>) {
+fn monitor_want(s: &Settings, serving: Option<u16>) -> (u32, Vec<(u32, Transport)>) {
     let active = s.active_radio;
     // The control-line states are a GLOBAL setting, and a monitor's rigctld opens a
     // real port on a real radio — so it has to honour them too. Without this, an
@@ -2698,7 +2703,7 @@ fn monitor_want(s: &Settings) -> (u32, Vec<(u32, Transport)>) {
             t.control_lines = lines;
             // Our own CAT broker's port, as the active radio's transport carries it, so a monitor
             // never takes Nexus itself for a radio (`net_rigctld_on_this_machine`, `open_read_only`).
-            t.broker_self_port = s.cat_broker.then_some(s.cat_broker_port);
+            t.broker_self_port = tempo_app::settings::sharing_self_port(s, serving);
             // …and our own TCI server's, so a monitor's TCI client never dials Nexus itself.
             t.tci_server_self_port = s.tci_server.then_some(s.tci_server_port);
             // And whether one of Nexus's own listeners holds this radio's NET rigctl address.
@@ -2953,7 +2958,10 @@ fn handoff_if_switched(
     let (active, want_active) = {
         let e = engine_lock(engine);
         let s = e.settings();
-        (s.active_radio, Transport::from_settings(s))
+        (
+            s.active_radio,
+            Transport::from_station(s, e.cat_share_port()),
+        )
     };
     if active == *last_active {
         // No switch in flight (or the intent vanished before the handoff won the pool —
@@ -4500,7 +4508,7 @@ impl RadioLoop {
         if self.remote_radio_id != Some(eng.settings().active_radio) {
             return None;
         }
-        let mut want = Transport::from_settings(eng.settings());
+        let mut want = Transport::from_station(eng.settings(), eng.cat_share_port());
         self.apply_port_alias(&mut want);
         if want != self.applied {
             return None;
@@ -7496,7 +7504,7 @@ impl RadioLoop {
                 // mutable take_* calls that follow don't fight the settings borrow. APRS forces
                 // simplex here (see `fm_repeater_config`) so a beacon never keys through a shift.
                 let fm = eng.fm_repeater_config();
-                let mut want = Transport::from_settings(eng.settings());
+                let mut want = Transport::from_station(eng.settings(), eng.cat_share_port());
                 self.cat_port_configured.clone_from(&want.serial_port);
                 self.apply_port_alias(&mut want);
                 let cat_hold = eng.cat_port_hold();
@@ -16494,11 +16502,11 @@ impl PartialEq for AddressRefusal {
 
 impl AddressRefusal {
     /// `t`'s, under the station `s`: the address as `t` dials it, against `s`'s other radios and
-    /// its broker.
+    /// the broker's port `t` carries (`broker_self_port`, where it really is: #165).
     fn of(t: &Transport, s: &Settings) -> Self {
         Self(tempo_app::settings::net_rigctl_address_refusal(
             &s.radios,
-            s.cat_broker.then_some(s.cat_broker_port),
+            t.broker_self_port,
             t.radio_id,
             t.rig_model,
             &t.rig_conn,
@@ -16679,7 +16687,17 @@ impl Transport {
         }
     }
 
+    /// The settings alone, as the tests build a transport: no broker has reported serving, so its
+    /// port is the Sharing port while sharing is on ([`Self::from_station`]).
+    #[cfg(test)]
     fn from_settings(s: &Settings) -> Self {
+        Self::from_station(s, None)
+    }
+
+    /// The transport the settings describe, with the port the CAT broker reports it is serving on (`serving`,
+    /// [`Engine::cat_share_port`]): where it stepped aside from the Sharing port (#165), that is
+    /// the port Nexus would be talking to itself on, and the Sharing port is another program's.
+    fn from_station(s: &Settings, serving: Option<u16>) -> Self {
         let mut t = Self {
             icom_data_mode: s.icom_data_mode,
             tx_audio_source: s.tx_audio_source.clone(),
@@ -16729,11 +16747,7 @@ impl Transport {
             rig_addr: s.rig_addr.clone(),
             omnirig_slot: s.omnirig_slot,
             rigctld_port: safe_rigctld_port(s.rigctld_port),
-            broker_self_port: if s.cat_broker {
-                Some(s.cat_broker_port)
-            } else {
-                None
-            },
+            broker_self_port: tempo_app::settings::sharing_self_port(s, serving),
             tci_server_self_port: s.tci_server.then_some(s.tci_server_port),
             address_refusal: AddressRefusal::default(),
             audio_in: s.audio_in.clone(),
@@ -27292,7 +27306,7 @@ mod tests {
                 .success()
         };
         let pass = || {
-            let (active, want) = monitor_want(engine.lock().unwrap().settings());
+            let (active, want) = monitor_want(engine.lock().unwrap().settings(), None);
             reconcile_pool_with_open(&pool, &want, active, &engine, 0.0, &open);
         };
 

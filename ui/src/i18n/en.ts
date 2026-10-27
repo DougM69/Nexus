@@ -6793,6 +6793,13 @@ export const EN = {
     other: 'Deleted {{count}} memories',
   },
   'memories.select.undo': 'Undo',
+  // #360: the selection bar's group picker. `{{group}}` is the operator's own group name.
+  'memories.select.group.label': 'Add to group…',
+  'memories.select.group.aria': 'Add the selected memories to a group',
+  'memories.select.grouped': {
+    one: 'Added {{count}} memory to {{group}}',
+    other: 'Added {{count}} memories to {{group}}',
+  },
   'memories.select.restored': {
     one: 'Restored {{count}} memory',
     other: 'Restored {{count}} memories',
@@ -6925,7 +6932,7 @@ export const EN = {
   'program.age.days': '{{days}}d ago',
   // `{{source}}` is the directory's own name and `{{band}}` a band name — both tokens.
   'program.coverageGap':
-    '{{source}} lists no <b>{{band}}</b> repeaters here, which is unusual for an area that has any — its rural coverage is patchy, so this list is probably missing machines. Adding a RepeaterBook API token in <b>Settings ▸ Integrations</b> fills the gap.',
+    '{{source}} lists no <b>{{band}}</b> repeaters here, which is unusual for an area that has any — its rural coverage is patchy, so this list is probably missing machines. Adding a RepeaterBook API token in <link>Settings ▸ Logging & Connectors ▸ Confirmations</link> fills the gap.',
 
   // `{{states}}` is a list of 2-letter state codes — tokens, never translated.
   'program.missingStates':
@@ -8629,6 +8636,8 @@ export const EN = {
     'It also carries how Nexus looks: the theme, colours, text size, density, Night and waterfall palettes, and a restore puts them back. Field mode and UI scale stay with each computer.',
   // `{{path}}` is where the file landed — a path, printed verbatim.
   'settings.transmit.backup.done': 'Settings backed up → {{path}}',
+  'settings.transmit.backup.saveAs': 'Save as…',
+  'settings.transmit.backup.saveAs.title': 'Back up to a folder you choose (Back up saves straight to Downloads)',
   'settings.transmit.backup.failed': 'Backup failed',
   'settings.transmit.restore.action': 'Restore…',
   'settings.transmit.restore.title': 'Replace your current setup with a saved backup',
@@ -8636,6 +8645,9 @@ export const EN = {
 
   'settings.transmit.share.label': 'Share this radio with other programs',
   'settings.transmit.share.copy.action': 'Copy',
+  // #165. `{{wanted}}` and `{{port}}` are port numbers; `rigctld` is Hamlib's program name, kept as is.
+  'settings.transmit.share.moved':
+    '{{wanted}} is taken (another program is listening there, or it is your radio’s own rigctld address), so Nexus leaves it free and is sharing on {{port}} instead. Point other programs at this address.',
   'settings.transmit.share.copy.title': 'Copy the address to paste into the other program',
   'settings.transmit.share.hint.on':
     'Nexus itself answers at this address, so <b>VarAC</b>, <b>FreeDV</b>, <b>WSJT-X</b>, <b>JS8Call</b> and <b>fldigi</b> can use the radio while Nexus runs — pick the rig <em>Hamlib NET rigctl</em> (VarAC and FreeDV call it a network or rigctld connection), give it the address above, and leave their serial port blank. They stay connected even while Nexus tests or reconfigures the radio link, and they follow whichever radio is active. Only for this computer — the address is not reachable from the network. Takes effect right away. Both programs can command the rig, so expect them to argue if you tune in both at once.',

@@ -2039,6 +2039,12 @@ pub struct RadioStatus {
     /// exactly this, "is not where anyone looks".
     #[serde(default)]
     pub cat_share_error: Option<String>,
+    /// The port the CAT broker is actually serving on (#165), `None` while it is not serving.
+    /// Usually Settings' "Sharing port"; when another program already holds that port, the
+    /// broker leaves it alone and serves on the next free one, and this is where programs must
+    /// connect. ABSENT while not sharing, so a snapshot without sharing is byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cat_share_port: Option<u16>,
     /// The TCI server ("Share by TCI"): where programs connect, why it is not serving, and the
     /// programs connected. ABSENT while the server is switched off, so every snapshot without it
     /// is byte-identical. Written by `src-tauri/src/tci_server.rs` on each of its ticks.

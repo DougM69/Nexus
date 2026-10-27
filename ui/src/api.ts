@@ -2717,6 +2717,12 @@ export async function saveTextToDownloads(filename: string, text: string): Promi
   return invoke<string>('save_text_to_downloads', { filename, text })
 }
 
+/** Save As: the OS save dialog, opening in Downloads with `filename` filled in, then the text
+ *  written where the operator picked. The saved path, or null when the dialog was cancelled. */
+export async function saveTextAs(filename: string, text: string): Promise<string | null> {
+  return invoke<string | null>('save_text_as', { filename, text })
+}
+
 /** Binary sibling of saveTextToDownloads for the share-card PNG (base64-encoded bytes) —
  *  on macOS wry cancels `<a download>` navigations outright, so a blob anchor saves nothing. */
 export async function savePngToDownloads(filename: string, base64: string): Promise<string> {
@@ -4481,6 +4487,12 @@ export async function setBothOffsets(hz: number): Promise<AppSnapshot> {
 /** Hold the TX offset fixed when selecting a decoded station ("Hold Tx Freq"). */
 export async function setHoldTxFreq(on: boolean): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_hold_tx_freq', { on })
+}
+
+/** The Spots view's "Spotted from" chips, which Pounce follows (#174): continent codes and
+ * DXCC countries, as the chips carry them. Empty lists = every spot. Kept for the session. */
+export async function setPounceSpotterFilter(conts: string[], entities: string[]): Promise<void> {
+  return invoke<void>('set_pounce_spotter_filter', { conts, entities })
 }
 
 /** Replace the blocked-callsigns list — the ONE write path (Alt-double-click gesture and

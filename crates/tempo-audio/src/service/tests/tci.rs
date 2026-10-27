@@ -252,7 +252,7 @@ fn the_launch_and_the_monitor_dial_the_tci_server_the_settings_name() {
         rig_conn: "tci".into(),
         ..RadioConfig::default()
     };
-    let launch = launch_transport(&cfg, &s);
+    let launch = launch_transport(&cfg, &s, None);
     let want = Transport::from_settings(&s);
     assert!(launch.tci_target().is_some());
     assert_eq!(
@@ -270,7 +270,7 @@ fn the_launch_and_the_monitor_dial_the_tci_server_the_settings_name() {
         tci_port: 50001,
         ..tempo_app::settings::RadioProfile::default()
     });
-    let (_, pool) = monitor_want(&s);
+    let (_, pool) = monitor_want(&s, None);
     let (_, t) = pool
         .iter()
         .find(|(id, _)| *id == 9)

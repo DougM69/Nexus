@@ -766,7 +766,22 @@ fn pounce_offer(sp: &tempo_net::cluster::ClusterSpot) {
                     .to_string()
             }),
         spotted_unix: sp.received_unix as i64,
+        voices: std::iter::once(&sp.spotter)
+            .chain(&sp.corroborators)
+            .cloned()
+            .collect(),
     });
+}
+
+/// The Spots board's "Spotted from" chips, which Pounce follows (#174; [`pouncer::SpotterFilter`]).
+/// The board sends them whenever they change; kept for the session, as the chips are.
+#[tauri::command]
+fn set_pounce_spotter_filter(
+    filter: State<'_, pouncer::SharedSpotterFilter>,
+    conts: Vec<String>,
+    entities: Vec<String>,
+) {
+    filter.set(pouncer::SpotterFilter { conts, entities });
 }
 
 /// Outbound command queue for the HUMAN DX-cluster nodes — the `post_spot`
@@ -15285,6 +15300,46 @@ fn save_text_to_downloads(
     let path = dir.join(name);
     std::fs::write(&path, text).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
     Ok(path.display().to_string())
+}
+
+/// Save As for the settings backup (#306): the OS save dialog, opening in Downloads (as
+/// [`save_text_to_downloads`] finds it) with `filename` reduced to its bare name and filled in,
+/// then `text` written wherever the operator picked. `None` when the dialog is cancelled or
+/// vanishes, which writes nothing. The callback form of the dialog, for the reason
+/// [`pick_data_folder`] gives; driven from Rust, so the webview needs no dialog permission.
+#[tauri::command]
+async fn save_text_as(
+    app: tauri::AppHandle,
+    filename: String,
+    text: String,
+) -> Result<Option<String>, String> {
+    use tauri::Manager;
+    use tauri_plugin_dialog::DialogExt;
+    let name = std::path::Path::new(&filename)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .filter(|n| !n.is_empty())
+        .ok_or("Invalid file name")?
+        .to_string();
+    let mut dialog = app.dialog().file().set_file_name(&name);
+    if let Ok(dir) = app.path().download_dir().or_else(|_| app.path().home_dir()) {
+        dialog = dialog.set_directory(dir);
+    }
+    if let Some(ext) = std::path::Path::new(&name)
+        .extension()
+        .and_then(|e| e.to_str())
+    {
+        dialog = dialog.add_filter(ext.to_uppercase(), &[ext]);
+    }
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    dialog.save_file(move |picked| {
+        let _ = tx.send(picked);
+    });
+    let Some(path) = rx.await.ok().flatten().and_then(|p| p.into_path().ok()) else {
+        return Ok(None);
+    };
+    std::fs::write(&path, text).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+    Ok(Some(path.display().to_string()))
 }
 
 /// Binary sibling of [`save_text_to_downloads`] for the Journey share card's PNG: on macOS
@@ -35994,6 +36049,94 @@ fn broker_bind_message(port: u16, err: &std::io::Error) -> String {
     }
 }
 
+/// How far past the operator's sharing port the broker looks for a free one when another program
+/// holds it (#165). Twenty ports is past any plausible run of neighbouring daemons, and still
+/// close enough to the chosen number to read as "the next one along".
+const BROKER_MOVE_SPAN: u16 = 20;
+
+/// Bind the CAT broker for a station whose sharing port is `want`, stepping aside when another
+/// program already has it (#165).
+///
+/// ⭐ **NEVER TAKE ANOTHER PROGRAM'S PORT.** The reporter starts their own rigctld on 4532 before
+/// Nexus; sharing used to stop there with a complaint. Now it stays on and moves to the next free
+/// port, and says so. A port counts as taken when the bind is refused with `AddrInUse`, AND when
+/// something already ANSWERS on 127.0.0.1 there: on some systems a rigctld listening on every
+/// address leaves the narrower 127.0.0.1 bind open, and taking it would sit Nexus in front of
+/// that rigctld for every local program. Ports in `keep` (the station's own daemons, the TCI
+/// server, the operator's NET rigctl address; `Settings::ports_the_broker_steps_around`) are
+/// never moved onto. Ports in `reserved` (where a NET rigctl radio expects the operator's own
+/// rigctld; `Settings::ports_the_operators_rigctld_holds`) are never bound at all, not even as
+/// the port asked for: that rigctld may simply not be running yet, and once Nexus held its port it
+/// could never start, and the radio pointed there would be talking to Nexus itself. Any other
+/// refusal (a privileged port, a firewall) is returned as it was: moving would not be the fix,
+/// and the operator's own port is the one to explain.
+fn broker_bind(
+    want: u16,
+    keep: &[u16],
+    reserved: &[u16],
+) -> std::io::Result<(u16, std::net::TcpListener)> {
+    broker_bind_with(
+        want,
+        keep,
+        reserved,
+        |p| {
+            std::net::TcpStream::connect_timeout(
+                &std::net::SocketAddr::from(([127, 0, 0, 1], p)),
+                std::time::Duration::from_millis(250),
+            )
+            .is_ok()
+        },
+        |p| std::net::TcpListener::bind(("127.0.0.1", p)),
+    )
+}
+
+/// [`broker_bind`], with how a port is probed and bound passed in, so a test can be the
+/// system that lets a narrower bind shadow a wider one.
+fn broker_bind_with(
+    want: u16,
+    keep: &[u16],
+    reserved: &[u16],
+    answers: impl Fn(u16) -> bool,
+    bind: impl Fn(u16) -> std::io::Result<std::net::TcpListener>,
+) -> std::io::Result<(u16, std::net::TcpListener)> {
+    let held = std::io::Error::from(std::io::ErrorKind::AddrInUse);
+    let first = if reserved.contains(&want) || answers(want) {
+        held
+    } else {
+        match bind(want) {
+            Ok(l) => return Ok((want, l)),
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => e,
+            Err(e) => return Err(e),
+        }
+    };
+    for port in (1..=BROKER_MOVE_SPAN).filter_map(|i| want.checked_add(i)) {
+        if keep.contains(&port) || reserved.contains(&port) || answers(port) {
+            continue;
+        }
+        if let Ok(l) = bind(port) {
+            return Ok((port, l));
+        }
+    }
+    Err(first)
+}
+
+/// What the connection log says when sharing stepped aside (#165), and why: `reserved` when
+/// the port is a NET rigctl radio's address (the operator's own rigctld), else another program
+/// was already listening there.
+fn broker_moved_message(wanted: u16, serving: u16, reserved: bool) -> String {
+    let why = if reserved {
+        format!("127.0.0.1:{wanted} is your radio's rigctld address, so Nexus keeps it free")
+    } else {
+        format!(
+            "Another program is already listening on 127.0.0.1:{wanted}, so Nexus left it alone"
+        )
+    };
+    format!(
+        "{why} and is sharing this radio on 127.0.0.1:{serving} instead. Point other programs \
+         there."
+    )
+}
+
 /// May the manager attempt to bind `port` right now? A record for a DIFFERENT port never
 /// holds one back — moving the broker to a free port is the operator's fix for this, and it
 /// must take effect on the next tick.
@@ -39076,8 +39219,14 @@ fn start_on_the_logbook(
         use std::sync::atomic::{AtomicBool, Ordering};
         let mgr_engine = engine.clone();
         std::thread::spawn(move || {
-            // The running broker as (port, shutdown flag); None = not serving.
-            let mut running: Option<(u16, std::sync::Arc<AtomicBool>)> = None;
+            // The running broker as (the port asked for, shutdown flag, its thread); None = not
+            // serving. The port it SERVES on may differ (#165: another program held the one asked
+            // for); what it was asked for is what a settings change is compared against.
+            let mut running: Option<(
+                u16,
+                std::sync::Arc<AtomicBool>,
+                std::thread::JoinHandle<()>,
+            )> = None;
             // …and the bind that FAILED, which is the other half of "not serving" (#165).
             // Without it a failed bind left `running` as None, `want != have` stayed true,
             // and both the bind and its error line re-ran every second, forever.
@@ -39100,13 +39249,19 @@ fn start_on_the_logbook(
                     if want.is_none() {
                         e.set_cat_share_error(None);
                     }
-                    want
+                    // Where sharing must never move to, read under the same lock.
+                    (want, e.settings().ports_the_broker_steps_around())
                 };
-                let have = running.as_ref().map(|(p, _)| *p);
+                let (want, mut keep) = want;
+                let have = running.as_ref().map(|(p, ..)| *p);
                 if want != have {
-                    // Stop the current broker (disabled, or the port changed).
-                    if let Some((_, shutdown)) = running.take() {
+                    // Stop the current broker (disabled, or the port changed), and wait for it to
+                    // let go of its port (one accept poll, 200 ms): a broker of our own still
+                    // answering must not read as another program holding the port.
+                    if let Some((_, shutdown, thread)) = running.take() {
                         shutdown.store(true, Ordering::Relaxed);
+                        let _ = thread.join();
+                        engine_lock(&mgr_engine).set_cat_share_port(None);
                     }
                     // Start on the wanted port, unless a recent failure on THIS port says to
                     // wait. A different port is always tried at once — changing it is the
@@ -39115,24 +39270,39 @@ fn start_on_the_logbook(
                     if let Some(port) =
                         want.filter(|p| broker_may_attempt(failure.as_ref(), *p, now))
                     {
-                        match std::net::TcpListener::bind(("127.0.0.1", port)) {
-                            Ok(l) => {
-                                engine_lock(&mgr_engine).set_cat_share_error(None);
+                        // Never on the operator's own rigctld port (#165), by loopback or by one
+                        // of this computer's addresses, listed outside the engine lock.
+                        let here: Vec<std::net::IpAddr> = tempo_net::fdsync::lan_addrs()
+                            .into_iter()
+                            .map(|a| std::net::IpAddr::V4(a.ip))
+                            .collect();
+                        let reserved = engine_lock(&mgr_engine)
+                            .settings()
+                            .ports_the_operators_rigctld_holds(&here);
+                        keep.extend(&reserved);
+                        match broker_bind(port, &keep, &reserved) {
+                            Ok((serving, l)) => {
+                                {
+                                    let mut e = engine_lock(&mgr_engine);
+                                    e.set_cat_share_error(None);
+                                    e.set_cat_share_port(Some(serving));
+                                }
                                 let shutdown = std::sync::Arc::new(AtomicBool::new(false));
                                 let backend: std::sync::Arc<
                                     dyn tempo_audio::rigctld_server::RigBackend,
                                 > = std::sync::Arc::new(EngineRig::new(mgr_engine.clone()));
                                 let sd = shutdown.clone();
-                                std::thread::spawn(move || {
+                                let thread = std::thread::spawn(move || {
                                     tempo_audio::rigctld_server::serve_until(l, backend, sd)
                                 });
-                                running = Some((port, shutdown));
+                                running = Some((port, shutdown, thread));
                                 failure = None;
-                                conn_log(
-                                    "CAT broker",
-                                    "info",
-                                    format!("sharing this radio on 127.0.0.1:{port}"),
-                                );
+                                let line = if serving == port {
+                                    format!("sharing this radio on 127.0.0.1:{port}")
+                                } else {
+                                    broker_moved_message(port, serving, reserved.contains(&port))
+                                };
+                                conn_log("CAT broker", "info", line);
                             }
                             Err(e) => {
                                 // The sentence goes to the operator FIRST and to the log
@@ -39141,7 +39311,11 @@ fn start_on_the_logbook(
                                 // but the snapshot holds a current state, and a UI that only
                                 // learned about the first failure would go blank on the second.
                                 let msg = broker_bind_message(port, &e);
-                                engine_lock(&mgr_engine).set_cat_share_error(Some(msg.clone()));
+                                {
+                                    let mut eng = engine_lock(&mgr_engine);
+                                    eng.set_cat_share_error(Some(msg.clone()));
+                                    eng.set_cat_share_port(None);
+                                }
                                 if broker_record_failure(&mut failure, port, now) {
                                     // ONE line, naming the port and the cause an operator can
                                     // act on. The retry carries on quietly behind the backoff.
@@ -39646,10 +39820,14 @@ fn finish_launch(handle: tauri::AppHandle, d: BuildDeps, rest: LaunchRest) {
             let emit_handle = handle.clone();
             let recent = d.pounces.clone();
             let ota = d.ota_spots.clone();
+            let spotted_from = handle
+                .state::<pouncer::SharedSpotterFilter>()
+                .inner()
+                .clone();
             std::thread::Builder::new()
                 .name("nexus-pounce".into())
                 .spawn(move || {
-                    pouncer::run(eng, needs, ota, rx, recent, move |p| {
+                    pouncer::run(eng, needs, ota, rx, recent, spotted_from, move |p| {
                         let _ = emit_handle.emit(alert::EVENT, &alert::raised("pounce", &p));
                     });
                 })
@@ -39981,6 +40159,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         export_general_log,
         export_selected_log,
         save_text_to_downloads,
+        save_text_as,
         save_png_to_downloads,
         civ_diagnostic_log,
         all_txt_location,
@@ -40231,6 +40410,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         set_rx_gain,
         set_active_radio,
         set_peg_lock,
+        set_pounce_spotter_filter,
         confirm_sat_uplink,
         add_radio,
         remove_radio,
@@ -40578,6 +40758,7 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
         .manage(SharedCallbookCache::default())
         .manage(callbook_update::CallbookUpdate::default())
         .manage(BetaUpdateState::default())
+        .manage(pouncer::SharedSpotterFilter::default())
         // The Logbook's award-need filter reads the award fold the Awards view keeps.
         .manage(log_queries::LogQueries::with_tallies(log_tallies))
         .manage(street_map::StreetMapState::default())
@@ -44179,6 +44360,161 @@ mod tests {
             4534,
             start + Duration::from_secs(300)
         ));
+    }
+
+    /// ⭐ **#165 — sharing steps aside, it never takes another program's port.** The reporter
+    /// starts their own rigctld on 4532 before Nexus. Sharing stays on and moves to the next free
+    /// port; the rigctld keeps 4532 and still answers on it.
+    #[test]
+    fn a_taken_sharing_port_moves_sharing_to_the_next_free_one_and_leaves_the_holder_alone() {
+        use std::io::{Read, Write};
+        let held = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = held.local_addr().unwrap().port();
+        let (got, listener) = super::broker_bind(port, &[], &[]).expect("a free port nearby");
+        assert_ne!(got, port, "took the port another program holds");
+        assert!(
+            got > port && got <= port.saturating_add(super::BROKER_MOVE_SPAN),
+            "{got} is not near {port}"
+        );
+        assert_eq!(listener.local_addr().unwrap().port(), got);
+        // The holder is untouched: a client on its port still reaches IT.
+        // (The move's own probe connected and hung up first; it is in the backlog ahead.)
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        c.write_all(b"f\n").unwrap();
+        let reached = (0..3).any(|_| {
+            let (mut srv, _) = held.accept().unwrap();
+            let mut buf = [0u8; 2];
+            srv.read_exact(&mut buf).is_ok() && &buf == b"f\n"
+        });
+        assert!(reached, "the holder no longer answers on its own port");
+    }
+
+    /// POSITIVE CONTROL: a free sharing port is used as set, and only `AddrInUse` moves sharing —
+    /// any other refusal is reported as before, on the port the operator chose.
+    #[test]
+    fn a_free_sharing_port_is_used_as_set_and_only_a_held_one_moves() {
+        use std::io::{Error, ErrorKind};
+        let free = |_: u16| false;
+        let ok = |p: u16| std::net::TcpListener::bind(("127.0.0.1", p)).map(|l| (p, l));
+        let probe = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let (got, _l) =
+            super::broker_bind_with(port, &[], &[], free, |p| ok(p).map(|(_, l)| l)).unwrap();
+        assert_eq!(got, port);
+        let denied = super::broker_bind_with(port, &[], &[], free, |_| {
+            Err(Error::from(ErrorKind::PermissionDenied))
+        });
+        assert_eq!(denied.unwrap_err().kind(), ErrorKind::PermissionDenied);
+    }
+
+    /// The move skips the ports the station keeps for its own daemons, and a port something is
+    /// already ANSWERING on counts as taken even where the OS would let a narrower bind shadow it
+    /// (a rigctld listening on every address), so sharing never sits in front of another program.
+    #[test]
+    fn the_move_skips_the_stations_own_ports_and_any_port_that_answers() {
+        use std::io::{Error, ErrorKind};
+        let tried = std::cell::RefCell::new(Vec::new());
+        let bind = |p: u16| {
+            tried.borrow_mut().push(p);
+            if p == 4532 {
+                Err(Error::from(ErrorKind::AddrInUse))
+            } else {
+                std::net::TcpListener::bind(("127.0.0.1", 0))
+            }
+        };
+        let (got, _l) =
+            super::broker_bind_with(4532, &[4533, 4534], &[], |p| p == 4535, bind).unwrap();
+        assert_eq!(got, 4536);
+        assert_eq!(
+            *tried.borrow(),
+            vec![4532, 4536],
+            "never even tried a kept or answering port"
+        );
+        // An answering wanted port is not bound over either: the move starts at once.
+        tried.borrow_mut().clear();
+        let bind_any = |p: u16| {
+            tried.borrow_mut().push(p);
+            std::net::TcpListener::bind(("127.0.0.1", 0))
+        };
+        let (got, _l) = super::broker_bind_with(4532, &[], &[], |p| p == 4532, bind_any).unwrap();
+        assert_eq!(got, 4533);
+        assert_eq!(*tried.borrow(), vec![4533]);
+    }
+
+    /// The share block and the log say where sharing went and why, naming both ports.
+    #[test]
+    fn a_moved_share_says_which_port_and_why() {
+        for reserved in [false, true] {
+            let msg = super::broker_moved_message(4532, 4536, reserved);
+            assert!(
+                msg.contains("127.0.0.1:4532") && msg.contains("127.0.0.1:4536"),
+                "{msg}"
+            );
+            assert_eq!(msg.contains("your radio's rigctld"), reserved, "{msg}");
+            assert_eq!(msg.contains("Another program"), !reserved, "{msg}");
+        }
+    }
+
+    /// ⭐ **#165 — SHARING NEVER TAKES THE OPERATOR'S OWN RIGCTLD PORT, EVEN WHEN NOTHING IS ON
+    /// IT YET.** A NET rigctl radio points at 127.0.0.1:P, Share this radio asks for P too, and
+    /// the operator's rigctld is not running when Nexus starts. Sharing used to bind P, so the
+    /// rigctld could never start there and the radio was refused as Nexus itself. Now sharing
+    /// serves on the next free port and P stays free: the operator's rigctld binds it, and a
+    /// client on P reaches that rigctld, not Nexus. Real sockets, the station's own lists.
+    #[test]
+    fn sharing_leaves_the_operators_rigctld_port_free_when_nothing_is_on_it_yet() {
+        use std::io::{Read, Write};
+        let probe = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = probe.local_addr().unwrap().port();
+        drop(probe);
+        let mut s = tempo_app::settings::Settings::default();
+        s.ensure_radio_profiles();
+        // A second profile, not the active one, is the NET rigctl radio.
+        let id = s.add_radio_profile();
+        let p = s.radios.iter_mut().find(|p| p.id == id).unwrap();
+        (p.rig_model, p.rig_conn, p.rig_addr) = (2, "network".into(), format!("127.0.0.1:{port}"));
+        s.cat_broker = true;
+        s.cat_broker_port = port;
+        let reserved = s.ports_the_operators_rigctld_holds(&[]);
+        let mut keep = s.ports_the_broker_steps_around();
+        keep.extend(&reserved);
+        let (got, _sharing) =
+            super::broker_bind(port, &keep, &reserved).expect("a free port nearby");
+        assert_ne!(got, port, "sharing took the operator's rigctld port");
+        assert!(got > port && got <= port.saturating_add(super::BROKER_MOVE_SPAN));
+        // The operator starts their rigctld now: its port is free, and a client reaches it.
+        let rigctld = std::net::TcpListener::bind(("127.0.0.1", port))
+            .expect("the operator's rigctld can bind its port");
+        let mut c = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        c.write_all(b"f\n").unwrap();
+        let (mut srv, _) = rigctld.accept().unwrap();
+        let mut buf = [0u8; 2];
+        srv.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"f\n");
+    }
+
+    /// The reserved port is never even tried, and never moved onto; a port no radio expects
+    /// (a NET rigctl radio on another computer reserves nothing) is bound as asked.
+    #[test]
+    fn a_reserved_port_is_never_tried_and_an_unreserved_one_is_used_as_set() {
+        let tried = std::cell::RefCell::new(Vec::new());
+        let bind = |p: u16| {
+            tried.borrow_mut().push(p);
+            std::net::TcpListener::bind(("127.0.0.1", 0))
+        };
+        let (got, _l) = super::broker_bind_with(4532, &[], &[4532, 4533], |_| false, bind).unwrap();
+        assert_eq!((got, tried.borrow().clone()), (4534, vec![4534]));
+        tried.borrow_mut().clear();
+        let mut s = tempo_app::settings::Settings::default();
+        s.ensure_radio_profiles();
+        s.radios[0].rig_model = 2;
+        s.radios[0].rig_conn = "network".into();
+        s.radios[0].rig_addr = "192.168.1.9:4532".into();
+        let reserved = s.ports_the_operators_rigctld_holds(&[]);
+        assert!(reserved.is_empty(), "{reserved:?}");
+        let (got, _l) = super::broker_bind_with(4532, &[], &reserved, |_| false, bind).unwrap();
+        assert_eq!((got, tried.borrow().clone()), (4532, vec![4532]));
     }
 
     /// R3: on Linux the opener plugin's `that_detached` returns `Ok` the moment the launcher is

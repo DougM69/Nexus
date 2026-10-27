@@ -580,6 +580,20 @@ export function deleteGroup(bank: MemoriesBank, id: string): MemoriesBank {
   }
 }
 
+/** Put each of `ids` in group `groupId` as well, keeping every group a row is already in (#360:
+ *  the selection bar's Add to group). An unknown group changes nothing. Like the editor's Groups
+ *  box, membership is not content, so a pack row stays the pack's. */
+export function addMemoriesToGroup(bank: MemoriesBank, ids: readonly string[], groupId: string): MemoriesBank {
+  if (!bank.groups.some((g) => g.id === groupId)) return bank
+  const want = new Set(ids)
+  return {
+    ...bank,
+    memories: bank.memories.map((m) =>
+      want.has(m.id) && !m.groups.includes(groupId) ? { ...m, groups: [...m.groups, groupId] } : m,
+    ),
+  }
+}
+
 export function setMemoryGroups(bank: MemoriesBank, id: string, groups: string[]): MemoriesBank {
   const valid = new Set(bank.groups.map((g) => g.id))
   const next = groups.filter((g) => valid.has(g))

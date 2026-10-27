@@ -4573,6 +4573,9 @@ pub struct Engine {
     /// Why the CAT broker is not serving, when its bind was refused (#165). See
     /// [`crate::dto::RadioStatus::cat_share_error`].
     cat_share_error: Option<String>,
+    /// The port the CAT broker is serving on, `None` while it is not (#165). See
+    /// [`crate::dto::RadioStatus::cat_share_port`].
+    cat_share_port: Option<u16>,
     /// The TCI server as its manager last saw it; `None` while it is switched off. See
     /// [`crate::dto::RadioStatus::tci_server`].
     tci_server: Option<crate::dto::TciServerStatus>,
@@ -6841,6 +6844,7 @@ impl Engine {
             cat_reprobe: false,
             audio_error: None,
             cat_share_error: None,
+            cat_share_port: None,
             tci_server: None,
             tci_spots: tci_spots::PanadapterSpots::default(),
             tci_program_spots: tci_spots::ProgramSpots::default(),
@@ -8446,7 +8450,8 @@ impl Engine {
         }
         // Keep each radio's daemon ports distinct (a bumped port must not collide).
         edited.ensure_distinct_radio_ports();
-        let broker = edited.cat_broker.then_some(edited.cat_broker_port);
+        // Where the broker really is (#165): a profile edit leaves sharing as it was.
+        let broker = self.sharing_self_port();
         if let Some(refusal) = crate::settings::port_clash_introduced(
             &self.settings.radios,
             broker,
@@ -8472,13 +8477,16 @@ impl Engine {
     /// (the status lane says that one).
     pub fn port_clash_a_save_introduces(&self, s: &Settings) -> Option<String> {
         let after = self.roster_after_form_save(s);
+        // Where the broker really is now (#165), and after the save: still there while the save
+        // keeps sharing on the same port, else where the saved setting sends it.
+        let unchanged = after.cat_broker
+            && self.settings.cat_broker
+            && after.cat_broker_port == self.settings.cat_broker_port;
         crate::settings::port_clash_introduced(
             &self.settings.radios,
-            self.settings
-                .cat_broker
-                .then_some(self.settings.cat_broker_port),
+            self.sharing_self_port(),
             &after.radios,
-            after.cat_broker.then_some(after.cat_broker_port),
+            crate::settings::sharing_self_port(&after, self.cat_share_port.filter(|_| unchanged)),
         )
     }
 
@@ -25914,6 +25922,23 @@ contact yourself."
         self.cat_share_error = err;
     }
 
+    /// Record the port the CAT broker is serving on, or `None` when it is not serving (#165).
+    /// Written by the broker's manager on every decision, as [`Self::set_cat_share_error`] is.
+    pub fn set_cat_share_port(&mut self, port: Option<u16>) {
+        self.cat_share_port = port;
+    }
+
+    /// The port the CAT broker is serving on, `None` while it is not (#165).
+    pub fn cat_share_port(&self) -> Option<u16> {
+        self.cat_share_port
+    }
+
+    /// The port Nexus's own CAT broker holds, for the checks that keep a radio from talking to
+    /// Nexus itself ([`crate::settings::sharing_self_port`]).
+    pub fn sharing_self_port(&self) -> Option<u16> {
+        crate::settings::sharing_self_port(&self.settings, self.cat_share_port)
+    }
+
     /// Record the TCI server's state for the snapshot, or `None` once it is switched off. Written
     /// by its manager on every tick, in both directions, as [`Self::set_cat_share_error`] is.
     pub fn set_tci_server_status(&mut self, status: Option<crate::dto::TciServerStatus>) {
@@ -27814,6 +27839,7 @@ contact yourself."
         s.radio.audio_error = self.audio_error.as_ref().map(|(_, line)| line.clone());
         s.radio.audio_error_kind = self.audio_error.as_ref().map(|(kind, _)| *kind);
         s.radio.cat_share_error = self.cat_share_error.clone();
+        s.radio.cat_share_port = self.cat_share_port;
         s.radio.tci_server = self.tci_server.clone();
         // A map lookup and a clone: no I/O and no second lock. `Engine::snapshot` runs under
         // the engine mutex on the UI's 300 ms poll, and work done inside it has twice stalled
@@ -27830,9 +27856,7 @@ contact yourself."
             // command the wrong radio.
             crate::settings::net_rigctl_address_conflicts(
                 &self.settings.radios,
-                self.settings
-                    .cat_broker
-                    .then_some(self.settings.cat_broker_port),
+                self.sharing_self_port(),
             )
             .or_else(|| crate::settings::serial_port_conflicts(&self.settings.radios))
                 .or_else(|| {
@@ -35309,6 +35333,118 @@ mod tests {
         assert!(
             e.snapshot().radio.cat_share_error.is_none(),
             "a bind that succeeded left the old complaint on screen"
+        );
+    }
+
+    /// #165: where sharing really is. When another program holds the sharing port, the broker
+    /// steps aside to a free one, and the share block has to print THAT address, not the one in
+    /// Settings. Read on the wire key the UI hand-writes (`catSharePort`), and absent from the
+    /// snapshot while nothing is shared, so every snapshot without sharing is byte-identical.
+    #[test]
+    fn the_port_sharing_really_uses_reaches_the_ui_and_is_absent_while_not_sharing() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        let json = serde_json::to_string(&e.snapshot().radio).unwrap();
+        assert!(!json.contains("catSharePort"), "{json}");
+        e.set_cat_share_port(Some(4533));
+        let json = serde_json::to_string(&e.snapshot().radio).unwrap();
+        assert!(
+            json.contains("\"catSharePort\":4533"),
+            "missing wire key catSharePort in {json}"
+        );
+        e.set_cat_share_port(None);
+        assert_eq!(e.snapshot().radio.cat_share_port, None);
+    }
+
+    /// #165: a NET rigctl radio at the operator's OWN rigctld on the Sharing port's number is not
+    /// Nexus talking to itself once sharing has stepped aside to another port, and a radio at the
+    /// port sharing really serves on still is. The status lane's warning and a profile save are
+    /// judged by where the broker IS: on the Sharing port until it has bound (a launch connects the
+    /// radio first), then where it reports serving; nowhere once sharing is off and let go. Each
+    /// value is (the lane warns, a save onto the Sharing port's number is refused, a save onto the
+    /// serving port is refused).
+    #[test]
+    fn the_self_connect_checks_follow_the_port_sharing_really_serves_on() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        let mut s = e.settings().clone();
+        s.cat_broker = true;
+        s.cat_broker_port = 4532;
+        s.rig_model = 2; // NET rigctl
+        s.rig_conn = "network".into();
+        s.rig_addr = "127.0.0.1:4532".into();
+        s.rigctld_port = 4540;
+        e.apply_settings(s);
+        assert_eq!(e.settings().rig_addr, "127.0.0.1:4532");
+        let id = e.settings().active_radio;
+        let save = |e: &mut Engine, addr: &str| {
+            let mut p = e
+                .settings()
+                .radios
+                .iter()
+                .find(|p| p.id == id)
+                .unwrap()
+                .clone();
+            p.rig_addr = addr.into();
+            let patch = serde_json::from_value(serde_json::to_value(&p).unwrap()).unwrap();
+            // Tried from an address nothing holds, so whatever it refuses is the save's own.
+            let mut q = p.clone();
+            q.rig_addr = "127.0.0.1:4550".into();
+            e.update_radio_profile(
+                id,
+                serde_json::from_value(serde_json::to_value(&q).unwrap()).unwrap(),
+            )
+            .unwrap();
+            let refused = e.update_radio_profile(id, patch).is_err();
+            e.update_radio_profile(
+                id,
+                serde_json::from_value(serde_json::to_value(&q).unwrap()).unwrap(),
+            )
+            .unwrap();
+            refused
+        };
+        let seen = |e: &mut Engine| {
+            let warns = {
+                let mut p = e
+                    .settings()
+                    .radios
+                    .iter()
+                    .find(|p| p.id == id)
+                    .unwrap()
+                    .clone();
+                p.rig_addr = "127.0.0.1:4532".into();
+                // Stored as an older build could leave it, so the lane is what is asked.
+                let mut s = e.settings().clone();
+                *s.radios.iter_mut().find(|r| r.id == id).unwrap() = p;
+                s.sync_flat_from_active();
+                e.apply_settings(s);
+                e.snapshot()
+                    .radio
+                    .radio_config_warning
+                    .is_some_and(|w| w.contains("Share this radio"))
+            };
+            (warns, save(e, "127.0.0.1:4532"), save(e, "127.0.0.1:4533"))
+        };
+        // A launch: sharing is on and the broker has not bound yet.
+        let launching = seen(&mut e);
+        // Another program held 4532; the broker serves on 4533.
+        e.set_cat_share_port(Some(4533));
+        let moved = seen(&mut e);
+        // The broker serves on the Sharing port itself.
+        e.set_cat_share_port(Some(4532));
+        let own = seen(&mut e);
+        // Sharing switched off and let go.
+        e.set_cat_share_port(None);
+        let mut s = e.settings().clone();
+        s.cat_broker = false;
+        e.apply_settings(s);
+        let off = seen(&mut e);
+        assert_eq!(
+            (launching, moved, own, off),
+            (
+                (true, true, false),
+                (false, false, true),
+                (true, true, false),
+                (false, false, false),
+            )
         );
     }
 

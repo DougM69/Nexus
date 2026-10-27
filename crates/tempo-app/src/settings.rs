@@ -5232,6 +5232,20 @@ pub fn net_rigctl_address_clashes(
     clashes
 }
 
+/// The port Nexus's own CAT broker holds, for every "never talk to ourselves" check (#165):
+/// where the broker reports it is serving (`serving`), else the Sharing port while sharing is on,
+/// else none.
+///
+/// The broker steps aside when another program holds the Sharing port, so a NET rigctl radio
+/// pointed at THAT program's rigctld on the Sharing port's number is not Nexus talking to itself,
+/// and is allowed once the broker serves elsewhere. Until the broker has bound (the radio connects
+/// first at a launch), or while its bind keeps failing, the Sharing port is where it is about to
+/// be, so the check stays on it. A port it is still serving on counts after sharing is switched
+/// off, until it has let go.
+pub fn sharing_self_port(s: &Settings, serving: Option<u16>) -> Option<u16> {
+    serving.or(s.cat_broker.then_some(s.cat_broker_port))
+}
+
 /// The first [`AddressClash`], in words: what the status lane says (`radio_config_warning`) while
 /// one is stored, as an older build's port repair could leave it. Nothing renumbers it: the
 /// rigctld TCP Port to change is the operator's to choose.
@@ -6651,6 +6665,45 @@ impl Settings {
         next_id
     }
 
+    /// The ports the CAT broker must never step onto when its own port is taken by another program
+    /// (#165): every radio's rigctld and rotctld port (a daemon of Nexus's own may not be up yet),
+    /// the TCI server's while it serves, and wherever a NET rigctl radio's Network Address points
+    /// on this computer (the operator's own rigctld is there).
+    pub fn ports_the_broker_steps_around(&self) -> Vec<u16> {
+        let mut ports: Vec<u16> = self
+            .radios
+            .iter()
+            .flat_map(|p| [p.rigctld_port, p.rotctld_port])
+            .collect();
+        if self.tci_server {
+            ports.push(self.tci_server_port);
+        }
+        ports.extend(self.radios.iter().filter_map(net_rigctl_port_here));
+        ports
+    }
+
+    /// The ports the operator's own rigctld answers on, so the CAT broker never binds one, not
+    /// even as the sharing port it was asked for (#165): every radio profile's NET rigctl Network
+    /// Address on this computer, by loopback name or by one of its addresses in `here`. Taken
+    /// while that rigctld is not running yet, it could never start there, and the radio pointed at
+    /// it would be talking to Nexus itself.
+    pub fn ports_the_operators_rigctld_holds(&self, here: &[std::net::IpAddr]) -> Vec<u16> {
+        self.radios
+            .iter()
+            .filter(|p| p.rig_model == 2 && rig_conn_is_network(&p.rig_conn, &p.rig_addr))
+            .filter_map(|p| split_host_port(&p.rig_addr))
+            .filter(|(host, _)| {
+                host_is_this_machine(host)
+                    || host
+                        .trim_start_matches('[')
+                        .trim_end_matches(']')
+                        .parse::<std::net::IpAddr>()
+                        .is_ok_and(|ip| here.contains(&ip))
+            })
+            .map(|(_, port)| port)
+            .collect()
+    }
+
     /// Auto-repair colliding daemon ports so every radio can run its OWN persistent rigctld/rotctld at
     /// the same time (true dual-radio needs two live daemons — a shared port would make the monitor
     /// connect through the active radio's daemon). Bumps any duplicate `rigctld_port`/`rotctld_port`
@@ -7954,6 +8007,66 @@ impl Settings {
 mod tests {
     #![allow(clippy::field_reassign_with_default)]
     use super::*;
+
+    /// #165: when another program holds the sharing port, the broker moves, and it must not move
+    /// onto a port this station's own daemons or the operator's NET rigctl address will want.
+    #[test]
+    fn the_broker_steps_around_the_stations_own_ports() {
+        let mut s = Settings::default();
+        s.ensure_radio_profiles();
+        let id = s.add_radio_profile();
+        let r = s.radios.iter().find(|p| p.id == id).unwrap().clone();
+        s.tci_server = true;
+        s.tci_server_port = 40001;
+        let ports = s.ports_the_broker_steps_around();
+        for p in [
+            r.rigctld_port,
+            r.rotctld_port,
+            s.radios[0].rigctld_port,
+            s.radios[0].rotctld_port,
+            40001,
+        ] {
+            assert!(ports.contains(&p), "{p} missing from {ports:?}");
+        }
+        assert!(
+            !ports.contains(&s.cat_broker_port),
+            "the broker's own port is not one it steps around"
+        );
+    }
+
+    /// #165: the ports the operator's own rigctld answers on are every profile's NET rigctl
+    /// address on this computer — by loopback name or by one of its own addresses — and nothing
+    /// else: a rigctld on another computer, or a radio that is not NET rigctl, holds no port here.
+    #[test]
+    fn the_operators_rigctld_holds_every_net_rigctl_port_on_this_computer() {
+        let mut s = Settings::default();
+        s.ensure_radio_profiles();
+        let rows = [
+            (2, "network", "127.0.0.1:4532"),
+            (2, "network", "localhost:4540"),
+            (2, "network", "[::1]:4541"),
+            (2, "network", "192.168.1.5:4542"),
+            (2, "network", "192.168.1.9:4543"),
+            (3073, "network", "127.0.0.1:4544"),
+            (2, "serial", "127.0.0.1:4545"),
+        ];
+        for (model, conn, addr) in rows {
+            let id = s.add_radio_profile();
+            let p = s.radios.iter_mut().find(|p| p.id == id).unwrap();
+            (p.rig_model, p.rig_conn, p.rig_addr) = (model, conn.into(), addr.into());
+            // Not the active radio, and not even enabled: a profile still points there.
+            p.enabled = false;
+        }
+        let here = ["192.168.1.5".parse().unwrap()];
+        assert_eq!(
+            s.ports_the_operators_rigctld_holds(&here),
+            vec![4532, 4540, 4541, 4542]
+        );
+        assert_eq!(
+            s.ports_the_operators_rigctld_holds(&[]),
+            vec![4532, 4540, 4541]
+        );
+    }
 
     /// A scratch settings directory no CONCURRENT test process can reach.
     ///
