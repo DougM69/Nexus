@@ -32939,6 +32939,13 @@ contact yourself."
         self.station.take_all_txt_pending()
     }
 
+    /// Everything ALL.TXT is still owed, for the quit: the lines buffered since the last poll and
+    /// every `Tx` line held for the end of its over ([`StationCore::take_all_txt_pending_at`]), in
+    /// time order. An over the quit cut short was keyed, and WSJT-X writes its line at key-up.
+    pub fn take_all_txt_pending_on_quit(&mut self) -> Vec<String> {
+        self.station.take_all_txt_pending_at(u64::MAX)
+    }
+
     /// See [`StationCore::take_all_txt_pending_at`]. Test hook (the `test-util` feature, never in
     /// a shipped build): a test keying at the real clock reads what the file will hold once its
     /// over has ended.
