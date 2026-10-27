@@ -667,6 +667,7 @@ impl Request {
         engine.clear_rig_tuner();
         engine.clear_rig_passband();
         engine.clear_rig_tx_meters();
+        engine.clear_rig_tx_extras();
         // This request's CAT transaction already established the selected dial
         // and mode. Consume only its own retune while local setters are excluded.
         // Do this before installation too: unwinding may not leave a retry behind.

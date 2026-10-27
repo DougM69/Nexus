@@ -1,0 +1,17 @@
+<!doctype html>
+<!-- The transmit meters with the finals temperature and the COMP row's controls in a real browser:
+     scripts/browser-probe --desktop txmeters serves this page from ui/ with the app's own Vite
+     config. src/probe/txmeters.tsx mounts it. -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>TX meters probe</title>
+    <style>
+      html, body, #root { margin: 0; height: 100%; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/probe/txmeters.tsx"></script>
+  </body>
+</html>

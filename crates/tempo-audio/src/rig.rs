@@ -1837,6 +1837,14 @@ impl Rig {
     pub fn set_preamp_db(&mut self, db: u8) -> std::io::Result<()> {
         self.cat(&level_line("PREAMP", &db.to_string()))
     }
+    /// Set an Icom's SSB transmit-bandwidth step (`16 58`: 0 WIDE, 1 MID, 2 NAR) through Nexus's
+    /// own CI-V daemon, the only link that answers this token — see `crate::txextras`.
+    pub fn set_ssb_tx_bw(&mut self, idx: u8) -> std::io::Result<()> {
+        self.cat(&level_line(
+            crate::txextras::ICOM_TBW_TOKEN,
+            &idx.to_string(),
+        ))
+    }
     /// Read the attenuator in dB. Through the RAW reader, because [`Rig::read_level`]
     /// filters to 0.0..=1.0 and would REJECT every reading except "off" — which fails
     /// asymmetrically: the control looks healthy until the operator switches a pad in.

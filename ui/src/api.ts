@@ -3084,6 +3084,11 @@ export async function setMicGain(gain: number): Promise<AppSnapshot> {
 export async function setNrLevel(level: number): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_nr_level', { level })
 }
+/** Pick the radio's SSB transmit-bandwidth step by its name in `radio.txBwSteps`. Refused while
+ *  transmitting, and for a step this radio does not offer; the radio's read-back is the truth. */
+export async function setTxBw(step: string): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_tx_bw', { step })
+}
 /** Set the speech-processor depth as a 0.0–1.0 fraction (#95). */
 export async function setCompLevel(level: number): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_comp_level', { level })

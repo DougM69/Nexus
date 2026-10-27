@@ -503,6 +503,18 @@ export function Js8Cockpit({
     if (!active) return
     void js8SelectCall(selectedTo || null).catch(() => {})
   }, [selectedTo, active])
+  // A BAND CHANGE, by any route, empties the To box (operator ruling, 2026-10-26): the station
+  // addressed on the old band is not on the new one. The directed command picked for it goes too,
+  // and the selected call told to the station above follows the box.
+  const bandTickSeen = useRef(snap?.bandChangeTick)
+  useEffect(() => {
+    const seen = bandTickSeen.current
+    bandTickSeen.current = snap?.bandChangeTick
+    // Not before a snapshot has said where the count stands: the first one is no change.
+    if (seen == null || snap?.bandChangeTick == null || snap.bandChangeTick === seen) return
+    setToCall('')
+    setCmdId(null)
+  }, [snap?.bandChangeTick])
   const selectStation = (call: string) => setToCall(call.toUpperCase())
   /** A RECEIVE move only — the offset table's double-click, JS8Call's own behaviour on
    *  tableWidgetRXAll. The TX offset is untouched; nothing here keys. */
@@ -1477,6 +1489,7 @@ export function Js8Cockpit({
       {...closeProps('log')}
     >
       <LogEntry
+        clearCallOnBandChange
         onOpenLogbook={onOpenLogbook}
         onEntryCall={(c) => {
           setStatsCall(c)

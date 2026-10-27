@@ -103,6 +103,7 @@ import {
   setSquelch,
   setFilterWidth,
   setRigFunc,
+  setTxBw,
   setAgc,
   setSidebandOverride,
 } from '../api'
@@ -1700,6 +1701,24 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
   // fallback), BW is drivable now (CAT up, never FM), the rig is not in a DATA mode (that filter is
   // FT8's), and this window is the station's own (the Remote page's scope is click-only). Held, like
   // tuning, while anything transmits — the rig's own PTT included.
+  // The TX meters' COMP row sets what the chain's COMP controls set, through the same verbs and
+  // under the same capability verdicts: a control dead or hidden in the chain is not offered on
+  // the meter either. The transmit-bandwidth step has no chain twin; TxMeters shows it only once
+  // the radio has read one back.
+  const txMeterControls = {
+    onCompLevel: show('COMPLVL') && !dead('COMPLVL') ? (frac: number) => changeComp(Math.round(frac * 100)) : undefined,
+    onProc:
+      show('COMP') && !dead('COMP')
+        ? (on: boolean) =>
+            void setRigFunc('comp', on)
+              .then((s) => s && onSnap?.(s))
+              .catch(() => pushToast(t('phone.dsp.toggleFailed', { func: COMP }), 'error'))
+        : undefined,
+    onTxBw: (step: string) =>
+      void setTxBw(step)
+        .then((s) => s && onSnap?.(s))
+        .catch((error) => pushToast(String(error), 'error')),
+  }
   const passbandEditable =
     !dead('BW') && (filterHz ?? 0) > 0 && !rigMode.startsWith('PKT')
   const onScopePassband = useScopePassband({
@@ -2526,6 +2545,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
           card scrolls inside the log column and can never squeeze the cockpit — the operator
           gets the QRZ photo / bearing / history back while operating. */}
       <LogEntry
+        clearCallOnBandChange
         onOpenLogbook={onOpenLogbook}
         onEntryCall={(c) => {
           setStatsCall(c)
@@ -3261,7 +3281,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
         )}
       </div>
 
-      {shown('txmeters') && <TxMeters radio={snap.radio} pinned />}
+      {shown('txmeters') && <TxMeters radio={snap.radio} pinned controls={txMeterControls} />}
 
       {/* ⚠️ NOTHING IN THIS ROW IS MIGRATED, and that is the whole of why this file is on the
           i18n PARTIAL list. PTT is Phone's stop-line census (features/panelState.ts) and

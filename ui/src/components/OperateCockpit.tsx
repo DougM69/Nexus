@@ -1011,6 +1011,23 @@ export function OperateCockpit({
     }
   }, [dxClearTick, clearDx])
 
+  // A BAND CHANGE, by any route, clears the DX call in every mode this cockpit runs, FT8 and FT4
+  // and the other FT modes alike, and in a contest too (operator rulings, 2026-10-26): the engine
+  // has ended the contact, or the contest's partner (`Engine::on_band_change`), and bumped
+  // `bandChangeTick`, and the boxes follow, so Tx1–Tx5 are those of no DX station. WSJT-X keeps the DX call on a band
+  // change; Nexus clears it, because the old station is not on the new band. A contact the engine
+  // already started on the new band (a spot on another band, clicked: the QSY and the call are one
+  // act) stays — the effect below fills its boxes. Declared BEFORE that effect, so a snapshot that
+  // carries both runs the clear first.
+  const bandTickSeen = useRef(snap.bandChangeTick)
+  useEffect(() => {
+    const seen = bandTickSeen.current
+    bandTickSeen.current = snap.bandChangeTick
+    if (seen == null || snap.bandChangeTick == null || snap.bandChangeTick === seen) return
+    if (!snap.qso?.dxcall) clearDx()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snap.bandChangeTick])
+
   // A retarget/abandon makes a remembered Tx-slot pick meaningless — without
   // this the next-dot stayed lit on a stale row of the NEW station's panel.
   //

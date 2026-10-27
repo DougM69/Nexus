@@ -12158,6 +12158,58 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   gap: 1px var(--space-2);
   padding: 0;
 }
+/* The COMP row in Phone SETS the processor level as well as metering compression: the fill is
+   the meter, the marker line is the level, and the track is the slider (drag / arrow keys).
+   `touch-action: none` keeps a finger drag on a touch screen from scrolling the dock instead. */
+.ph-txmeter-track {
+  position: relative;
+}
+/* A COMP row carrying its controls takes two tracks of the grid, so its bar keeps the room a
+   meter row has beside the chips. Only Phone passes the controls, and Phone's dock is always
+   many tracks wide. */
+.ph-txmeter.has-ctl {
+  grid-column: span 2;
+}
+.ph-txmeter.settable .ph-txmeter-track {
+  cursor: ew-resize;
+  touch-action: none;
+}
+.ph-txmeter.settable .ph-txmeter-track:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.ph-txmeter-mark {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--text);
+  pointer-events: none;
+}
+/* The processor switch and the transmit-bandwidth step, beside COMP: small, fixed-height chips
+   on the row's own line, so a row with them is no taller than one without. */
+.ph-txmeter-btn {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: calc(10px * var(--text-scale));
+  line-height: 1.2;
+  padding: 0 var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--bg);
+  color: var(--text-dim);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ph-txmeter-btn.on {
+  color: var(--text);
+  border-color: var(--state-good);
+}
+.ph-txmeter-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
 /* Between overs: keep the last readings visible but clearly not live. */
 .ph-txmeters.idle .ph-txmeter-fill {
   opacity: 0.35;
@@ -12165,6 +12217,12 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .ph-txmeters.idle .ph-txmeter-value,
 .ph-txmeters.idle .ph-txmeter-label {
   opacity: 0.55;
+}
+/* …except a temperature, which is read while receiving and is live between overs. */
+.ph-txmeters.idle .ph-txmeter.temp .ph-txmeter-fill,
+.ph-txmeters.idle .ph-txmeter.temp .ph-txmeter-value,
+.ph-txmeters.idle .ph-txmeter.temp .ph-txmeter-label {
+  opacity: 1;
 }
 .ph-txmeters-hint {
   font-size: calc(10px * var(--text-scale));

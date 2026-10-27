@@ -145,6 +145,12 @@ export function fmtTempF(f: number, u: Units): string {
   return u === 'metric' ? `${Math.round((f - 32) / 1.8)}°C` : `${Math.round(f)}°F`
 }
 
+/** Temperature from °C (a radio's PA reading, an amplifier documented in Celsius) → the display
+ *  string. Only for a reading KNOWN to be Celsius: see `fmtTempF` for the °F-native source. */
+export function fmtTempC(c: number, u: Units): string {
+  return u === 'imperial' ? `${Math.round(c * 1.8 + 32)}°F` : `${Math.round(c)}°C`
+}
+
 /** Speed from mph (APRS-native) → the display string. */
 export function fmtSpeedMph(mph: number, u: Units): string {
   return u === 'metric' ? `${Math.round(mph * KM_PER_MI)} km/h` : `${Math.round(mph)} mph`

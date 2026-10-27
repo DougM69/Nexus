@@ -1932,6 +1932,7 @@ export function CwCockpit({
           pane grid made this pane's .pane-body the scroller, so the FULL recall card (photo /
           bearing / history) can no longer crush the cockpit the way it did pre-overhaul. */}
       <LogEntry
+        clearCallOnBandChange
         onOpenLogbook={onOpenLogbook}
         onEntryCall={(c) => {
           setStatsCall(c)

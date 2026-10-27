@@ -1429,6 +1429,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           paneRef={logFrameRef}
         >
           <LogEntry
+            clearCallOnBandChange
             onOpenLogbook={onOpenLogbook}
             onEntryCall={(c) => {
               setStatsCall(c)

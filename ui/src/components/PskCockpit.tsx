@@ -944,6 +944,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           paneRef={logFrameRef}
         >
           <LogEntry
+            clearCallOnBandChange
             onOpenLogbook={onOpenLogbook}
             onEntryCall={(c) => {
               setStatsCall(c)

@@ -681,6 +681,30 @@ pub fn preamp_db_for_index(model: IcomModel, idx: u8) -> Option<u8> {
     preamp_steps_db(model).get(usize::from(idx) - 1).copied()
 }
 
+/// SSB TRANSMIT BANDWIDTH (`16 58`), one byte: `00` WIDE, `01` MID, `02` NAR. The same command and
+/// values on every Icom Nexus drives natively — the IC-7300 (Full Manual 12b ch. 19), IC-7300MK2
+/// (rev 0 p. 20), IC-7610 (rev 4 p. 13), IC-705 (rev 6 p. 21), IC-9700 (rev 4 p. 16), IC-905
+/// (rev 2 p. 20) and IC-7760 (rev 2) CI-V references. The passband each step stands for is a
+/// radio menu setting (`1A 05`), not this byte. Not band-directed: one transmitter, one setting.
+/// NEEDS-BENCH on every model.
+pub const FUNC_SSB_TBW: u8 = 0x58;
+/// Select the SSB transmit-bandwidth step (0 WIDE, 1 MID, 2 NAR).
+pub fn set_ssb_tbw(radio: u8, idx: u8) -> Frame {
+    Frame::command(radio, 0x16, &[FUNC_SSB_TBW, idx])
+}
+/// Read the SSB transmit-bandwidth step (`16 58`).
+pub fn read_ssb_tbw(radio: u8) -> Frame {
+    Frame::command(radio, 0x16, &[FUNC_SSB_TBW])
+}
+/// The step from a `16 58` reply: 0, 1 or 2. Anything else is no reading.
+pub fn parse_ssb_tbw(f: &Frame) -> Option<u8> {
+    if f.cmd == 0x16 && f.data.first() == Some(&FUNC_SSB_TBW) {
+        f.data.get(1).copied().filter(|&b| b <= 2)
+    } else {
+        None
+    }
+}
+
 /// AGC time constant (`16 12`), one byte. On the IC-7300/9700/705 family: 00=off, 01=FAST,
 /// 02=MID, 03=SLOW. Hamlib carries AGC as an enum int (OFF=0, FAST=2, SLOW=3, MEDIUM=5); these
 /// two helpers translate at the CI-V boundary so the rigctld side speaks Hamlib and the wire
@@ -1534,6 +1558,36 @@ fn from_bcd(b: u8) -> u8 {
 
 #[cfg(test)]
 mod tests {
+
+    /// `16 58`, the SSB transmit bandwidth, byte for byte as the Icom CI-V references give it
+    /// (IC-7300 to the IC-7760 alike): `FE FE <radio> E0 16 58 [00|01|02] FD`. Not band-directed:
+    /// it is the transmitter's.
+    #[test]
+    fn ssb_transmit_bandwidth_frames_match_the_ci_v_reference() {
+        assert_eq!(
+            set_ssb_tbw(0x94, 2).to_bytes(),
+            vec![0xFE, 0xFE, 0x94, 0xE0, 0x16, 0x58, 0x02, 0xFD]
+        );
+        assert_eq!(
+            read_ssb_tbw(0x98).to_bytes(),
+            vec![0xFE, 0xFE, 0x98, 0xE0, 0x16, 0x58, 0xFD]
+        );
+        let reply = |b: u8| Frame::parse(&[0xFE, 0xFE, 0xE0, 0x94, 0x16, 0x58, b, 0xFD]).unwrap();
+        assert_eq!(parse_ssb_tbw(&reply(0x00)), Some(0));
+        assert_eq!(parse_ssb_tbw(&reply(0x01)), Some(1));
+        assert_eq!(parse_ssb_tbw(&reply(0x02)), Some(2));
+        assert_eq!(parse_ssb_tbw(&reply(0x03)), None, "no fourth step");
+        let agc = Frame::parse(&[0xFE, 0xFE, 0xE0, 0x94, 0x16, 0x12, 0x01, 0xFD]).unwrap();
+        assert_eq!(
+            parse_ssb_tbw(&agc),
+            None,
+            "another 16 sub-command is not this one"
+        );
+        assert!(!band_directed_supported(
+            IcomModel::Ic7610,
+            &set_ssb_tbw(0x98, 0)
+        ));
+    }
 
     /// THE BYTE THAT SENT AN IC-7610 TO D1 FOREVER.
     ///

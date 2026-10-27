@@ -730,6 +730,12 @@ mod tests {
         let qso = fixture.engine.snapshot().qso;
         fixture.engine.set_frequency(7.074, "40m", "USB");
         fixture.engine.set_frequency(14.074, "20m", "USB");
+        // A band change ends an FT8 contact, so the same contact is made again on the way back.
+        fixture.engine.call_station_with_grid("W9XYZ", Some("EN37"));
+        fixture
+            .engine
+            .ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
+        fixture.engine.qso_start_unix = Some(1_700_000_000);
         assert_eq!(fixture.engine.snapshot().qso, qso);
         assert_ne!(
             fixture.engine.current_qso_log_key().as_deref(),

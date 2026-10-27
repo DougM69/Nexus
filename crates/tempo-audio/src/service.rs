@@ -1048,6 +1048,9 @@ enum HeavyRead {
     Split,
     Vfo,
     Func,
+    /// The radio's PA temperature and SSB transmit bandwidth (`crate::txextras`), on radios
+    /// that have them.
+    TxExtras,
 }
 
 /// WHOSE TURN IT IS on the heavy poll's read budget (#385, Yaesu FTX-1).
@@ -3921,6 +3924,10 @@ struct RadioLoop {
     mic_gain_giveup: Option<f32>,
     nr_level_giveup: Option<f32>,
     comp_level_giveup: Option<f32>,
+    /// When the last speech-processor level write went out (loop ms), for its pace while keyed.
+    comp_sent_ms: Option<f64>,
+    /// A level write while keyed got no answer from the link: no more until the unkey.
+    comp_fault_hold: bool,
     notch_freq_giveup: Option<f32>,
     monitor_gain_giveup: Option<f32>,
     att_db_giveup: Option<u8>,
@@ -4395,6 +4402,9 @@ struct RadioLoop {
     func_read_next: usize,
     /// Whose turn it is on the heavy poll's read budget — see [`ReadTurns`].
     read_turns: ReadTurns,
+    /// The PA temperature and SSB transmit-bandwidth driver (`crate::txextras`): configured per
+    /// radio on the heavy poll, reset with the radio.
+    tx_extras: crate::txextras::TxExtrasPoll,
     /// Whether the rig's BUILT-IN ATU (Hamlib `TUNER`) has been probed for the current CAT
     /// confirmation. Probed ONCE per confirmation like [`Self::rx_ranges`] rather than round-robin
     /// like the DSP funcs — it is a capability the cockpit shows or hides a TRANSMIT control on —
@@ -4651,6 +4661,8 @@ impl RadioLoop {
             mic_gain_giveup: None,
             nr_level_giveup: None,
             comp_level_giveup: None,
+            comp_sent_ms: None,
+            comp_fault_hold: false,
             notch_freq_giveup: None,
             monitor_gain_giveup: None,
             att_db_giveup: None,
@@ -4767,6 +4779,7 @@ impl RadioLoop {
             func_retry_backoff: [FUNC_RETRY_BACKOFF_BASE; N_FUNCS],
             func_read_next: 0,
             read_turns: ReadTurns::default(),
+            tx_extras: Default::default(),
             tuner_probed: false,
             tuner_reprobe_at: None,
             tuner_misses: 0,
@@ -4832,6 +4845,20 @@ impl RadioLoop {
     /// for the two.
     fn operator_keyed(&self) -> bool {
         self.rig_keyed || self.sat_inferred_keyed
+    }
+
+    /// Which kind of CAT link the radio is on, for `crate::txextras` and the COMP write's pace.
+    fn txextras_link(&self) -> crate::txextras::Link {
+        match self.rigctld_proc.as_ref() {
+            // A generic CI-V radio (no model) is asked nothing model-specific.
+            Some(d) if d.native().is_some_and(|n| n.knows_model()) => {
+                crate::txextras::Link::IcomNative
+            }
+            Some(d) if d.native().is_some() => crate::txextras::Link::Other,
+            // Hamlib's rigctld, spawned here or the operator's own.
+            None | Some(CatDaemon::Spawned(_)) => crate::txextras::Link::Hamlib,
+            Some(_) => crate::txextras::Link::Other,
+        }
     }
 
     /// The link is answering again: nothing learned during the outage may outlive it. The
@@ -7063,6 +7090,9 @@ impl RadioLoop {
         self.last_mic_gain = None;
         self.last_nr_level = None;
         self.last_comp_level = None;
+        self.comp_sent_ms = None;
+        self.comp_fault_hold = false;
+        self.tx_extras.reset();
         self.last_notch_freq_hz = None;
         self.last_monitor_gain = None;
         self.last_att_db = None;
@@ -10134,6 +10164,26 @@ impl RadioLoop {
                                 }
                             }
                         }
+                        // The PA temperature and the SSB transmit bandwidth: only on a radio
+                        // `crate::txextras` names, one read on its own slow sub-cadence (a
+                        // read-back after a write sooner). This whole poll is the receive-time
+                        // one, so nothing here is read while transmitting.
+                        let link = self.txextras_link();
+                        self.tx_extras
+                            .configure(self.applied.rig_model, link, engine);
+                        if self.tx_extras.has_reads() {
+                            if self.tx_extras.readback_due() {
+                                self.read_turns.owe_now(HeavyRead::TxExtras);
+                            } else if self.rig_poll_ticks % crate::txextras::READ_EVERY_POLLS == 1 {
+                                self.read_turns.owe(HeavyRead::TxExtras);
+                            }
+                            if self
+                                .read_turns
+                                .take_owed(HeavyRead::TxExtras, have_budget())
+                            {
+                                self.tx_extras.read_one(rig, engine);
+                            }
+                        }
                     }
                     // The dial probe is the CAT health check. On a REAL CAT rig a
                     // failure/timeout here means the link went half-open (writes
@@ -10189,6 +10239,7 @@ impl RadioLoop {
                             self.func_supported = [None; N_FUNCS];
                             self.func_misses = [0; N_FUNCS];
                             self.func_state = [None; N_FUNCS];
+                            self.tx_extras.reset(); // re-ask once the link is back
                             self.tuner_probed = false;
                             // The trip drops the tuner on purpose (`clear_rig_tuner` below): the
                             // first probe after it is a fresh question, not a re-read (#344).
@@ -10217,6 +10268,7 @@ impl RadioLoop {
                                 eng.clear_rig_mode();
                                 eng.clear_rig_funcs();
                                 eng.clear_rig_tuner();
+                                eng.clear_rig_cat_extras();
                                 eng.clear_rig_db_steps();
                                 eng.clear_rig_passband();
                                 eng.set_cat_status(Some(false), msg);
@@ -12794,16 +12846,68 @@ impl RadioLoop {
             // #95's two writes. Same shape as NR below — a refusal is remembered against THAT
             // value so a rig that will not take it is asked once, not on every pass, and a
             // different value from the operator is still tried.
+            //
+            // ⚠️ AND HELD OR PACED WHILE ON THE AIR (the TX meters' COMP bar is dragged mid-over).
+            // The value is the engine's latest, so a drag's in-between values simply never go out:
+            // one blocking write at a time (this loop), the latest value wins, and a held value goes
+            // on the first tick after the unkey has been sent (the PTT applier above runs first).
+            // - an over with its own end (a slot/voice/CW message, a tune) gets NO write until it
+            //   is over, so no write can sit between that over's unkey decision and its unkey;
+            // - over the operator's own PTT on any link but Nexus's own Icom one, NO write either.
+            //   Through rigctld the write is Hamlib's: on a Yaesu `PLnnn;` and an `ID;` verify,
+            //   retried while the radio is silent (4.7.1 `newcat_set_cmd`: `.retry` 3, so four
+            //   tries of the 2 s `.timeout` on an FTDX101, 1 s on an FT-710), and rigctld holds the
+            //   radio's port for all of it, so a release sent behind it waits up to ~8 s whatever
+            //   Nexus's own deadline is. An answering radio answers in one round trip; a silent
+            //   one is the case that matters, and nothing here can tell them apart in advance.
+            // - on the native Icom link, at most one write per `COMP_KEYED_GAP_MS`, and after one
+            //   the radio did not answer, none until the unkey. There the write is one CI-V
+            //   request, sent once with no verify and no retry, bounded by the daemon's own
+            //   deadline (300 ms on a serial bus): a release can wait behind one, never longer.
+            let timed_over =
+                self.tx_until_ms.is_some() || self.tuning_keyed || now < self.cw_keying_until;
+            let live_keyed = self.manual_ptt_applied || self.operator_keyed();
+            let paced_link = self.txextras_link() == crate::txextras::Link::IcomNative;
+            if !timed_over && !live_keyed {
+                self.comp_fault_hold = false;
+            }
             if let Some(c) = comp {
-                if Some(c) != self.last_comp_level && self.comp_level_giveup != Some(c) {
+                if Some(c) != self.last_comp_level
+                    && self.comp_level_giveup != Some(c)
+                    && comp_write_allowed(
+                        timed_over,
+                        live_keyed,
+                        paced_link,
+                        now,
+                        self.comp_sent_ms,
+                        self.comp_fault_hold,
+                    )
+                {
+                    self.comp_sent_ms = Some(now);
                     match rig.set_rx_level("COMP", c) {
                         Ok(()) => {
                             self.last_comp_level = Some(c);
                             self.comp_level_giveup = None;
                         }
-                        Err(_) => self.comp_level_giveup = Some(c),
+                        Err(e) => {
+                            self.comp_level_giveup = Some(c);
+                            if live_keyed && is_link_fault(&e) {
+                                self.comp_fault_hold = true;
+                            }
+                        }
                     }
                 }
+            }
+            // The operator's SSB transmit-bandwidth pick (`crate::txextras`). A radio menu write,
+            // and no vendor reference says one is safe mid-over, so it never goes out while the
+            // station is keyed by anyone — the engine refuses the pick then too.
+            {
+                let keyed = self.tx_until_ms.is_some()
+                    || self.tuning_keyed
+                    || self.manual_ptt_applied
+                    || now < self.cw_keying_until
+                    || self.operator_keyed();
+                self.tx_extras.write_pending(rig, engine, keyed);
             }
             if let Some(hz) = notchf {
                 if Some(hz) != self.last_notch_freq_hz && self.notch_freq_giveup != Some(hz) {
@@ -17373,6 +17477,36 @@ fn width_giveup_note(hz: u32, brief: &str, kept_hz: Option<u32>) -> String {
     format!("{hz} Hz filter width not sent — {brief} after {DIAL_SET_MAX_TRIES} tries{still}")
 }
 
+/// The fewest ms between two speech-processor level writes over the operator's own PTT on the
+/// native Icom link: about four a second, however fast the COMP bar is dragged.
+const COMP_KEYED_GAP_MS: f64 = 250.0;
+
+/// May the speech-processor level be written on this tick? Never inside an over that has its own
+/// end (`timed_over`: a slot, voice or CW message, a tune), so no write sits between its unkey
+/// decision and its unkey. Over the operator's live PTT (`live_keyed`): never on a link whose
+/// write can hold the radio's port past one bounded request (`paced_link` false, rigctld above
+/// all, whose Hamlib verify retries do); on the native Icom link (`paced_link`) at most one per
+/// [`COMP_KEYED_GAP_MS`], and none after a write the link did not answer (`fault_hold`, held to
+/// the unkey). Freely while receiving.
+fn comp_write_allowed(
+    timed_over: bool,
+    live_keyed: bool,
+    paced_link: bool,
+    now: f64,
+    last_sent_ms: Option<f64>,
+    fault_hold: bool,
+) -> bool {
+    if timed_over {
+        return false;
+    }
+    if live_keyed {
+        return paced_link
+            && !fault_hold
+            && last_sent_ms.is_none_or(|t| now - t >= COMP_KEYED_GAP_MS);
+    }
+    true
+}
+
 /// One short clause naming WHY a dial set failed, for the retry notes. Distinguishes the rig
 /// actively refusing (`ErrorKind::Other` — a `RPRT <negative>` reply) from the link not answering,
 /// because the two have completely different fixes: a different radio vs a cable/daemon.
@@ -18144,6 +18278,7 @@ mod tests {
     mod tci_server;
     mod tci_soundcard_cw;
     mod tci_spots;
+    mod tx_extras;
     mod udp_decode_time;
     mod udp_requests;
     mod wfview;

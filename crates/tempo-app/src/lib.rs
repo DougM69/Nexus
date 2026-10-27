@@ -322,6 +322,11 @@ impl AppState {
                 tx_alc_zone: None,
                 tx_po_w: None,
                 tx_comp_db: None,
+                pa_temp_c: None,
+                pa_temp_meter: None,
+                tx_bw_steps: Vec::new(),
+                tx_bw: None,
+                tx_proc_switch: false,
                 swr_scale_verified: false,
                 rig_mode: None, // engine fills from CAT mode read-back (display-only)
                 sideband_override: None, // engine fills from the cockpit mode picker (transient)
@@ -1043,6 +1048,7 @@ impl AppState {
             udp_free_text: None,
             rx_freq_clear_tick: 0,
             logged_tick: 0,
+            band_change_tick: 0,
             hunt: None,
             activation: None,
             // Filled by the engine while coordinated QSY is enabled; None here.

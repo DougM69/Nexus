@@ -1812,6 +1812,31 @@ pub struct RadioStatus {
     pub tx_po_w: Option<f32>,
     #[serde(default)]
     pub tx_comp_db: Option<f32>,
+    /// The radio's own PA (finals) temperature in degrees CELSIUS, as its CAT interface last
+    /// reported it. `None` where the radio does not report one (most do not), and then left out
+    /// of the JSON, so a snapshot without it stays byte-identical. Not a transmit meter: it is
+    /// read while receiving and kept across overs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pa_temp_c: Option<f32>,
+    /// The radio's own TEMP meter position, 0.0 to 1.0, where the radio reports a meter and no
+    /// degrees (the FTDX101's `RM9`: Yaesu publishes no degree scale for it). Shown as the
+    /// radio's own meter, never converted to degrees. Left out of the JSON when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pa_temp_meter: Option<f32>,
+    /// The radio's SSB transmit-bandwidth steps, in the radio's own order and front-panel words
+    /// (an Icom's `WIDE`/`MID`/`NAR`; a Yaesu's is parked for now). Empty where Nexus has no CAT
+    /// command for it on this radio, or the radio has not answered one yet; then the selector is
+    /// hidden and the field is left out of the JSON.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tx_bw_steps: Vec<String>,
+    /// Which of `tx_bw_steps` the radio says it is on, as read back. `None` until it answers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tx_bw: Option<String>,
+    /// May the TX meters offer the speech-processor (PROC) switch: true only on a link where the
+    /// switch's write is the radio maker's own command (the native Icom link's `16 44`). Left out
+    /// of the JSON when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub tx_proc_switch: bool,
     /// Can Nexus put a NUMBER to this radio's SWR — i.e. may the high-SWR cutoff be offered?
     /// True only on the two paths that convert the raw meter with a scale we can point at:
     /// the native Icom CI-V daemon, and a FlexRadio's own VITA meter stream. False everywhere
@@ -5080,6 +5105,10 @@ pub struct AppSnapshot {
     /// clears the cockpit's DX fields just like a manual log does.
     #[serde(default)]
     pub logged_tick: u32,
+    /// Bumped on every band change, by any route — the cockpits clear their call boxes on
+    /// change (the FT DX call, the JS8 To box, the JTTY Call box, the log strip's call).
+    #[serde(default)]
+    pub band_change_tick: u32,
     /// Pending one-click POTA/SOTA hunt (the next QSO with this call auto-tags
     /// the park). None = not hunting.
     #[serde(default)]

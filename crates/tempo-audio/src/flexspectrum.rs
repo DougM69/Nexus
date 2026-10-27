@@ -481,6 +481,7 @@ fn route_meters(
     our_slice: Option<u16>,
 ) {
     let (mut smeter, mut swr, mut alc, mut po_w) = (None, None, None, None);
+    let mut pa_temp_c = None;
     {
         let defs = meters.lock().unwrap();
         for &(id, raw) in pairs {
@@ -502,11 +503,15 @@ fn route_meters(
                 (s, "FWDPWR") if s.starts_with("TX") => po_w = Some(dbm_to_watts(v)),
                 (s, "SWR") if s.starts_with("TX") => swr = Some(v),
                 ("TX", "ALC") => alc = Some(10f32.powf(v / 20.0).clamp(0.0, 1.0)),
+                // The PA temperature (SmartSDR API wiki, Metering-Protocol: `PATEMP`, source `TX-`,
+                // unit `degC`). Matched by name alone, as the API names one per radio; a radio
+                // that states Fahrenheit is converted, any other unit is not a temperature.
+                (_, "PATEMP") => pa_temp_c = pa_temp_celsius(&def.unit, v),
                 _ => {}
             }
         }
     }
-    if smeter.is_none() && swr.is_none() && alc.is_none() && po_w.is_none() {
+    if smeter.is_none() && swr.is_none() && alc.is_none() && po_w.is_none() && pa_temp_c.is_none() {
         return;
     }
     if let Some(db) = smeter {
@@ -520,6 +525,19 @@ fn route_meters(
         if swr.is_some() || alc.is_some() || po_w.is_some() {
             e.observe_rig_tx_meters(swr, alc, po_w, None);
         }
+        if let Some(c) = pa_temp_c {
+            e.observe_rig_pa_temp_c(c);
+        }
+    }
+}
+
+/// A `PATEMP` meter's converted value in °C, from the unit the radio declared for it (already
+/// scaled by `convert_meter_raw`: `degC`/`degF` ÷ 64). `None` for any other unit.
+fn pa_temp_celsius(unit: &str, v: f32) -> Option<f32> {
+    match unit {
+        "degC" => Some(v),
+        "degF" => Some((v - 32.0) / 1.8),
+        _ => None,
     }
 }
 
@@ -530,7 +548,10 @@ fn route_meters(
 /// (never the departed stream's last needle).
 fn withdraw_meters(engine: &Arc<Mutex<Engine>>, meters_out: &MeterFeed) {
     meters_out.set_smeter_db(None);
-    engine_lock(engine).clear_rig_smeter();
+    let mut e = engine_lock(engine);
+    e.clear_rig_smeter();
+    // The temperature came on the same stream and goes with it.
+    e.clear_rig_pa_temp();
 }
 
 /// What both threads share about the pan this session created. The control thread writes it; the
@@ -1169,6 +1190,68 @@ mod tests {
             None,
             "engine mirror cleared on teardown"
         );
+    }
+
+    /// THE PA TEMPERATURE RIDES THE SAME STREAM. A `PATEMP` meter (unit `degC`, ÷64 on the wire)
+    /// lands in the snapshot in °C; one declared `degF` is converted; any other unit is not a
+    /// temperature and is dropped. Teardown withdraws it with the S-meter.
+    #[test]
+    fn the_pa_temperature_meter_reaches_the_snapshot_in_celsius() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let bus = MeterFeed::default();
+        let meters = Arc::new(Mutex::new(HashMap::new()));
+        let def = |unit: &str| MeterDef {
+            index: 30,
+            source: "TX-".into(),
+            name: "PATEMP".into(),
+            unit: unit.into(),
+            num: None,
+        };
+        meters.lock().unwrap().insert(30, def("degC"));
+        route_meters(
+            &engine,
+            &bus,
+            &meters,
+            &[(30, 42 * 64)],
+            14_074_000,
+            Some(0),
+        );
+        assert_eq!(
+            engine.lock().unwrap().snapshot().radio.pa_temp_c,
+            Some(42.0)
+        );
+
+        meters.lock().unwrap().insert(30, def("degF"));
+        route_meters(
+            &engine,
+            &bus,
+            &meters,
+            &[(30, 113 * 64)],
+            14_074_000,
+            Some(0),
+        );
+        assert_eq!(
+            engine.lock().unwrap().snapshot().radio.pa_temp_c,
+            Some(45.0)
+        );
+
+        // A unit that is not a temperature changes nothing.
+        meters.lock().unwrap().insert(30, def("Volts"));
+        route_meters(
+            &engine,
+            &bus,
+            &meters,
+            &[(30, 13 * 256)],
+            14_074_000,
+            Some(0),
+        );
+        assert_eq!(
+            engine.lock().unwrap().snapshot().radio.pa_temp_c,
+            Some(45.0)
+        );
+
+        withdraw_meters(&engine, &bus);
+        assert_eq!(engine.lock().unwrap().snapshot().radio.pa_temp_c, None);
     }
 
     /// ONE REASSEMBLED SWEEP, ONE FRAME. A fragment that completes nothing publishes nothing; the

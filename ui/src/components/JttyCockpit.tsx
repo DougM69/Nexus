@@ -358,6 +358,18 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     const newest = pane.filter(named).reduce<JttyLine>((a, l) => (l.startUtcMs >= a.startUtcMs ? l : a), line)
     setPicked({ call: up, snr: newest.snr })
   }
+  // A BAND CHANGE, by any route, empties the Call box (operator ruling, 2026-10-26): `%H`/`%Q`
+  // must not send the old band's station on the new one. The clicked call goes with it.
+  const bandTickSeen = useRef(snap?.bandChangeTick)
+  useEffect(() => {
+    const seen = bandTickSeen.current
+    bandTickSeen.current = snap?.bandChangeTick
+    // Not before a snapshot has said where the count stands: the first one is no change.
+    if (seen == null || snap?.bandChangeTick == null || snap.bandChangeTick === seen) return
+    setHisCall('')
+    setGrabbed(null)
+    setPicked(null)
+  }, [snap?.bandChangeTick])
   // The compose box holds what is not yet sent; `committed` is what this transmission has sent of
   // it (WSJT-X's locked, painted prefix), shown before it until the transmission is over.
   const [draft, setDraft] = useState('')
@@ -755,6 +767,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         </div>
       )}
       <LogEntry
+        clearCallOnBandChange
         onOpenLogbook={onOpenLogbook}
         snap={snap}
         mode={MODE_NAME}

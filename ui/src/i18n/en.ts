@@ -5296,6 +5296,10 @@ export const EN = {
   'logEntry.contest.notRunning.aria': 'Contest not running',
   'logEntry.contest.notRunning': 'Contest mode is on, but the contest is not running.',
   'logEntry.contest.resume': 'Resume',
+  'logEntry.bandCleared': 'Band changed: the log line for {{call}} was set aside. Restore puts it back, to log on {{band}}.',
+  'logEntry.bandCleared.noCall': 'Band changed: the log line was set aside. Restore puts it back, to log on {{band}}.',
+  'logEntry.bandCleared.restore': 'Restore',
+  'logEntry.bandCleared.contestBand': 'A contest contact logs on the band the radio is on: go back to {{band}} to restore it.',
   'fieldDay.log.remove': 'Remove',
   'fieldDay.log.remove.ask': 'Remove {{contact}}? Click Remove again.',
   'fieldDay.log.remove.title': 'Take this contact out of the contest log. It is kept under Removed and can be restored. Click twice: the first click asks.',
@@ -13812,6 +13816,15 @@ export const EN = {
   'meters.tx.alc.title': 'ALC — set mic gain so SSB peaks just tickle the zone, never peg it',
   'meters.tx.po.title': 'Actual output power',
   'meters.tx.comp.title': 'Speech compression',
+  'meters.tx.comp.level.aria': 'Speech processor level',
+  'meters.tx.comp.level.title': 'Speech compression — the bar is the meter, the line is the processor level ({{level}}%). Drag the bar or use the arrow keys to set the level.',
+  'meters.tx.proc.title': 'Speech processor on or off',
+  'meters.tx.txbw.title': "SSB transmit bandwidth: {{step}}. Click for the radio's next setting.",
+  'meters.tx.txbw.aria': 'SSB transmit bandwidth {{step}}, next setting',
+  'meters.tx.txbw.busy': 'Not while transmitting — change the transmit bandwidth between overs',
+  'meters.tx.temp.rig.title': "The radio's power-amplifier (finals) temperature, as the radio reports it",
+  'meters.tx.temp.amp.title': "The amplifier's temperature, as the amplifier reports it",
+  'meters.tx.temp.meter.title': "The radio's power-amplifier (finals) temperature meter, as a share of its scale — this radio reports its meter, not degrees",
 
   // ── The rotator strip and the Rotor pane ────────────────────────────────────────────
   // Both surfaces drive the same mast, so they share the words for the one act they share (the

@@ -1486,6 +1486,22 @@ export interface RadioStatus {
   txAlcZone?: number | null
   txPoW?: number | null
   txCompDb?: number | null
+  /** The radio's own PA (finals) temperature in °C, as its CAT interface last reported it.
+   * Absent where the radio reports none (most do not). Read while receiving and kept across
+   * overs — not a transmit meter. Display converts to °F under the Imperial units setting. */
+  paTempC?: number | null
+  /** The radio's own TEMP meter position, 0–1, where the radio reports a meter and no degrees
+   * (the FTDX101: Yaesu publishes no degree scale for it). Shown as the meter, never as °C/°F. */
+  paTempMeter?: number | null
+  /** The radio's SSB transmit-bandwidth steps in its own order and front-panel words (an
+   * Icom's WIDE/MID/NAR; a Yaesu's is parked for now). Absent where Nexus has no CAT command for
+   * it on this radio, or the radio has not answered a read yet: the selector is then hidden. */
+  txBwSteps?: string[]
+  /** Which of `txBwSteps` the radio read back as. */
+  txBw?: string | null
+  /** May the TX meters offer the speech-processor (PROC) switch: true only where its write is the
+   * radio maker's own command (the native Icom link's `16 44`). Absent = not offered. */
+  txProcSwitch?: boolean
   /** Can Nexus put a NUMBER to this radio's SWR — i.e. may the high-SWR cutoff be offered?
    * True only on the native Icom CI-V daemon and a FlexRadio's own VITA meter stream, the two
    * paths that convert the raw meter with a scale we can point at. Elsewhere `txSwr` is
@@ -5875,6 +5891,10 @@ export interface AppSnapshot {
   /** Bumped every time a QSO is logged, by any path (backend auto-log included).
    * App fires the "clear DX call after logging" wipe on change. */
   loggedTick?: number
+  /** Bumped on every band change, by any route (a move within one band never bumps it). The
+   * cockpits clear their call boxes on change: the FT8/FT4 DX call and grid, the JS8 To box,
+   * the JTTY Call box and the log strip's un-logged call. */
+  bandChangeTick?: number
   /** Bumped on every change to the log by ANY writer — the shack, a Remote browser, another
    * instance, a connector stamp. The Logbook reloads its list on change. */
   logTick?: number

@@ -26,6 +26,7 @@
     "text": ""
   },
   "b4MatchMode": false,
+  "bandChangeTick": null,
   "chatCq": "off",
   "clearTick": null,
   "conversations": [],

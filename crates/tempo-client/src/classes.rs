@@ -541,6 +541,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("set_tier",                       RunsAtShack, "The shack's FT mode; keys nothing."),
     ("set_title_bar_theme",            RunsHere,    "A window on this computer."),
     ("set_tune",                       StartsTx,    "Puts a tune carrier on the air."),
+    ("set_tx_bw",                      RunsAtShack, "The shack's rig control; refused while transmitting."),
     ("set_tx_cycle_auto",              RunsAtShack, "The shack's FT setting; keys nothing."),
     ("set_tx_enabled",                 StartsTx,    "Enable TX: the FT sequencer may key at the next slot."),
     ("set_tx_even",                    RunsAtShack, "The shack's FT setting; keys nothing."),

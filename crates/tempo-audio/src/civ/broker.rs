@@ -863,6 +863,19 @@ impl CivBackend {
                 )
             }
             "COMP_METER" => self.tx_meter(commands::METER_COMP, commands::comp_db_from_raw, 1),
+            // The SSB transmit bandwidth (`16 58`), as its step number: Nexus's own token, asked
+            // only by Nexus's radio loop (`crate::txextras`). The transmitter's, so Main's.
+            crate::txextras::ICOM_TBW_TOKEN => {
+                self.model?;
+                let f = self
+                    .read(
+                        commands::read_ssb_tbw(self.addr),
+                        0x16,
+                        Some(commands::FUNC_SSB_TBW),
+                    )
+                    .ok()?;
+                Some(commands::parse_ssb_tbw(&f)?.to_string())
+            }
             // ATTENUATOR and PREAMP — INTEGER DECIBELS, not the 0..1 fractions everything
             // else on this surface deals in, and each on a register of its own. Both answer
             // `None` (→ `RPRT -11`, and the poll then hides the control) when this build has
@@ -935,6 +948,14 @@ impl CivBackend {
                     who,
                     commands::set_agc(self.addr, commands::agc_civ_from_hamlib(hamlib)),
                 ))
+            }
+            // A step outside WIDE/MID/NAR is refused, never clamped onto a neighbour.
+            crate::txextras::ICOM_TBW_TOKEN => {
+                self.model?;
+                match value.trim().parse::<u8>() {
+                    Ok(idx) if idx <= 2 => Some(self.ack(commands::set_ssb_tbw(self.addr, idx))),
+                    _ => Some(false),
+                }
             }
             "KEYSPD" => {
                 let wpm: u32 = value.parse().ok()?;
@@ -1834,6 +1855,12 @@ impl CivDaemon {
     /// on the box to take before the daemon binds it.
     pub fn local_addr(&self) -> SocketAddr {
         self.local_addr
+    }
+
+    /// Was the daemon started for a known Icom model? A generic CI-V radio (no model) is driven
+    /// for the basics only, and the radio loop asks it nothing model-specific.
+    pub fn knows_model(&self) -> bool {
+        self.civ.model.is_some()
     }
 
     /// False once the serial engine died (port unplugged / denied).
@@ -3406,6 +3433,44 @@ mod tests {
     /// receiver cockpit showed the Sub's S-meter, AF, NB… as "the radio's". Command `29`
     /// names Main without touching the selection ("Regardless of active/inactive the Main
     /// or Sub band, you can directly specify the Main or Sub band", A7380-7EX-4 p. 9), so
+    /// The SSB transmit bandwidth on Nexus's own token: `16 58` written and read back as the step
+    /// number, a step past NAR refused (never clamped), and nothing asked of a radio whose model
+    /// the daemon does not know.
+    #[test]
+    fn the_ssb_transmit_bandwidth_is_16_58_by_step_number() {
+        let (_e, b, regs) = backend_on(0x94, Some(IcomModel::Ic7300));
+        assert_eq!(
+            b.set_level(crate::txextras::ICOM_TBW_TOKEN, "2"),
+            Some(true)
+        );
+        assert_eq!(
+            regs.lock().unwrap().funcs.get(&0x58),
+            Some(&0x02),
+            "16 58 02 = NAR"
+        );
+        assert_eq!(
+            b.level(crate::txextras::ICOM_TBW_TOKEN).as_deref(),
+            Some("2")
+        );
+        assert_eq!(
+            b.set_level(crate::txextras::ICOM_TBW_TOKEN, "3"),
+            Some(false)
+        );
+        assert_eq!(
+            b.set_level(crate::txextras::ICOM_TBW_TOKEN, "wide"),
+            Some(false)
+        );
+        assert_eq!(
+            regs.lock().unwrap().funcs.get(&0x58),
+            Some(&0x02),
+            "a refusal sends nothing"
+        );
+
+        let (_e, b, _regs) = backend_on(0x94, None);
+        assert_eq!(b.level(crate::txextras::ICOM_TBW_TOKEN), None);
+        assert_eq!(b.set_level(crate::txextras::ICOM_TBW_TOKEN, "1"), None);
+    }
+
     /// the panel never flickers and the operator's choice of band is left exactly as it was.
     #[test]
     fn an_ic7610_names_main_while_the_panel_has_the_sub_band_selected() {

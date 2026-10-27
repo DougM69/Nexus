@@ -133,6 +133,7 @@ pub mod sstvrx;
 /// feature like the Flex and Icom network clients.
 #[cfg(feature = "device")]
 pub mod tci;
+pub mod txextras;
 pub mod usbrig;
 /// Which rig a sound card or serial port belongs to, from USB topology (macOS).
 pub mod usbtopo;

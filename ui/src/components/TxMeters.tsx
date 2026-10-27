@@ -4,10 +4,12 @@
 // tooltips, the group's name and the idle line — is in the catalog under `meters.tx.*`.
 //
 // These are READOUTS, not transmit controls: nothing here keys, gates or stops anything.
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
+import type { KeyboardEvent, PointerEvent } from 'react'
 import type { RadioStatus } from '../types'
 import { isOnAir } from '../types'
 import { t } from '../i18n'
+import { fmtTempC, useUnits } from '../units'
 
 /** The rig's own meter names, as they are printed on a radio's front panel — technical tokens
  *  exactly as a mode name is, gathered here so the catalog guard reads them as the deliberate
@@ -16,6 +18,15 @@ const SWR = 'SWR'
 const ALC = 'ALC'
 const PO = 'PO'
 const COMP = 'COMP'
+/** The radio's speech-processor switch, as Yaesu's and Kenwood's front panels print it. */
+const PROC = 'PROC'
+/** The temperature rows: the radio's own PA when it is the only one, `RIG` beside an
+ *  amplifier's so the two cannot be mistaken for each other, and the amplifier's. */
+const TEMP = 'TEMP'
+const RIG = 'RIG'
+const AMP = 'AMP'
+/** Arrow-key step for the processor level, in percent — the cockpit's other level controls'. */
+const COMP_KEY_STEP = 5
 
 /** The SWR token with the mark that says Nexus cannot vouch for this rig's scale. It rides on
  *  the LABEL because that is the one part of the row whose width nothing else is pinned to:
@@ -125,13 +136,33 @@ type MeterRow = {
   bar: ReturnType<typeof swrBar> | null
 }
 
+/** What the COMP row may set, given by a host that owns the Phone chain. Absent (CW, Operate),
+ *  the row is a meter and nothing else. Each control also appears only where the radio has
+ *  READ BACK the value it sets: a processor level, a processor switch, a transmit-bandwidth step
+ *  list — a control the radio never answered would be one Nexus cannot show the state of. */
+export interface TxMeterControls {
+  /** Set the speech-processor level, 0..1. */
+  onCompLevel?: (frac: number) => void
+  /** Switch the speech processor on or off. */
+  onProc?: (on: boolean) => void
+  /** Pick a transmit-bandwidth step by its name in `radio.txBwSteps`. */
+  onTxBw?: (step: string) => void
+}
+
+/** A temperature row: the radio's own PA, or an amplifier's. Not a transmit meter — it is read
+ *  while receiving, so it is shown whenever a reading exists and takes no part in the ⊘ logic. */
+type TempRow = { key: 'rigTemp' | 'ampTemp'; label: string; title: string; frac: number; value: string }
+
 export function TxMeters({
   radio,
   pinned = false,
   inline = false,
+  controls,
 }: {
   radio: RadioStatus
   pinned?: boolean
+  /** The COMP row's controls; see [`TxMeterControls`]. */
+  controls?: TxMeterControls
   /** Inline telemetry-cell variant (the Operate strip): pinned semantics — always
    *  rendered, live while keyed, dimmed last readings between overs — inside a
    *  FIXED-WIDTH cell, so the TX cycle causes zero geometry change at zero
@@ -158,6 +189,14 @@ export function TxMeters({
   // Has the rig keyed since this panel mounted? The Operate cell gives every meter its slot
   // from that moment on (below).
   const keyedOnce = useRef(false)
+  const units = useUnits()
+  // The processor level while a drag is in flight: the marker follows the pointer at once.
+  const [dragPct, setDragPct] = useState<number | null>(null)
+  // The level last set here, held on the marker until the radio's reported level moves. Mid-over
+  // the radio is not read back (that happens between overs), so without this the marker would
+  // snap back to the level from before the over while the radio already has the new one.
+  const [held, setHeld] = useState<{ pct: number; base: number | null } | null>(null)
+  if (held && held.base !== (radio.compLevel ?? null)) setHeld(null)
 
   const rows: MeterRow[] = []
   {
@@ -231,6 +270,143 @@ export function TxMeters({
   if (onAir) keyedOnce.current = true
   else if (everRead.current) overJudged.current = true
 
+  // ⭐ FINALS TEMPERATURE (operator request; #247). The radio's own reading, °C on the wire, shown
+  // in the operator's units. The amplifier's beside it, reusing the reading its own pane shows.
+  // Neither has a zone colour: a safe temperature is the radio's own business, and its limits
+  // differ by model, so a red bar here would be a threshold Nexus cannot stand behind.
+  const temps: TempRow[] = []
+  const amp = radio.amp?.linked ? radio.amp : null
+  const ampTemp = amp?.temp ?? null
+  if (radio.paTempC != null) {
+    temps.push({
+      key: 'rigTemp',
+      label: ampTemp != null ? RIG : TEMP,
+      title: t('meters.tx.temp.rig.title'),
+      frac: Math.max(0, Math.min(1, radio.paTempC / 100)),
+      value: fmtTempC(radio.paTempC, units),
+    })
+  } else if (radio.paTempMeter != null) {
+    // A meter and no degrees: the radio's own TEMP bar, as a share of its scale. Inventing °C
+    // from it would be a number the radio never stated.
+    temps.push({
+      key: 'rigTemp',
+      label: ampTemp != null ? RIG : TEMP,
+      title: t('meters.tx.temp.meter.title'),
+      frac: Math.max(0, Math.min(1, radio.paTempMeter)),
+      value: `${Math.round(radio.paTempMeter * 100)}%`,
+    })
+  }
+  if (amp && ampTemp != null) {
+    // SPE's protocol does not say whether its number is °C or °F (the amplifier sends whatever
+    // its own panel is set to), so that number is shown bare, unconverted and unbarred — the
+    // amplifier pane's rule. The KPA's is documented Celsius and converts like the radio's.
+    temps.push(
+      amp.tempCelsius
+        ? {
+            key: 'ampTemp',
+            label: AMP,
+            title: t('meters.tx.temp.amp.title'),
+            frac: Math.max(0, Math.min(1, ampTemp / 100)),
+            value: fmtTempC(ampTemp, units),
+          }
+        : { key: 'ampTemp', label: AMP, title: t('amp.temp.unknownScale'), frac: 0, value: `${ampTemp}°` },
+    )
+  }
+  const tempRows = temps.map((r) => (
+    <div key={r.key} className="ph-txmeter temp" data-meter={r.key} title={r.title}>
+      <span className="ph-txmeter-label">{r.label}</span>
+      <div className="ph-txmeter-track well">
+        <div className="ph-txmeter-fill" style={{ width: `${Math.round(r.frac * 100)}%`, background: ZONE_COLOR.unknown }} />
+      </div>
+      <span className="ph-txmeter-value">{r.value}</span>
+    </div>
+  ))
+
+  // ⭐ THE COMP ROW SETS WHAT IT SHOWS (operator request). The bar stays the compression METER;
+  // the marker on it is the processor LEVEL, and dragging the bar (or the arrow keys) moves the
+  // level. The two share a track, not a scale: the meter is dB the radio measured, the marker the
+  // knob's position — which is why the marker is a line, not a second fill.
+  const levelPct =
+    controls?.onCompLevel && radio.compLevel != null
+      ? dragPct ?? held?.pct ?? Math.round(radio.compLevel * 100)
+      : null
+  const setLevel = (pct: number) => {
+    const p = Math.max(0, Math.min(100, Math.round(pct)))
+    controls?.onCompLevel?.(p / 100)
+    return p
+  }
+  const pctAt = (e: PointerEvent<HTMLDivElement>) => {
+    const box = e.currentTarget.getBoundingClientRect()
+    return box.width > 0 ? ((e.clientX - box.left) / box.width) * 100 : 0
+  }
+  const onLevelDown = (e: PointerEvent<HTMLDivElement>) => {
+    e.currentTarget.setPointerCapture?.(e.pointerId)
+    setDragPct(setLevel(pctAt(e)))
+  }
+  const onLevelMove = (e: PointerEvent<HTMLDivElement>) => {
+    if (dragPct == null) return
+    const p = Math.max(0, Math.min(100, Math.round(pctAt(e))))
+    if (p !== dragPct) setDragPct(setLevel(p))
+  }
+  const onLevelUp = () => {
+    if (dragPct != null) setHeld({ pct: dragPct, base: radio.compLevel ?? null })
+    setDragPct(null)
+  }
+  const onLevelKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (levelPct == null) return
+    const next =
+      e.key === 'ArrowRight' || e.key === 'ArrowUp'
+        ? levelPct + COMP_KEY_STEP
+        : e.key === 'ArrowLeft' || e.key === 'ArrowDown'
+          ? levelPct - COMP_KEY_STEP
+          : e.key === 'Home'
+            ? 0
+            : e.key === 'End'
+              ? 100
+              : null
+    if (next == null) return
+    e.preventDefault()
+    setHeld({ pct: setLevel(next), base: radio.compLevel ?? null })
+  }
+  // PROC only where the radio loop says the switch's write is the maker's own command (the native
+  // Icom link's `16 44`): elsewhere the processor stays on the chain's own COMP control.
+  const procOn = controls?.onProc && radio.txProcSwitch && radio.comp != null ? radio.comp === true : null
+  const bwSteps = controls?.onTxBw && radio.txBw ? (radio.txBwSteps ?? []) : []
+  const bwNext = () => {
+    const i = bwSteps.indexOf(radio.txBw ?? '')
+    controls?.onTxBw?.(bwSteps[(i + 1) % bwSteps.length])
+  }
+  const compControls = (
+    <>
+      {procOn != null && (
+        <button
+          type="button"
+          className={`ph-txmeter-btn${procOn ? ' on' : ''}`}
+          data-ctl="proc"
+          aria-pressed={procOn}
+          title={t('meters.tx.proc.title')}
+          onClick={() => controls?.onProc?.(!procOn)}
+        >
+          {PROC}
+        </button>
+      )}
+      {bwSteps.length > 1 && (
+        <button
+          type="button"
+          className="ph-txmeter-btn"
+          data-ctl="txbw"
+          // Never while on the air: the radio's own menu write is not one Nexus will make mid-over.
+          disabled={isOnAir(radio)}
+          title={isOnAir(radio) ? t('meters.tx.txbw.busy') : t('meters.tx.txbw.title', { step: radio.txBw ?? '' })}
+          aria-label={t('meters.tx.txbw.aria', { step: radio.txBw ?? '' })}
+          onClick={bwNext}
+        >
+          {radio.txBw}
+        </button>
+      )}
+    </>
+  )
+
   const pin = pinned || inline
   if (!pin) {
     // Default (Phone/CW's old shape): appear only while keyed, exactly as before. It has no
@@ -281,6 +457,7 @@ export function TxMeters({
     return (
       <div className={`ph-txmeters${variant} idle`} role="group" aria-label={t('meters.tx.aria')}>
         <span className="ph-txmeters-hint">{t('meters.tx.idle', { when: TX_METERS_WHEN })}</span>
+        {tempRows}
       </div>
     )
   }
@@ -290,12 +467,37 @@ export function TxMeters({
       role="group"
       aria-label={t('meters.tx.aria')}
     >
-      {shown.map((r) => (
-        <div key={r.key} className="ph-txmeter" title={r.title}>
+      {shown.map((r) => {
+        const slider = r.key === 'comp' && levelPct != null
+        const hasCtl = r.key === 'comp' && (slider || procOn != null || bwSteps.length > 1)
+        return (
+        <div
+          key={r.key}
+          className={`ph-txmeter${slider ? ' settable' : ''}${hasCtl ? ' has-ctl' : ''}`}
+          title={slider ? t('meters.tx.comp.level.title', { level: levelPct }) : r.title}
+        >
           <span className="ph-txmeter-label">{r.label}</span>
           {/* A display well (styles.css DISPLAY WELLS), in all three hosts alike: the zone colours
               above resolve to the dark theme's inks on a track that is dark in both themes. */}
-          <div className="ph-txmeter-track well">
+          <div
+            className="ph-txmeter-track well"
+            {...(slider
+              ? {
+                  role: 'slider',
+                  tabIndex: 0,
+                  'aria-label': t('meters.tx.comp.level.aria'),
+                  'aria-valuemin': 0,
+                  'aria-valuemax': 100,
+                  'aria-valuenow': levelPct,
+                  'aria-valuetext': `${levelPct}%`,
+                  onPointerDown: onLevelDown,
+                  onPointerMove: onLevelMove,
+                  onPointerUp: onLevelUp,
+                  onPointerCancel: onLevelUp,
+                  onKeyDown: onLevelKey,
+                }
+              : {})}
+          >
             <div
               className="ph-txmeter-fill"
               style={{
@@ -303,8 +505,10 @@ export function TxMeters({
                 background: ZONE_COLOR[r.bar?.zone ?? 'unknown'],
               }}
             />
+            {slider && <div className="ph-txmeter-mark" style={{ left: `${levelPct}%` }} />}
           </div>
           <span className="ph-txmeter-value">{r.bar?.value ?? '—'}</span>
+          {r.key === 'comp' && compControls}
           {/* ⊘ ONLY ONCE WE COULD HAVE KNOWN. The rig has keyed and this meter stayed
               silent through it, so it is one the radio does not report — as against the
               blank rows before the first over, which say nothing about the radio and are
@@ -315,7 +519,9 @@ export function TxMeters({
             </span>
           )}
         </div>
-      ))}
+        )
+      })}
+      {tempRows}
       {/* Before the first over nothing is known about any meter — these fields are populated
           only while transmitting — so the panel says WHEN it reads rather than letting four
           dashes read as four missing features. It goes once a reading has arrived, because

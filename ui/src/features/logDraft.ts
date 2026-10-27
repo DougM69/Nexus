@@ -43,6 +43,53 @@ export interface LogDraft {
   enrichedFor: string
   /** When the call was entered (Unix seconds), the contact's start; null when not known. */
   enteredUnix?: number | null
+  /** The station's band-change count when the draft was kept (`AppSnapshot.bandChangeTick`): a
+   *  band change while the cockpit was away clears the call as it would have on screen. */
+  bandChangeTick?: number
+  /** Where the radio was as the draft was kept (band, logged frequency, mode): what a band change
+   *  made while the cockpit was away sets the line aside with. */
+  context?: LineContext
+  /** The line a band change set aside, while its Restore is still on offer. */
+  bandCleared?: BandClearedLine
+  /** The band, frequency and mode a restored line logs with, and its call (empty for a line restored
+   *  without one), while it is the line kept. */
+  restored?: LineContext & { call: string }
+}
+
+/** The band, logged frequency (MHz) and mode a contact in the strip is logged with. */
+export interface LineContext {
+  band: string
+  freqMhz: number
+  mode: string
+}
+
+/** A log line a BAND CHANGE set aside (operator ruling, 2026-10-26): every box as it stood, and
+ *  the band, frequency and mode it was made on, which Restore logs it with. */
+export interface BandClearedLine {
+  line: LogDraft
+  context: LineContext
+}
+
+/** A line with nothing in it: the draft that keeps only a set-aside line. */
+export const BLANK_LINE: LogDraft = {
+  call: '',
+  rstSent: null,
+  rstRcvd: null,
+  name: '',
+  qth: '',
+  comment: '',
+  notes: '',
+  grid: '',
+  state: '',
+  stateSource: 'operator',
+  callbookState: '',
+  country: '',
+  image: null,
+  parkProgram: 'POTA',
+  parkRef: '',
+  parkFor: { call: '', hunt: false },
+  workPark: null,
+  enrichedFor: '',
 }
 
 const drafts = new Map<string, LogDraft>()
