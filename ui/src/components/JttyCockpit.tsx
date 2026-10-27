@@ -524,6 +524,9 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         active={active}
         fdMode="DIG"
         fdSubmode={MODE_NAME}
+        // The dial plus JTTY's Tx frequency, as WSJT-X logs a JTTY contact (the dial plus its Tx
+        // box). A station that sends no transmitter logs the dial, as before.
+        logOffsetHz={tx?.txHz}
       />
     </CockpitPaneFrame>
   ) : null

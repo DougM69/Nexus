@@ -30990,7 +30990,7 @@ contact yourself."
     ///
     /// Both legs are the on-air RF: the dial plus the audio offset the section's signal sits at
     /// ([`Self::logged_signal_offset`]) — FT's TX offset sideband-signed (USB adds, LSB
-    /// subtracts) exactly as WSJT-X logs it, PSK31's centre, RTTY's mark, and none for voice or
+    /// subtracts) exactly as WSJT-X logs it, PSK31's centre, JTTY's Tx, RTTY's mark, and none for voice or
     /// the rig's own CW. For FT the bare dial alone would log two stations at different audio
     /// offsets as identical.
     ///
@@ -31098,10 +31098,12 @@ contact yourself."
                     )
                 }
             }
-            // PSK31: the netted centre, on the side the dial is commanded — USB, the section's
-            // convention.
+            // PSK31: the netted centre; JTTY: its Tx frequency, as WSJT-X logs JTTY (the dial plus
+            // `TxFreqSpinBox`, which JTTY's Tx box sets) — the low edge of `keyboard_span_hz`,
+            // which names each modem's own. On the side the dial is commanded — USB, the
+            // section's convention.
             OperatingMode::Keyboard => (
-                self.psk_center_hz() as f64 / 1e6,
+                self.keyboard_span_hz().0 / 1e6,
                 Self::side_is_lsb(&self.rig_mode_effective()).unwrap_or(false),
             ),
         }
@@ -75284,6 +75286,55 @@ mod logged_frequency_tests {
                 dial: 14.070,
                 band: "20m",
                 sideband: "LSB",
+                class: "DIG",
+                submode: Some("PSK31"),
+                word: "PKTUSB",
+                on_air_hz: 14_071_000,
+            },
+        ]);
+    }
+
+    fn jtty_tx_1800(e: &mut Engine) {
+        e.set_jtty_tx(1800.0).expect("JTTY idle");
+    }
+
+    /// ⭐ JTTY: the dial plus JTTY's Tx frequency, as WSJT-X logs a JTTY contact (the dial plus
+    /// `TxFreqSpinBox`, which JTTY's own Tx box sets) — never PSK's centre, which JTTY does not
+    /// transmit on. The control: PSK31 with JTTY's Tx moved still logs at PSK's centre.
+    #[test]
+    fn a_jtty_contest_contact_is_logged_at_its_tx_frequency() {
+        assert_cases(&[
+            Case {
+                name: "JTTY at 14.090, Tx 1800 Hz",
+                section: "jtty",
+                setup: jtty_tx_1800,
+                dial: 14.090,
+                band: "20m",
+                sideband: "USB",
+                class: "DIG",
+                submode: Some("JTTY"),
+                word: "PKTUSB",
+                on_air_hz: 14_091_800,
+            },
+            Case {
+                name: "JTTY at 14.090, Tx where selecting JTTY puts it",
+                section: "jtty",
+                setup: no_setup,
+                dial: 14.090,
+                band: "20m",
+                sideband: "USB",
+                class: "DIG",
+                submode: Some("JTTY"),
+                word: "PKTUSB",
+                on_air_hz: 14_091_500,
+            },
+            Case {
+                name: "PSK31 at 14.070, JTTY's Tx moved",
+                section: "keyboard",
+                setup: jtty_tx_1800,
+                dial: 14.070,
+                band: "20m",
+                sideband: "USB",
                 class: "DIG",
                 submode: Some("PSK31"),
                 word: "PKTUSB",
