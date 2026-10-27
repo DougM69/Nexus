@@ -1,0 +1,52 @@
+name: Build Intel Mac Release
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-intel:
+    runs-on: macos-15-intel
+
+    steps:
+    - name: Install System Dependencies
+      run: |
+        brew install cmake ninja gcc fftw boost node libusb
+        echo "PKG_CONFIG_PATH=$(brew --prefix)/lib/pkgconfig" >> $GITHUB_ENV
+
+    - name: Install Rust Toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: 1.83.1
+        targets: x86_64-apple-darwin
+
+    - name: Install Tauri CLI
+      run: |
+        cargo install tauri-cli --version "^2"
+
+    - name: Setup Frontend Build Environment
+      run: |
+        npm --prefix ui ci
+        npm --prefix ui run build
+
+    - name: Stage Hamlib Binaries
+      run: |
+        bash scripts/fetch-hamlib-unix.sh
+
+    - name: Compile and Bundle Tauri App
+      run: |
+        export MACOSX_DEPLOYMENT_TARGET=10.15
+        export PKG_CONFIG_PATH="$(brew --prefix)/lib/pkgconfig"
+        export NEXUS_ALLOW_MISSING_AICW=1
+        
+        cargo tauri build \
+          --features radio,custom-protocol \
+          --bundles app,dmg \
+          --config '{"bundle":{"createUpdaterArtifacts":false}}'
+
+    - name: Upload Finished Intel Installer (.dmg)
+      uses: actions/upload-artifact@v4
+      with:
+        name: Nexus-Intel-Mac-Installer
+        path: src-tauri/target/release/bundle/dmg/*.dmg
