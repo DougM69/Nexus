@@ -8608,9 +8608,9 @@ export const EN = {
 
   'settings.transmit.share.label': 'Share this radio with other programs',
   'settings.transmit.share.copy.action': 'Copy',
-  // #165. `{{wanted}}` and `{{port}}` are port numbers.
+  // #165. `{{wanted}}` and `{{port}}` are port numbers; `rigctld` is Hamlib's program name, kept as is.
   'settings.transmit.share.moved':
-    'Another program is already listening on {{wanted}}, so Nexus left it alone and is sharing on {{port}} instead. Point other programs at this address.',
+    '{{wanted}} is taken (another program is listening there, or it is your radio’s own rigctld address), so Nexus leaves it free and is sharing on {{port}} instead. Point other programs at this address.',
   'settings.transmit.share.copy.title': 'Copy the address to paste into the other program',
   'settings.transmit.share.hint.on':
     'Nexus itself answers at this address, so <b>VarAC</b>, <b>FreeDV</b>, <b>WSJT-X</b>, <b>JS8Call</b> and <b>fldigi</b> can use the radio while Nexus runs — pick the rig <em>Hamlib NET rigctl</em> (VarAC and FreeDV call it a network or rigctld connection), give it the address above, and leave their serial port blank. They stay connected even while Nexus tests or reconfigures the radio link, and they follow whichever radio is active. Only for this computer — the address is not reachable from the network. Takes effect right away. Both programs can command the rig, so expect them to argue if you tune in both at once.',

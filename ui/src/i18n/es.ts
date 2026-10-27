@@ -7985,7 +7985,7 @@ export const ES: PartialCatalog = {
   "settings.transmit.restore.action": "Restaurar…",
   "settings.transmit.restore.title": "Reemplazar tu montaje actual por una copia guardada",
   "settings.transmit.share.copy.action": "Copiar",
-  "settings.transmit.share.moved": "Otro programa ya está escuchando en {{wanted}}, así que Nexus lo deja en paz y comparte en {{port}}. Apunta los demás programas a esta dirección.",
+  "settings.transmit.share.moved": "{{wanted}} está ocupado (otro programa escucha allí, o es la dirección del rigctld propio de tu equipo), así que Nexus lo deja libre y comparte en {{port}}. Apunta los demás programas a esta dirección.",
   "settings.transmit.share.copy.title": "Copiar la dirección para pegarla en el otro programa",
   "settings.transmit.share.hint.direct": "¿Manejas un equipo concreto que <em>no</em> es el activo? Usa su dirección directa <code>{{address}}</code> (por equipo; este enlace se cae un momento cada vez que Nexus reconfigura ese equipo).",
   "settings.transmit.share.hint.off": "Desactivado — otros programas no pueden usar el equipo mientras Nexus está en marcha. Actívalo y apúntalos a la dirección que aparece aquí (<em>Hamlib NET rigctl</em>).",

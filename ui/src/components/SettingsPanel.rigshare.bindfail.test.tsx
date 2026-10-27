@@ -210,6 +210,9 @@ describe('the share block when sharing stepped aside to another port', () => {
     const note = container.querySelector('.rig-share-moved')
     expect(note?.textContent).toContain('4532')
     expect(note?.textContent).toContain('4536')
+    // Either cause: another program on the port, or the radio's own rigctld address (#165).
+    expect(note?.textContent).toContain('another program')
+    expect(note?.textContent).toContain('rigctld')
   })
 
   it('serving on the port in Settings, it says nothing about a move', async () => {

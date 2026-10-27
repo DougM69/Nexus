@@ -2124,6 +2124,87 @@ fn a_radio_on_the_operators_rigctld_at_the_sharing_ports_number_connects_once_sh
     );
 }
 
+/// ⭐ #165: STARTED BEFORE THE OPERATOR'S OWN RIGCTLD, AT THE SHARING PORT'S NUMBER. A NET rigctl
+/// radio on 127.0.0.1:P, Share this radio on P, and nothing listening on P when Nexus starts. The
+/// station counts P as the operator's rigctld port, so sharing moves (the broker's bind is the
+/// app's; here it reports the port it took). The launch is refused while sharing has not bound;
+/// once it serves elsewhere the radio waits for its rigctld, and when the operator starts it on P
+/// the radio shares it. Each value is (CAT ok, what the status says).
+#[test]
+fn started_before_the_operators_rigctld_on_the_sharing_port_the_radio_connects_once_it_starts() {
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let (engine, _) = station(&addr, free_port());
+    let settings = {
+        let mut e = engine.lock().unwrap();
+        e.rename_radio(0, "IC-9700");
+        let mut s = e.settings().clone();
+        s.cat_broker = true;
+        s.cat_broker_port = port;
+        e.apply_settings(s);
+        e.settings().clone()
+    };
+    // What sharing must never bind: P, the operator's rigctld port.
+    let reserved = settings.ports_the_operators_rigctld_holds(&[]);
+    let (mut rig, daemon, probe) = open_rig(&Transport::from_settings(&settings), true);
+    let launched = (probe.ok, probe.detail.clone());
+    engine
+        .lock()
+        .unwrap()
+        .set_cat_status(probe.ok, probe.detail);
+    let cfg = RadioConfig {
+        rig_model: settings.rig_model,
+        ..RadioConfig::default()
+    };
+    let mut state = RadioLoop::new(Transport::from_settings(&settings), daemon, &cfg);
+    state.after_the_launch_open(&rig, probe.ok);
+    // Sharing bound the next free port instead of P.
+    engine.lock().unwrap().set_cat_share_port(Some(free_port()));
+    let said = || engine.lock().unwrap().snapshot().radio.cat_detail.clone();
+    let mut backend = MockBackend::new();
+    let mut now = 0.0f64;
+    let mut run =
+        |state: &mut RadioLoop, rig: &mut Rig, ticks: usize, done: &dyn Fn(&RadioLoop) -> bool| {
+            for _ in 0..ticks {
+                if done(state) {
+                    return;
+                }
+                now += 500.0;
+                let mut reopen_rig = |t: &Transport, coexist: bool| open_rig(t, coexist);
+                state
+                    .step(
+                        &engine,
+                        &mut backend,
+                        rig,
+                        &no_sinks(),
+                        now,
+                        &mut mock_reopen_audio(),
+                        &mut reopen_rig,
+                        &mut StationSinks::new(),
+                    )
+                    .unwrap();
+            }
+        };
+    run(&mut state, &mut rig, 4, &|_| false);
+    let waiting = (state.cat_ok, said());
+    // The operator starts their rigctld on P: the port is free, so it binds.
+    let _rigctld = FakeWfview::at(&addr, true);
+    run(&mut state, &mut rig, 40, &|s| s.cat_ok == Some(true));
+    let shared = (state.cat_ok, said());
+    assert_eq!(
+        (reserved, launched, waiting, shared),
+        (
+            vec![port],
+            (Some(false), held_by_the_broker(port, "IC-9700")),
+            (Some(false), nothing_answering_at(&addr)),
+            (
+                Some(true),
+                format!("Sharing the rigctld at {addr} — Connected — 14.074 MHz")
+            ),
+        )
+    );
+}
+
 /// #165, for a radio the monitor reads: the FT-991A's address is the Sharing port's number. The
 /// monitor refuses it while the broker may be there (not yet bound, or serving there) and opens it
 /// once the broker reports serving on another port. The values are the refusal, per broker report.

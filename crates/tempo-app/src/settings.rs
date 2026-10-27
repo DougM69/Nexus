@@ -6682,6 +6682,28 @@ impl Settings {
         ports
     }
 
+    /// The ports the operator's own rigctld answers on, so the CAT broker never binds one, not
+    /// even as the sharing port it was asked for (#165): every radio profile's NET rigctl Network
+    /// Address on this computer, by loopback name or by one of its addresses in `here`. Taken
+    /// while that rigctld is not running yet, it could never start there, and the radio pointed at
+    /// it would be talking to Nexus itself.
+    pub fn ports_the_operators_rigctld_holds(&self, here: &[std::net::IpAddr]) -> Vec<u16> {
+        self.radios
+            .iter()
+            .filter(|p| p.rig_model == 2 && rig_conn_is_network(&p.rig_conn, &p.rig_addr))
+            .filter_map(|p| split_host_port(&p.rig_addr))
+            .filter(|(host, _)| {
+                host_is_this_machine(host)
+                    || host
+                        .trim_start_matches('[')
+                        .trim_end_matches(']')
+                        .parse::<std::net::IpAddr>()
+                        .is_ok_and(|ip| here.contains(&ip))
+            })
+            .map(|(_, port)| port)
+            .collect()
+    }
+
     /// Auto-repair colliding daemon ports so every radio can run its OWN persistent rigctld/rotctld at
     /// the same time (true dual-radio needs two live daemons — a shared port would make the monitor
     /// connect through the active radio's daemon). Bumps any duplicate `rigctld_port`/`rotctld_port`
@@ -8009,6 +8031,40 @@ mod tests {
         assert!(
             !ports.contains(&s.cat_broker_port),
             "the broker's own port is not one it steps around"
+        );
+    }
+
+    /// #165: the ports the operator's own rigctld answers on are every profile's NET rigctl
+    /// address on this computer — by loopback name or by one of its own addresses — and nothing
+    /// else: a rigctld on another computer, or a radio that is not NET rigctl, holds no port here.
+    #[test]
+    fn the_operators_rigctld_holds_every_net_rigctl_port_on_this_computer() {
+        let mut s = Settings::default();
+        s.ensure_radio_profiles();
+        let rows = [
+            (2, "network", "127.0.0.1:4532"),
+            (2, "network", "localhost:4540"),
+            (2, "network", "[::1]:4541"),
+            (2, "network", "192.168.1.5:4542"),
+            (2, "network", "192.168.1.9:4543"),
+            (3073, "network", "127.0.0.1:4544"),
+            (2, "serial", "127.0.0.1:4545"),
+        ];
+        for (model, conn, addr) in rows {
+            let id = s.add_radio_profile();
+            let p = s.radios.iter_mut().find(|p| p.id == id).unwrap();
+            (p.rig_model, p.rig_conn, p.rig_addr) = (model, conn.into(), addr.into());
+            // Not the active radio, and not even enabled: a profile still points there.
+            p.enabled = false;
+        }
+        let here = ["192.168.1.5".parse().unwrap()];
+        assert_eq!(
+            s.ports_the_operators_rigctld_holds(&here),
+            vec![4532, 4540, 4541, 4542]
+        );
+        assert_eq!(
+            s.ports_the_operators_rigctld_holds(&[]),
+            vec![4532, 4540, 4541]
         );
     }
 

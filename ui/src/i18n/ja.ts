@@ -5479,7 +5479,7 @@ export const JA: PartialCatalog = {
   "settings.transmit.restore.title": "現在の設定を保存済みのバックアップで置き換えます",
   "settings.transmit.share.label": "この無線機を他のプログラムと共有",
   "settings.transmit.share.copy.action": "コピー",
-  "settings.transmit.share.moved": "別のプログラムがすでに{{wanted}}で待ち受けているため、Nexusはそのポートには触れず、代わりに{{port}}で共有しています。他のプログラムはこのアドレスに接続してください。",
+  "settings.transmit.share.moved": "{{wanted}}は使用中です（別のプログラムが待ち受けているか、無線機自身のrigctldのアドレスです）。Nexusはそのポートを空けたまま、代わりに{{port}}で共有しています。他のプログラムはこのアドレスに接続してください。",
   "settings.transmit.share.copy.title": "相手のプログラムに貼り付けるアドレスをコピー",
   "settings.transmit.share.hint.on": "Nexus自身がこのアドレスで応答するため、Nexusの実行中でも<b>VarAC</b>、<b>FreeDV</b>、<b>WSJT-X</b>、<b>JS8Call</b>、<b>fldigi</b>から無線機を使えます。相手側でリグに<em>Hamlib NET rigctl</em>を選び（VarACとFreeDVではネットワーク接続またはrigctld接続と呼ばれます）、上のアドレスを設定し、シリアルポートは空欄のままにしてください。Nexusが無線機リンクをテスト・再設定している間も接続は維持され、アクティブな無線機に追従します。このコンピューター専用で、アドレスにネットワークからは到達できません。即時に反映されます。どちらのプログラムからも無線機を操作できるため、両方で同時に同調すると取り合いになります。",
   "settings.transmit.share.hint.off": "オフ — Nexusの実行中、他のプログラムは無線機を使えません。オンにして、ここに表示されるアドレスを相手のプログラムに設定してください（<em>Hamlib NET rigctl</em>）。",
