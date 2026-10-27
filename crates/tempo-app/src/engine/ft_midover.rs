@@ -252,10 +252,13 @@ impl Engine {
         self.take_ft_over(slot);
         self.record_own_tx(to.clone());
         if self.settings.write_all_txt {
-            let mode = format!("{tier:?}").to_uppercase();
-            self.station
-                .all_txt_pending
-                .push(crate::alltxt::all_txt_line(
+            let mode = self.all_txt_mode(tier, self.active_slot_secs());
+            // Held with the over's first row, so the two go into the file in order
+            // (`StationCore::all_txt_held_tx`).
+            let over_end = self.all_txt_over_end(slot);
+            self.station.hold_all_txt_tx(
+                over_end,
+                crate::alltxt::all_txt_line(
                     // WSJT-X stamps the second row with the wall clock (`write_all`), which says
                     // when in the over the switch was made.
                     (now_ms.max(0.0) / 1000.0) as u64,
@@ -266,11 +269,8 @@ impl Engine {
                     0.0,
                     self.tx_offset_hz,
                     &to,
-                ));
-            let len = self.station.all_txt_pending.len();
-            if len > 5000 {
-                self.station.all_txt_pending.drain(0..len - 5000);
-            }
+                ),
+            );
         }
         let period_ms = self.active_slot_secs() * 1000.0;
         tempo_core::applog::info(

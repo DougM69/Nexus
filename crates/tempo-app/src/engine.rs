@@ -15,6 +15,9 @@
 
 /// A CAT-broker client's held key: an armed FT run plans no over under it, and keys its next free
 /// slot after the release.
+/// ALL.TXT reads in the order things happened on the air.
+#[cfg(test)]
+mod all_txt_order_tests;
 #[cfg(test)]
 mod broker_key_slot_tests;
 /// SPEC-2's C16: changes to one contact by its id.
@@ -28700,7 +28703,7 @@ contact yourself."
         // this plan is re-produced by every poll inside the interval.
         if self.settings.write_all_txt && self.beacon_txline_slot != Some(slot) {
             self.beacon_txline_slot = Some(slot);
-            let mode = format!("{:?}", self.app.tier()).to_uppercase();
+            let mode = self.all_txt_mode(self.app.tier(), self.active_slot_secs());
             self.station
                 .all_txt_pending
                 .push(crate::alltxt::all_txt_line(
@@ -29221,10 +29224,13 @@ contact yourself."
                     // effect. Same clean-frame filter as record_own_tx; SNR/DT are 0 for our TX,
                     // audio = our TX offset.
                     if self.settings.write_all_txt {
-                        let mode = format!("{:?}", self.app.tier()).to_uppercase();
-                        self.station
-                            .all_txt_pending
-                            .push(crate::alltxt::all_txt_line(
+                        let mode = self.all_txt_mode(self.app.tier(), self.active_slot_secs());
+                        // Held until the over has ended, then filed in time order: see
+                        // `StationCore::all_txt_held_tx`. Made here as before.
+                        let over_end = self.all_txt_over_end(slot);
+                        self.station.hold_all_txt_tx(
+                            over_end,
+                            crate::alltxt::all_txt_line(
                                 // The period this over KEYS IN. `now_unix_secs()` was up to a
                                 // second early (the plan is made just before the boundary) and,
                                 // for a re-planned over, seconds late — the operator's log has
@@ -29237,11 +29243,8 @@ contact yourself."
                                 0.0,
                                 self.tx_offset_hz,
                                 &t,
-                            ));
-                        let len = self.station.all_txt_pending.len();
-                        if len > 5000 {
-                            self.station.all_txt_pending.drain(0..len - 5000);
-                        }
+                            ),
+                        );
                     }
                 }
                 // Robust tier (DX1) modulates 8-FSK; fast tier (FT1) uses 4-CPM.
@@ -29994,7 +29997,7 @@ contact yourself."
             _ => std::collections::HashSet::new(),
         };
         if self.settings.write_all_txt {
-            let mode = format!("{:?}", heard.tier).to_uppercase();
+            let mode = self.all_txt_mode(heard.tier, heard.period_secs);
             let stamp = crate::alltxt::period_start_unix(slot.saturating_sub(1), heard.period_secs);
             for d in decodes
                 .iter()
@@ -30368,7 +30371,7 @@ contact yourself."
         // engine is I/O-free → buffer here; the shell drains + writes.
         if self.settings.write_all_txt {
             let dial = self.settings.dial_mhz;
-            let mode = format!("{:?}", self.app.tier()).to_uppercase();
+            let mode = self.all_txt_mode(self.app.tier(), self.active_slot_secs());
             // THE PERIOD THE AUDIO CAME FROM, not the wall clock this result happened to be
             // folded at — see `alltxt::period_start_unix` for the field report. Both passes
             // carry `audio slot + 1` (the boundary pass decodes the just-ended slot; the early
@@ -32867,6 +32870,33 @@ contact yourself."
     /// See [`StationCore::take_all_txt_pending`].
     pub fn take_all_txt_pending(&mut self) -> Vec<String> {
         self.station.take_all_txt_pending()
+    }
+
+    /// See [`StationCore::take_all_txt_pending_at`].
+    #[cfg(test)]
+    pub(crate) fn take_all_txt_pending_at(&mut self, now: u64) -> Vec<String> {
+        self.station.take_all_txt_pending_at(now)
+    }
+
+    /// The mode column of an ALL.TXT line for `tier` on a `period_secs` period, as WSJT-X's
+    /// `write_all` writes it: the mode's name, except Q65's, which names its period and submode
+    /// (`"Q65-" + period + ('A' + submode)`, `Q65-30A`). Logging only.
+    pub(crate) fn all_txt_mode(&self, tier: Tier, period_secs: f64) -> String {
+        match (
+            tier,
+            Tier::q65_kind(period_secs as u16, self.settings.q65_submode),
+        ) {
+            (Tier::Q65, modes::ModeKind::Q65 { period_s, submode }) => {
+                format!("Q65-{period_s}{}", char::from(b'A' + submode))
+            }
+            _ => format!("{tier:?}").to_uppercase(),
+        }
+    }
+
+    /// The unix second `slot`'s over ends, on the active period: when its held ALL.TXT `Tx` line
+    /// is filed ([`StationCore::all_txt_held_tx`]).
+    pub(crate) fn all_txt_over_end(&self, slot: u64) -> u64 {
+        ((slot + 1) as f64 * self.active_slot_secs()).ceil() as u64
     }
 
     /// [`sync_shared_log`] in one breath, for an owner holding the engine with no Engine guard
