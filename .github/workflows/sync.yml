@@ -1,23 +1,47 @@
-name: Sync Fork
+name: Sync Fork and Tags
 
 on:
   schedule:
     - cron: '0 0 * * *' # Runs every day at midnight
-  workflow_dispatch: # Allows you to trigger it manually via the Actions tab
+  workflow_dispatch: # Allows manual verification via button click
 
 jobs:
-  sync:
+  sync-tags:
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
-      - name: Trigger GitHub Native Sync
-        uses: actions/github-script@v7
+      - name: Checkout Fork
+        uses: actions/checkout@v4
         with:
-          script: |
-            await github.rest.repos.mergeUpstream({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              branch: 'main'
-            });
+          fetch-depth: 0 # Pulls full git history to safely map new tags
+
+      - name: Fetch and Sync Upstream Tags
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # 1. Establish upstream mapping tracking
+          git remote add upstream https://github.com
+          git fetch upstream --tags
+          
+          # 2. Identify the single absolute latest tag from the upstream source repo
+          LATEST_UPSTREAM_TAG=$(git describe --tags $(git rev-list --tags --max-count=1 upstream/main))
+          echo "Latest Upstream Tag is: $LATEST_UPSTREAM_TAG"
+          
+          # 3. Check if this tag already exists in your fork execution memory
+          if git rev-parse "$LATEST_UPSTREAM_TAG" >/dev/null 2>&1; then
+            echo "Your fork is already up-to-date with tag $LATEST_UPSTREAM_TAG. Skipping sync."
+          else
+            echo "New version detected ($LATEST_UPSTREAM_TAG). Proceeding with Sync..."
+            
+            # Pull down the code matching that tag timeline smoothly
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git merge upstream/main --no-edit || git merge upstream/main --strategy-option theirs --no-edit
+            
+            # Push the updated code and copy the exact tag up to your fork timeline
+            git push origin main
+            git tag $LATEST_UPSTREAM_TAG
+            git push origin $LATEST_UPSTREAM_TAG
+          fi
