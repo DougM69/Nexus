@@ -81,7 +81,7 @@ describe('duplicates', () => {
     api.mergeLogDuplicates.mockResolvedValue(made)
     api.undoHistoryRun.mockResolvedValue({
       changed: 2, run: 'u', kept: [], held: [], gone: 0, alreadyThere: 0, changedSince: 0, duplicate: 0,
-      unknownKind: 0, changedSinceCalls: [], duplicateCalls: [],
+      unknownKind: 0, changedSinceCalls: [], duplicateCalls: [], owedCalls: [], owedAt: [],
     })
     const onChanged = open('dupes')
     fireEvent.click(last(screen.getAllByRole('button', { name: 'Find' })))

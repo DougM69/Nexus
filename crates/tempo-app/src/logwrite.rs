@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex};
 
 use tempo_core::logbook::history::Source;
 use tempo_core::logbook::{
-    LogOp, QsoEdit, QsoRecord, RecordId, RowAfter, UploadService, UploadStatus,
+    FieldEdit, LogOp, QsoEdit, QsoRecord, RecordId, UploadService, UploadStatus,
 };
 
 use crate::engine::{engine_lock, Engine};
@@ -196,20 +196,38 @@ pub fn edit_row(
     Result<Result<Arc<QsoRecord>, RowRefusal>, String>,
     Durability,
 ) {
+    edit_row_with_fields(engine, id, edit_key, edit, &[])
+}
+
+/// [`edit_row`], with the contact card's changes to fields kept as written ([`FieldEdit`]) made
+/// in the same change ([`StationCore::edit_ops`]).
+pub fn edit_row_with_fields(
+    engine: &Mutex<Engine>,
+    id: RecordId,
+    edit_key: &str,
+    edit: &QsoEdit,
+    fields: &[FieldEdit],
+) -> (
+    Result<Result<Arc<QsoRecord>, RowRefusal>, String>,
+    Durability,
+) {
     let mut bad = None;
-    // The row as the field edit alone leaves it: what a corrected call goes back out to the
-    // connectors as, as it did when the marks were commands of their own.
+    // The row as the field edit and the card's fields leave it: what a corrected call goes back
+    // out to the connectors as — with the card's changes, which the store holds too, but without
+    // the QSL marks, as it did when the marks were commands of their own.
     let edited: std::cell::RefCell<Option<QsoRecord>> = std::cell::RefCell::new(None);
     let (made, durability) = change_row(
         engine,
         id,
         "edit_qso",
-        |e, stored| match e.station().edit_ops(id, edit_key, edit, stored) {
+        |e, stored| match e.station().edit_ops(id, edit_key, edit, fields, stored) {
             Ok(Ok(ops)) => {
-                *edited.borrow_mut() = ops.first().and_then(|op| match op.apply_to(stored) {
-                    RowAfter::Now(row) => Some(*row),
-                    RowAfter::Gone | RowAfter::Unchanged => None,
-                });
+                let fields = ops
+                    .iter()
+                    .take_while(|op| matches!(op, LogOp::Edit { .. } | LogOp::SetFields { .. }))
+                    .count();
+                *edited.borrow_mut() =
+                    station::ops_on(stored, &ops[..fields]).and_then(|(_, row)| row);
                 Ok(station::ops_on(stored, &ops))
             }
             Ok(Err(refusal)) => Err(refusal),
@@ -259,7 +277,10 @@ pub fn update_row<T>(
         "update_qso",
         |e, row| {
             StationCore::fresh_row(row, edit_key)?;
-            Ok(station::ops_on(row, &[e.station().edit_op(id, edit(row))]))
+            Ok(station::ops_on(
+                row,
+                &[e.station().edit_op(id, edit(row), row)],
+            ))
         },
         |e, made| {
             if let (before, Some(after)) = &made {

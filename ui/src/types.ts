@@ -2683,6 +2683,9 @@ export interface LoggedContest {
   /** The exchange as logged, field by field: `[field, value]`. */
   sent?: [string, string][]
   rcvd?: [string, string][]
+  /** The exchange's own standard ADIF columns, `[tag, value]` (`CNTY`, `ARRL_SECT`, `CQZ` …): what
+   *  exports, uploads and awards read for those fields on this contact. */
+  adif?: [string, string][]
 }
 
 /** On-the-air (POTA/SOTA) references for a QSO. POTA maps to ADIF SIG/SIG_INFO, SOTA to SOTA_REF. */

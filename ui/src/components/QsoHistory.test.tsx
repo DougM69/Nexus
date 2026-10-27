@@ -53,7 +53,8 @@ const entry = (over: Partial<QsoHistoryEntry>): QsoHistoryEntry => ({
 
 const done = {
   changed: 1, run: 'undo-run', kept: [], held: [], heldUnder: null, gone: 0, alreadyThere: 0, changedSince: 0, duplicate: 0,
-  unknownKind: 0, changedSinceCalls: [] as string[], duplicateCalls: [] as string[],
+  unknownKind: 0, changedSinceCalls: [] as string[], duplicateCalls: [] as string[], owedCalls: [] as string[],
+  owedAt: [] as { call: string; services: string[] }[],
 }
 
 describe("a contact's history", () => {
@@ -118,6 +119,35 @@ describe("a contact's history", () => {
     expect(toasts.some((x) => x.message === 'Nothing put back: a contact with K2ABC on the same band and mode within 5 minutes was logged again after it was deleted.')).toBe(true)
     sayUndone({ ...done, changed: 0, run: null, unknownKind: 1 }, 'Change undone', () => {})
     expect(toasts.some((x) => x.message.startsWith('That change was made by a newer version'))).toBe(true)
+  })
+
+  it('says plainly when an undone call correction may already be at the logging services', () => {
+    sayUndone({ ...done, owedCalls: ['K1ABC'] }, 'Call fix undone', () => {})
+    const said = toasts.find((x) => x.message.startsWith('Call fix undone'))?.message ?? ''
+    expect(said).toBe('Call fix undone; K1ABC is marked not uploaded: the call this replaced may already be at your logging services, so it goes again with the next upload')
+    sayUndone({ ...done, changed: 2, owedCalls: ['K1ABC', 'K2ABC'] }, 'Call fixes undone', () => {})
+    expect(toasts.find((x) => x.message.startsWith('Call fixes undone'))?.message).toContain('2 contacts are marked not uploaded')
+    sayUndone({ ...done }, 'Nothing owed', () => {})
+    expect(toasts.find((x) => x.message.startsWith('Nothing owed'))?.message).toBe('Nothing owed')
+  })
+
+  it('names the services an undone call correction may already be at, and only those', () => {
+    sayUndone({ ...done, owedAt: [{ call: 'K1ABC', services: ['LoTW'] }] }, 'One service', () => {})
+    expect(toasts.find((x) => x.message.startsWith('One service'))?.message)
+      .toBe('One service; K1ABC is marked not uploaded to LoTW: the call this replaced may already be there')
+    sayUndone({
+      ...done,
+      changed: 3,
+      owedAt: [
+        { call: 'K1ABC', services: ['QRZ', 'Club Log'] },
+        { call: 'K2ABC', services: ['QRZ', 'Club Log'] },
+        { call: 'K3ABC', services: ['LoTW'] },
+      ],
+    }, 'Three undone', () => {})
+    expect(toasts.find((x) => x.message.startsWith('Three undone'))?.message).toBe(
+      'Three undone; 2 contacts are marked not uploaded to QRZ, Club Log: the calls this replaced may already be there: K1ABC, K2ABC'
+        + '; K3ABC is marked not uploaded to LoTW: the call this replaced may already be there',
+    )
   })
 
   it('says which field it kept, and the Settings call a blank would have gone under', () => {

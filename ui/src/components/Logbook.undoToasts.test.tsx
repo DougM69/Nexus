@@ -29,7 +29,7 @@ beforeAll(() => {
 const engineLog = vi.hoisted(() => vi.fn())
 vi.mock('../api', () => {
   const noop = () => vi.fn()
-  const undone = { changed: 3, run: 'undo-run', kept: [], held: [], gone: 0, alreadyThere: 0, changedSince: 0, duplicate: 0, unknownKind: 0, changedSinceCalls: [], duplicateCalls: [] }
+  const undone = { changed: 3, run: 'undo-run', kept: [], held: [], gone: 0, alreadyThere: 0, changedSince: 0, duplicate: 0, unknownKind: 0, changedSinceCalls: [], duplicateCalls: [], owedCalls: [], owedAt: [] }
   return {
     askLog: vi.fn(async (q: LogQuestion) => (await import('../features/logAnswers.testkit')).answerAs(q, await engineLog())),
     previewImport: vi.fn(async () => ({

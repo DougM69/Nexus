@@ -151,8 +151,9 @@ const MIGRATED = [
   // The words for an export that lacks recent changes the logbook database did not hold yet,
   // which the Logbook's exports and Settings' WRL export share — born migrated.
   'features/exportLacks.ts',
-  // The QSO detail view (#313) — born migrated: every string in it is a catalog key.
-  'components/QsoDetail.tsx',
+  // The Logbook contact card (it took over #313's detail view) — born migrated: every string in it
+  // is a catalog key.
+  'components/ContactCard.tsx',
   'components/QsoHistory.tsx',
   'components/RecentlyDeleted.tsx',
   // The import preview and its no-loss report's words — born migrated.

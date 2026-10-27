@@ -1682,8 +1682,18 @@ export interface QsoEdit {
  *  and paper-card marks where the form changed them — one write, where the form used to send three
  *  commands. Confirmation, credit and upload state are kept as they are; a callsign correction
  *  re-queues the uploads (the backend's one edit policy). Returns once it is on disk. */
-export async function editQsoById(target: RowRef, edit: QsoEdit): Promise<RowAnswer> {
-  return invoke<RowAnswer>('edit_qso_by_id', { target, edit })
+export async function editQsoById(target: RowRef, edit: QsoEdit, fields?: FieldEdit[]): Promise<RowAnswer> {
+  return invoke<RowAnswer>('edit_qso_by_id', fields?.length ? { target, edit, fields } : { target, edit })
+}
+
+/** One change the Logbook's contact card makes to a field the log keeps as it was written (`extra`:
+ *  a county, a zone, a tag another program wrote) — tempo-core's `FieldEdit`. `old` is the value the
+ *  card showed (null: the contact had none); the change is refused as `changed` when the contact no
+ *  longer holds it. `new: null` removes the field. Sent beside the edit, in the same change. */
+export interface FieldEdit {
+  tag: string
+  old: string | null
+  new: string | null
 }
 
 /** One field a change to a contact changed (ADIF tag; `null` where the contact did not carry it). */
@@ -1735,6 +1745,13 @@ export interface UndoAnswer {
   unknownKind: number
   changedSinceCalls: string[]
   duplicateCalls: string[]
+  /** The contacts whose callsign it changed with nothing known of where the call it replaced was
+   *  sent (the session that corrected it has ended): marked not uploaded to every service. */
+  owedCalls: string[]
+  /** The contacts whose callsign it changed while the call it replaced has gone, or may have
+   *  gone, to the services named (their own names): marked not uploaded there. A correction no
+   *  service was sent is not here — its undo cancelled the re-send and put the upload marks back. */
+  owedAt: { call: string; services: string[] }[]
 }
 
 /** One contact's change history, oldest first. */

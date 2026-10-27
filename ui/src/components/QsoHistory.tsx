@@ -102,8 +102,20 @@ export function sayUndone(answer: UndoAnswer, done: string, onChanged: () => voi
   const dups = dupCalls.length
     ? t('qso.history.undo.duplicates', { count: dupCalls.length, calls: callList(dupCalls) })
     : ''
+  const owed = answer.owedCalls.length
+    ? t('qso.history.undo.owed', { count: answer.owedCalls.length, calls: callList(answer.owedCalls) })
+    : ''
+  // The contacts left marked not uploaded at the same services, said once for all of them.
+  const owedAt = new Map<string, string[]>()
+  for (const o of answer.owedAt) {
+    const services = o.services.join(', ')
+    owedAt.set(services, [...(owedAt.get(services) ?? []), o.call])
+  }
+  const owedThere = [...owedAt]
+    .map(([services, calls]) => t('qso.history.undo.owedAt', { count: calls.length, calls: callList(calls), services }))
+    .join('')
   const run = answer.run
-  pushToast(`${done}${kept}${held}${keptContacts}${dups}`, 'success', 10_000, run ? {
+  pushToast(`${done}${kept}${held}${keptContacts}${dups}${owed}${owedThere}`, 'success', 10_000, run ? {
     actionLabel: t('qso.history.redo'),
     // A refusal rejects with its reason, so the toast stays up saying why and Redo can be
     // pressed again (a redo of a large undo waits while the radio transmits). An undo of one

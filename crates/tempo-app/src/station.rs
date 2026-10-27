@@ -24,8 +24,8 @@ use std::sync::Arc;
 use tempo_core::logbook::hot::{HotIndex, HotKeys, RowPair};
 use tempo_core::logbook::writer::Change;
 use tempo_core::logbook::{
-    LogOp, Logbook, Minter, OpClass, QsoEdit, QsoRecord, RecordId, RowAfter, UploadService,
-    Watermarks, WorkedSince,
+    FieldEdit, LogOp, Logbook, Minter, OpClass, QsoEdit, QsoRecord, RecordId, RowAfter,
+    UploadService, Watermarks, WorkedSince,
 };
 
 use crate::logstore::{LogStore, Opened, SessionRows};
@@ -538,6 +538,10 @@ pub type DxccResolve = dyn Fn(&str) -> Option<String> + Send + Sync;
 /// names; `None` for a number that names none — as [`StationCore::dxcc_country`] holds it.
 pub type DxccCountry = dyn Fn(u32) -> Option<String> + Send + Sync;
 
+/// A `COUNTRY` text → the DXCC number of the entity it names; `None` for a text that names no
+/// entity, or entities of different numbers — as [`StationCore::country_dxcc`] holds it.
+pub type CountryDxcc = dyn Fn(&str) -> Option<u32> + Send + Sync;
+
 /// THE country a contact with `call`, carrying the DXCC number `dxcc`, is named under: the name the
 /// number gives it (`number`), else the entity its call places it in (`by_call`). What every insert
 /// and fill writes where a contact has no country, and what the operator's own changes write
@@ -709,6 +713,26 @@ pub(crate) fn stamped_rows(
         })
         .collect();
     (!pairs.is_empty()).then_some(pairs)
+}
+
+/// The `LOTW_QSL_SENT` mark `r` carries (another logger's record of a LoTW upload), as kept.
+fn lotw_qsl_sent(r: &QsoRecord) -> Option<&str> {
+    r.extra
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("LOTW_QSL_SENT"))
+        .map(|(_, v)| v.as_str())
+}
+
+/// What the undo of a callsign correction gives each service ([`StationCore::correction_undone`]).
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct CorrectionUndone {
+    /// The upload stamps the contact comes back with: each service's from before the correction
+    /// where that service has not taken the corrected call, none where it has or may have.
+    pub upload: tempo_core::logbook::UploadState,
+    /// `LOTW_QSL_SENT` from before the correction, put back with LoTW's marks.
+    pub lotw_qsl_sent: Option<String>,
+    /// The services that took the corrected call, or may have: left marked not uploaded, named.
+    pub reached: Vec<&'static str>,
 }
 
 /// What a change that answers [`RowRefusal::Busy`] says where a string is the answer.
@@ -2137,6 +2161,14 @@ pub struct StationCore {
     /// Uploads the full queue dropped (#290), held for the connector worker to report — see
     /// [`Self::enqueue_upload`]. Bounded like the queue.
     pub(crate) dropped_uploads: Vec<PendingUpload>,
+    /// The callsign corrections made this session, by contact: what each took off the contact,
+    /// for an undo to put back service by service ([`Self::correction_undone`]). Memory-only,
+    /// like the queue whose state it is read against: after a restart an undo knows nothing of
+    /// what was sent and leaves the contact owed to every service.
+    pub(crate) corrections: HashMap<RecordId, crate::engine::CorrectedFrom>,
+    /// LoTW batches running now (TQSL signing or sending): a contact one holds may reach LoTW
+    /// before its stamp shows. See [`Self::lotw_batch_begun`].
+    pub(crate) lotw_batches: u32,
     /// Earliest wall-clock second the NEXT catch-up upload may go out — the pacing slot
     /// allocator for [`UploadOrigin::CatchUp`] (#193). Bumped by
     /// [`CATCHUP_UPLOAD_SPACING_SECS`] every time a catch-up record is queued, so a scan
@@ -2215,6 +2247,12 @@ pub struct StationCore {
     /// in headless tests: `COUNTRY` is the call's, as before the number was followed. See
     /// [`Self::set_dxcc_country_resolver`].
     pub(crate) dxcc_country: Option<Arc<DxccCountry>>,
+    /// A `COUNTRY` text → the DXCC number of the entity it names, injected by the command layer
+    /// for [`Self::dxcc_resolve`]'s reason. What tells a stored country that names another entity
+    /// than the contact's number from one that names the same entity, or none the table knows
+    /// ([`Self::contradicted_country`]). `None` in headless tests: no stored country is corrected.
+    /// See [`Self::set_country_dxcc_resolver`].
+    pub(crate) country_dxcc: Option<Arc<CountryDxcc>>,
     /// (Callsign, heard grid) → US state resolver, injected by the command layer (which owns
     /// the FCC callsign index) — same pattern as [`Self::set_dxcc_resolver`], and injected for
     /// the same reason: tempo-app has no `propagation` dependency, so it cannot reach the index
@@ -2393,6 +2431,8 @@ impl StationCore {
             all_txt_pending: Vec::new(),
             pending_uploads: VecDeque::new(),
             dropped_uploads: Vec::new(),
+            corrections: HashMap::new(),
+            lotw_batches: 0,
             catchup_slot_unix: 0,
             upload_note: None,
             upload_ok: false,
@@ -2414,6 +2454,7 @@ impl StationCore {
             journals: Default::default(),
             dxcc_resolve: None,
             dxcc_country: None,
+            country_dxcc: None,
             state_resolve: None,
             grid_rarity_resolve: None,
             lotw_resolve: None,
@@ -3206,6 +3247,16 @@ impl StationCore {
         self.dxcc_country = Some(Arc::new(country));
     }
 
+    /// Inject the `COUNTRY` text → DXCC number resolver (the command layer passes
+    /// `propagation::dxcc::dxcc_by_name`). Nothing is keyed by it: it is read by an edit, to tell
+    /// a stored country that contradicts the contact's DXCC number ([`Self::contradicted_country`]).
+    pub fn set_country_dxcc_resolver(
+        &mut self,
+        number: impl Fn(&str) -> Option<u32> + Send + Sync + 'static,
+    ) {
+        self.country_dxcc = Some(Arc::new(number));
+    }
+
     /// The `COUNTRY` a contact with `call`, left holding the DXCC number `dxcc`, takes when the
     /// operator changes it: the name that number gives it, so the two never disagree; else, with
     /// no number or one that names no entity, its call's entity, as every edit has always written.
@@ -3217,6 +3268,51 @@ impl StationCore {
             call,
             dxcc,
         )
+    }
+
+    /// The DXCC number the awards count `stored` under, as they choose it: the first of LoTW's
+    /// ([`tempo_core::logbook::record_lotw_dxcc`]) and the log's own that names an entity — a
+    /// number naming none is passed over — and none at all at 0, the number of no entity, which
+    /// the awards count under nothing. `None` too where no number names one, or with no table.
+    fn counted_dxcc(&self, stored: &QsoRecord) -> Option<u32> {
+        let name = self.dxcc_country.as_deref()?;
+        for number in [tempo_core::logbook::record_lotw_dxcc(stored), stored.dxcc]
+            .into_iter()
+            .flatten()
+        {
+            if number == 0 {
+                return None;
+            }
+            if name(number).is_some() {
+                return Some(number);
+            }
+        }
+        None
+    }
+
+    /// The `COUNTRY` an edit writes over `stored`'s own, where that names ANOTHER DXCC entity than
+    /// the number the awards count the contact under — LoTW's where the contact carries one
+    /// ([`tempo_core::logbook::record_lotw_dxcc`]), else the log's own: that number's name.
+    /// `None` — the stored text stays exactly as it is — for a contact with no number or one that
+    /// names no entity, and for a text naming the number's own entity in any spelling the table
+    /// knows, or naming none it knows ("Germany"), or spelling the number's own name in another
+    /// case (a deleted entity's "Palestine", whose current namesake is another number): only a
+    /// text the table places elsewhere is known to be wrong.
+    fn contradicted_country(&self, stored: &QsoRecord) -> Option<String> {
+        let number = self.counted_dxcc(stored)?;
+        let text = stored.country.as_deref()?;
+        let named = self.country_dxcc.as_deref()?(text)?;
+        if named == number {
+            return None;
+        }
+        let name = self.dxcc_country.as_deref()?(number)?;
+        let folded = |s: &str| {
+            s.split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .to_lowercase()
+        };
+        (folded(&name) != folded(text)).then_some(name)
     }
 
     /// Build the hot index again under the DXCC resolver the station now holds, which keys
@@ -3700,6 +3796,7 @@ impl StationCore {
             legs,
             attempts,
             retry_after_unix: due,
+            corrected: false,
         });
     }
 
@@ -4320,7 +4417,7 @@ impl StationCore {
     /// [`Self::update_qso`], handing back the contact as the edit left it.
     pub(crate) fn update_row(&mut self, id: RecordId, rec: QsoRecord) -> Option<Arc<QsoRecord>> {
         let made = self.change_by_id(id, "update_qso", |sc, before| {
-            Ok(ops_on(before, &[sc.edit_op(id, rec.clone())]))
+            Ok(ops_on(before, &[sc.edit_op(id, rec.clone(), before)]))
         });
         match made {
             Ok(Ok(Some((before, Some(after))))) => {
@@ -4338,13 +4435,27 @@ impl StationCore {
         }
     }
 
-    /// The edit `rec` of the contact `id` as an op — with its country filled from the
-    /// station's resolver when the edit carries none (the edit form never does), which the edit
-    /// then keeps over the stored one.
-    pub(crate) fn edit_op(&self, id: RecordId, mut rec: QsoRecord) -> LogOp {
-        if rec.country.is_none() {
-            if let Some(resolve) = &self.dxcc_resolve {
-                rec.country = resolve(&rec.call);
+    /// The edit `rec` of the contact `id`, stored as `stored`, as an op. A corrected call takes
+    /// the new call's country whatever the edit carries: a whole-contact edit (a Remote browser's
+    /// round trip of the row it was shown) sends back the old call's, and the edit keeps what it
+    /// is given. With the call unchanged, a country the edit leaves as stored (or sends none of)
+    /// takes the edit form's rules ([`Self::edit_ops`]): a contact holding none is filled by the
+    /// number the awards count and else its call, and one naming another entity than the number the awards count
+    /// takes that number's name ([`Self::contradicted_country`]); otherwise it stays exactly. A
+    /// country the client changed is the client's.
+    pub(crate) fn edit_op(&self, id: RecordId, mut rec: QsoRecord, stored: &QsoRecord) -> LogOp {
+        if !rec.call.trim().eq_ignore_ascii_case(stored.call.trim()) {
+            rec.country = self.country_for(&rec.call, None);
+        } else if rec.country.is_none() || rec.country == stored.country {
+            let no_country = stored
+                .country
+                .as_deref()
+                .is_none_or(|c| c.trim().is_empty());
+            if no_country {
+                let number = self.counted_dxcc(stored).or(stored.dxcc);
+                rec.country = self.country_for(&rec.call, number).or(rec.country);
+            } else if let Some(named) = self.contradicted_country(stored) {
+                rec.country = Some(named);
             }
         }
         LogOp::Edit {
@@ -4370,9 +4481,153 @@ impl StationCore {
         if !after.call.trim().eq_ignore_ascii_case(before.call.trim()) {
             // Every leg: every stamp was just cleared, so every connector is owed. The disabled
             // ones are dropped by the worker's own toggle check, the same way a freshly logged
-            // contact's are.
-            self.requeue_upload(after.clone(), crate::engine::upload_legs::ALL, 0);
+            // contact's are. Live and due now, as `requeue_upload` queues it, marked as the
+            // correction's re-send, with the marks the correction took off kept for its undo.
+            if let Some(id) = after.id {
+                self.corrections.insert(
+                    id,
+                    crate::engine::CorrectedFrom {
+                        call: before.call.clone(),
+                        station_callsign: before.station_callsign.clone(),
+                        to: after.call.clone(),
+                        upload: before.upload.clone(),
+                        lotw_qsl_sent: lotw_qsl_sent(before).map(str::to_string),
+                    },
+                );
+            }
+            self.enqueue_upload(crate::engine::PendingUpload {
+                rec: after.clone(),
+                origin: crate::engine::UploadOrigin::Live,
+                legs: crate::engine::upload_legs::ALL,
+                attempts: 0,
+                retry_after_unix: 0,
+                corrected: true,
+            });
         }
+    }
+
+    /// What an undo of a callsign correction does, service by service (operator rulings):
+    /// `current` is the contact as the correction left it, `restored` as the undo would leave
+    /// it, `on` the legs the connector worker sends to ([`crate::engine::upload_legs::on`]).
+    ///
+    /// For each service the correction's re-send fans out to, and LoTW:
+    /// - **Not sent** — the contact gets back that service's marks from before the correction
+    ///   (its stamp; LoTW's with `LOTW_QSL_SENT`), and its waiting re-send is cancelled.
+    /// - **Sent, or may have been** — it stays marked not uploaded there, and is named.
+    ///
+    /// A queued service has not been sent the corrected call while the correction's own re-send
+    /// is still on the queue (the worker takes the whole queue at once, so one on it is not in
+    /// flight) and the contact carries no stamp of that service having taken it. Once the
+    /// worker took the re-send, a service it sends to may have it, and one it does not send to
+    /// (switched off) was not tried. A refusal stamp (rejected, sign-in refused) is an answer
+    /// that it did not take it. LoTW is not on the queue: it has the corrected call where its
+    /// stamp says so, or another logger's `LOTW_QSL_SENT` does, and may have it while a batch
+    /// runs.
+    ///
+    /// `None` when this session holds no record of the correction, or the undo does not put back
+    /// the call and station call the marks were earned under: nothing can be shown, so the
+    /// contact stays owed to every service, as a corrected call is.
+    pub(crate) fn correction_undone(
+        &self,
+        current: &QsoRecord,
+        restored: &QsoRecord,
+        on: u8,
+    ) -> Option<CorrectionUndone> {
+        use crate::engine::upload_legs as legs;
+        let id = current.id?;
+        let from = self.corrections.get(&id)?;
+        let same = |a: &str, b: &str| a.trim().eq_ignore_ascii_case(b.trim());
+        let station = |s: &Option<String>| s.as_deref().map(|s| s.trim().to_ascii_uppercase());
+        if !same(&from.to, &current.call)
+            || !same(&from.call, &restored.call)
+            || station(&from.station_callsign) != station(&restored.station_callsign)
+        {
+            return None;
+        }
+        // The legs the correction's re-send still holds, untried.
+        let waiting = self
+            .pending_uploads
+            .iter()
+            .filter(|p| p.corrected && p.attempts == 0 && p.rec.id == Some(id))
+            .filter(|p| same(&p.rec.call, &current.call))
+            .fold(0, |mask, p| mask | p.legs);
+        // `Some(true)`: the service took the corrected call; `Some(false)`: it refused it.
+        let took =
+            |s: &Option<tempo_core::logbook::UploadStatus>| s.as_ref().map(|u| u.outcome.is_sent());
+        let mut out = CorrectionUndone::default();
+        if took(&current.upload.lotw) == Some(true)
+            || lotw_qsl_sent(current).is_some()
+            || self.lotw_batches > 0
+        {
+            out.reached.push("LoTW");
+        } else {
+            out.upload.lotw = from.upload.lotw.clone();
+            out.lotw_qsl_sent = from.lotw_qsl_sent.clone();
+        }
+        let stamped = [
+            (
+                legs::QRZ,
+                "QRZ",
+                &current.upload.qrz,
+                &from.upload.qrz,
+                &mut out.upload.qrz,
+            ),
+            (
+                legs::CLUBLOG,
+                "Club Log",
+                &current.upload.clublog,
+                &from.upload.clublog,
+                &mut out.upload.clublog,
+            ),
+            (
+                legs::EQSL,
+                "eQSL",
+                &current.upload.eqsl,
+                &from.upload.eqsl,
+                &mut out.upload.eqsl,
+            ),
+        ];
+        for (leg, name, now, before, put) in stamped {
+            match took(now) {
+                Some(true) => out.reached.push(name),
+                Some(false) => *put = before.clone(),
+                None if waiting & leg != 0 || on & leg == 0 => *put = before.clone(),
+                None => out.reached.push(name),
+            }
+        }
+        // No stamp to put back: named where the worker may have sent it the corrected call.
+        for (leg, name) in [
+            (legs::HRDLOG, "HRDLog.net"),
+            (legs::N3FJP, "N3FJP"),
+            (legs::CLOUDLOG, "Cloudlog/Wavelog"),
+            (legs::WRL, "World Radio League"),
+        ] {
+            if waiting & leg == 0 && on & leg != 0 {
+                out.reached.push(name);
+            }
+        }
+        Some(out)
+    }
+
+    /// Take off the queue the contact `id`'s uploads under `call`: an undo moved the contact off
+    /// that call, and what is queued would send a call the log no longer holds. Its record of
+    /// the correction goes with it.
+    pub(crate) fn cancel_queued_uploads(&mut self, id: RecordId, call: &str) {
+        let same = |a: &str| a.trim().eq_ignore_ascii_case(call.trim());
+        self.pending_uploads
+            .retain(|p| p.rec.id != Some(id) || !same(&p.rec.call));
+        self.corrections.remove(&id);
+    }
+
+    /// A LoTW batch starts: until [`Self::lotw_batch_over`], a contact it holds may reach LoTW
+    /// with no stamp yet to show it.
+    pub fn lotw_batch_begun(&mut self) {
+        self.lotw_batches += 1;
+    }
+
+    /// The batch [`Self::lotw_batch_begun`] counted is over, its stamps made or not.
+    pub fn lotw_batch_over(&mut self) {
+        self.lotw_batches = self.lotw_batches.saturating_sub(1);
     }
 
     /// The Logbook form's edit of the contact `id`, as ops on the row as it stands: the field
@@ -4380,29 +4635,68 @@ impl StationCore {
     /// used to send as three commands, each its own write (`QsoEdit`'s header). Refused when the
     /// row is no longer the version whose key is `edit_key`; `Err` for an edit the caller must not
     /// send again as it is (its QSL-sent code is not one the form offers).
+    ///
+    /// `fields`: the contact card's changes to fields kept as written ([`FieldEdit`]), made in the
+    /// same change as one more op after the field edit. Each is refused — the whole change with it
+    /// — when the contact no longer holds the value it was made against (`Changed`), and is an
+    /// `Err` when it names a field the card may not write. Empty from the edit form.
     pub(crate) fn edit_ops(
         &self,
         id: RecordId,
         edit_key: &str,
         edit: &QsoEdit,
+        fields: &[FieldEdit],
         stored: &Arc<QsoRecord>,
     ) -> Result<Result<Vec<LogOp>, RowRefusal>, String> {
         if let Err(refusal) = Self::fresh_row(stored, edit_key) {
             return Ok(Err(refusal));
+        }
+        for (i, f) in fields.iter().enumerate() {
+            f.check()?;
+            f.check_on(stored)?;
+            if fields[..i].iter().any(|g| g.tag == f.tag) {
+                return Err(format!("{} is changed twice in one save.", f.tag));
+            }
+        }
+        if !fields.iter().all(|f| f.is_fresh(stored)) {
+            return Ok(Err(RowRefusal::Changed(Arc::clone(stored))));
         }
         let sent = edit.qsl_sent_change(stored)?;
         // An IOTA box holding something that is not a reference: refused, never stored as junk.
         edit.iota()?;
         let card = edit.qsl_card_change(stored);
         let mut rec = edit.record(stored);
-        // Keep country populated on edits, as `update_qso` does: the form does not carry it. It
-        // follows the DXCC number the contact keeps — the edit leaves the stored one, and a
-        // corrected call drops both — and else the call.
-        rec.country = self.country_for(&rec.call, rec.dxcc.or(stored.dxcc));
+        // The form does not carry the country. It is named again only where the stored one cannot
+        // stand: a corrected call takes the new call's entity, as an insert fills it — the stored
+        // DXCC number went with the old call (`edited` drops it); a contact holding none is filled
+        // by the number the awards count it under (LoTW's before the log's, `counted_dxcc`), else
+        // its call — the number the next edit judges it against, so that edit leaves it; and one
+        // whose country names another entity than that number takes the number's name. Otherwise
+        // the edit leaves it
+        // empty and the edit policy (`edited`) writes the stored one back exactly: an imported
+        // "Germany" is not respelled by an edit of the name.
+        let call_changed = !rec.call.trim().eq_ignore_ascii_case(stored.call.trim());
+        let no_country = stored
+            .country
+            .as_deref()
+            .is_none_or(|c| c.trim().is_empty());
+        rec.country = if call_changed {
+            self.country_for(&rec.call, None)
+        } else if no_country {
+            self.country_for(&rec.call, self.counted_dxcc(stored).or(stored.dxcc))
+        } else {
+            self.contradicted_country(stored)
+        };
         let mut ops = vec![LogOp::Edit {
             id,
             rec: Box::new(rec),
         }];
+        if !fields.is_empty() {
+            ops.push(LogOp::SetFields {
+                id,
+                fields: fields.iter().map(|f| (f.tag.clone(), f.value())).collect(),
+            });
+        }
         if let Some(via) = sent {
             ops.push(LogOp::MarkQslSent {
                 id,
@@ -4461,7 +4755,7 @@ impl StationCore {
         let mut bad = None;
         let mut edited = None;
         let made = self.change_by_id(id, "edit_qso", |sc, stored| {
-            match sc.edit_ops(id, edit_key, edit, stored) {
+            match sc.edit_ops(id, edit_key, edit, &[], stored) {
                 Ok(Ok(ops)) => {
                     // The row as the field edit alone leaves it — what a corrected call goes back
                     // out to the connectors as, below.
@@ -6298,6 +6592,466 @@ mod park_state_tests {
         assert_eq!(
             now.contest.as_deref().unwrap().adif,
             [("STATE".to_string(), "PA".to_string())]
+        );
+    }
+}
+
+#[cfg(test)]
+mod edit_ops_tests {
+    use super::*;
+    use tempo_core::logbook::{ContestFields, RecordId};
+
+    /// A station whose resolver names every call's entity "United States".
+    fn station() -> StationCore {
+        let mut sc = StationCore::new();
+        sc.set_dxcc_resolver(|_| Some("United States".to_string()));
+        sc
+    }
+
+    /// K1ABC, stored with `country` (as an import or a callbook left it).
+    fn stored(country: Option<&str>) -> Arc<QsoRecord> {
+        let mut r = tempo_core::logbook::parse_adif(
+            "<CALL:5>K1ABC<QSO_DATE:8>20240101<TIME_ON:4>1200<BAND:3>20m<MODE:2>CW<EOR>",
+        )
+        .remove(0);
+        r.id = Some(RecordId::Provisional {
+            hash: 9,
+            ordinal: 0,
+        });
+        r.country = country.map(str::to_string);
+        Arc::new(r)
+    }
+
+    /// The contact as `edit` (with the card's `fields`) leaves it, through the edit's own ops.
+    fn edited(
+        sc: &StationCore,
+        row: &Arc<QsoRecord>,
+        edit: &QsoEdit,
+        fields: &[FieldEdit],
+    ) -> Result<QsoRecord, String> {
+        let id = row.id.unwrap();
+        let key = QsoEdit::project(row).key();
+        let ops = sc
+            .edit_ops(id, &key, edit, fields, row)?
+            .unwrap_or_else(|r| panic!("refused: {r:?}"));
+        Ok(ops_on(row, &ops).expect("a change").1.expect("a row"))
+    }
+
+    fn cnty(new: &str) -> FieldEdit {
+        FieldEdit {
+            tag: "CNTY".into(),
+            old: None,
+            new: Some(new.into()),
+        }
+    }
+
+    /// ★ An edit that leaves the call alone writes the stored country back exactly — the edit
+    /// form's and the contact card's alike — even where the resolver would name it otherwise. It
+    /// is resolved again where the contact holds none, and a corrected call never keeps it.
+    #[test]
+    fn country_is_resolved_again_only_for_a_new_call_or_an_empty_one() {
+        let sc = station();
+        let germany = stored(Some("Germany"));
+        let mut name = QsoEdit::project(&germany);
+        name.name = Some("Hans".into());
+        for fields in [&[][..], &[cnty("MA,ESSEX")][..]] {
+            let after = edited(&sc, &germany, &name, fields).unwrap();
+            assert_eq!(after.name.as_deref(), Some("Hans"));
+            assert_eq!(
+                after.country.as_deref(),
+                Some("Germany"),
+                "an unrelated edit leaves the stored country ({} card fields)",
+                fields.len()
+            );
+        }
+
+        let mut call = QsoEdit::project(&germany);
+        call.call = "K2XYZ".into();
+        // The stored one describes the busted call: the corrected call's own is named instead.
+        assert_eq!(
+            edited(&sc, &germany, &call, &[])
+                .unwrap()
+                .country
+                .as_deref(),
+            Some("United States"),
+            "a corrected call takes its own country, not the old call's"
+        );
+
+        for empty in [None, Some("")] {
+            let none = stored(empty);
+            let mut name = QsoEdit::project(&none);
+            name.name = Some("Hans".into());
+            assert_eq!(
+                edited(&sc, &none, &name, &[]).unwrap().country.as_deref(),
+                Some("United States"),
+                "an empty country ({empty:?}) is filled"
+            );
+        }
+    }
+
+    /// A station that knows three entities, as the launch wires it: K calls are in the United
+    /// States (291) and DL calls in the Fed. Rep. of Germany (230), Navassa Island is 182, and a
+    /// `COUNTRY` text names the entity whose name it is, case and spacing aside. "Germany" is no
+    /// entity's name.
+    fn known() -> StationCore {
+        let mut sc = StationCore::new();
+        sc.set_dxcc_resolver(|call| {
+            if call.starts_with("DL") {
+                Some("Fed. Rep. of Germany".to_string())
+            } else if call.starts_with('K') {
+                Some("United States".to_string())
+            } else {
+                None
+            }
+        });
+        let table = [
+            (182, "Navassa Island"),
+            (230, "Fed. Rep. of Germany"),
+            (291, "United States"),
+        ];
+        sc.set_dxcc_country_resolver(move |n| {
+            table
+                .iter()
+                .find(|(code, _)| *code == n)
+                .map(|(_, name)| name.to_string())
+        });
+        sc.set_country_dxcc_resolver(move |text| {
+            let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            table
+                .iter()
+                .find(|(_, name)| name.eq_ignore_ascii_case(&text))
+                .map(|(code, _)| *code)
+        });
+        sc
+    }
+
+    /// `call`, stored with the DXCC number `dxcc` and `country`.
+    fn stored_as(call: &str, dxcc: Option<u32>, country: Option<&str>) -> Arc<QsoRecord> {
+        let mut r = QsoRecord::clone(&stored(country));
+        r.call = call.into();
+        r.dxcc = dxcc;
+        Arc::new(r)
+    }
+
+    fn named(row: &QsoRecord) -> QsoEdit {
+        let mut edit = QsoEdit::project(row);
+        edit.name = Some("Hans".into());
+        edit
+    }
+
+    /// ★ An edit — the form's or the card's — corrects a stored country that names ANOTHER entity
+    /// than the contact's DXCC number to the number's name: K1N, 182, "United States" is Navassa
+    /// Island. Text naming the number's own entity (in any case or spacing), text naming no entity
+    /// the table knows ("Germany"), and a contact with no number keep the text exactly.
+    #[test]
+    fn a_stored_country_the_dxcc_number_contradicts_is_corrected_on_an_edit() {
+        let sc = known();
+        let k1n = stored_as("K1N", Some(182), Some("United States"));
+        for fields in [&[][..], &[cnty("MA,ESSEX")][..]] {
+            let after = edited(&sc, &k1n, &named(&k1n), fields).unwrap();
+            assert_eq!(
+                (after.dxcc, after.country.as_deref(), after.name.as_deref()),
+                (Some(182), Some("Navassa Island"), Some("Hans")),
+                "the number's name ({} card fields)",
+                fields.len()
+            );
+        }
+        for (call, dxcc, country) in [
+            ("DL1ABC", Some(230), "Germany"),
+            ("DL1ABC", Some(230), "  fed. rep. of   GERMANY "),
+            ("K1N", Some(182), "navassa island"),
+            ("K1N", Some(182), "Narnia"),
+            ("K1N", None, "Navassa Island"),
+            ("K1ABC", Some(999), "United States"),
+        ] {
+            let row = stored_as(call, dxcc, Some(country));
+            let after = edited(&sc, &row, &named(&row), &[cnty("MA,ESSEX")]).unwrap();
+            assert_eq!(
+                (after.dxcc, after.country.as_deref()),
+                (dxcc, Some(country)),
+                "{call} {dxcc:?} {country:?} stays as stored"
+            );
+        }
+    }
+
+    /// ★ A corrected callsign leaves the contact with the NEW call's country — the form's edit and
+    /// the card's — never empty where the new call resolves, never the old call's. The DXCC number,
+    /// which went with the old call, is dropped as before; a call nothing places has no country.
+    #[test]
+    fn a_corrected_call_takes_the_new_calls_country() {
+        let sc = known();
+        let dl = stored_as("DL1ABC", Some(230), Some("Fed. Rep. of Germany"));
+        for fields in [&[][..], &[cnty("MA,ESSEX")][..]] {
+            let mut edit = QsoEdit::project(&dl);
+            edit.call = "K1ABC".into();
+            let after = edited(&sc, &dl, &edit, fields).unwrap();
+            assert_eq!(
+                (after.call.as_str(), after.dxcc, after.country.as_deref()),
+                ("K1ABC", None, Some("United States")),
+                "the new call's country ({} card fields)",
+                fields.len()
+            );
+        }
+        let mut edit = QsoEdit::project(&dl);
+        edit.call = "XX9XX".into();
+        assert_eq!(edited(&sc, &dl, &edit, &[]).unwrap().country, None);
+    }
+
+    /// ★ The whole-contact edit — a Remote browser's round trip of the row it was shown, which
+    /// sends back the country it saw — never carries the old call's country onto a corrected call:
+    /// the contact takes the new call's. One that leaves the call alone keeps what it sends.
+    #[test]
+    fn a_whole_contact_edit_of_the_call_takes_the_new_calls_country() {
+        let sc = known();
+        let dl = stored_as("DL1ABC", Some(230), Some("Fed. Rep. of Germany"));
+        let id = dl.id.unwrap();
+        let whole = |call: &str, sc: &StationCore| {
+            let mut sent = QsoRecord::clone(&dl);
+            sent.call = call.into();
+            let op = sc.edit_op(id, sent, &dl);
+            ops_on(&dl, &[op]).expect("a change").1.expect("a row")
+        };
+        let after = whole("K1ABC", &sc);
+        assert_eq!(
+            (after.dxcc, after.country.as_deref()),
+            (None, Some("United States"))
+        );
+        assert_eq!(whole("XX9XX", &sc).country, None, "never the old call's");
+        assert_eq!(
+            whole("XX9XX", &StationCore::new()).country,
+            None,
+            "nor with no resolver"
+        );
+        let mut sent = QsoRecord::clone(&dl);
+        sent.name = Some("Hans".into());
+        let op = sc.edit_op(id, sent, &dl);
+        let after = ops_on(&dl, &[op]).expect("a change").1.expect("a row");
+        assert_eq!(after.country.as_deref(), Some("Fed. Rep. of Germany"));
+    }
+
+    /// `row` with LoTW's DXCC `lotw` kept beside the log's, as a LoTW merge keeps it.
+    fn with_lotw(row: &Arc<QsoRecord>, lotw: u32) -> Arc<QsoRecord> {
+        let mut r = QsoRecord::clone(row);
+        r.extra.push((
+            tempo_core::logbook::LOTW_DXCC_FIELD.into(),
+            lotw.to_string(),
+        ));
+        Arc::new(r)
+    }
+
+    /// ★ The stored country is judged against the number the awards count — LoTW's where the
+    /// contact carries one, else the log's own. K1N logged 291 and confirmed by LoTW as 182 keeps
+    /// "Navassa Island" exactly (it names LoTW's entity), and "United States" on it takes LoTW's
+    /// entity's name. Without LoTW's number the log's own decides, as before.
+    #[test]
+    fn a_stored_country_is_judged_against_the_number_the_awards_count() {
+        let sc = known();
+        for (country, want) in [
+            ("Navassa Island", "Navassa Island"),
+            ("navassa  ISLAND", "navassa  ISLAND"),
+            ("United States", "Navassa Island"),
+            ("Narnia", "Narnia"),
+        ] {
+            let row = with_lotw(&stored_as("K1N", Some(291), Some(country)), 182);
+            for fields in [&[][..], &[cnty("MA,ESSEX")][..]] {
+                let after = edited(&sc, &row, &named(&row), fields).unwrap();
+                assert_eq!(
+                    (after.dxcc, after.country.as_deref()),
+                    (Some(291), Some(want)),
+                    "{country:?} ({} card fields)",
+                    fields.len()
+                );
+            }
+        }
+        let row = stored_as("K1N", Some(291), Some("Navassa Island"));
+        let after = edited(&sc, &row, &named(&row), &[]).unwrap();
+        assert_eq!(
+            after.country.as_deref(),
+            Some("United States"),
+            "no LoTW number"
+        );
+    }
+
+    /// ★ A country naming the number's own entity is never respelled — not even where the text
+    /// resolves elsewhere, as a deleted entity's name does to the current entity of that name: a
+    /// contact carrying deleted 196 as "Palestine" stays "Palestine", never "PALESTINE".
+    #[test]
+    fn a_deleted_entitys_name_is_left_exactly_as_stored() {
+        let mut sc = StationCore::new();
+        sc.set_dxcc_resolver(|_| None);
+        sc.set_dxcc_country_resolver(|n| (n == 196).then(|| "PALESTINE".to_string()));
+        sc.set_country_dxcc_resolver(|text| text.eq_ignore_ascii_case("palestine").then_some(510));
+        for country in ["Palestine", "palestine", "PALESTINE"] {
+            let row = stored_as("4X1A", Some(196), Some(country));
+            let after = edited(&sc, &row, &named(&row), &[]).unwrap();
+            assert_eq!(after.country.as_deref(), Some(country));
+            let op = sc.edit_op(row.id.unwrap(), QsoRecord::clone(&row), &row);
+            let after = ops_on(&row, &[op]).map(|(_, r)| r.expect("a row"));
+            assert_eq!(
+                after.map_or(Some(country.to_string()), |r| r.country),
+                Some(country.to_string()),
+                "the whole-contact edit"
+            );
+        }
+    }
+
+    /// ★ The whole-contact edit (a Remote browser's) applies the edit form's country rules when it
+    /// leaves the call alone and sends back the country it was shown: a contradicted country takes
+    /// the number's name (LoTW's where the contact has one), one naming the number's entity or one
+    /// the table cannot place stays exactly, and an empty one is filled by the number before the
+    /// call. A country the client changed is the client's.
+    #[test]
+    fn a_whole_contact_edit_applies_the_country_rules_of_the_form() {
+        let sc = known();
+        let whole = |row: &Arc<QsoRecord>, country: Option<&str>| {
+            let mut sent = QsoRecord::clone(row);
+            sent.name = Some("Hans".into());
+            sent.country = country.map(str::to_string);
+            let op = sc.edit_op(row.id.unwrap(), sent, row);
+            ops_on(row, &[op])
+                .expect("a change")
+                .1
+                .expect("a row")
+                .country
+        };
+        let k1n = stored_as("K1N", Some(182), Some("United States"));
+        assert_eq!(
+            whole(&k1n, Some("United States")).as_deref(),
+            Some("Navassa Island")
+        );
+        assert_eq!(
+            whole(&k1n, Some("Wonderland")).as_deref(),
+            Some("Wonderland"),
+            "the client's own change"
+        );
+        let lotw = with_lotw(&stored_as("K1N", Some(291), Some("Navassa Island")), 182);
+        assert_eq!(
+            whole(&lotw, Some("Navassa Island")).as_deref(),
+            Some("Navassa Island")
+        );
+        let germany = stored_as("DL1ABC", Some(230), Some("Germany"));
+        assert_eq!(whole(&germany, Some("Germany")).as_deref(), Some("Germany"));
+        let empty = stored_as("K1N", Some(182), None);
+        assert_eq!(whole(&empty, None).as_deref(), Some("Navassa Island"));
+    }
+
+    /// ★ An empty country is filled with the name of the number the awards count — LoTW's where
+    /// the contact carries one naming an entity, else the log's own — so the next edit, which
+    /// judges the stored country against that same number, leaves it alone. K1N logged as 291 and
+    /// confirmed by LoTW as 182, with no country, is filled "Navassa Island" and stays so through a
+    /// second unrelated edit: the form's, the card's and the whole-contact edit's.
+    #[test]
+    fn an_empty_country_is_filled_by_the_number_the_awards_count_and_stays() {
+        let sc = known();
+        let row = with_lotw(&stored_as("K1N", Some(291), None), 182);
+        for fields in [&[][..], &[cnty("MA,ESSEX")][..]] {
+            let first = Arc::new(edited(&sc, &row, &named(&row), fields).unwrap());
+            assert_eq!(
+                first.country.as_deref(),
+                Some("Navassa Island"),
+                "filled ({} card fields)",
+                fields.len()
+            );
+            let mut again = QsoEdit::project(&first);
+            again.name = Some("Joe".into());
+            let second = edited(&sc, &first, &again, &[]).unwrap();
+            assert_eq!(
+                (second.dxcc, second.country.as_deref()),
+                (Some(291), Some("Navassa Island")),
+                "a second edit leaves it ({} card fields)",
+                fields.len()
+            );
+        }
+        let whole = |row: &Arc<QsoRecord>, name: &str| {
+            let mut sent = QsoRecord::clone(row);
+            sent.name = Some(name.into());
+            let op = sc.edit_op(row.id.unwrap(), sent, row);
+            Arc::new(ops_on(row, &[op]).expect("a change").1.expect("a row"))
+        };
+        let first = whole(&row, "Hans");
+        assert_eq!(first.country.as_deref(), Some("Navassa Island"));
+        let second = whole(&first, "Joe");
+        assert_eq!(second.country.as_deref(), Some("Navassa Island"));
+    }
+
+    /// ★ A State typed in the same save as a corrected call is kept — the form's, the card's and a
+    /// Remote browser's edit alike — while the old call's State, sent back as it was, goes.
+    #[test]
+    fn a_call_correction_keeps_a_state_typed_beside_it() {
+        let sc = known();
+        let mut r = QsoRecord::clone(&stored_as("K1N", Some(291), Some("United States")));
+        r.state = Some("MA".into());
+        let row = Arc::new(r);
+        for (typed, want) in [("CT", Some("CT")), ("MA", None)] {
+            for fields in [&[][..], &[cnty("CT,HARTFORD")][..]] {
+                let mut edit = QsoEdit::project(&row);
+                edit.call = "K1NX".into();
+                edit.state = Some(typed.into());
+                let after = edited(&sc, &row, &edit, fields).unwrap();
+                assert_eq!(
+                    after.state.as_deref(),
+                    want,
+                    "{typed} ({} card fields)",
+                    fields.len()
+                );
+            }
+            let mut sent = QsoRecord::clone(&row);
+            sent.call = "K1NX".into();
+            sent.state = Some(typed.into());
+            let op = sc.edit_op(row.id.unwrap(), sent, &row);
+            let after = ops_on(&row, &[op]).expect("a change").1.expect("a row");
+            assert_eq!(after.state.as_deref(), want, "{typed} (Remote)");
+        }
+    }
+
+    /// ★ A LoTW number that names no entity counts as none, as it does in the awards: the log's
+    /// own number decides. K1N logged as 182 with LoTW's 999 is Navassa Island — a stored "United
+    /// States" is corrected and an empty country filled so — while LoTW's 0 (no entity) leaves the
+    /// stored text exactly, as the awards count it under nothing.
+    #[test]
+    fn a_lotw_number_naming_no_entity_falls_back_to_the_logs() {
+        let sc = known();
+        let row = with_lotw(&stored_as("K1N", Some(182), Some("United States")), 999);
+        let after = edited(&sc, &row, &named(&row), &[]).unwrap();
+        assert_eq!(after.country.as_deref(), Some("Navassa Island"));
+        let mut sent = QsoRecord::clone(&row);
+        sent.name = Some("Hans".into());
+        let op = sc.edit_op(row.id.unwrap(), sent, &row);
+        let after = ops_on(&row, &[op]).expect("a change").1.expect("a row");
+        assert_eq!(after.country.as_deref(), Some("Navassa Island"), "Remote");
+
+        let empty = with_lotw(&stored_as("K1N", Some(182), None), 999);
+        let first = Arc::new(edited(&sc, &empty, &named(&empty), &[]).unwrap());
+        assert_eq!(first.country.as_deref(), Some("Navassa Island"), "filled");
+
+        let none = with_lotw(&stored_as("K1N", Some(182), Some("United States")), 0);
+        let after = edited(&sc, &none, &named(&none), &[]).unwrap();
+        assert_eq!(after.country.as_deref(), Some("United States"), "LoTW's 0");
+    }
+
+    /// A field the contact's contest exchange holds is refused on the card — with nothing made —
+    /// because the exchange's value is the one every export, upload and award reads.
+    #[test]
+    fn a_card_change_to_a_contest_exchange_field_is_refused() {
+        let sc = station();
+        let mut r = QsoRecord::clone(&stored(Some("United States")));
+        r.contest = Some(Box::new(ContestFields {
+            contest_id: "OH-QSO-PARTY".into(),
+            adif: vec![("CNTY".into(), "OH,FRANKLIN".into())],
+            ..Default::default()
+        }));
+        let r = Arc::new(r);
+        let edit = QsoEdit::project(&r);
+        let e = edited(&sc, &r, &edit, &[cnty("OH,DELAWARE")]).expect_err("refused");
+        assert!(e.contains("CNTY") && e.contains("contest exchange"), "{e}");
+        let other = FieldEdit {
+            tag: "ITUZ".into(),
+            old: None,
+            new: Some("8".into()),
+        };
+        assert!(
+            edited(&sc, &r, &edit, &[other]).is_ok(),
+            "a field it does not hold"
         );
     }
 }

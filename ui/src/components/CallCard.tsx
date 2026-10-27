@@ -323,6 +323,30 @@ export function localTime(nowMs: number, offsetHours: number): { time: string; o
 /** The callbook page button's label: the service's name, a token in every language. */
 const QRZ_PAGE = 'QRZ ↗'
 
+/** The callbook photo, or the call's initials until it draws. A callbook answer without one says why
+ *  on hover: QRZ gives the photo only to an XML subscription, so a free account's answer never carries
+ *  it. The station card's and the Logbook contact card's. */
+export function CallbookPhoto({ call, book }: { call: string; book: QrzLookup | null }) {
+  return (
+    <span className="callcard-avatar" aria-hidden title={book && !book.image ? t('callCard.photo.none') : undefined}>
+      <span className="callcard-initials">{call.slice(0, 2)}</span>
+      {book?.image && (
+        <img
+          key={book.image}
+          className="callcard-photo"
+          src={book.image}
+          alt=""
+          loading="lazy"
+          onError={(e) => {
+            e.currentTarget.style.display = 'none'
+            e.currentTarget.parentElement?.setAttribute('title', t('callCard.photo.failed'))
+          }}
+        />
+      )}
+    </span>
+  )
+}
+
 /** The card's face, from answers alone: what the tests render from a fixture. */
 export function CallCardView({ data, onClose }: { data: CallCardData; onClose: () => void }) {
   const units = useUnits()
@@ -351,24 +375,7 @@ export function CallCardView({ data, onClose }: { data: CallCardData; onClose: (
           their own line under it, and only × shares its row. With all three in this row, the name and
           the address were squeezed to the callsign's width (reported 2026-10-26). */}
       <div className="callcard-head">
-        {/* Initials until the photo draws. A callbook answer without one says why on hover: QRZ gives
-            the photo only to an XML subscription, so a free account's answer never carries it. */}
-        <span className="callcard-avatar" aria-hidden title={book && !book.image ? t('callCard.photo.none') : undefined}>
-          <span className="callcard-initials">{call.slice(0, 2)}</span>
-          {book?.image && (
-            <img
-              key={book.image}
-              className="callcard-photo"
-              src={book.image}
-              alt=""
-              loading="lazy"
-              onError={(e) => {
-                e.currentTarget.style.display = 'none'
-                e.currentTarget.parentElement?.setAttribute('title', t('callCard.photo.failed'))
-              }}
-            />
-          )}
-        </span>
+        <CallbookPhoto call={call} book={book} />
         <div className="callcard-id">
           <div className="callcard-title">
             <span className="callcard-call mono">{call}</span>

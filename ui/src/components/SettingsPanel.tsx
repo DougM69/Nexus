@@ -1580,6 +1580,9 @@ export function SettingsPanel({
   const [lotwSyncing, setLotwSyncing] = useState(false)
   const [eqslPw, setEqslPw] = useState('')
   const [eqslSyncing, setEqslSyncing] = useState(false)
+  // One confirmation download at a time, as on the Logbook: while LoTW's runs, eQSL's waits, and
+  // the other way round.
+  const downloading = lotwSyncing || eqslSyncing
   const [qrzPw, setQrzPw] = useState('')
   const [qrzKey, setQrzKey] = useState('')
   const [qrzSyncing, setQrzSyncing] = useState(false)
@@ -3299,7 +3302,7 @@ export function SettingsPanel({
   // elsewhere since it loaded) would put that cursor back before the download read it, so the
   // save carries the empty one. Resolves to whether the download finished.
   const onSyncLotw = async (fromScratch = false): Promise<boolean> => {
-    if (!form) return false
+    if (!form || downloading) return false
     setLotwSyncing(true)
     // Persist the form first so the download runs against the username the user
     // sees — the backend reads SAVED settings, not the in-form draft (and a
@@ -3343,6 +3346,7 @@ export function SettingsPanel({
   // asks for the whole history once. A download that cannot start or fails leaves the cursor
   // empty, so the next one still asks for everything, and the toast says so.
   const onRedownloadLotw = async () => {
+    if (downloading) return
     const yes = await confirmDialog({
       title: t('settings.confirmations.lotw.redownload.confirm.title'),
       body: t('settings.confirmations.lotw.redownload.confirm.body'),
@@ -3385,7 +3389,7 @@ export function SettingsPanel({
   }
 
   const onSyncEqsl = async () => {
-    if (!form) return
+    if (!form || downloading) return
     setEqslSyncing(true)
     // Save the form first so the download uses the username the user sees (the
     // backend reads SAVED settings; a username change resets the cursor).
@@ -12579,7 +12583,7 @@ export function SettingsPanel({
                       type="button"
                       className="settings-refresh"
                       onClick={() => onSyncLotw()}
-                      disabled={lotwSyncing || !form.lotwUsername.trim()}
+                      disabled={downloading || !form.lotwUsername.trim()}
                     >
                       {lotwSyncing
                         ? t('settings.confirmations.lotw.sync.busy')
@@ -12589,7 +12593,7 @@ export function SettingsPanel({
                       type="button"
                       className="settings-refresh"
                       onClick={onRedownloadLotw}
-                      disabled={lotwSyncing || !form.lotwUsername.trim()}
+                      disabled={downloading || !form.lotwUsername.trim()}
                       title={t('settings.confirmations.lotw.redownload.title')}
                     >
                       {t('settings.confirmations.lotw.redownload.action')}
@@ -12795,7 +12799,7 @@ export function SettingsPanel({
                       type="button"
                       className="settings-refresh"
                       onClick={onSyncEqsl}
-                      disabled={eqslSyncing || !form.eqslUsername.trim()}
+                      disabled={downloading || !form.eqslUsername.trim()}
                     >
                       {eqslSyncing
                         ? t('settings.confirmations.eqsl.sync.busy')

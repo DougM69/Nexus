@@ -3962,6 +3962,11 @@ pub struct LoggedContestDto {
     pub sent: Vec<(String, String)>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rcvd: Vec<(String, String)>,
+    /// The exchange's own standard ADIF columns, `(tag, value)` (`CNTY`, `ARRL_SECT`, `CQZ` …):
+    /// what the ADIF writer, the uploads and the awards read for those fields on this contact, so
+    /// the contact card shows them and does not offer to change them beside it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub adif: Vec<(String, String)>,
 }
 
 impl From<tempo_core::logbook::ContestFields> for LoggedContestDto {
@@ -3974,6 +3979,7 @@ impl From<tempo_core::logbook::ContestFields> for LoggedContestDto {
             srx_string: c.srx_string,
             sent: c.sent,
             rcvd: c.rcvd,
+            adif: c.adif,
         }
     }
 }
