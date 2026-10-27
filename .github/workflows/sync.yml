@@ -10,6 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: write # Required to allow the script to dispatch the build job
 
     steps:
       - name: Fetch and Sync Upstream Tag Natively
@@ -24,7 +25,7 @@ jobs:
             const latestTag = upstream.data.tag_name;
             console.log(`Latest upstream tag is: ${latestTag}`);
 
-            // 2. Check if this tag already exists in your fork using the correct git submodule
+            // 2. Check if this tag already exists in your fork
             try {
               await github.rest.git.getRef({
                 owner: context.repo.owner,
@@ -59,6 +60,16 @@ jobs:
                   sha: latestSHA
                 });
                 console.log(`Successfully created tag ${latestTag} on your fork!`);
+
+                // 6. Explicitly trigger build-intel.yml to bypass token looping block
+                console.log("Dispatching build-intel.yml workflow...");
+                await github.rest.actions.createWorkflowDispatch({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  workflow_id: 'build-intel.yml',
+                  ref: 'main' // Explicit reference target matching project rules
+                });
+                console.log("Build workflow dispatched successfully!");
               } else {
                 throw error;
               }
