@@ -68,6 +68,7 @@ import type {
   RotatorState,
   QrzPushResult,
   RouteMode,
+  RadioSwitchPolicy,
   RoutingRule,
   Settings,
   SourceKind,
@@ -3373,6 +3374,12 @@ export async function setRoutingRules(rules: RoutingRule[]): Promise<AppSnapshot
 /** Set (or clear, with `null`) the fallback radio for band+modes no rule and no coverage claims. */
 export async function setDefaultRadio(id: number | null): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_default_radio', { id })
+}
+
+/** Whether a radio switch Nexus makes by itself is said on screen — the ONE writer of
+ * `radioSwitchPolicy` (a settings save keeps the live value, as for `setBetaUpdates`). */
+export async function setRadioSwitchPolicy(policy: RadioSwitchPolicy): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_radio_switch_policy', { policy })
 }
 
 /** Where a (band, mode class) WOULD route right now — the rule editor's "test" affordance.

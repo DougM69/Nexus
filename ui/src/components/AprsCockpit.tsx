@@ -43,6 +43,7 @@ import { fmtDistanceKm, useUnits } from '../units'
 import { APRS_FREQS, BEACON_SYMBOLS, resolveAprsChannel } from '../aprsBeacon'
 import { parseOperatorNumber } from '../numInput'
 import { t } from '../i18n'
+import { T } from '../i18n/T'
 import { pollSingleFlight } from '../singleFlight'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { aprsRailValue, parseAprsRail } from '../features/aprsRail'
@@ -1319,6 +1320,20 @@ export function AprsCockpit({
           {t('aprs.beacon.lon.label')}
           <input value={lon} onChange={(e) => setLon(e.target.value)} inputMode="decimal" size={9} />
         </label>
+        {/* #330: Lat and Lon look as if they move the map, and they do not; the map centres on the
+            station grid, which lives in Settings. Say so, and link there when Settings can open. */}
+        <p className="aprs-beacon-note">
+          <T
+            k="aprs.beacon.gridNote"
+            tags={{
+              link: onOpenSettings ? (
+                <button type="button" className="settings-linkbtn" onClick={() => onOpenSettings('operator-radio')} />
+              ) : (
+                <strong />
+              ),
+            }}
+          />
+        </p>
         {/* Symbol / Comment / Path are the operator's PERSISTED beacon identity (Settings ▸
             Digital ▸ APRS ▸ Over the air) rather than session state, so they survive a restart.
             The symbol writes on change; the two text fields write on BLUR — every write is a

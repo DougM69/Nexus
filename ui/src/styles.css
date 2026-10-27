@@ -11608,6 +11608,14 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   max-height: var(--radix-dropdown-menu-content-available-height);
   overflow-y: auto;
 }
+/* What "(custom)" means, above the channels. Wraps: the menu is as wide as its channel rows. */
+.band-menu-note {
+  max-width: 32ch;
+  padding: var(--space-1) var(--space-2);
+  font-size: calc(11px * var(--text-scale));
+  color: var(--text-faint);
+  white-space: normal;
+}
 .band-menu-group {
   padding: var(--space-1) var(--space-2) 0;
   font-size: var(--fs-label);
@@ -15481,6 +15489,30 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .routing-default {
   margin-left: auto;
   gap: var(--space-2);
+}
+/* The routing in plain words: on each radio card, and one line per radio above the rules. */
+.radio-card-routes {
+  display: block;
+  margin-top: var(--space-1);
+  overflow-wrap: anywhere;
+}
+.routing-plain {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.routing-plain li {
+  overflow-wrap: anywhere;
+}
+.routing-policy {
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.routing-policy .settings-input {
+  width: auto;
 }
 .routing-test {
   border-top: 1px solid var(--border);
@@ -29985,6 +30017,13 @@ button.sat-chip:disabled {
   border-radius: var(--radius-sm);
   padding: 1px var(--space-1);
   font-size: calc(12px * var(--text-scale));
+}
+.aprs-beacon-note {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--text-faint);
+  font-size: calc(10px * var(--text-scale));
+  line-height: 1.4;
 }
 .aprs-beacon-comment {
   flex: 1;

@@ -30,6 +30,24 @@ export function isSearchChord(
 }
 
 /**
+ * Things operators look for in Settings that are not settings (#343: "where are the meters?"). The
+ * TX meters are a ⊞ Panels pane on the FT8, Phone and CW screens, so a search for them found
+ * nothing and read as "Nexus has no meters". The box says where they are instead. Matched on whole
+ * words of the query; SWR and ALC are the same word in every language, and the pane's own name is
+ * matched in the operator's language.
+ */
+function panelHint(query: string): string | null {
+  const q = query.trim().toLowerCase()
+  if (!q) return null
+  const words = new Set(q.split(/\s+/))
+  const tx = ['meter', 'meters', 'swr', 'alc', 'compression']
+  if (tx.some((w) => words.has(w)) || q === t('phone.panel.txmeters').toLowerCase()) {
+    return t('settings.search.panelHint.txMeters')
+  }
+  return null
+}
+
+/**
  * Find a setting by name — the answer to "I know Nexus can do this, I cannot find where".
  *
  * This is item B6 of the approved 0.17 settings plan, three batches late. The audit that
@@ -67,6 +85,7 @@ export function SettingsSearch({ onPick }: { onPick: (sectionId: string) => void
   }, [])
 
   const hits = useMemo(() => searchSettings(q), [q])
+  const hint = useMemo(() => panelHint(q), [q])
 
   // Clamp the highlight whenever the result set shrinks, so Enter can never fire a stale index.
   useEffect(() => setActive(0), [q])
@@ -142,12 +161,19 @@ export function SettingsSearch({ onPick }: { onPick: (sectionId: string) => void
       )}
       {open && q.trim() !== '' && (
         <ul className="settings-search-results" id={listId} role="listbox">
+          {hint && (
+            <li className="settings-search-empty settings-search-panelhint" role="presentation">
+              {hint}
+            </li>
+          )}
           {hits.length === 0 ? (
+            hint ? null : (
             // Never a bare empty box: say what was searched, so "no results" reads as an answer
             // rather than as the control being broken.
             <li className="settings-search-empty" role="presentation">
               {t('settings.search.empty', { query: q.trim() })}
             </li>
+            )
           ) : (
             hits.map((h, i) => (
               <li key={h.section.id} role="option" aria-selected={i === active}>

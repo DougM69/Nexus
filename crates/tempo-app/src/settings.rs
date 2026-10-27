@@ -2598,6 +2598,11 @@ pub struct Settings {
     /// goes here". `None` (the default) = stay on the active radio, i.e. today's behavior.
     #[serde(default)]
     pub default_radio: Option<u32>,
+    /// What the screen says when the routing above switches radio by itself — see
+    /// [`RadioSwitchPolicy`]. ⭐ `Tell` for a new install, `Act` (silent) for an existing file
+    /// that has no key: the field's own `#[serde(default)]` is what reads a missing key as `Act`.
+    #[serde(default)]
+    pub radio_switch_policy: RadioSwitchPolicy,
 
     // --- network (WSJT-X parity) ---
     /// Emit the WSJT-X-compatible UDP protocol (for JTAlert/GridTracker/loggers).
@@ -4397,6 +4402,24 @@ impl Macros {
     }
 }
 
+/// What the operator sees when Nexus switches the active radio BY ITSELF — a band or mode the
+/// routing hands to another radio ([`Settings::route_radio`]). The switch is the same either way;
+/// this only says whether the screen tells the operator about it.
+///
+/// ⭐ **`Tell` for a NEW station, `Act` for an existing one.** [`Settings::default`] (a first run,
+/// no settings file) says `Tell`; the field's own `#[serde(default)]` beats the container's, so a
+/// key MISSING from an existing file reads as `Act`, the silent switch every earlier build made.
+/// Written only by `Engine::set_radio_switch_policy`; a settings form save keeps the live value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RadioSwitchPolicy {
+    /// Switch silently (every build before this one).
+    #[default]
+    Act,
+    /// Switch, and say so on screen with Undo.
+    Tell,
+}
+
 /// The mode granularity radio ROUTING decides on — coarse enough that the operator writes five
 /// rules, fine enough to split one band between two rigs.
 ///
@@ -6090,6 +6113,8 @@ impl Default for Settings {
             // operator writes one, so upgrading changes nothing.
             routing_rules: Vec::new(),
             default_radio: None,
+            // A new install is told when Nexus switches radio by itself (see the field).
+            radio_switch_policy: RadioSwitchPolicy::Tell,
             wsjtx_udp: false,
             wsjtx_udp_addr: "127.0.0.1:2237".to_string(),
             write_all_txt: true,
@@ -8211,6 +8236,42 @@ mod tests {
         ] {
             std::fs::write(&path, file.to_string()).unwrap();
             assert_eq!(Settings::load(&path).write_all_txt, want, "{file}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **A NEW station is told when Nexus switches radio by itself; an EXISTING one keeps the
+    /// silent switch it has always had** (the switch-and-tell default for new installs, operator
+    /// ruling 2026-10-27). New is told from existing by the settings file: a first
+    /// run has none. A file that predates the key switched silently, so a missing key reads as
+    /// the silent switch, never as the new default. CONTROL: a saved choice of either kind stays.
+    #[test]
+    fn radio_switch_policy_tells_a_new_install_and_keeps_an_existing_one_silent() {
+        let dir = scratch_dir("radio_switch_policy");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        assert_eq!(
+            Settings::load(&path).radio_switch_policy,
+            RadioSwitchPolicy::Tell,
+            "a first run (no settings file) tells"
+        );
+        for (file, want) in [
+            (
+                serde_json::json!({ "mycall": "KD9TAW" }),
+                RadioSwitchPolicy::Act,
+            ),
+            (
+                serde_json::json!({ "mycall": "KD9TAW", "radioSwitchPolicy": "tell" }),
+                RadioSwitchPolicy::Tell,
+            ),
+            (
+                serde_json::json!({ "mycall": "KD9TAW", "radioSwitchPolicy": "act" }),
+                RadioSwitchPolicy::Act,
+            ),
+        ] {
+            std::fs::write(&path, file.to_string()).unwrap();
+            assert_eq!(Settings::load(&path).radio_switch_policy, want, "{file}");
         }
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -42,9 +42,11 @@ interface Props {
   triggerStyle?: CSSProperties
   ariaLabel: string
   title?: string
+  /** A line at the top of the menu, above the channels (what "(custom)" means). */
+  note?: string
 }
 
-export function BandMenu({ items, value, onPick, disabled = false, triggerLabel, triggerClassName, triggerStyle, ariaLabel, title }: Props) {
+export function BandMenu({ items, value, onPick, disabled = false, triggerLabel, triggerClassName, triggerStyle, ariaLabel, title, note }: Props) {
   const [open, setOpen] = useState(false)
   const condition = useBandConditions()
 
@@ -67,6 +69,7 @@ export function BandMenu({ items, value, onPick, disabled = false, triggerLabel,
         <RM.Content className="ui-menu band-menu" align="start" sideOffset={4} collisionPadding={8}>
           {/* The portal escapes `.app`'s zoom; re-apply it (Menu.tsx / Tooltip.tsx). */}
           <div style={{ zoom: 'var(--ui-zoom, 1)' }}>
+            {note && <RM.Label className="band-menu-note">{note}</RM.Label>}
             <RM.RadioGroup value={value ?? ''}>
               {groups.map((g, gi) => (
                 <Fragment key={`${g.group ?? ''}-${gi}`}>

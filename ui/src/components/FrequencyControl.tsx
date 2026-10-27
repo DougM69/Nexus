@@ -113,7 +113,10 @@ export function FrequencyControl({
             triggerClassName="freq-channel"
             value={active ? chanKey(active) : null}
             onPick={selectChannel}
-            title={active ? active.note : t('freq.channel.title')}
+            // Off a listed channel the pill reads "(custom)" (#334, #184): say that this is all it
+            // means, on the pill and at the top of its menu.
+            title={active ? active.note : t('freq.channel.custom.title')}
+            note={active ? undefined : t('freq.channel.custom.title')}
             ariaLabel={t('freq.channel.menu.aria', {
               channel: active ? channelText(active) : t('freq.channel.custom', { band: band || '—' }),
             })}

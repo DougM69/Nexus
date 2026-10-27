@@ -20,6 +20,10 @@ export interface Toast {
   action?: () => void
   /** Button label for `action` (default "Work"). */
   actionLabel?: string
+  /** A second, lighter button beside `action` (the radio switch notice's "Why?"): it runs and the
+   *  toast closes. Shown only with its label. */
+  secondaryAction?: () => void
+  secondaryLabel?: string
   /** Why its action did not happen, shown under the message once it failed (`keepToast`). */
   note?: string
   /** An ALERT about the world — a decode, a spot, a band opening, space weather — that the app
@@ -31,6 +35,8 @@ export interface ToastOptions {
   prominent?: boolean
   action?: () => void
   actionLabel?: string
+  secondaryAction?: () => void
+  secondaryLabel?: string
   alert?: boolean
 }
 

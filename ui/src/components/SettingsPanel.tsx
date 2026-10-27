@@ -43,6 +43,7 @@ import type {
   FdEventBeacon,
   RadioStatus,
   RouteMode,
+  RadioSwitchPolicy,
   RoutingRule,
   Settings,
   DataFolderInfo,
@@ -95,6 +96,7 @@ import {
   setRadioBands,
   setRoutingRules,
   setDefaultRadio,
+  setRadioSwitchPolicy,
   routePreview,
   updateRadioProfile,
   type RadioProfilePatch,
@@ -250,6 +252,7 @@ import { blockerText, startBlocker } from '../features/contestStart'
 import { Js8HeartbeatSettings } from './Js8HeartbeatSettings'
 import { Js8ListsSettings } from './Js8ListsSettings'
 import { resolveTarget } from '../settings/registry'
+import { describeRadioRouting, ROUTE_MODES, ROUTE_MODE_LABEL, type RouteLine } from '../settings/describeRouting'
 import { ThisComputerAudio, useDriving } from './ThisComputerAudio'
 import { changedSince, mergeListEdit, patchSettings } from '../settings/patch'
 // The SSTV default-mode picker's rows. A pure module — importing them from SstvView would drag
@@ -781,25 +784,36 @@ const STOCK_WORKING_FREQUENCIES: WorkingFrequency[] = [
 const FREQ_BANDS = ['160m', '80m', '60m', '40m', '30m', '20m', '17m', '15m', '12m', '10m', '6m', '4m', '2m', '1.25m', '70cm', '33cm', '23cm', '13cm', '9cm', '6cm', '3cm', '1.25cm']
 const FREQ_MODES = ['FT8', 'FT4']
 
-/** The mode classes radio ROUTING decides on, with the operator-facing labels (must match the Rust
- * `RouteMode::label`). Coarser than the submode list on purpose: five rules cover a whole station.
- *
- * ⚠️ NOT IN THE CATALOG, DELIBERATELY (i18n phase 2). These five are MODE NAMES — the same
- * invariant vocabulary that keeps the Phone / CW / Digital tabs above untranslated — and this
- * array's own contract is that they match the Rust `RouteMode::label`, which no locale reaches.
- * Translating this copy alone would break that parity. The words around them (`Any mode`,
- * `Satellite`, the rule summary) ARE prose and live in `en.ts`. */
-const ROUTE_MODES: [RouteMode, string][] = [
-  ['digital', 'Weak-signal digital'],
-  ['fm', 'FM & APRS'],
-  ['ssb', 'SSB phone'],
-  ['cw', 'CW'],
-  ['rtty', 'RTTY'],
-]
-const ROUTE_MODE_LABEL: Record<RouteMode, string> = Object.fromEntries(ROUTE_MODES) as Record<
-  RouteMode,
-  string
->
+// The routing mode classes and their labels live with the plain-words routing description.
+
+/** One routing line (`describeRadioRouting`) in words. */
+function routeLineText(l: RouteLine): string {
+  switch (l.kind) {
+    case 'rule':
+      return t('settings.radios.routes.rule', {
+        n: l.n,
+        bands: l.bands.length ? l.bands.join(', ') : t('settings.routing.rule.summary.anyBand'),
+        mode: l.satellite
+          ? t('settings.routing.rule.satellite')
+          : l.mode
+            ? ROUTE_MODE_LABEL[l.mode]
+            : t('settings.routing.rule.summary.anyMode'),
+      })
+    case 'bands':
+      return l.bands.join(', ')
+    case 'catchAll':
+      return t('settings.radios.routes.catchAll')
+    case 'default':
+      return t('settings.radios.routes.default')
+    case 'disabled':
+      return t('settings.radios.routes.disabled')
+  }
+}
+
+/** What the routing sends to a radio, as one line: its rules, its bands, the default. */
+function routeListText(lines: RouteLine[]): string {
+  return lines.map(routeLineText).join('; ')
+}
 
 /** Settings is split into tabbed sections: only the active one renders, so a
  * keystroke re-renders ~one section's worth of inputs instead of the whole panel
@@ -2804,6 +2818,22 @@ export function SettingsPanel({
     if (to < 0 || to >= rules.length) return
     ;[rules[i], rules[to]] = [rules[to], rules[i]]
     mutateRules(rules)
+  }
+  // The radio switch notice's policy: ONE writer (`setRadioSwitchPolicy`), saved on change, the
+  // beta-channel shape. A failed write puts the choice back.
+  const handleSetSwitchPolicy = (policy: RadioSwitchPolicy) => {
+    const was = form?.radioSwitchPolicy ?? 'act'
+    setForm((prev) => (prev ? { ...prev, radioSwitchPolicy: policy } : prev))
+    if (savedRef.current) savedRef.current = { ...savedRef.current, radioSwitchPolicy: policy }
+    void withErrorToast(() => setRadioSwitchPolicy(policy), t('settings.routing.policy.failed')).then((s) => {
+      if (!s) {
+        setForm((prev) => (prev ? { ...prev, radioSwitchPolicy: was } : prev))
+        if (savedRef.current) savedRef.current = { ...savedRef.current, radioSwitchPolicy: was }
+        return
+      }
+      // App reads the policy from its settings to decide whether to show the notice.
+      onSaved?.()
+    })
   }
   const handleSetDefaultRadio = (id: number | null) => {
     void withErrorToast(() => setDefaultRadio(id), t('settings.radios.default.failed')).then(
@@ -5381,6 +5411,15 @@ export function SettingsPanel({
                         port: r.rigctldPort,
                       })}
                     </div>
+                    {/* What the routing sends to this radio, in plain words: the same tiers the
+                        engine decides by (describeRouting.ts). Only with two radios or more. */}
+                    {multi && (
+                      <div className="radio-card-routes settings-hint">
+                        {t('settings.radios.routes.lead', {
+                          list: routeListText(describeRadioRouting(form, r.id)),
+                        })}
+                      </div>
+                    )}
                     {multi && (
                       <div className="radio-band-coverage">
                         <span className="settings-hint">
@@ -5427,6 +5466,17 @@ export function SettingsPanel({
                 <span className="settings-hint">
                   <T k="settings.routing.intro" tags={{ b: <strong /> }} />
                 </span>
+                {/* The whole table in plain words, one line per radio, above the rules. */}
+                <ul className="routing-plain" aria-label={t('settings.routing.plain.aria')}>
+                  {(form.radios ?? []).map((r) => (
+                    <li key={r.id} className="settings-hint">
+                      {t('settings.routing.plain.line', {
+                        radio: r.name,
+                        list: routeListText(describeRadioRouting(form, r.id)),
+                      })}
+                    </li>
+                  ))}
+                </ul>
                 {(form.routingRules ?? []).length === 0 && (
                   <p className="settings-note">{t('settings.routing.empty')}</p>
                 )}
@@ -5565,6 +5615,20 @@ export function SettingsPanel({
                     </select>
                   </label>
                 </div>
+                {/* What the screen says when the routing switches radio by itself. */}
+                <label className="settings-input-row routing-policy">
+                  <span className="settings-label">{t('settings.routing.policy.label')}</span>
+                  <select
+                    className="settings-input"
+                    value={form.radioSwitchPolicy ?? 'act'}
+                    onChange={(e) => handleSetSwitchPolicy(e.target.value as RadioSwitchPolicy)}
+                    aria-label={t('settings.routing.policy.label')}
+                  >
+                    <option value="tell">{t('settings.routing.policy.tell')}</option>
+                    <option value="act">{t('settings.routing.policy.act')}</option>
+                  </select>
+                </label>
+                <span className="settings-hint routing-policy-hint">{t('settings.routing.policy.hint')}</span>
                 {/* Test affordance: check the table without QSYing a rig. Answered by the same
                     resolver the radio loop uses, so it can't drift from real behavior. */}
                 <div className="routing-test">
