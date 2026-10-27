@@ -10758,8 +10758,9 @@ impl RadioLoop {
                 }
                 // CAT keyer abort (cut the one word in the rig buffer), and the playback stop a
                 // Yaesu's own reference defines where Hamlib sends none
-                // (`rigmodels::cw_playback_stops`), written without waiting: Hamlib answers a raw
-                // set with nothing.
+                // (`rigmodels::cw_playback_stops`), sent in the form Hamlib does not wait on, so
+                // the unkey after them is not held for the radio's read timeout
+                // (`Rig::send_raw_set`).
                 let _ = rig.stop_morse();
                 for stop in crate::rigmodels::cw_playback_stops(self.applied.rig_model) {
                     rig.send_raw_set(stop);
@@ -26208,9 +26209,7 @@ mod tests {
         });
         let sent = yaesu_log.lock().unwrap()[before..].to_vec();
         assert!(
-            !sent
-                .iter()
-                .any(|l| l.starts_with("w SS05") && l != "w SS05;"),
+            !sent.iter().any(|l| l.contains("SS05") && l != "w SS05;"),
             "no scope span is set on the radio being left: {sent:?}"
         );
         assert_eq!(

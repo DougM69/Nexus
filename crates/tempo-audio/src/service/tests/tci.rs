@@ -1334,10 +1334,9 @@ fn the_loops_own_link_dropping_under_its_over_does_not_unkey_it() {
     s.engine().set_ptt(true);
     s.run_until("the PTT never keyed", |s| s.sent(0, "trx:0,true") == 1);
     s.run(200);
-    assert!(
-        s.rig.send_raw_set("X\nHELP\nHELP\nHELP"),
-        "the lines went out"
-    );
+    // The lines ride behind a raw set's verb (`W X`); what the shim answers it is beside the
+    // point, and the hang-up below is the premise that they arrived.
+    let _ = s.rig.send_raw_set("X\nHELP\nHELP\nHELP");
     // A read may still take an answer to a line before the hang-up as its own, an error that is no
     // link fault; the drive the shim does answer reads only on a link that is still up.
     let hung_up = (0..10).any(|_| {
