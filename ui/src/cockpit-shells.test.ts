@@ -562,10 +562,7 @@ describe('the SSTV stamp has a real percentage base and the shell has real floor
       // frame's inline `min-height: 0`. cockpit-panes.test.ts fences who may set it.
       const v = finalDecl(shell, '--cockpit-fill-min')
       expect(v, `${shell}: --cockpit-fill-min not set — its fill frame floors at 0`).not.toBeNull()
-      // An em length, or RTTY's tuning-scope knob over one (`var(--rtty-fill-min, 10em)`: the RTTY
-      // shell lowers its log strip's floor to the Call row while the scope is shown; the stock em
-      // value stands wherever nothing sets the knob, as on PSK and SSTV, which share this rule).
-      expect(/^(\d+(\.\d+)?em|var\(--rtty-fill-min, \d+(\.\d+)?em\))$/.test(v!), `${shell} --cockpit-fill-min is \`${v}\``).toBe(true)
+      expect(/^\d+(\.\d+)?em$/.test(v!), `${shell} --cockpit-fill-min is \`${v}\``).toBe(true)
     })
   }
 })
@@ -776,6 +773,13 @@ describe('a y divider costs its column nothing: its margins give back the gap it
   }
 })
 
+/** The strip a waterfall's height divider sizes, as its chain: the `.waterfall-wrap` itself, except on
+ *  RTTY, where the strip is the ROW that holds the waterfall and, right of it, the tuning scope
+ *  (2026-10-26) — the waterfall in it takes the row's width, never its height. */
+function wfStrip(shell: string): Array<Set<string>> {
+  return [...shellChain(shell), new Set([shell === 'rtty-cockpit' ? 'rtty-wf-row' : 'waterfall-wrap'])]
+}
+
 describe('the scope splitter drag is respected (winning flex-grow is 0)', () => {
   // The Splitter (PhoneCockpit.tsx ~728 / CwCockpit) drives --ph-scope-h / --cw-scope-h
   // as the scope's flex-BASIS. A basis only sets the rendered height while flex-grow
@@ -788,7 +792,7 @@ describe('the scope splitter drag is respected (winning flex-grow is 0)', () => 
   // JS8's (layout L2), RTTY's and PSK's (L6) waterfall dividers drive the same kind of basis.
   for (const shell of ['js8-cockpit', 'rtty-cockpit', 'psk-cockpit', 'jtty-cockpit']) {
     it(`.${shell} .waterfall-wrap resolves flex-grow 0 (its waterfall divider)`, () => {
-      const win = winningValue([...shellChain(shell), new Set(['waterfall-wrap'])], blockGrow)
+      const win = winningValue(wfStrip(shell), blockGrow)
       expect(win, `.${shell} .waterfall-wrap: no rule declares flex at all`).not.toBeNull()
       expect(
         win!.value,
@@ -1235,6 +1239,24 @@ describe('the band-scope strip is sized by its HOST, never by the shared base ru
   }
 })
 
+describe('RTTY: the waterfall and the tuning scope share one strip, side by side (2026-10-26)', () => {
+  // The divider sizes the ROW; the waterfall in it fills the row's height and whatever width the tuning
+  // scope leaves. A waterfall that kept the strip's column basis here would take it as a WIDTH.
+  const row = wfStrip('rtty-cockpit')
+  const wf = [...row, new Set(['waterfall-wrap'])]
+  it('the strip is a flex row', () => {
+    expect(winningValue(row, blockLonghand('display'))?.value).toBe('flex')
+    const dir = winningValue(row, blockFlexDirection)
+    expect(dir === null || dir.value === 'row', `the strip stacks: ${JSON.stringify(dir)}`).toBe(true)
+  })
+  it('the waterfall in it grows into the width and may shrink to nothing of it', () => {
+    expect(winningValue(wf, blockGrow)?.value, 'the waterfall does not take the row\'s width').toBe(1)
+    expect(winningValue(wf, blockLonghand('min-width'))?.value).toBe('0')
+    // No strip floor or ceiling on the waterfall itself: those are the row's.
+    expect(winningValue(wf, blockLonghand('max-height'))).toBeNull()
+  })
+})
+
 describe('the RTTY/PSK waterfall floor YIELDS (and is the lower end of its divider)', () => {
   // `.rtty-cockpit .waterfall-wrap` shares the strip shape with `.ph-scope-panel`, and
   // carried the same `min-height: 120px` — and until layout L6 RTTY gave the operator no drag
@@ -1245,7 +1267,7 @@ describe('the RTTY/PSK waterfall floor YIELDS (and is the lower end of its divid
   // safety bug. PSK shares the strip rule (one comma group), so it is computed separately
   // here — a split of that group could regress one alone.
   for (const shell of ['rtty-cockpit', 'psk-cockpit', 'jtty-cockpit']) {
-    const chain = [...shellChain(shell), new Set(['waterfall-wrap'])]
+    const chain = wfStrip(shell)
 
     it(`.${shell} resolves a min-height at all (the canvas needs real device pixels)`, () => {
       const win = winningValue(chain, blockLonghand('min-height'))
@@ -1383,7 +1405,8 @@ describe("the scope Splitter's declared range is the range the sheet HONOURS", (
     // JS8's waterfall divider (layout L2): the RTTY/PSK waterfall's yielding floor, the scope's cap.
     ['js8-cockpit', './components/Js8Cockpit.tsx', '--js8-wf-h', ['waterfall-wrap']],
     // RTTY's and PSK's (layout L6): the same clamps; PSK's strip rides RTTY's rule and variable.
-    ['rtty-cockpit', './components/RttyCockpit.tsx', '--rtty-wf-h', ['waterfall-wrap']],
+    // RTTY's strip is the row that holds the waterfall and the tuning scope beside it (2026-10-26).
+    ['rtty-cockpit', './components/RttyCockpit.tsx', '--rtty-wf-h', ['rtty-wf-row']],
     ['psk-cockpit', './components/PskCockpit.tsx', '--rtty-wf-h', ['waterfall-wrap']],
     ['jtty-cockpit', './components/JttyCockpit.tsx', '--rtty-wf-h', ['waterfall-wrap']],
     // SSTV's stage divider (layout L6) sizes the stage in its SIZED shape, which is the one its

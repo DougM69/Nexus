@@ -17,12 +17,21 @@
 //      wherever their cockpits are the same height.
 //   4. Stop TX, Tune and Phone's PTT are on screen and the topmost thing where they stand; CW's pane region keeps
 //      its floor and its shell does not scroll.
+//   6. RTTY (2026-10-26): its tuning scope stands RIGHT of the waterfall in the same strip, so with the scope
+//      shown the strip is exactly as tall as with it hidden (the scope costs the waterfall no height), and that is
+//      the COMMON height — 25 % of the cockpit, as tall as JS8's, which has the same cockpit — wherever RTTY's own
+//      panes let the strip reach it (from 1366×768 up; at 1024×768 the decoded text's and the log strip's floors
+//      hold it lower with or without the scope, as PSK's and CW's are held, and the table says so). The square
+//      keeps its size (at least what it was in its old place left of the decoded text, measured before the move:
+//      TUNING_BEFORE), its nudges and words are on screen with nothing scrolled, RTTY's cockpit does not scroll,
+//      and with the scope hidden the waterfall takes the strip's full width.
 //   5. PHONE'S LEFT SIDE: with Band Activity on the side, the scope is exactly as wide as without it, and the side
 //      starts under the TX strip. TEMPO, STACKED (1024×768 at a pinned 100 %): its strip is 25 % of the window and
 //      stands clear of the cell under it.
 // THE CONTROLS, run every time: JS8 with its divider moved one step (the default no longer 25 %) must fail check
 // 1, and Phone with a planted 360 px margin beside its scope must fail check 2. If either passes, the checks
-// cannot fail and the probe says so instead of passing.
+// cannot fail and the probe says so instead of passing. RTTY's two (6): a planted ceiling on its strip must fail the
+// common height, and a planted 60 px square must fail the scope's size.
 //
 // exit: 0 every check held · 1 a red, or a control that could not fail · 2 a page never drew its waterfall
 import { createServer } from 'vite'
@@ -54,6 +63,10 @@ const VIEWS = [
   ['SSTV', 'sstv', {}],
 ]
 const NO_HEIGHT = new Set(['SSTV'])
+/** RTTY's tuning square on screen, px, in its old place left of the decoded text (measured on the tree before the
+ *  2026-10-26 move, at these sizes): the size it keeps. */
+const TUNING_BEFORE = { '1024×768': 118, '1366×768': 142, '1920×1080': 201, '2560×1440': 202 }
+const RTTY_NO_TUNING = { 'nexus.panels.rtty.main': JSON.stringify({ v: 1, state: { tuning: 'removed' }, share: {} }) }
 const PHONE_SIDE = { 'nexus.panels.phone.main': JSON.stringify({ v: 2, state: {}, share: {}, leftSide: ['bandActivity'] }) }
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -98,10 +111,28 @@ const MEASURE = `(() => {
     ptt: ptt ? reach(ptt) : null,
     region: region ? { h: region.getBoundingClientRect().height / zoomOf(region), floor: parseFloat(getComputedStyle(region).minHeight) || 0 } : null,
     shellScrolls: shell.scrollHeight > shell.clientHeight + 1,
+    wfW: Math.round(strip.querySelector('.waterfall-wrap')?.getBoundingClientRect().width ?? r.width),
     side: side ? { top: Math.round(side.getBoundingClientRect().top) } : null,
     txBottom: txstrip ? Math.round(txstrip.getBoundingClientRect().bottom) : null,
     next: (() => { const n = [...shell.children].find((e) => e.matches('.grid-stations')); return n ? Math.round(n.getBoundingClientRect().top) : null })(),
     vhEff: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--vh-eff')) || null,
+    // RTTY's tuning display: its square, where it stands against the waterfall, and whether its nudges and words
+    // are on screen without its column scrolling.
+    tuning: (() => {
+      const col = shell.querySelector('.rtty-tuning')
+      if (!vis(col)) return null
+      const q = col.getBoundingClientRect(), b = col.querySelector('.rtty-tuning-box').getBoundingClientRect()
+      const wf = shell.querySelector('.waterfall-wrap')
+      const w = wf ? wf.getBoundingClientRect() : null
+      const inCol = (el) => { const e = el.getBoundingClientRect(); return e.height > 0 && e.top >= q.top - 1 && e.bottom <= q.bottom + 1 && e.bottom <= innerHeight }
+      return {
+        side: Math.round(Math.min(b.width, b.height)), boxW: Math.round(b.width), boxH: Math.round(b.height),
+        left: Math.round(q.left), top: Math.round(q.top), bottom: Math.round(q.bottom),
+        wfRight: w ? Math.round(w.right) : null, inStrip: strip.contains(col),
+        scrolls: col.scrollHeight > col.clientHeight + 1,
+        controls: [...col.querySelectorAll('.rtty-tuning-btn, .rtty-tuning-status')].every(inCol),
+      }
+    })(),
   }
 })()`
 
@@ -193,6 +224,30 @@ function defaultRed(name, m) {
   if (Math.abs(m.stripCs - m.now) > 2) return `${name}: the strip renders ${m.stripCs.toFixed(0)} CSS px, not the ${m.now} its divider announces`
   return null
 }
+/** Check 6 for RTTY with its tuning scope shown (`m`), against the same page with it hidden (`bare`): the
+ *  scope costs no height, the strip is the common height wherever the cockpit's own panes allow it, and the
+ *  scope's size and place. */
+function rttyRed(tag, m, bare, js8) {
+  const reds = []
+  const want = 0.25 * m.shellCs
+  if (Math.abs(m.stripCs - bare.stripCs) > 2)
+    reds.push(`RTTY at ${tag}: the strip is ${m.stripCs.toFixed(0)} CSS px with the tuning scope, ${bare.stripCs.toFixed(0)} without it`)
+  // The common height, wherever the strip without the scope reaches it.
+  if (bare.stripCs >= want - 2) {
+    if (Math.abs(m.now - want) > 2 || Math.abs(m.stripCs - want) > 2)
+      reds.push(`RTTY at ${tag}: the strip is ${m.stripCs.toFixed(0)} CSS px (divider ${m.now}, range ${m.min}–${m.max}), not the common 25 % of its ${m.shellCs.toFixed(0)} px cockpit (${want.toFixed(0)})`)
+    if (js8 && Math.abs(m.shellCs - js8.shellCs) <= 2 && Math.abs(m.px.h - js8.px.h) > 3) reds.push(`RTTY at ${tag}: the strip is ${m.px.h} px tall, JS8's ${js8.px.h}`)
+  }
+  const t = m.tuning
+  if (!t) return [...reds, `RTTY at ${tag}: no tuning scope on screen`]
+  if (!t.inStrip) reds.push(`RTTY at ${tag}: the tuning scope is not in the waterfall's strip`)
+  if (t.wfRight != null && t.left < t.wfRight) reds.push(`RTTY at ${tag}: the tuning scope starts at ${t.left}, left of the waterfall's right edge ${t.wfRight}`)
+  if (t.side < TUNING_BEFORE[tag] - 1) reds.push(`RTTY at ${tag}: the tuning square is ${t.side} px, smaller than its ${TUNING_BEFORE[tag]} px before the move`)
+  if (!t.controls) reds.push(`RTTY at ${tag}: the tuning scope's nudges or words are cut off`)
+  if (t.scrolls) reds.push(`RTTY at ${tag}: the tuning scope scrolls`)
+  if (m.shellScrolls) reds.push(`RTTY at ${tag}: the cockpit scrolls`)
+  return reds
+}
 /** Checks 2 and 3 across one size's pages. */
 function sameRed(size, rows) {
   const reds = []
@@ -220,6 +275,7 @@ const red = (msg) => {
 try {
   const table = []
   const bySize = new Map()
+  const rttyBare = new Map()
   for (const size of SIZES) {
     const tag = `${size[0]}×${size[1]}`
     const rows = []
@@ -239,6 +295,17 @@ try {
       }
       for (const [label, ok] of m.stops) if (!ok) red(`${name} at ${tag}: ${label} is not on screen or something covers it`)
       if (m.ptt === false) red(`${name} at ${tag}: PTT is not on screen or something covers it`)
+      if (name === 'RTTY') {
+        // The same page with the tuning scope hidden: the waterfall takes the strip's full width.
+        const bare = await measure('rtty', size, RTTY_NO_TUNING)
+        if (!bare) throw new Error(`RTTY without its tuning scope at ${tag}: no waterfall`)
+        rttyBare.set(tag, bare)
+        console.log(`waterfalls-probe: RTTY at ${tag}: strip ${m.px.h} px tall with the tuning scope, ${bare.px.h} without (25 %: ${(0.25 * m.shellCs * m.z).toFixed(0)}); square ${m.tuning?.side} px (before the move ${TUNING_BEFORE[tag]}); waterfall ${m.wfW} × picture ${m.px.canvasH} px with it, ${bare.wfW} × ${bare.px.canvasH} without, of the ${m.px.w} px strip`)
+        for (const r of rttyRed(tag, m, bare, rows.find(([n]) => n === 'JS8')?.[1])) red(r)
+        if (bare.tuning) red(`RTTY at ${tag}: the tuning scope is still shown with its entry hidden`)
+        if (Math.abs(bare.wfW - bare.px.w) > 1) red(`RTTY without its tuning scope at ${tag}: the waterfall is ${bare.wfW} px of a ${bare.px.w} px strip`)
+        for (const [label, ok] of bare.stops) if (!ok) red(`RTTY (no tuning) at ${tag}: ${label} is not on screen or something covers it`)
+      }
       if (name === 'CW') {
         if (!m.region || m.region.h < m.region.floor - 1) red(`CW at ${tag}: its pane region is ${m.region?.h.toFixed(0)} CSS px, under its ${m.region?.floor} px floor`)
         if (m.shellScrolls) red(`CW at ${tag}: the cockpit scrolls`)
@@ -292,7 +359,20 @@ try {
   if (caught.length === 0) red('CONTROL FAILED — Phone with a planted 360 px margin passed check 2; the check cannot fail')
   else console.log(`waterfalls-probe: CONTROL — ${caught[0]} (caught)`)
 
-  if (code === 0) console.log('waterfalls-probe: PASS — every waterfall starts at 25 % of its cockpit (or its layout ceiling), as wide as every other, and both controls were caught')
+  // RTTY's controls (check 6): a ceiling planted on its strip, and a planted 60 px square.
+  for (const [what, css] of [
+    ['a ceiling planted on its strip', '.rtty-cockpit > .rtty-wf-row, .rtty-cockpit > .waterfall-wrap { max-height: 100px !important }'],
+    ['a planted 60 px square', '.rtty-tuning-box { width: 60px !important }'],
+  ]) {
+    const m = await measure('rtty', [1366, 768], {}, async (evaluate) => {
+      await evaluate(`(() => { const s = document.createElement('style'); s.textContent = ${JSON.stringify(css)}; document.head.appendChild(s); return 1 })()`)
+    })
+    const caught = m ? rttyRed('1366×768', m, rttyBare.get('1366×768'), bySize.get('1366×768').find(([n]) => n === 'JS8')[1]) : []
+    if (caught.length === 0) red(`CONTROL FAILED — RTTY with ${what} passed check 6; the check cannot fail`)
+    else console.log(`waterfalls-probe: CONTROL — RTTY with ${what}: ${caught[0]} (caught)`)
+  }
+
+  if (code === 0) console.log('waterfalls-probe: PASS — every waterfall starts at 25 % of its cockpit (or its layout ceiling), as wide as every other, RTTY\'s with its tuning scope beside it at its own size, and every control was caught')
   process.exitCode = process.exitCode || code
 } catch (e) {
   if (!process.exitCode) {

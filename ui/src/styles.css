@@ -28168,7 +28168,7 @@ button.sat-chip:disabled {
      (`.rtty-cockpit > .pane-frame { min-height: 10em }`) shipped dead. Fenced:
      cockpit-panes.test.ts fails any other rule that sets this — inherited under a
      region's tier-2/3 `overflow: hidden` it would be the clip mechanism reborn. */
-  --cockpit-fill-min: var(--rtty-fill-min, 10em);
+  --cockpit-fill-min: 10em;
 }
 /* JS8 is a REGION cockpit (CW's shape: a .cockpit-panes grid, not bare fill frames), so it
    takes CW's shell rule and NOT the --cockpit-fill-min knob — cockpit-panes.test.ts fences
@@ -28223,8 +28223,12 @@ button.sat-chip:disabled {
    basis is what renders (cockpit-shells.test.ts). The default, 25 % of the shell, is where the
    old fixed `0.22 × --vh-eff` measured (base tree, in Chrome): 25.1 % at 1024×768 and 1366×768,
    24.5 % at 1920×1080. The var is the SHELL's own (each shell carries its divider's), so the one
-   name serves all three cockpits. */
-.rtty-cockpit .waterfall-wrap,
+   name serves all three cockpits.
+
+   On RTTY the strip is the ROW `.rtty-wf-row` (2026-10-26): the waterfall, then the tuning scope right of
+   it (its size: cockpit-panes.css `.rtty-tuning-box`), so the waterfall keeps this height and the scope
+   its size, and the waterfall gives up the width. The divider sizes the row. */
+.rtty-wf-row,
 .psk-cockpit .waterfall-wrap,
 .jtty-cockpit .waterfall-wrap {
   flex: 0 1 var(--rtty-wf-h, 25%);
@@ -28237,10 +28241,22 @@ button.sat-chip:disabled {
      floor: the canvas needs device pixels to draw into, and a strip that shrinks to nothing
      is a decoder with no display. Its divider's lower end is exactly this floor
      (WATERFALL_SPLIT_MIN). */
-  min-height: min(var(--rtty-wf-floor, 8em), calc(0.28 * var(--vh-eff, 100vh)));
+  min-height: min(8em, calc(0.28 * var(--vh-eff, 100vh)));
   /* The scope's ceiling (WATERFALL_SPLIT_MAX): a waterfall is a glance strip, and the
      transcript and the log strip below it are what this cockpit is for. */
   max-height: calc(0.45 * var(--vh-eff, 100vh));
+}
+/* RTTY's strip row: the waterfall takes the width the tuning scope leaves (a zero basis, so the scope's
+   own size is what stands) and the row's whole height. The row is the size container the scope's square
+   reads (`100cqh`), so where the operator drags the strip shorter than the square the square follows. */
+.rtty-wf-row {
+  display: flex;
+  gap: var(--space-2);
+  container-type: size;
+}
+.rtty-wf-row > .waterfall-wrap {
+  flex: 1 1 0;
+  min-width: 0;
 }
 /* JS8's waterfall, SIZED BY ITS DIVIDER (layout L2): the operator drags or arrows its height,
    stored per surface (`nexus.split.js8.waterfall`) and clamped against the live box on load and
@@ -28430,7 +28446,7 @@ button.sat-chip:disabled {
   background: var(--accent);
   border-color: var(--accent);
 }
-/* RTTY TUNING SCOPE — the insides of the column (its size is cockpit-panes.css `.rtty-tuning`).
+/* RTTY TUNING SCOPE — the insides of the column (its size is cockpit-panes.css `.rtty-tuning-box`).
    The picture's colours are read off the canvas's own computed tokens (--bg, --rx, --text-faint,
    --text-dim), so it follows both themes with no token of its own. */
 /* Shown over the square when there is nothing to draw: disarmed, or our own over. */

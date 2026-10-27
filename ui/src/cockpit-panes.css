@@ -786,65 +786,53 @@
   gap: var(--space-3);
 }
 
-/* THE RTTY TUNING SCOPE (⊞ `tuning`, 2026-10-17): a square column LEFT of the decoded text, the
-   text shrinking to fit (RttyTuningScope.tsx). The RX row holds the column and the transcript in
-   the stream pane's body and takes the height the transcript used to (`flex: 1 1 0`, a grower
-   that yields); the transcript stays its own scroller inside it.
-   The column is the window's share (140 px, growing to about 200 px) capped by the room in the row
-   (THE GUARANTEE below), never more than 45% of the row so the text keeps the larger share. It is a stack of content (the
-   square, the nudges, the words) that cannot shrink, so where the pane is shorter than that stack
-   the COLUMN scrolls — the second legal fate of deficit — and nothing clips. It hosts no stop
-   control and sits below the stream head, so it never covers or displaces one. */
-.rtty-rx-row {
-  display: flex;
-  flex: 1 1 0;
-  min-height: 0;
-  gap: var(--space-2);
-  container-type: size;
-}
+/* THE RTTY TUNING SCOPE (⊞ `tuning`): RIGHT of the waterfall, in the strip its divider sizes (operator,
+   2026-10-26: the waterfall keeps the common 25 % height like every other mode, the scope keeps its size, and
+   the waterfall gives up that width; RTTY only). The strip is the row `.rtty-wf-row` (styles.css, beside the
+   other waterfall strips): the waterfall, then this column. RttyTuningScope.tsx draws it.
+   It replaces the 2026-10-17 place, a column LEFT of the decoded text whose guaranteed size took its room
+   from the waterfall ("take the room from the waterfall"), which left RTTY's waterfall about half the
+   common height at 1366×768 and smaller. Nothing else gives room now: no knob, no floor on the text pane.
+
+   THE COLUMN is a grid: the square spans both rows, and the nudges (◀ M ▶) and the words stand BESIDE it,
+   the nudges at the foot of the top half and the words at the head of the bottom one. A strip is short and
+   wide, so stacking them under the square would cost the square its height. The controls' column is its
+   own min-content width (the nudge row; the words wrap to it). Where the strip is shorter than the stack,
+   the COLUMN scrolls — the second legal fate of deficit — and nothing clips. Never more than 45 % of the
+   strip, so the waterfall keeps the larger share. It hosts no stop control and none that starts one. */
 .rtty-tuning {
   flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  width: clamp(10em, calc(0.105 * var(--vw-eff, 1280px)), 14.5em);
-  width: min(clamp(10em, calc(0.105 * var(--vw-eff, 1280px)), 14.5em), calc(100cqh - 3.7em));
+  display: grid;
+  grid-template-columns: auto min-content;
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+  column-gap: var(--space-2);
+  row-gap: var(--space-1);
   max-width: 45%;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
 }
-/* The square: the column's width tall. The picture and its canvas are out of flow (the
-   measured-box pattern), so the bitmap never sizes it; the ✕ sits in its top corner. */
+/* THE SQUARE keeps its size: the window's share (10em, growing to 14.5em with the window, the size it had
+   in its old place), capped only by the strip's own height (`100cqh` of `.rtty-wf-row`, a size container)
+   where the operator drags the strip shorter than that. Measured in Chrome (waterfalls probe): 118 / 142 /
+   201 / 202 px on screen at 1024×768 / 1366×768 / 1920×1080 / 2560×1440, the strip at the common 25 % at
+   all four. A browser without container units keeps the plain share, declared first. The picture and its
+   canvas are out of flow (the measured-box pattern), so the bitmap never sizes it; the ✕ sits in its top
+   corner. */
 .rtty-tuning-box {
   position: relative;
-  flex: 0 0 auto;
-  width: 100%;
+  grid-row: 1 / 3;
+  align-self: center;
+  width: clamp(10em, calc(0.105 * var(--vw-eff, 1280px)), 14.5em);
+  width: min(clamp(10em, calc(0.105 * var(--vw-eff, 1280px)), 14.5em), 100cqh);
   aspect-ratio: 1 / 1;
   min-height: 0;
 }
-/* THE GUARANTEE (operator, 2026-10-17: "Guarantee ~140 px; RX text shrinks", amended the same day:
-   "take the room from the waterfall", and where even that is short the square takes the largest
-   that fits, so NOTHING scrolls). The square is the column's width and never yields; the column's
-   width is the window's share (10em, growing to 14.5em) capped by the room in its row
-   (`100cqh` of `.rtty-rx-row`, a size container, less the nudges and the words). While Tuning is
-   shown the shell carries `.rtty-tuning-on`, which sets three knobs, each read in one place:
-     --rtty-stream-floor  the text pane's floor (CockpitPaneFrame `floor`, that frame alone): the
-                          column plus the pane's head and the RX head, but never more than the shell
-                          has once everything else stands at its minimum (`100% - 34em`, measured in
-                          Chrome at 1024×768 and 1280×800 so the shell does not scroll);
-     --rtty-fill-min      the shell's fill floor, so the log strip floors at its Call row (6em);
-     --rtty-wf-floor      the waterfall strip's floor (styles.css), down to its 6em minimum — a
-                          header and a drawable canvas. Its divider still stops at 8em; the strip
-                          goes lower only when the shell has no other room.
-   Measured (Chrome, real cockpit): square 100 / 128 / 201 px at 1024×768 / 1280×800 / 1920×1080,
-   no shell scroll at any of them, Call, the nudges, the words and Stop TX on screen. A browser
-   without container units keeps the first `width` (the plain clamp) and the shell's valve takes
-   the rest. The size expression is the column's own; cockpit-panes.test.ts holds them equal. */
-.rtty-tuning-on {
-  --rtty-stream-floor: min(calc(100% - 34em), calc(clamp(10em, calc(0.105 * var(--vw-eff, 1280px)), 14.5em) + 8.5em));
-  --rtty-fill-min: 6em;
-  --rtty-wf-floor: 6em;
+.rtty-tuning-nudge {
+  align-self: end;
+}
+.rtty-tuning-status {
+  align-self: start;
 }
 .rtty-tuning-picture {
   position: absolute;

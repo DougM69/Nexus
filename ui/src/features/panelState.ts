@@ -1422,8 +1422,9 @@ export const CW_PANELS: PanelVocabulary<CwPanelId> = {
  *  (unmounting the pane calls no wire), so it correctly carries no ⊞ note. This is the pane
  *  that falsified the FOURTH wording a second time — see the header.
  *
- *  `tuning` (2026-10-17) is the crossed-ellipse tuning scope, a square column LEFT of the decoded
- *  text, shown by default. Display plus two nudges that net the decoder (and with it the AFSK
+ *  `tuning` (2026-10-17) is the crossed-ellipse tuning scope, shown by default: since 2026-10-26 it
+ *  stands RIGHT of the waterfall in the waterfall's strip (it stood left of the decoded text before).
+ *  Hidden, the waterfall takes the strip's width; with the waterfall hidden, it holds the strip alone. Display plus two nudges that net the decoder (and with it the AFSK
  *  transmit tone) by 5 Hz; the nudges are disabled while anything of ours is keyed. It hosts no
  *  control that stops a transmission and none that starts one, and hiding it ends nothing, so it
  *  carries no ⊞ note and THE STOP LINE is untouched by it. */
