@@ -3532,11 +3532,12 @@ pub struct Engine {
     /// ONE more over (#170, #153) — see [`RecentPartner`] for the three bounds. Session-only,
     /// one deep, and dropped the moment it is spent or expires.
     recent_partner: Option<RecentPartner>,
-    /// The caller Clear DX just dropped from a CQ run. It usually calls again, since it never got
-    /// our report, and until the operator arms TX again (Enable Tx, Call CQ) the run does not answer
-    /// it: nothing is sent to a station after its clear (WSJT-X answers nothing while Enable Tx is
-    /// off). Other callers are answered as before, and a click on it works it as any click does.
-    cleared_dx_call: Option<String>,
+    /// Every caller Clear DX has dropped from a CQ run since TX was last armed. A cleared caller
+    /// usually calls again, since it never got our report, and until the operator arms TX again
+    /// (Enable Tx, Call CQ) the run answers none of them: nothing is sent to a station after its
+    /// clear (WSJT-X answers nothing while Enable Tx is off), however many callers are cleared in
+    /// between. Other callers are answered as before, and a click on one works it as any click does.
+    cleared_dx_calls: Vec<String>,
     /// Completed QSOs held for the operator to confirm before they are logged (WSJT-X
     /// "Prompt me to log QSO"), oldest first. Non-empty only while `prompt_to_log` is on.
     ///
@@ -6552,7 +6553,7 @@ impl Engine {
             qso_report_sent: None,
             stalled_qso: None,
             recent_partner: None,
-            cleared_dx_call: None,
+            cleared_dx_calls: Vec::new(),
             pending_logs: VecDeque::new(),
             unconfirmed_auto_logs: Vec::new(),
             contest_held_uploads: Vec::new(),
@@ -17889,7 +17890,13 @@ Pick the one you operate from on the Contesting tab in Settings.",
         match &mut self.mode {
             Mode::FieldDay { station, running } => station.rearm(*running),
             _ if self.cq_running => {
-                self.cleared_dx_call = Some(cleared);
+                if !self
+                    .cleared_dx_calls
+                    .iter()
+                    .any(|c| tempo_core::message::same_call(c, &cleared))
+                {
+                    self.cleared_dx_calls.push(cleared);
+                }
                 let mut s = QsoStation::calling_cq(&mycall, &mygrid);
                 s.confirm_with_rrr = self.settings.prefer_rrr;
                 s.cq_call_cap = self.cq_call_budget();
@@ -20063,8 +20070,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
         self.tx_enabled = on;
         if on {
-            // The operator's arm ends Clear DX's hold on the caller it dropped.
-            self.cleared_dx_call = None;
+            // The operator's arm ends Clear DX's hold on the callers it dropped.
+            self.cleared_dx_calls.clear();
             // Re-enabling is an operator action: clear a tripped watchdog and
             // restart the watchdog timer on the next over.
             self.tx_watchdog = false;
@@ -30581,6 +30588,25 @@ contact yourself."
             Mode::Chat => {}
             Mode::Qso { station, .. } => {
                 let state_before = station.state;
+                // A caller Clear DX dropped is not answered until the operator arms TX again. It is
+                // set aside before the best-caller pick, so it never hides another caller.
+                let unheld;
+                let answerable: &[modes::Decode] =
+                    if !self.cleared_dx_calls.is_empty() && state_before == QsoState::CallingCq {
+                        let cleared = &self.cleared_dx_calls;
+                        unheld = decodes
+                            .iter()
+                            .filter(|d| {
+                                !Msg::parse(&d.message).sender().is_some_and(|s| {
+                                    cleared.iter().any(|c| tempo_core::message::same_call(s, c))
+                                })
+                            })
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        &unheld
+                    } else {
+                        decodes
+                    };
                 // W1.4 best-caller selection: when RUNNING CQ and several stations
                 // answer in the same slot, reorder the decodes so the sequencer
                 // locks onto the operator's preferred caller instead of stock
@@ -30598,7 +30624,7 @@ contact yourself."
                         || !self.settings.blocked_calls.is_empty())
                 {
                     picked = best_caller_decodes(
-                        decodes,
+                        answerable,
                         &self.settings.mycall,
                         &self.settings.best_caller,
                         self.settings.best_caller_min_snr,
@@ -30607,24 +30633,7 @@ contact yourself."
                     );
                     &picked
                 } else {
-                    decodes
-                };
-                // A caller Clear DX dropped is not answered until the operator arms TX again.
-                let unheld;
-                let observed: &[modes::Decode] = match &self.cleared_dx_call {
-                    Some(cleared) if state_before == QsoState::CallingCq => {
-                        unheld = observed
-                            .iter()
-                            .filter(|d| {
-                                !Msg::parse(&d.message)
-                                    .sender()
-                                    .is_some_and(|s| tempo_core::message::same_call(s, cleared))
-                            })
-                            .cloned()
-                            .collect::<Vec<_>>();
-                        &unheld
-                    }
-                    _ => observed,
+                    answerable
                 };
                 // WSJT-X 3.0.2 `mainwindow.cpp:9426`: in FT8, FT4 and FST4 a repeated over
                 // from the partner re-reads the report we send back; every other mode keeps

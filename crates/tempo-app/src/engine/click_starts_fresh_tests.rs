@@ -528,6 +528,120 @@ fn the_cleared_caller_is_worked_again_once_the_operator_chooses_it() {
     assert_eq!(tx_now(&e), "W1AW KR4FQG -07", "a click on it");
 }
 
+/// (3) Every caller cleared since the last arm stays held, not just the latest. In a pile-up the
+/// operator clears W1AW, the TX-off run then locks onto K9XYZ, and the operator clears that one too;
+/// W1AW calling again must still get nothing, and Enable Tx sends the CQ.
+#[test]
+fn a_second_clear_keeps_the_first_cleared_caller_held() {
+    let mut e = ft8();
+    e.settings.auto_log = true;
+    e.settings.prompt_to_log = false;
+    e.set_mode("qso-run").expect("CQ");
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG W1AW FN31", -7)], 3);
+    e.clear_dx_call();
+    e.ingest_decodes_for_test(
+        &[
+            dec_snr("KR4FQG W1AW FN31", -7),
+            dec_snr("KR4FQG K9XYZ EN52", -11),
+        ],
+        5,
+    );
+    assert_eq!(
+        e.qso_dxcall(),
+        Some("K9XYZ"),
+        "premise: the next caller locked"
+    );
+    e.clear_dx_call();
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG W1AW FN31", -7)], 7);
+    assert_eq!(e.qso_dxcall(), None, "W1AW, cleared first, is still held");
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG K9XYZ EN52", -11)], 9);
+    assert_eq!(e.qso_dxcall(), None, "K9XYZ, cleared second, is held");
+    e.set_tx_enabled(true);
+    assert_eq!(keyed(&mut e, 10..12), vec!["CQ KR4FQG EM85".to_string()]);
+    assert!(e.stored_log().is_empty());
+}
+
+/// (3) The cleared caller's bare report (no grid) is the other answer a CQ run locks onto; it is
+/// held too, in the portable and the hashed forms as well. Its RR73 and 73 lock nothing either.
+#[test]
+fn a_cleared_callers_report_is_not_answered_in_any_form() {
+    let mut e = ft8();
+    e.set_mode("qso-run").expect("CQ");
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG W1AW FN31", -7)], 3);
+    e.clear_dx_call();
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG W1AW -10", -7)], 5);
+    assert_eq!(e.qso_dxcall(), None, "bare report");
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG W1AW/P FN31", -7)], 7);
+    assert_eq!(e.qso_dxcall(), None, "portable form");
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG <W1AW> -10", -7)], 9);
+    assert_eq!(e.qso_dxcall(), None, "hashed form");
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG W1AW RR73", -7)], 11);
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG W1AW 73", -7)], 13);
+    assert_eq!(e.qso_dxcall(), None);
+    e.set_tx_enabled(true);
+    assert_eq!(keyed(&mut e, 14..16), vec!["CQ KR4FQG EM85".to_string()]);
+}
+
+/// (3) An arm that is refused (here the clock-repair hold) is not the operator choosing to transmit
+/// again: both cleared callers stay held. The arm after the hold ends releases them.
+#[test]
+fn a_refused_arm_keeps_the_cleared_callers_held() {
+    let mut e = ft8();
+    e.set_mode("qso-run").expect("CQ");
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG W1AW FN31", -7)], 3);
+    e.clear_dx_call();
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG K9XYZ EN52", -11)], 5);
+    e.clear_dx_call();
+    e.hold_tx_for_clock_repair(std::time::Instant::now() + std::time::Duration::from_secs(600));
+    e.set_tx_enabled(true);
+    assert!(!e.tx_enabled, "premise: the arm was refused");
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG W1AW FN31", -7)], 7);
+    assert_eq!(e.qso_dxcall(), None, "W1AW still held");
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG K9XYZ EN52", -11)], 9);
+    assert_eq!(e.qso_dxcall(), None, "K9XYZ still held");
+    e.end_clock_repair_hold();
+    e.set_tx_enabled(true);
+    assert!(e.tx_enabled);
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG W1AW FN31", -7)], 11);
+    assert_eq!(e.qso_dxcall(), Some("W1AW"), "released by the arm");
+}
+
+/// (3) Call CQ arms TX, so it releases the cleared callers like Enable Tx does.
+#[test]
+fn call_cq_releases_the_cleared_callers() {
+    let mut e = ft8();
+    e.set_mode("qso-run").expect("CQ");
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG W1AW FN31", -7)], 3);
+    e.clear_dx_call();
+    assert!(!e.tx_enabled);
+    e.set_mode("qso-run").expect("CQ");
+    assert!(e.tx_enabled, "premise: Call CQ arms TX");
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG W1AW FN31", -7)], 5);
+    assert_eq!(e.qso_dxcall(), Some("W1AW"));
+    assert_eq!(tx_now(&e), "W1AW KR4FQG -07");
+}
+
+/// (3) With a best-caller choice other than first heard, a held caller is set aside BEFORE the pick,
+/// so it never hides another station answering in the same period: here W1AW is the strongest,
+/// and K9XYZ is answered.
+#[test]
+fn a_held_caller_does_not_hide_another_from_the_best_caller_pick() {
+    let mut e = ft8();
+    e.settings.best_caller = "strongest".into();
+    e.set_mode("qso-run").expect("CQ");
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG W1AW FN31", -2)], 3);
+    e.clear_dx_call();
+    e.ingest_decodes_for_test(
+        &[
+            dec_snr("KR4FQG W1AW FN31", -2),
+            dec_snr("KR4FQG K9XYZ EN52", -11),
+        ],
+        5,
+    );
+    assert_eq!(e.qso_dxcall(), Some("K9XYZ"));
+    assert_eq!(tx_now(&e), "K9XYZ KR4FQG -11");
+}
+
 /// (3) CONTROL: calling CQ with nobody in the contact, Clear DX ends nothing and TX stays on
 /// (`if (m_QSOProgress != CALLING) auto_tx_mode(false)`, :10078).
 #[test]
