@@ -9,6 +9,15 @@ import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-li
 import { ContestSetupWizard, contestSoon, enteredContest, fdPowerAnswer, fdPowerFrom, SOON_SECS } from './ContestSetupWizard'
 import type { AppSnapshot, Settings } from '../types'
 import type { ContestWindow, FdRulesetDto } from '../api'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+
+/** The ARRL RTTY Roundup's banned modes, as the rules seed ships them. */
+const RRU_BANNED: string[] = (
+  JSON.parse(readFileSync(resolve(process.cwd(), '../crates/tempo-core/src/fd_rules.seed.json'), 'utf8')) as {
+    rulesets: { event: string; banned_modes: string[] }[]
+  }
+).rulesets.find((r) => r.event === 'arrlrtty')!.banned_modes
 
 const api = vi.hoisted(() => {
   const spies: Record<string, ReturnType<typeof vi.fn>> = {}
@@ -63,6 +72,26 @@ function preview(patch: Partial<Settings>): FdRulesetDto {
       sentSettings: ['contest_qth_county', 'contest_qth_state'],
       cabrilloHeaders: ['CLAIMED-SCORE', 'EMAIL', 'IL-COUNTY', 'NAME', 'CLUB', 'ENTRY-CLASS', 'OPERATORS'],
       entryClasses: ['ILLINOIS FIXED HIGH POWER', 'UNLIMITED'],
+    }
+  }
+  // The ARRL RTTY Roundup, as the engine previews it (src-tauri's
+  // `the_preview_offers_the_declarations_the_sponsor_names`): a W/VE station sends its state, and the
+  // contest takes RTTY alone.
+  if (event === 'arrlrtty') {
+    const state = (s.contestQthState ?? '').trim()
+    return {
+      event,
+      rulesYear: 2026,
+      bannedModes: RRU_BANNED,
+      spottingAllowed: true,
+      clusterAllowed: true,
+      enforcement: 'warn',
+      role: 'w_ve',
+      exchange: ['599', state],
+      problem: '',
+      sentSettings: ['contest_qth_state'],
+      cabrilloHeaders: ['CATEGORY-ASSISTED', 'CATEGORY-MODE', 'CATEGORY-POWER', 'CLAIMED-SCORE', 'CLUB', 'OPERATORS'],
+      transmitterCategories: ['ONE', 'TWO', 'UNLIMITED'],
     }
   }
   // The ARRL VHF contests send the grid, from the station's own grid: not a location "I moved" changes.
@@ -258,6 +287,55 @@ describe('the steps', () => {
     expect(screen.getByRole('button', { name: 'Next' })).toHaveProperty('disabled', false)
     next()
     expect(screen.getByRole('button', { name: 'Start Illinois QSO Party' })).toHaveProperty('disabled', false)
+  })
+
+  it('the ARRL RTTY Roundup: the state alone, its entry lines, and FT8 or CW a warning with a way to RTTY, never a refusal', async () => {
+    await open({ initial: { fdEvent: 'arrlrtty' } })
+    next()
+    await screen.findByText('You send: 599 IL')
+    // Only what a W/VE station sends (Special Rules 4.2.1): no county, no zone, no class.
+    expect(screen.getByLabelText('State or province')).toBeTruthy()
+    expect(screen.queryByLabelText('County')).toBeNull()
+    expect(screen.queryByLabelText('FD Class')).toBeNull()
+    next()
+    expect(screen.getByLabelText('Power category')).toBeTruthy()
+    expect(screen.getByLabelText('Club')).toBeTruthy()
+    expect(screen.getByLabelText('Other operators')).toBeTruthy()
+    expect(screen.queryByLabelText('Band category')).toBeNull()
+    expect(screen.queryByLabelText('Entry class')).toBeNull()
+    next()
+    // The station is on FT8 (the snapshot's digital tier).
+    const warn = document.querySelector('[data-banned]')!
+    expect(warn.textContent).toContain(
+      'ARRL RTTY Roundup does not allow FT8: contacts in it are logged but score nothing. Work it in RTTY instead.',
+    )
+    const ways = within(warn as HTMLElement).getAllByRole('button').map((b) => b.textContent)
+    expect(ways).toEqual(['Work this contest in RTTY'])
+    expect(screen.getByRole('button', { name: 'Next' })).toHaveProperty('disabled', false)
+    next()
+    expect(screen.getByRole('button', { name: 'Start ARRL RTTY Roundup' })).toHaveProperty('disabled', false)
+  })
+
+  it('the ARRL RTTY Roundup on CW and on PSK31 warns too, and on RTTY it does not', async () => {
+    for (const [operatingMode, banned] of [
+      ['cw', 'CW'],
+      ['keyboard', 'PSK31'],
+      ['rtty', null],
+    ] as const) {
+      api.get('getSnapshot').mockImplementation(() =>
+        Promise.resolve({ fieldDay: null, mode: 'chat', radio: { catOk: true, operatingMode }, link: { tier: 'FT8' } }),
+      )
+      await open({ initial: { fdEvent: 'arrlrtty' } })
+      next()
+      await screen.findByText('You send: 599 IL')
+      next()
+      next()
+      const warn = document.querySelector('[data-banned]')
+      if (banned) expect(warn?.textContent, operatingMode).toContain(`does not allow ${banned}`)
+      else expect(warn, operatingMode).toBeNull()
+      expect(screen.getByRole('button', { name: 'Next' })).toHaveProperty('disabled', false)
+      cleanup()
+    }
   })
 
   it('Cancel saves nothing', async () => {

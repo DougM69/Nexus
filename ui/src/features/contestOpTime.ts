@@ -23,6 +23,10 @@ export const OFF_TIME_MIN_SEC = 30 * 60
  * - ARRL Sweepstakes CW and Phone — 30 min. ARRL November Sweepstakes Rules, Special Rule 1.1: "All
  *   stations may operate no more than 24 of the 30 hours … Off times must be at least 30 minutes
  *   long." (contests.arrl.org/ContestRules/SS-Rules.pdf).
+ * - ARRL RTTY Roundup — 30 min. RTTY-RU-Rules.pdf v3.0b, Special Rule 1.1: "Single Operator
+ *   stations may operate up to 24 hours out of the 30-hour contest period. … each off time must be
+ *   at least 30 minutes long until 24 hours have been completed." (1.2's "one or two breaks" is not
+ *   counted here.)
  *
  * Every other contest the station runs (both Field Days, the ARRL VHF contests, the QSO parties) has
  * no minimum on record here and uses `OFF_TIME_MIN_SEC`, and a surface that states the rule says so.
@@ -35,6 +39,7 @@ const OFF_TIME_RULES: Readonly<Record<string, number>> = {
   cqwpx_ssb: 60 * 60,
   arrlss_cw: 30 * 60,
   arrlss_ssb: 30 * 60,
+  arrlrtty: 30 * 60,
 }
 
 /** The break that counts as off time in contest `event`, and whether its rules name it. */

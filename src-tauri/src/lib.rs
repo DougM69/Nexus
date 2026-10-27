@@ -43544,7 +43544,7 @@ mod tests {
                 .find(|c| c.id == "ilqp")
                 .map(|c| (c.start_unix, c.end_unix))
         };
-        assert_eq!(super::contest_windows_at(w.start_unix).len(), 18);
+        assert_eq!(super::contest_windows_at(w.start_unix).len(), 19);
         assert_eq!(at(w.start_unix + 60), Some((w.start_unix, w.end_unix)));
         let next = rs.event_window(2027);
         assert_eq!(at(w.end_unix), Some((next.start_unix, next.end_unix)));
@@ -43583,6 +43583,51 @@ mod tests {
             ["ALL", "80M", "40M", "20M", "15M", "10M"],
             "CQ WW RTTY runs on five bands"
         );
+        // ⭐ The ARRL RTTY Roundup, from Illinois: its setup asks for the state alone (no county,
+        // no zone), offers its three multi-operator classes and the lines its file writes, and
+        // names every mode but RTTY as one it does not allow — the fixture the setup's own test
+        // (ContestSetupWizard.test.tsx) mirrors.
+        let rru = serde_json::to_value({
+            let s = tempo_app::settings::Settings {
+                fd_event: "arrlrtty".into(),
+                contest_qth_state: "IL".into(),
+                ..Default::default()
+            };
+            super::fd_ruleset_preview(&tempo_app::engine::Engine::with_settings(s))
+        })
+        .unwrap();
+        assert_eq!(
+            rru["sentSettings"],
+            serde_json::json!(["contest_qth_state"]),
+            "{rru}"
+        );
+        assert_eq!(rru["role"], "w_ve", "{rru}");
+        assert_eq!(rru["exchange"], serde_json::json!(["599", "IL"]), "{rru}");
+        assert_eq!(
+            rru["transmitterCategories"],
+            serde_json::json!(["ONE", "TWO", "UNLIMITED"])
+        );
+        assert_eq!(
+            rru["cabrilloHeaders"],
+            serde_json::json!([
+                "CATEGORY-ASSISTED",
+                "CATEGORY-MODE",
+                "CATEGORY-POWER",
+                "CLAIMED-SCORE",
+                "CLUB",
+                "OPERATORS"
+            ])
+        );
+        let banned: Vec<&str> = rru["bannedModes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|m| m.as_str())
+            .collect();
+        for mode in ["JTTY", "FT8", "FT4", "PSK31", "CW", "SSB"] {
+            assert!(banned.contains(&mode), "{mode} not in {banned:?}");
+        }
+        assert!(!banned.contains(&"RTTY"), "{banned:?}");
         let json = serde_json::to_value(&wpx).unwrap();
         assert_eq!(json["transmitterCategories"][1], "TWO", "{json}");
         assert_eq!(json["soapbox"], true, "{json}");

@@ -66,6 +66,9 @@ export const CONTESTS: { id: string; name: string; short: string; badge?: string
   { id: 'arrlvhf_jan', name: 'ARRL January VHF Contest', short: 'January VHF', badge: 'Jan VHF', submit: 'https://contest-log-submission.arrl.org/' },
   { id: 'arrlvhf_jun', name: 'ARRL June VHF Contest', short: 'June VHF', badge: 'Jun VHF', submit: 'https://contest-log-submission.arrl.org/' },
   { id: 'arrlvhf_sep', name: 'ARRL September VHF Contest', short: 'September VHF', badge: 'Sep VHF', submit: 'https://contest-log-submission.arrl.org/' },
+  // The ARRL RTTY Roundup, by the name on arrl.org/rtty-roundup. RTTY only: every other mode is
+  // in the rules data's banned list, so a contact in one is logged and scores nothing.
+  { id: 'arrlrtty', name: 'ARRL RTTY Roundup', short: 'RTTY Roundup', badge: 'RTTY RU', submit: 'https://contest-log-submission.arrl.org/' },
   // CQ WW and CQ WPX are likewise two contests each, on separate weekends with separate
   // Cabrillo tokens. The sponsors' own names, from cqww.com and cqwpx.com.
   // NB the RTTY runnings of both are a DIFFERENT sponsor's contests (CQ/RJ, with the RTTY
@@ -170,6 +173,7 @@ export const CLUB_SYNC_REFUSED: Record<string, ClubSyncRefusal> = {
   cqp: 'serial',
   arrlss_cw: 'serial',
   arrlss_ssb: 'serial',
+  arrlrtty: 'serial',
   cqwpx_cw: 'serial',
   cqwpx_ssb: 'serial',
   cqww_cw: 'transmitter',

@@ -344,6 +344,8 @@ const MIGRATED = [
   'features/contestLocation.ts',
   'features/contestUnsaved.ts',
   'features/contestSpotMarks.ts',
+  // The work-in buttons' words (Work this contest in CW / Phone / RTTY): born migrated.
+  'features/contestWorkIn.ts',
   // The warn-only FD advisories (2026-08-29): born migrated — its two banner/header
   // chips are catalog keys from birth; the mode names, event names and assistance-source
   // labels it interpolates are invariant tokens.

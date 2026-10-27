@@ -415,8 +415,18 @@ impl LoggedQso {
     /// The same answer as `FdRuleset::mode_banned(&self.submode)` without its allocation, which the
     /// scorer's walk of every row on every snapshot must not make: the row's mode is stored trimmed
     /// and uppercase, and the loader takes a banned mode only uppercase and non-empty.
+    ///
+    /// ⭐ **…except a `CW` row, whose CLASS is its mode.** A CW contact records no submode (CW
+    /// needs none, [`FieldDayLog::log_mode_at`]), and that is not missing evidence: it
+    /// was worked in CW. A contest that bans CW (the ARRL RTTY Roundup, RTTY only) must not
+    /// credit it for having nothing in the submode.
     pub fn banned_under(&self, rs: &crate::fd_rules::FdRuleset) -> bool {
-        rs.banned_modes.iter().any(|&m| m == self.submode)
+        let mode = if self.submode.is_empty() && self.mode == "CW" {
+            "CW"
+        } else {
+            self.submode.as_str()
+        };
+        rs.banned_modes.contains(&mode)
     }
 
     /// ⭐ **What the dupe key needs to know about this row's bird** — [`SatKey`]'s
@@ -6260,10 +6270,12 @@ mod tests {
         let year = crate::fd_rules::CURRENT_RULES_YEAR;
         let want = [
             ("arrlfd", FieldDay),
-            // Winter Field Day, Illinois and New York ban FT8 and FT4: nothing new.
+            // Winter Field Day, Illinois and New York ban FT8 and FT4: nothing new. So does the
+            // ARRL RTTY Roundup, which takes RTTY alone (Special Rules 2.2).
             ("wfd", FieldDay),
             ("ilqp", FieldDay),
             ("nyqp", FieldDay),
+            ("arrlrtty", FieldDay),
             ("arrlvhf_jan", NaVhf),
             ("arrlvhf_jun", NaVhf),
             ("arrlvhf_sep", NaVhf),
@@ -6326,7 +6338,7 @@ mod tests {
             .filter_map(|r| r["event"].as_str())
             .collect();
         events.push("");
-        assert_eq!(events.len(), 19);
+        assert_eq!(events.len(), 20);
         for event in events {
             let want = match event {
                 "" | "arrlfd" => (FtMessages::FieldDay, 3),
@@ -6511,10 +6523,10 @@ mod tests {
             .iter()
             .filter_map(|r| r["event"].as_str())
             .collect();
-        assert_eq!(events.len(), 18);
+        assert_eq!(events.len(), 19);
         for event in events {
             let rs = crate::fd_rules::ruleset_by_id(event, year).expect(event);
-            let bans = matches!(event, "wfd" | "ilqp" | "nyqp");
+            let bans = matches!(event, "wfd" | "ilqp" | "nyqp" | "arrlrtty");
             for mode in ["FT8", "FT4"] {
                 assert_eq!(
                     FtMessages::follows_contest(rs, mode),

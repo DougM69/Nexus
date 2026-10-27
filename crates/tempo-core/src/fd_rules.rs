@@ -631,7 +631,19 @@ impl FdRuleset {
                     .map_or(&[], |(_, inputs)| *inputs),
                 _ => &[],
             };
+            // ⭐ The county is sent only by an IN-STATE role (`derived:my_location` and its
+            // `_or_typed` twin send the county there and the state everywhere else), so a
+            // contest whose QTH no in-state role sends — CQ WW RTTY, the ARRL RTTY Roundup —
+            // never asks a setup screen for one.
+            let county_sent = self
+                .exchange
+                .roles
+                .iter()
+                .any(|r| r.id == "in_state" && r.sends.contains(&field.key));
             for name in names {
+                if *name == "contest_qth_county" && !county_sent {
+                    continue;
+                }
                 if !out.contains(name) {
                     out.push(name);
                 }
@@ -4063,6 +4075,45 @@ mod tests {
         assert_ne!(short, want);
     }
 
+    /// ⭐ **The ARRL RTTY Roundup's state and province list is the same list on both sides of the
+    /// IPC** — the CQ WW RTTY guard above, for `ui/src/features/arrlRttyQth.ts`.
+    #[test]
+    fn the_typescript_arrl_rtty_qth_mirror_matches_the_seed_domain() {
+        let ts_src = include_str!("../../../ui/src/features/arrlRttyQth.ts");
+        let ts: Vec<(&str, &str)> = ts_src
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.starts_with("//") && !l.starts_with('*') && !l.starts_with("/*"))
+            .filter_map(|l| Some((ts_str_field(l, "code")?, ts_str_field(l, "name")?)))
+            .collect();
+        assert!(
+            ts.len() > 50,
+            "parsed only {} rows out of arrlRttyQth.ts — the parser is broken, not the mirror",
+            ts.len()
+        );
+        let rs = ruleset_by_id("arrlrtty", CURRENT_RULES_YEAR).expect("arrlrtty is seeded");
+        let domain = rs
+            .domains
+            .iter()
+            .find(|d| d.id == "arrl_rtty_qth")
+            .expect("the QTH domain is declared");
+        assert_eq!(
+            domain.values.len(),
+            63,
+            "48 states + DC + 14 Canadian provinces and territories (Labrador included)"
+        );
+        assert_eq!(
+            ts,
+            domain.values.to_vec(),
+            "ui/src/features/arrlRttyQth.ts drifted from the seed's arrl_rtty_qth \
+             (code, name and order)"
+        );
+        // POSITIVE CONTROL: a mirror missing one code is not equal.
+        let mut short = ts.clone();
+        short.retain(|(c, _)| *c != "LB");
+        assert_ne!(short, domain.values.to_vec());
+    }
+
     /// ⭐ **Every contest the bundled rules table carries is on the picker's menu.**
     ///
     /// The picker (`CONTESTS` in ui/src/fdEvent.ts) is a hand-written list, because a ruleset
@@ -4532,6 +4583,15 @@ mod tests {
         );
         assert_eq!(sent("cqww_cw"), vec!["contest_cq_zone"]);
         assert_eq!(sent("arrlvhf_jun"), vec!["mygrid"]);
+        // ⭐ A QTH with no in-state role sends the state alone: the county is sent only by a
+        // QSO party's in-state station, so a contest without one never asks for it. The ARRL
+        // RTTY Roundup's W/VE station sends its state or province (Special Rules 4.2.1), and its
+        // DX station a serial, which no setting holds.
+        assert_eq!(sent("arrlrtty"), vec!["contest_qth_state"]);
+        assert_eq!(
+            sent("cqww_rtty"),
+            vec!["contest_cq_zone", "contest_qth_state"]
+        );
         // Sweepstakes sends a serial, its precedence (the four category axes), its call, its check
         // and its section.
         let ss = sent("arrlss_cw");
@@ -4565,6 +4625,7 @@ mod tests {
             "cqww_rtty",
             "arrlvhf_sep",
             "arrlss_ssb",
+            "arrlrtty",
         ] {
             assert_eq!(
                 ids.iter().filter(|i| **i == id).count(),
@@ -4572,7 +4633,7 @@ mod tests {
                 "{id} in {ids:?}"
             );
         }
-        assert_eq!(ids.len(), 18, "{ids:?}");
+        assert_eq!(ids.len(), 19, "{ids:?}");
     }
 
     #[test]
@@ -5039,7 +5100,7 @@ mod tests {
         const CQ: &[&str] = &["ONE", "TWO", "UNLIMITED"];
         const VHF: &[&str] = &["ONE", "LIMITED", "UNLIMITED"];
         const NONE: &[&str] = &[];
-        let table: [Row; 18] = [
+        let table: [Row; 19] = [
             ("arrlfd", NONE, NONE, NONE, false),
             ("wfd", NONE, NONE, NONE, false),
             ("tnqp", NONE, NONE, &["ADDRESS"], false),
@@ -5087,6 +5148,9 @@ mod tests {
             ("arrlvhf_jan", VHF, NONE, &["ADDRESS"], true),
             ("arrlvhf_jun", VHF, NONE, &["ADDRESS"], true),
             ("arrlvhf_sep", VHF, NONE, &["ADDRESS"], true),
+            // The RTTY Roundup's three multi-operator classes (Special Rules 3.4), no Cabrillo
+            // overlay (its Limited Antennas Overlay has no Cabrillo token), no address.
+            ("arrlrtty", &["ONE", "TWO", "UNLIMITED"], NONE, NONE, false),
         ];
         let shipped = build(parse_spec(SEED).expect("the seed parses"));
         assert_eq!(
@@ -5156,6 +5220,30 @@ mod tests {
                     );
                     assert_eq!(rs.cabrillo_entry_headers, ["CLUB"]);
                     cq += 1;
+                    continue;
+                }
+                // The ARRL RTTY Roundup: RTTY is its only mode (Special Rules 2.2), and no
+                // band is declared (its b4h.net Cabrillo form offers ALL only).
+                "arrlrtty" => {
+                    let none: &[&str] = &[];
+                    let required: &[&str] = &[
+                        "CATEGORY-ASSISTED",
+                        "CATEGORY-MODE",
+                        "CATEGORY-POWER",
+                        "CATEGORY-TRANSMITTER",
+                        "OPERATORS",
+                    ];
+                    assert_eq!(got, (none, "RTTY", required), "arrlrtty");
+                    assert_eq!(
+                        rs.cabrillo_headers,
+                        [
+                            "CATEGORY-ASSISTED",
+                            "CATEGORY-MODE",
+                            "CATEGORY-POWER",
+                            "CLAIMED-SCORE"
+                        ]
+                    );
+                    assert_eq!(rs.cabrillo_entry_headers, ["CLUB", "OPERATORS"]);
                     continue;
                 }
                 // The Illinois QSO Party declares no category line, and requires the entrant's
@@ -6498,9 +6586,10 @@ mod tests {
         let b = build(parse_spec(&twice).expect("and parses again after a round trip"));
         assert_eq!(
             a.rulesets.len(),
-            18,
+            19,
             "two Field Day events + six QSO parties + both Sweepstakes weekends + \
-             CQ WW's two and CQ WPX's two + ARRL VHF's three runnings + CQ WW RTTY"
+             CQ WW's two and CQ WPX's two + ARRL VHF's three runnings + CQ WW RTTY + \
+             the ARRL RTTY Roundup"
         );
         assert_eq!(a.rulesets.len(), b.rulesets.len());
         for (x, y) in a.rulesets.iter().zip(b.rulesets) {

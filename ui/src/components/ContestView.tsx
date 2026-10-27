@@ -69,7 +69,7 @@ import { modeClassOf } from '../features/needs'
 import { CONTEST_LOG_MAX_SHARE, CONTEST_LOG_SPLIT_MAX, CONTEST_LOG_SPLIT_MIN } from '../features/paneSeam'
 import { PaneSeam } from './PaneSeam'
 import { UtcClock } from './UtcClock'
-import { askMainToWorkIn, dismissWorkInHint, workInHintSeen, type WorkInView } from '../features/contestWorkIn'
+import { askMainToWorkIn, dismissWorkInHint, workInHintSeen, workInLabel, workInTitle, workInViewsFor, type WorkInView } from '../features/contestWorkIn'
 import { useFeatures } from '../useFeatures'
 import { upperTyped } from '../typedInput'
 
@@ -3085,9 +3085,10 @@ export function ContestView({
   // The work-in hint, until it is dismissed on this computer (features/contestWorkIn).
   const [workInHint, setWorkInHint] = useState(() => !workInHintSeen())
   // The route to the cockpits that send: only with Contest mode on, and never on a page that watches;
-  // one button per cockpit this station shows (Settings ▸ Features, read as the rail reads it).
+  // one button per cockpit this station shows (Settings ▸ Features, read as the rail reads it), and
+  // per cockpit whose mode the contest allows (RTTY alone for the RTTY Roundup, `workInViewsFor`).
   const features = useFeatures()
-  const workInViews = (['cw', 'phone'] as const).filter((v) => features.enabled[v] !== false)
+  const workInViews = workInViewsFor(fdRuleset?.bannedModes, (v) => features.enabled[v] !== false)
   const workIn = fdActive && !observed && workInViews.length > 0
   const openedForRun = useRef(false)
 
@@ -3878,10 +3879,10 @@ export function ContestView({
                 key={view}
                 type="button"
                 className="export-btn"
-                title={view === 'cw' ? t('fieldDay.workIn.cw.title') : t('fieldDay.workIn.phone.title')}
+                title={workInTitle(view)}
                 onClick={() => (onWorkIn ?? askMainToWorkIn)(view)}
               >
-                {view === 'cw' ? t('fieldDay.workIn.cw') : t('fieldDay.workIn.phone')}
+                {workInLabel(view)}
               </button>
             ))}
           </div>

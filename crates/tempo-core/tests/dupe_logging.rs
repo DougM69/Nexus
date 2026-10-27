@@ -353,6 +353,9 @@ const DUPE_POLICY: &[(&str, bool)] = &[
     ("arrlvhf_jan", true),
     ("arrlvhf_jun", true),
     ("arrlvhf_sep", true),
+    // …and the RTTY Roundup, whose rules carry the same LGCK.1 sentence (RTTY-RU-Rules.pdf
+    // v3.0b, "Log Checking Penalties").
+    ("arrlrtty", true),
     // CQ XII.E.1 — the same sentence, plus an entrant instruction in as many words:
     // "please do not remove any QSOs from your log! This will cause the other station
     // that worked you to lose credit for the contact."
