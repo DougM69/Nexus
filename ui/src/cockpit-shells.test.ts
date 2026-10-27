@@ -611,11 +611,11 @@ describe('a strip divider keeps its 8 px in an overfull column (winning flex-shr
     ['psk-cockpit', []],
     ['jtty-cockpit', []],
     ['sstv-view', []],
+    // Phone's, a shell child in both of its left side's states since 2026-10-26 (it stood in the stage).
+    ['phone-cockpit', []],
   ]
-  // Phone's sits in its stage (PHONE_STAGES) and carries `in-column` (its margins, below): both states.
   const STRIP_CHAINS: Array<[string, Array<Set<string>>]> = [
     ...STRIPS.map(([shell, between]): [string, Array<Set<string>>] => [shell, [...shellChain(shell), ...between.map((c) => new Set([c])), new Set(['pane-splitter', 'horizontal'])]]),
-    ...PHONE_STAGES.map(([state, stage]): [string, Array<Set<string>>] => [`phone-cockpit (${state})`, [...stage, new Set(['pane-splitter', 'horizontal', 'in-column'])]]),
   ]
   for (const [shell, chain] of STRIP_CHAINS) {
     it(`.${shell}: the strip divider resolves flex-shrink 0`, () => {
@@ -709,20 +709,11 @@ describe('a y divider costs its column nothing: its margins give back the gap it
   const QSOCOL = [...BODY, new Set(['cockpit-lower', 'classic']), new Set(['cockpit-qsocol'])]
   /** [what, the column's chain (null: a pane-grid column), the divider's own classes] */
   const CASES: Array<[string, Array<Set<string>> | null, Array<Set<string>>, string[]]> = [
-    ...['rtty-cockpit', 'psk-cockpit', 'jtty-cockpit', 'sstv-view', 'cw-cockpit', 'js8-cockpit'].map(
+    // PHONE'S SCOPE DIVIDER is a shell child in both of its left side's states (2026-10-26; from
+    // 2026-10-03 it stood in the stage and carried `in-column`).
+    ...['rtty-cockpit', 'psk-cockpit', 'jtty-cockpit', 'sstv-view', 'cw-cockpit', 'js8-cockpit', 'phone-cockpit'].map(
       (shell): [string, Array<Set<string>>, Array<Set<string>>, string[]] => [`.${shell}`, shellChain(shell), shellChain(shell), ['pane-splitter', 'horizontal']],
     ),
-    // PHONE'S SCOPE DIVIDER (2026-10-03) stands in the stage (PHONE_STAGES) and gives back a column's
-    // gap by `in-column`, like every divider whose parent this sheet may not name. With no side the
-    // flat wrappers have no box, so the column whose gap it sits in is the SHELL; with the side shown
-    // it is the stage, whose gap cockpit-panes.css declares (`.cockpit-stage`).
-    [
-      '.phone-cockpit (no side)',
-      shellChain('phone-cockpit'),
-      [...PHONE_STAGES[0][1]],
-      ['pane-splitter', 'horizontal', 'in-column'],
-    ],
-    ['.phone-cockpit (left side shown)', null, [...PHONE_STAGES[1][1]], ['pane-splitter', 'horizontal', 'in-column']],
     ...['phone-cockpit', 'js8-cockpit'].map(
       (shell): [string, null, Array<Set<string>>, string[]] => [
         `.${shell} .cockpit-col`,
@@ -844,9 +835,10 @@ describe('the scope splitter drag is respected (winning flex-grow is 0)', () => 
     for (const fontPx of [14, 16]) expect(resolveClamp(TX_SPLIT_MIN, { fontPx, vhEff: 768 })).toBe(4 * fontPx)
   })
 
+  // Both scopes are shell children; Phone's in both of its left side's states (2026-10-26).
   const SCOPES: Array<[string, Array<Set<string>>]> = [
     ['cw-cockpit', shellChain('cw-cockpit')],
-    ...PHONE_STAGES.map(([state, stage]): [string, Array<Set<string>>] => [`phone-cockpit (${state})`, stage]),
+    ['phone-cockpit', shellChain('phone-cockpit')],
   ]
   for (const [shell, host] of SCOPES) {
     it(`.${shell} .ph-scope-panel resolves flex-grow 0 (grow ≥1 voids the dragged basis)`, () => {
@@ -1183,9 +1175,9 @@ function lengthPx(v: string, g: Geom): number | null {
   return null
 }
 
-/** The two hosts of the strip, as DOM chains — Phone's in both of its stage's states. */
+/** The two hosts of the strip, as DOM chains — both shells (Phone's in both of its left side's states, 2026-10-26). */
 const SCOPE_HOSTS: Array<[string, () => Array<Set<string>>]> = [
-  ...PHONE_STAGES.map(([state, stage]): [string, () => Array<Set<string>>] => [`phone-cockpit (${state})`, () => stage]),
+  ['phone-cockpit', () => shellChain('phone-cockpit')],
   ['cw-cockpit', () => shellChain('cw-cockpit')],
 ]
 const SIZE_PROPS = ['flex', 'height', 'min-height', 'max-height']
@@ -1283,22 +1275,14 @@ describe('the RTTY/PSK waterfall floor YIELDS (and is the lower end of its divid
   }
 })
 
-describe('beside the left side the scope counts at its FLOOR, not its content (2026-10-03)', () => {
-  // With the side shown, the row's automatic minimum is the stage's INTRINSIC height, and a column's
-  // intrinsic height takes each child at its preferred size: the scope counted at its content height
-  // (134 px on a 1280×720 window) instead of the 8em it shrinks to under deficit, so the shell scrolled
-  // 22 px further and the TX strip sat 22 px lower than without the side — measured in Chrome. Size
-  // containment makes its intrinsic size the floor; laid out, it is still its basis, clamped. Only in
-  // that state: the stock shell resolves the scope's basis against the shell, and nothing changes there.
+describe('the scope is never size-contained: it is a shell child in both of Phone’s states (2026-10-26)', () => {
+  // From 2026-10-03 to 2026-10-26 the scope stood in the stage beside the left side, and there it had
+  // to be size-contained (a column's intrinsic height counted it at its content, which scrolled the
+  // shell 22 px further at 1280×720). It stands above the row now, as CW's does, so no rule may
+  // contain it: containment would make its intrinsic size its floor in the stock layout as well.
   const blockContain = blockLonghand('contain')
-  it('with the side shown the scope is size-contained', () => {
-    const chain = [...PHONE_STAGES[1][1], new Set(['ph-scope-panel', 'ph-scope-panel--beside'])]
-    const win = winningValue(chain, blockContain)
-    expect(win, 'nothing contains the scope beside the side').not.toBeNull()
-    expect(win!.value.split(/\s+/), `\`${win!.selector} { contain: ${win!.value} }\``).toContain('size')
-  })
-  it('without the side nothing contains it (control: the stock and hosted layouts are untouched)', () => {
-    for (const host of [PHONE_STAGES[0][1], shellChain('cw-cockpit')]) {
+  it('no rule contains either cockpit’s scope', () => {
+    for (const host of [shellChain('phone-cockpit'), shellChain('cw-cockpit')]) {
       expect(winningValue([...host, new Set(['ph-scope-panel'])], blockContain)).toBeNull()
     }
   })
@@ -1407,8 +1391,7 @@ describe("the scope Splitter's declared range is the range the sheet HONOURS", (
     ['sstv-view', './components/SstvView.tsx', '--sstv-stage-h', ['sstv-canvas', '[data-sized]']],
   ]
   for (const [shell, file, varName, tokens] of CALLERS) {
-    // Phone's strip stands in its stage (PHONE_STAGES); its clamps are the same in both states.
-    const chain = [...(shell === 'phone-cockpit' ? PHONE_STAGES[1][1] : shellChain(shell)), new Set(tokens)]
+    const chain = [...shellChain(shell), new Set(tokens)]
     const strip = tokens.map((t) => (t.startsWith('[') ? t : `.${t}`)).join('').slice(1)
     for (const [end, prop] of [
       ['min', 'min-height'],

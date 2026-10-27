@@ -123,9 +123,10 @@ and **Tune** are not in the pane region at all, so nothing you do in ⊞ Panels 
 hide them or put them in a pane.
 
 **The left side.** ⊞ Panels ▸ **Arrange** starts with a **Left side**: a column
-from under the header down to the dock, beside the scope, for **Band Activity**,
-**Spots** and **Needed**. **◀** on one of them in Column 1 puts it there, the full
-height of the window, and **▶** takes it back to its column. Drag the divider on
+from under the scope and the transmit strip down to the dock, beside the other
+panes, for **Band Activity**, **Spots** and **Needed**. **◀** on one of them in
+Column 1 puts it there, and **▶** takes it back to its column. The scope keeps
+the full width of the window above it. Drag the divider on
 the left side's right edge to make it wider or narrower; Nexus remembers the width,
 and a double-click on the divider (or **Backspace**) puts the default back. The
 left side shows on a window about 1280 px wide or wider, counted after the UI

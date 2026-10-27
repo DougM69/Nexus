@@ -12933,7 +12933,9 @@ export const EN = {
   'shell.tx.announce.on': 'Transmitting',
   'shell.tx.announce.off': 'Receiving',
   'shell.rail.stations.label': 'stations panel width',
-  'shell.rail.waterfall.label': 'waterfall panel width',
+  // The right rail's divider: since 2026-10-26 the rail holds Band Activity, the waterfall a strip of its own.
+  'shell.rail.waterfall.label': 'band activity panel width',
+  'shell.waterfall.splitter.label': 'waterfall height',
   'shell.bandActivity.title': 'Band Activity — heard on the band',
   'shell.roam.aria': 'Roam settings',
   'shell.roam.close.aria': 'Close Roam settings',
@@ -13413,7 +13415,7 @@ export const EN = {
   // THE LEFT SIDE (2026-10-03, Phone): ⊞ Arrange's place beside the scope. `{{panes}}` is the
   // cockpit's own pane names, joined by the locale's list format ("A, B or C" / "A and B").
   'panels.arrange.side': 'Left side',
-  'panels.arrange.side.how': '◀ in Column 1 puts {{panes}} here, the full height beside the scope.',
+  'panels.arrange.side.how': '◀ in Column 1 puts {{panes}} here, under the scope, beside the other panes.',
   'panels.arrange.side.narrow': 'Shows on a window about 1280 px wide or wider.',
   'panels.arrange.side.kept': {
     one: '{{panes}} stands here on a window about 1280 px wide or wider. On this one it is in its usual column.',

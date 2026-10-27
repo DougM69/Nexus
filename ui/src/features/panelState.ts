@@ -1313,7 +1313,7 @@ export const PHONE_PANELS: PanelVocabulary<PhonePanelId> = {
   // which would stop its over and discard its recording. Below three tracks the feeds follow the rig
   // strips (`stockMerged`).
   // THE LEFT SIDE (operator's pick, 2026-10-03): Band Activity, Spots and Needed may stand in a
-  // full-height column beside the scope. Never the voice keyer or the log form: the side comes and
+  // column beside the region, under the scope (2026-10-26). Never the voice keyer or the log form: the side comes and
   // goes with the window's width (about 1280 px), and a pane that changes parent is remounted, which
   // would cut off a voice message or a half-typed contact. The rig strips stay in the region.
   // THE BOXES (BOX_IDS) stand at the foot of the leading column until ⊞ Arrange puts them elsewhere,

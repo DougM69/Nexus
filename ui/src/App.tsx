@@ -98,6 +98,7 @@ import type { BoxSource, RailLink } from './components/panes/CockpitBox'
 import { publishDashRailSwitch, type DashRailSwitch } from './components/dashRailSwitch'
 import { usePaneWidths, LEFT_MIN, RIGHT_MIN } from './usePaneWidths'
 import { PaneSeam } from './components/PaneSeam'
+import { WATERFALL_SPLIT_MAX, WATERFALL_SPLIT_MIN } from './features/paneSeam'
 import { TopBar } from './components/TopBar'
 import { StationList, type StationFilter } from './components/StationList'
 import { Conversation } from './components/Conversation'
@@ -610,6 +611,8 @@ function App() {
   // calling). The FT8/FT4 ⇄ Tempo switch binds the radio tier+mode and swaps only
   // the cockpit; Connect/Map/Prop/Logbook/Awards are GLOBAL views selected from the
   // sidebar (they never retune the radio). Default FT8/FT4 (the 80% case).
+  // Tempo's full-width waterfall strip (2026-10-26), the box its height divider sizes.
+  const tempoWfRef = useRef<HTMLDivElement>(null)
   const [area, setArea] = useState<'dx' | 'msg'>(() => {
     try {
       // coerceArea (test-pinned) also migrates the retired 'connect' area to
@@ -3054,16 +3057,6 @@ function App() {
 
   const waterfallRail = (
     <aside className="right-rail panel">
-      <Waterfall
-        transmitting={snap.radio.transmitting}
-        rxOffsetHz={snap.radio.rxOffsetHz}
-        txOffsetHz={snap.radio.txOffsetHz}
-        theme={theme}
-        onTune={handleTune}
-        paletteScope={FT_PALETTE_SCOPE}
-        markerWidthHz={ftMarkerWidthHz}
-        txBlanks // FT surface — a 13 s over may go dark; see the prop's doc.
-      />
       <OperateDecodes
         decodes={snap.recentDecodes}
         late={snap.lateDecodes}
@@ -3084,13 +3077,38 @@ function App() {
     </aside>
   )
 
-  // Three-pane workspace: stations | center | waterfall, with drag splitters
-  // between each. The waterfall lives in the right rail at every width; the rail
-  // only narrows on the sm/xs collapse. (This used to claim a `data-layout`
-  // top-strip alternative — there was no writer and no CSS behind it.)
+  // Three-pane workspace: a full-width waterfall strip under the header, then stations | center |
+  // the rail (Band Activity and the link pill), with drag splitters between each. THE WATERFALL
+  // STRIP (2026-10-26, "width and height to be consistent"): every mode's waterfall starts at the
+  // same full width and 25 % of the shell, so Tempo's left the right rail (where it was 299 px wide
+  // at 1366×768) for a strip across the top, sized by its own divider as FT's is. The strip is
+  // the workspace grid's own row (styles.css `.layout[data-three-pane]`, `--tempo-wf-h`) and stays
+  // in the same parent at every width, so it never remounts; on the sm/xs collapse it stacks first.
   const threePane = (center: JSX.Element, header?: JSX.Element) => (
     <main className={`layout${header ? ' has-tempo-header' : ''}`} data-three-pane>
       {header && <div className="grid-header">{header}</div>}
+      <Waterfall
+        stripRef={tempoWfRef}
+        transmitting={snap.radio.transmitting}
+        rxOffsetHz={snap.radio.rxOffsetHz}
+        txOffsetHz={snap.radio.txOffsetHz}
+        theme={theme}
+        onTune={handleTune}
+        paletteScope={FT_PALETTE_SCOPE}
+        markerWidthHz={ftMarkerWidthHz}
+        txBlanks // FT surface — a 13 s over may go dark; see the prop's doc.
+      />
+      <PaneSeam
+        axis="y"
+        varName="--tempo-wf-h"
+        strip={tempoWfRef}
+        className="tempo-wf-seam"
+        storageKey="nexus.split.tempo.waterfall"
+        min={WATERFALL_SPLIT_MIN}
+        max={WATERFALL_SPLIT_MAX}
+        defaultPct={25}
+        label={t('shell.waterfall.splitter.label')}
+      />
       <div className="grid-stations">{stationsPanel}</div>
       <PaneSeam
         axis="x"
@@ -3105,7 +3123,7 @@ function App() {
         onReset={resetLeft}
       />
       <div className="grid-center">{center}</div>
-      {/* This divider is the waterfall rail's LEFT edge: moving it left widens the rail. */}
+      {/* This divider is the right rail's LEFT edge: moving it left widens the rail. */}
       <PaneSeam
         axis="x"
         className="right"

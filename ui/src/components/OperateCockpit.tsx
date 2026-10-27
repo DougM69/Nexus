@@ -1976,7 +1976,11 @@ export function OperateCockpit({
               storageKey="nexus.split.operate.waterfall"
               min={88}
               max={420}
-              defaultPct={22}
+              // 25 % of the SHELL, as every cockpit's waterfall starts (2026-10-26: "width and height to
+              // be consistent"). The strip stands in the body, under the cockpit's own rows, so the
+              // default is measured against the shell; a stored height stays a share of the body.
+              defaultPct={25}
+              defaultOf={() => wfRef.current?.closest<HTMLElement>('main.operate-cockpit') ?? null}
               label={t('operate.waterfall.splitter.label')}
             />
           </>

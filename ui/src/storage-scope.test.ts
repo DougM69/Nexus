@@ -148,6 +148,8 @@ export const PER_SURFACE = [
   'nexus.split.psk.waterfall',
   'nexus.split.rtty.waterfall',
   'nexus.split.sstv.stage',
+  // Tempo's waterfall strip (2026-10-26): a % of THIS window's workspace grid, the same kind.
+  'nexus.split.tempo.waterfall',
   'nexus.view',
   'nexus.waterfall.dss',
   'nexus.waterfall.flow',
@@ -482,6 +484,7 @@ const INDIRECT: Record<string, string[]> = {
     'nexus.split.logbook.globe',
     'nexus.split.contest.log',
     'nexus.split.contest.recent',
+    'nexus.split.tempo.waterfall',
   ],
   // The Needed board's filter record: its own key as the view and the pop-out, or the key the
   // host of a PANE of it passes (NeededPane — the Phone and CW cockpits', #345, and the

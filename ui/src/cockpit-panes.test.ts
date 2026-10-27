@@ -312,10 +312,11 @@ const phoneShellGap = () => {
   return v
 }
 
-describe('THE LEFT SIDE (2026-10-03): a full-height column beside the scope, and the five-kind shell is unchanged without it', () => {
-  // The operator's pick: ⊞ Panels ▸ Arrange's "Left side", a column from under the header to the
-  // dock, beside the scope, the TX strip and the pane region, for Band Activity, Spots and Needed.
-  // Phone renders the scope, the strip and the region inside TWO WRAPPERS that are always there — so
+describe('THE LEFT SIDE (2026-10-03): a column beside the region, and the five-kind shell is unchanged without it', () => {
+  // The operator's pick: ⊞ Panels ▸ Arrange's "Left side", a column from under the TX strip to the
+  // dock (2026-10-26; from under the header until then), beside the pane region, for Band Activity,
+  // Spots and Needed. The scope and the TX strip are shell children, full width, in both states.
+  // Phone renders the region inside TWO WRAPPERS that are always there — so
   // showing the side never moves the voice keyer or the log form to a new parent — and the wrappers
   // generate NO BOX until the side shows. These compute that the two states are what they claim.
 
@@ -324,9 +325,8 @@ describe('THE LEFT SIDE (2026-10-03): a full-height column beside the scope, and
     expect(win, 'nothing declares display on .cockpit-flat — a wrapper with a box changes every Phone screen').not.toBeNull()
     expect(
       win!.value,
-      `\`${win!.sheet}: ${win!.selector} { display: ${win!.value} }\` — the scope, the TX strip and the region ` +
-        'must stay flex items of the SHELL while no side shows: the strip\'s sticky edges are measured against ' +
-        'the shell, which is what keeps Stop TX on screen at a 175 % pin.',
+      `\`${win!.sheet}: ${win!.selector} { display: ${win!.value} }\` — the region ` +
+        'must stay a flex item of the SHELL while no side shows, or the stock Phone screen changes.',
     ).toBe('contents')
     // A flat wrapper is never a scroll container or a clip edge either.
     expect(classWinner('cockpit-flat', blockOverflowY)).toBeNull()

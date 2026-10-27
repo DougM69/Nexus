@@ -2372,7 +2372,7 @@ export function CwCockpit({
       {/* THE SCOPE STRIP, ⊞-hideable since 2026-08-16 — the Phone twin of this gate carries the
           full reasoning. In short: the shell's four-child census is unchanged (one of the four is
           simply conditional), the gate is at the SHELL CHILD so no empty bordered box is left
-          holding its `flex: 0 1 13%` basis and 8em floor, the Splitter goes with it (it drags
+          holding its `flex: 0 1 25%` basis and 8em floor, the Splitter goes with it (it drags
           --cw-scope-h, which is that basis, and would otherwise strand a seam), and
           `.cockpit-panes { flex: 1 1 0 }` takes the freed height with no rule change.
 
@@ -2512,7 +2512,8 @@ export function CwCockpit({
         storageKey="nexus.split.cw.scope"
         min={SCOPE_SPLIT_MIN}
         max={SCOPE_SPLIT_MAX}
-        defaultPct={13}
+        // 25 % of the shell, every cockpit's waterfall default (2026-10-26); a dragged height is kept.
+        defaultPct={25}
         label={t('cw.scope.splitter.label')}
       />
         </>
