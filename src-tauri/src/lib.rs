@@ -22617,6 +22617,16 @@ fn qso_resend(
     Ok(eng.snapshot())
 }
 
+/// WSJT-X's Clear DX (F4, the Clear button) and an edit of the DX Call box: the contact with the
+/// station in it ends, its start time is reset, TX goes off, and nothing more is sent to that
+/// station ([`tempo_app::engine::Engine::clear_dx_call`]). Keys nothing.
+#[tauri::command(async)]
+fn clear_dx_call(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    eng.clear_dx_call();
+    Ok(eng.snapshot())
+}
+
 /// Operator in-QSO free text (WSJT-X Tx5): override the next transmission with
 /// `text`, directed to the current DX station when known. No-op outside a QSO; refused,
 /// with the reason, when the encoder cannot send its over. `afar`: as [`set_tx_enabled`]'s.
@@ -40579,6 +40589,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         street_map::street_map_install_file,
         set_area,
         qso_resend,
+        clear_dx_call,
         qso_freetext,
         log_current_qso,
         confirm_pending_log,

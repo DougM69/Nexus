@@ -1390,6 +1390,13 @@ export async function qsoResend(): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('qso_resend', {})
 }
 
+/** WSJT-X's Clear DX (F4, the Clear button) and an edit of the DX Call box: the contact with the
+ * station in it ends, the QSO start time is reset, and nothing more is sent to that station.
+ * Calling CQ with nobody in the contact, only the start time is reset. Returns the fresh snapshot. */
+export async function clearDxCall(): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('clear_dx_call', {})
+}
+
 /** Operator in-QSO free text (WSJT-X Tx5): override the next transmission with
  * `text`, directed to the current DX when known. Returns the fresh snapshot. */
 export async function qsoFreetext(text: string): Promise<AppSnapshot> {

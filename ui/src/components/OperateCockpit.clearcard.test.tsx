@@ -53,6 +53,7 @@ vi.mock('../api', () => ({
   pointRotatorAtCall: vi.fn(async () => null),
   redecode: (...a: unknown[]) => redecode(...(a as [])),
   startCq: vi.fn(async () => null),
+  clearDxCall: vi.fn(async () => null),
   startQsoRecording: vi.fn(async () => null),
   stopQsoRecording: vi.fn(async () => null),
   setSkipTx1: vi.fn(async () => null),

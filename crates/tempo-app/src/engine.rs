@@ -23,6 +23,9 @@ mod by_id_tests;
 /// A callbook lookup's answer reaches the contact on every log path, never by a lookup of its own.
 #[cfg(test)]
 mod callbook_fill_tests;
+/// A click on a station starts the contact fresh, and TIME_ON follows WSJT-X's start time.
+#[cfg(test)]
+mod click_starts_fresh_tests;
 /// A clock repair holds transmit: every way to start one refused, nothing keyed or unkeyed.
 #[cfg(test)]
 mod clock_repair_hold_tests;
@@ -3606,6 +3609,12 @@ pub struct Engine {
     /// ONE more over (#170, #153) — see [`RecentPartner`] for the three bounds. Session-only,
     /// one deep, and dropped the moment it is spent or expires.
     recent_partner: Option<RecentPartner>,
+    /// Every caller Clear DX has dropped from a CQ run since TX was last armed. A cleared caller
+    /// usually calls again, since it never got our report, and until the operator arms TX again
+    /// (Enable Tx, Call CQ) the run answers none of them: nothing is sent to a station after its
+    /// clear (WSJT-X answers nothing while Enable Tx is off), however many callers are cleared in
+    /// between. Other callers are answered as before, and a click on one works it as any click does.
+    cleared_dx_calls: Vec<String>,
     /// Completed QSOs held for the operator to confirm before they are logged (WSJT-X
     /// "Prompt me to log QSO"), oldest first. Non-empty only while `prompt_to_log` is on.
     ///
@@ -6645,6 +6654,7 @@ impl Engine {
             stalled_qso: None,
             band_change_qso: None,
             recent_partner: None,
+            cleared_dx_calls: Vec::new(),
             pending_logs: VecDeque::new(),
             unconfirmed_auto_logs: Vec::new(),
             contest_held_uploads: Vec::new(),
@@ -17872,8 +17882,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// WSJT-X parses *that* message to choose the next Tx, so clicking a station
     /// that already answered resumes the QSO mid-sequence instead of restarting at
     /// the grid. When `reply_msg` is `None` (a roster/spot/typed call with no
-    /// specific line), we fall back to the most recent decode from `dxcall`
-    /// addressed to us this slot. Working a station also **enables TX** (so a
+    /// specific line), we answer the station's latest transmission: its reply to us
+    /// when that is the newest thing heard from it, else Tx1. Every call starts the
+    /// contact fresh and resets the QSO start time, as WSJT-X's double-click does
+    /// (`mainwindow.cpp:9271`). Working a station also **enables TX** (so a
     /// double-click transmits even if TX was toggled off) — matching WSJT-X.
     pub fn call_station_ctx(
         &mut self,
@@ -17947,8 +17959,14 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 }
                 Some((Msg::parse(text), snr))
             }
+            // A click naming no message (a roster row, a station card, the Needed board, a
+            // spot) answers the station's LATEST transmission, as a WSJT-X double-click on that
+            // line would (`processMessage`, `DecodedMessageReaction.cpp` `planProcessMessage`).
+            // A message to us maps by its type, its RR73 or RRR included: Tx5, our 73 (:590-598,
+            // `rogerAck`). A CQ or a message to someone else is answered as one: Tx1, or Tx2 with
+            // the report heard on it when Skip Tx1 is on (:696-702, `SetReport` :400).
             _ => self
-                .latest_reply_from(dxcall, &mycall)
+                .latest_message_from(dxcall, &mycall)
                 .map(|(m, snr, slot)| {
                     context_slot = Some(slot);
                     (m, snr)
@@ -18002,68 +18020,25 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // advanced the QSO to RR73, so the report is gone and the contact logs with a blank
         // RST_SENT. Operator report, 2026-07-25: "the log seems to have it right in almost
         // every case" — this is the "almost".
-        // ⭐ RE-CLICKING THE STATION ALREADY BEING WORKED MUST NOT REBUILD THE QSO.
-        //
-        // Everything above builds a FRESH `Station`, and this used to install it
-        // unconditionally — so "work this station" on the station already being worked threw
-        // the live contact away and started it again. Field report 2026-08-25 (RI1FJL on
-        // 10.131), proven by replaying the operator's own ALL.TXT through the state machine:
-        // he cleared his message back to his grid, clicked the station again, and Nexus sent
-        // `R-21` — the message the rebuild re-derived from the DX's last report to him. Twice,
-        // with nothing addressed to him on the air in between, which is what ruled out
-        // `Station::observe` (every arm there is gated on `same_call(to, mycall)`).
-        //
-        // The message was the visible half. The rebuild also reset `qso_start_unix` — so the
-        // contact would LOG the time of the last click instead of when it began — along with
-        // `qso_report_sent`, the per-step transmit counts and the transcript.
-        //
-        // The rule, and it is the click's own meaning: a click that POINTS AT A MESSAGE
-        // (`reply_msg`) is WSJT-X's double-click — the operator is naming the message they
-        // want answered, so re-derive from it, unchanged. A click carrying NO message is
-        // "work this station" (a roster row, a station card, a spot); when that names the
-        // station already being worked it is a re-arm, and it must not rewrite what is queued.
-        //
-        // Everything else a click does still happens: parity, RX/TX offsets, the TX-enable
-        // and the immediate-key below all run either way. Only the QSO's own state survives.
-        //
-        // ⚠️ AND IT IS A RE-ARM, NOT A NO-OP. The first cut of this guard simply skipped the
-        // install, which broke three ways that an adversarial review measured before it
-        // shipped — every one of them a click that leaves the transmitter SILENT:
-        //
-        //  (a) The rebuild was the only thing that cleared `Station::tx_count`. A directed
-        //      step that has spent `directed_max_calls` (default 8) stayed spent across the
-        //      click, so `outgoing_rv()` kept withholding and the radio never keyed —
-        //      measured 0 overs where the old code gave 8. That is this very operator's QSO
-        //      one step on: the DX never rogers, the budget runs out, he clicks to get it
-        //      going again. So the re-arm clears the step budget, exactly as the Resend
-        //      button does (`Station::resend`), while KEEPING what is queued.
-        //  (b) A QSO that reached `Done` has `pending: None` and no arm in `observe` that can
-        //      re-arm it, so "work this station" armed TX and queued nothing, for good.
-        //      `pending.is_some()` sends that case down the rebuild branch where it belongs.
-        //  (c) A cross-band QSY clears the decode context but NOT `Mode::Qso`, so a re-click
-        //      on the new band would resume the old band's mid-sequence station and open with
-        //      a roger for an exchange that never happened there. Requiring a live decode
-        //      from this DX uses the state the QSY already clears.
-        let rearming_same_qso = reply_msg.is_none()
-            && self.latest_decode_slot_from(dxcall).is_some()
-            && matches!(&self.mode, Mode::Qso { station: live, .. }
-                if live.dxcall.as_deref().is_some_and(|c| tempo_core::message::same_call(c, dxcall))
-                    && live.pending.is_some());
-        if rearming_same_qso {
-            if let Mode::Qso { station: live, .. } = &mut self.mode {
-                live.resend(); // zero the spent step budget; the queued message stands
-            }
-        }
-        if !rearming_same_qso {
-            let opening_report = report_in(station.outgoing());
-            self.mode = Mode::Qso {
-                station: Box::new(station),
-                running: true,
-            };
-            self.reset_qso_log_identity();
-            self.qso_report_sent = opening_report;
-            self.qso_start_unix = Some(now_unix_secs()); // working a station starts the QSO clock
-        }
+        // ⭐ EVERY CLICK STARTS FRESH, AS WSJT-X'S DOUBLE-CLICK DOES (field report KR4FQG,
+        // 2026-10-26). A re-click rule used to keep the live QSO when a click named no message
+        // and the station was the one being worked. Nothing bounded its age: a partial S&P QSO
+        // with 7P8 stalled, and hours later a roster click put the hours-old roger with the
+        // hours-old report back on the air, the DX closed with RR73, and the contact logged
+        // under the first attempt's start time. WSJT-X keeps no such rule: `handleDecodeSelection`
+        // resets the QSO start time (`set_dateTimeQSO(-1)`, `widgets/mainwindow.cpp:9271`) and
+        // `processMessage` re-derives the Tx message and the report from the clicked message
+        // alone (`DecodedMessageReaction.cpp` `planProcessMessage`, `SetReport` :400). So the
+        // station built above is installed, every time, and the start time restarts with it.
+        let opening_report = report_in(station.outgoing());
+        self.mode = Mode::Qso {
+            station: Box::new(station),
+            running: true,
+        };
+        self.reset_qso_log_identity();
+        self.qso_report_sent = opening_report;
+        self.qso_start_unix = None; // mainwindow.cpp:9271
+        self.follow_tx_selection(None);
         // A directed call is S&P, not a CQ run: a completed QSO does NOT auto-resume
         // calling CQ.
         self.cq_running = false;
@@ -18140,10 +18115,88 @@ Pick the one you operate from on the Contesting tab in Settings.",
         self.immediate_tx = true;
         self.tx_queue.clear();
         self.broadcast_queue.clear();
-        // `qso_logged` / `qso_report_sent` / `qso_start_unix` are set with the Station above —
-        // they belong to the CONTACT, so a re-arm of the one in progress must not restamp them.
         self.harq_reset_locked(); // fresh exchange: drop stale receive-side IR-HARQ state
         Ok(())
+    }
+
+    /// WSJT-X's Clear DX (F4, the Clear button beside the DX Call box), and an edit of the DX Call
+    /// box: the contact with the station in it ENDS, and the QSO start time is reset.
+    ///
+    /// `clearDX` (`widgets/mainwindow.cpp:10075-10104`) resets the start time (:10077), turns
+    /// Enable Tx off unless the station is calling CQ with nobody in the contact (:10078-10080),
+    /// empties the DX call, both reports and the generated messages (:10081-10091), and selects
+    /// Tx6 with the progress back at CALLING (:10098-10103). `on_dxCallEntry_textChanged` resets the
+    /// start time when the DX call changes (:10563). Here a CQ run goes back to its CQ, armed behind
+    /// TX off as Tx6 is; search and pounce goes back to listening; Field Day's sequencer re-arms
+    /// for its next station as it does after a contact.
+    ///
+    /// NOTHING IS SENT TO THAT STATION AFTERWARDS: its queued over goes with the station, a late
+    /// answer still owed to a partner the run has left is dropped, and TX off drops every queued
+    /// send. An over already on the air finishes, as WSJT-X's Enable Tx off lets it (Halt is the
+    /// immediate stop). A typed call is then worked as a click works it: a Tx button on it finds
+    /// no contact with that station and starts one fresh ([`Self::override_next_tx`]).
+    pub fn clear_dx_call(&mut self) {
+        // mainwindow.cpp:10077, :10563
+        self.qso_start_unix = None;
+        // The partner a run has already left is still WSJT-X's DX call (`m_hisCall`), which the
+        // clear empties: the one late answer still owed to it goes too.
+        self.recent_partner = None;
+        let cleared = match &self.mode {
+            Mode::Qso { station, .. } => station.dxcall.clone(),
+            Mode::FieldDay { station, .. } => station.dxcall.clone(),
+            Mode::Chat => None,
+        };
+        let Some(cleared) = cleared else {
+            return; // calling CQ, or nobody: :10078 leaves Enable Tx as it is
+        };
+        // An earlier abandoned contact with this same station goes too, so the Log button cannot
+        // log the station just cleared; one with another station stays for the Log button.
+        if self
+            .stalled_qso
+            .as_ref()
+            .is_some_and(|st| tempo_core::message::same_call(&st.dxcall, &cleared))
+        {
+            self.stalled_qso = None;
+        }
+        let mycall = self.settings.mycall.clone();
+        let mygrid = self.settings.mygrid.clone();
+        match &mut self.mode {
+            Mode::FieldDay { station, running } => station.rearm(*running),
+            _ if self.cq_running => {
+                if !self
+                    .cleared_dx_calls
+                    .iter()
+                    .any(|c| tempo_core::message::same_call(c, &cleared))
+                {
+                    self.cleared_dx_calls.push(cleared);
+                }
+                let mut s = QsoStation::calling_cq(&mycall, &mygrid);
+                s.confirm_with_rrr = self.settings.prefer_rrr;
+                s.cq_call_cap = self.cq_call_budget();
+                if let Some(d) = &self.cq_dir {
+                    s.override_next(Msg::Cq {
+                        de: mycall.clone(),
+                        grid: mygrid.clone(),
+                        dir: d.clone(),
+                    });
+                }
+                self.mode = Mode::Qso {
+                    station: Box::new(s),
+                    running: true,
+                };
+            }
+            _ => {
+                self.mode = Mode::Qso {
+                    station: Box::new(QsoStation::monitoring(&mycall, &mygrid)),
+                    running: false,
+                };
+            }
+        }
+        self.reset_qso_log_identity();
+        self.qso_report_sent = None; // :10083-10084
+        self.immediate_tx = false;
+        self.set_tx_enabled(false); // auto_tx_mode(false), :10079
+        self.reset_tx_watchdog();
     }
 
     /// The cockpit's "work this station" — the `call_station` command: a double-click on a
@@ -18545,6 +18598,37 @@ Pick the one you operate from on the Contesting tab in Settings.",
             })
             // Newest first, then highest resume rank within the same slot.
             .max_by_key(|(r, _, _, slot)| (*slot, *r))
+            .map(|(_, m, snr, slot)| (m, snr, slot))
+    }
+
+    /// The station's latest transmission, for a click naming no message: among the decodes FROM
+    /// `dxcall` in the newest slot it was heard in, a message to us first (the furthest-progressed:
+    /// grid < report < R-report < RRR/RR73), else whatever it sent (a CQ, a call to someone else),
+    /// with the SNR it was heard at and its slot. A 73 to us is not answered: a click on a station
+    /// that has signed off with us starts a new call, so it yields `None` (Tx1) when it is all that
+    /// slot holds.
+    fn latest_message_from(&self, dxcall: &str, mycall: &str) -> Option<(Msg, i32, u64)> {
+        let newest = self.latest_decode_slot_from(dxcall)?;
+        self.decode_history
+            .iter()
+            .filter(|(slot, _)| *slot == newest)
+            .filter_map(|(slot, d)| {
+                let m = Msg::parse(&d.message);
+                if !m.sender().is_some_and(|s| same_call(s, dxcall)) {
+                    return None;
+                }
+                let to_me = m.addressee().is_some_and(|a| same_call(a, mycall));
+                let rank = match (&m, to_me) {
+                    (_, false) => 0,
+                    (Msg::Grid { .. }, true) => 1,
+                    (Msg::Report { .. }, true) => 2,
+                    (Msg::RReport { .. }, true) => 3,
+                    (Msg::Rrr { .. } | Msg::Rr73 { .. }, true) => 4,
+                    (_, true) => return None,
+                };
+                Some((rank, m, d.snr.clamp(-30, 49), *slot))
+            })
+            .max_by_key(|(rank, ..)| *rank)
             .map(|(_, m, snr, slot)| (m, snr, slot))
     }
 
@@ -20427,6 +20511,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
         self.tx_enabled = on;
         if on {
+            // The operator's arm ends Clear DX's hold on the callers it dropped.
+            self.cleared_dx_calls.clear();
             // Re-enabling is an operator action: clear a tripped watchdog and
             // restart the watchdog timer on the next over.
             self.tx_watchdog = false;
@@ -27628,6 +27714,19 @@ contact yourself."
         self.contest_ft_messages().is_some() && self.mode_opens_session("fieldday-sp")
     }
 
+    /// The QSO start time after the queued over changed from Tx `before` ([`wsjtx_tx_number`]):
+    /// WSJT-X acts on a Tx radio button only when its selection changes (`toggled`).
+    fn follow_tx_selection(&mut self, before: Option<u8>) {
+        let Mode::Qso { station, .. } = &self.mode else {
+            return;
+        };
+        let now = wsjtx_tx_number(station.pending.as_ref());
+        if now != before {
+            let period_s = self.active_slot_secs();
+            follow_tx_selection_into(&mut self.qso_start_unix, self.qso_logged, now, period_s);
+        }
+    }
+
     /// WSJT-X Tx-slot click: force `text` as the next transmission to `dxcall`.
     /// Starts (or retargets) the QSO when needed; the auto-sequencer's observe
     /// still advances on the partner's matching reply, so a forced message
@@ -27666,10 +27765,15 @@ contact yourself."
             // correct: the override rides a QSO that was never started.
             self.call_station_ctx(dxcall, dxgrid, None, None, None)?;
         }
+        let mut before = None;
         if let Mode::Qso { station, .. } = &mut self.mode {
+            before = wsjtx_tx_number(station.pending.as_ref());
             let row = station.tx_row(text);
             station.override_next(row);
         }
+        // A Tx button selects that message, and with it the start time's rule (mainwindow.cpp
+        // `on_txbN_clicked` checks the radio button).
+        self.follow_tx_selection(before);
         self.reset_tx_watchdog();
         if self.settings.double_click_sets_tx {
             self.set_tx_enabled(true);
@@ -29133,6 +29237,7 @@ contact yourself."
         // a pending message it is refusing to emit. This is what lets the `None` arm below
         // tell a capped station apart from ordinary silence — see the watchdog block there.
         let mut withheld_by_call_cap = false;
+        let qso_period_s = self.active_slot_secs();
         let text: Option<String> = match &mut self.mode {
             Mode::Chat => {
                 // Open broadcasts have priority and send unconditionally — no
@@ -29293,6 +29398,24 @@ contact yourself."
                         // reply. Clearing it here rather than only on resume means a stale
                         // deadline cannot survive into the next run and silence its first calls.
                         self.cq_pause_until = None;
+                        // WSJT-X logs the contact as its first RR73 or 73 starts
+                        // (`mainwindow.cpp:8237-8249`, prompt-to-log or auto-log), and a start
+                        // time Tx2/Tx3 never set is estimated at that moment from the Tx number
+                        // going out (`mainwindow_slots.cpp:496-500`). Our log lands a decode later,
+                        // so the estimate is taken here, as the over leaves.
+                        let closing_ntx = match station.pending {
+                            Some(Msg::Rr73 { .. }) => Some(4),
+                            Some(Msg::Bye73 { .. }) => Some(5),
+                            _ => None,
+                        };
+                        if let Some(n) = closing_ntx.filter(|_| {
+                            self.settings.auto_log
+                                && !self.qso_logged
+                                && self.qso_start_unix.is_none()
+                        }) {
+                            self.qso_start_unix =
+                                Some(wsjtx_qso_on(now_unix_secs(), n, qso_period_s));
+                        }
                         station.after_tx();
                         // Stock "Disable Tx after sending 73": the over leaving
                         // NOW is our final 73 (after_tx just cleared pending at
@@ -30908,6 +31031,7 @@ contact yourself."
 
     fn observe_modes(&mut self, decodes: &[modes::Decode], slot: u64) {
         self.ft_seq_moved = false;
+        let period_s = self.active_slot_secs();
         // The completed contact to auto-log, gathered while `self.mode` is
         // borrowed and committed after (so building the record doesn't conflict
         // with the mutable borrow of the sequencer).
@@ -30925,6 +31049,25 @@ contact yourself."
             Mode::Chat => {}
             Mode::Qso { station, .. } => {
                 let state_before = station.state;
+                // A caller Clear DX dropped is not answered until the operator arms TX again. It is
+                // set aside before the best-caller pick, so it never hides another caller.
+                let unheld;
+                let answerable: &[modes::Decode] =
+                    if !self.cleared_dx_calls.is_empty() && state_before == QsoState::CallingCq {
+                        let cleared = &self.cleared_dx_calls;
+                        unheld = decodes
+                            .iter()
+                            .filter(|d| {
+                                !Msg::parse(&d.message).sender().is_some_and(|s| {
+                                    cleared.iter().any(|c| tempo_core::message::same_call(s, c))
+                                })
+                            })
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        &unheld
+                    } else {
+                        decodes
+                    };
                 // W1.4 best-caller selection: when RUNNING CQ and several stations
                 // answer in the same slot, reorder the decodes so the sequencer
                 // locks onto the operator's preferred caller instead of stock
@@ -30942,7 +31085,7 @@ contact yourself."
                         || !self.settings.blocked_calls.is_empty())
                 {
                     picked = best_caller_decodes(
-                        decodes,
+                        answerable,
                         &self.settings.mycall,
                         &self.settings.best_caller,
                         self.settings.best_caller_min_snr,
@@ -30951,7 +31094,7 @@ contact yourself."
                     );
                     &picked
                 } else {
-                    decodes
+                    answerable
                 };
                 // WSJT-X 3.0.2 `mainwindow.cpp:9426`: in FT8, FT4 and FST4 a repeated over
                 // from the partner re-reads the report we send back; every other mode keeps
@@ -30959,6 +31102,7 @@ contact yourself."
                 station.report_follows_latest_decode =
                     matches!(self.app.tier(), Tier::Ft8 | Tier::Ft4 | Tier::Fst4);
                 let next_before = station.outgoing();
+                let ntx_before = wsjtx_tx_number(station.pending.as_ref());
                 station.observe(observed);
                 sequence_advanced = station.state != state_before;
                 self.ft_seq_moved = sequence_advanced || station.outgoing() != next_before;
@@ -31002,16 +31146,17 @@ contact yourself."
                 if let Some(snr) = report_in(station.outgoing()) {
                     self.qso_report_sent = Some(snr);
                 }
-                // Stamp the QSO start (TIME_ON) the first time an exchange is actually
-                // under way — when our CQ gets its first reply (answering a station
-                // already stamped it in call_station_ctx). One-shot via the None guard;
-                // skip once logged so a post-log over can't re-stamp a stale start.
-                if self.qso_start_unix.is_none()
-                    && !self.qso_logged
-                    && station.dxcall.is_some()
-                    && !matches!(station.state, QsoState::CallingCq | QsoState::Listening)
-                {
-                    self.qso_start_unix = Some(now_unix_secs());
+                // The QSO start time (TIME_ON) follows the over the sequencer selects, as
+                // WSJT-X's auto-sequencer checks a Tx radio button: Tx2/Tx3 set it (a CQ's
+                // first answer, the DX's report to us), Tx1/CQ reset it.
+                let ntx_after = wsjtx_tx_number(station.pending.as_ref());
+                if ntx_after != ntx_before {
+                    follow_tx_selection_into(
+                        &mut self.qso_start_unix,
+                        self.qso_logged,
+                        ntx_after,
+                        period_s,
+                    );
                 }
                 // Auto-log exactly once when the contact is complete. The responder
                 // reaches Done (it sent the final 73); the INITIATOR reaches Confirming
@@ -31542,6 +31687,34 @@ contact yourself."
         }
     }
 
+    /// TIME_ON for a contact whose start time was never set, because Tx2 and Tx3 were never
+    /// selected (a click on an R-report opens with Tx4): WSJT-X's fallback when it logs,
+    /// `now - (m_ntx-2)*int(T/R) - int(fmod(seconds of the minute, T/R))`, with `m_ntx` the Tx
+    /// message selected then (`mainwindow_slots.cpp:496-500`, `on_logQSOButton_clicked`). Our
+    /// queued over gives that number, and a contact at Done whose 73 has gone gives Tx5. Tx1 is
+    /// counted as Tx2, the period's own start, where WSJT-X's formula would put the start AFTER
+    /// now. With no contact with `dxcall` in the sequencer (a contact rescued after the run left
+    /// it), the start is now, as before.
+    fn start_time_at_log(&self, dxcall: &str) -> u64 {
+        let now = now_unix_secs();
+        let ntx = match &self.mode {
+            Mode::Qso { station, .. }
+                if station
+                    .dxcall
+                    .as_deref()
+                    .is_some_and(|c| same_call(c, dxcall)) =>
+            {
+                wsjtx_tx_number(station.pending.as_ref())
+                    .or((station.state == QsoState::Done).then_some(5))
+            }
+            _ => None,
+        };
+        match ntx {
+            Some(n) => wsjtx_qso_on(now, u64::from(n.max(2)), self.active_slot_secs()),
+            None => now,
+        }
+    }
+
     fn qso_record(
         &self,
         dxcall: String,
@@ -31562,6 +31735,9 @@ contact yourself."
         // function is where a live station becomes a log entry, so a log-shaped rule belongs
         // here and nowhere earlier. WSJT-X draws the same line: it strips `<`/`>` at every
         // point it consumes a call for logging or display.
+        let when_unix = self
+            .qso_start_unix
+            .unwrap_or_else(|| self.start_time_at_log(&dxcall));
         let dxcall = tempo_core::message::unhash_call(&dxcall).to_string();
         // ADIF mode: one source of truth with the B4 band-key — see adif_mode_for_tier.
         let mode = self.adif_mode_for_tier().to_string();
@@ -31621,10 +31797,10 @@ contact yourself."
             comment: reports_note,
             notes: None,
             tx_power: None,
-            // TIME_ON = when the exchange began (set on answer / first CQ reply);
-            // TIME_OFF = now (the contact just completed). Fall back to now if we somehow
-            // never stamped a start.
-            when_unix: self.qso_start_unix.unwrap_or_else(now_unix_secs),
+            // TIME_ON = when the exchange began (WSJT-X's `m_dateTimeQSOOn`, set when Tx2 or Tx3
+            // is selected), else WSJT-X's log-time estimate ([`Self::start_time_at_log`]);
+            // TIME_OFF = now (the contact just completed).
+            when_unix,
             time_off_unix: Some(now_unix_secs()),
             confirmed: false,
             award_confirmed: false,
@@ -33416,6 +33592,45 @@ fn restore_fd_journal(
     if let Some(why) = why {
         tempo_core::keep_aside::keep_aside("fieldDay", path, now_unix, &why);
     }
+}
+
+/// The WSJT-X Tx message number (1-6) a queued over stands for: Tx1 our grid, Tx2 the report,
+/// Tx3 the roger with report, Tx4 RRR/RR73, Tx5 73, Tx6 CQ. Read from the message the sequencer
+/// queued, before the on-air rewrite of a compound call. `None` for free text or nothing queued.
+fn wsjtx_tx_number(pending: Option<&Msg>) -> Option<u8> {
+    match pending? {
+        Msg::Grid { .. } => Some(1),
+        Msg::Report { .. } => Some(2),
+        Msg::RReport { .. } => Some(3),
+        Msg::Rrr { .. } | Msg::Rr73 { .. } => Some(4),
+        Msg::Bye73 { .. } => Some(5),
+        Msg::Cq { .. } => Some(6),
+        _ => None,
+    }
+}
+
+/// What selecting Tx `ntx` does to the QSO start time, where WSJT-X's Tx radio buttons do it:
+/// Tx1 and a CQ reset it (`on_txrb1_toggled`, `on_txrb6_toggled`, `mainwindow.cpp:9129`, :9213);
+/// Tx2 and Tx3 set it, only when it is not already set (`on_txrb2_toggled`/`on_txrb3_toggled`,
+/// :9168, :9178, through `set_dateTimeQSO`, which returns at once on a valid time, :9099). A
+/// contact already logged is not stamped again.
+fn follow_tx_selection_into(start: &mut Option<u64>, logged: bool, ntx: Option<u8>, period_s: f64) {
+    match ntx {
+        Some(1 | 6) => *start = None,
+        Some(n @ (2 | 3)) if start.is_none() && !logged => {
+            *start = Some(wsjtx_qso_on(now_unix_secs(), n as u64, period_s));
+        }
+        _ => {}
+    }
+}
+
+/// WSJT-X's QSO start time when Tx `ntx` (2 or 3) is selected at `now`: `set_dateTimeQSO(n)`,
+/// `widgets/mainwindow.cpp` 9087-9107, `now - (n-2)*int(T/R) - int(fmod(seconds of the minute,
+/// T/R))`. Tx2 means we answered a caller, so the QSO began this period; Tx3 means our Tx1 went
+/// out at least one period earlier.
+pub(crate) fn wsjtx_qso_on(now: u64, ntx: u64, period_s: f64) -> u64 {
+    let back = ntx.saturating_sub(2) * period_s as u64 + ((now % 60) as f64 % period_s) as u64;
+    now.saturating_sub(back)
 }
 
 /// Current wall-clock time as Unix seconds (UTC), 0 before the epoch.
@@ -46052,26 +46267,19 @@ mod tests {
         );
     }
 
-    /// RE-CLICKING THE STATION YOU ARE ALREADY WORKING MUST NOT THROW THE QSO AWAY.
+    /// RE-CLICKING THE STATION YOU ARE ALREADY WORKING STARTS FRESH FROM ITS LATEST MESSAGE, AS
+    /// WSJT-X'S DOUBLE-CLICK DOES. Flipped 2026-10-26 (field report KR4FQG).
     ///
-    /// Field report 2026-08-25 (RI1FJL on 10.131, proven by replaying the operator's own
-    /// ALL.TXT through the state machine): he cleared his outgoing message back to his grid,
-    /// clicked the station again, and Nexus went back to sending `R-21` — twice, with NOTHING
-    /// addressed to him on the air in between. The replay showed the sequencer holding `EN52`
-    /// both times while the app transmitted the report, so the fault was never in
-    /// `tempo_core::qso`: `call_station_ctx` built a BRAND NEW `Station` and replaced the live
-    /// one on every call, re-deriving the message from the DX's last report to us.
-    ///
-    /// It cost more than the message. The rebuild also reset `qso_start_unix` (so the contact
-    /// would log with the time of the last click rather than when it began), `qso_report_sent`,
-    /// the transmit counts, and the transcript.
-    ///
-    /// A click that POINTS AT A MESSAGE still re-derives — that is WSJT-X's double-click and
-    /// the operator is naming the message they want answered. A click that carries none (a
-    /// roster row, a station card, a spot) is "work this station", and when it is the station
-    /// already being worked it must re-arm without rewriting what is queued.
+    /// This test used to pin the opposite (RI1FJL, 2026-08-25): a click naming no message on the
+    /// station already being worked kept the operator's manual Tx pick and the QSO start time.
+    /// That rule had no age limit, and hours after a stalled QSO a roster click put the old
+    /// roger and the old report back on the air and logged the old start time. WSJT-X keeps
+    /// nothing across a click: `handleDecodeSelection` resets the start time
+    /// (`mainwindow.cpp:9271`) and `processMessage` re-derives the message from the line. A
+    /// click naming no message answers the station's latest transmission, here its report to
+    /// us, so the manual Tx1 pick is replaced by Tx3, and the start time restarts with Tx3.
     #[test]
-    fn reclicking_the_station_being_worked_keeps_the_operator_message() {
+    fn reclicking_the_station_being_worked_starts_fresh_from_its_latest_message() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.set_tier(Tier::Ft8);
         // The DX answers our call with a report — the sequencer arms R-<report>.
@@ -46092,7 +46300,7 @@ mod tests {
             "precondition: the sequencer arms a rogered report, got {derived}"
         );
 
-        // The operator overrides it back to his grid (Tx1).
+        // The operator overrides it back to his grid (Tx1), which resets the start time.
         e.override_next_tx("RI1FJL", None, "RI1FJL KD9TAW EN52");
         assert_eq!(
             e.snapshot()
@@ -46103,30 +46311,30 @@ mod tests {
             Some("RI1FJL KD9TAW EN52"),
             "the manual pick is queued"
         );
-        let started = e.qso_start_unix;
+        assert_eq!(e.qso_start_unix, None, "Tx1 resets the start time (:9129)");
 
         // …and then clicks the SAME station again, pointing at no message.
         e.call_station_ctx("RI1FJL", None, None, None, None)
             .expect("re-clicking the worked station is not an error");
 
-        assert_eq!(
-            e.snapshot()
-                .qso
-                .as_ref()
-                .and_then(|q| q.tx_now.clone())
-                .as_deref(),
-            Some("RI1FJL KD9TAW EN52"),
-            "THE BUG: the re-click re-derived the message and discarded the operator's pick"
+        let now = e
+            .snapshot()
+            .qso
+            .as_ref()
+            .and_then(|q| q.tx_now.clone())
+            .unwrap_or_default();
+        assert!(
+            now.starts_with("RI1FJL KD9TAW R"),
+            "the re-click re-derives Tx3 from the DX's latest message, their report: {now}"
         );
-        assert_eq!(
-            e.qso_start_unix, started,
-            "the re-click also restamped the QSO clock, so it would log the wrong start time"
+        assert!(
+            e.qso_start_unix.is_some(),
+            "the click reset the start time and Tx3's selection set it again (:9178)"
         );
     }
 
-    /// The other direction, so the fix is a rule and not a hole: a click that POINTS AT a
-    /// message re-derives from it, exactly as WSJT-X's double-click does. Without this the
-    /// guard above would freeze the sequencer at whatever was queued first.
+    /// A click that POINTS AT a message re-derives from it, exactly as WSJT-X's double-click
+    /// does, mid-QSO included.
     #[test]
     fn clicking_a_decode_still_rederives_even_mid_qso() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
@@ -46162,11 +46370,9 @@ mod tests {
         );
     }
 
-    /// (a) A CALL-CAPPED STEP MUST STILL RESUME. Caught by review, measured: the first cut of
-    /// the re-click guard skipped the rebuild, which was the only thing zeroing `tx_count`, so
-    /// a directed step that had spent `directed_max_calls` stayed spent and the click put
-    /// NOTHING on the air — 0 overs where the old code gave 8. This is the reported QSO one
-    /// step on: the DX stops rogering, the budget runs out, the operator clicks to restart it.
+    /// (a) A CALL-CAPPED STEP MUST STILL RESUME. A click rebuilds the station from the DX's
+    /// latest message, which zeroes the spent `directed_max_calls` budget: the DX stops
+    /// rogering, the budget runs out, the operator clicks to get it going again.
     #[test]
     fn reclicking_a_call_capped_step_re_arms_it() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
@@ -46204,8 +46410,8 @@ mod tests {
         }
     }
 
-    /// (b) A FINISHED QSO MUST REBUILD, not re-arm. `after_tx` clears `pending` at `Done` and
-    /// no arm of `observe` can re-arm it, so keeping that station made "work this station" a
+    /// (b) A FINISHED QSO MUST REBUILD. `after_tx` clears `pending` at `Done` and no arm of
+    /// `observe` can re-arm it, so keeping that station would make "work this station" a
     /// permanently dead click — TX armed, nothing ever queued.
     #[test]
     fn reclicking_after_the_qso_finished_starts_a_new_one() {
@@ -46234,9 +46440,10 @@ mod tests {
 
     /// (c) AFTER A BAND QSY THE OLD STATION MUST NOT BE RESUMED. A decode-context clear (a tier
     /// switch; an FT8/FT4 band change now also ends the QSO, `on_band_change`) leaves
-    /// `Mode::Qso` standing, so resuming it would open the new band
-    /// with a roger for an exchange that never happened there. Requiring a live decode from
-    /// this DX is what distinguishes the two — the QSY already cleared it.
+    /// `Mode::Qso` standing, so resuming it would open the new band with a roger for an exchange
+    /// that never happened there. The click rebuilds from what was heard on the new band, which
+    /// the QSY left empty, so it opens with Tx1. (The case where the DX is then heard on the new
+    /// band is `e_a_roster_click_on_the_new_band_starts_fresh_there`.)
     #[test]
     fn a_reclick_after_a_band_change_does_not_resume_the_old_bands_sequence() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
