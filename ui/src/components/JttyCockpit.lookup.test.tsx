@@ -147,7 +147,24 @@ describe('a JTTY call is looked up only once two separate messages confirmed it'
     await waitFor(() => expect(ask(), 'answered').toBeNull())
   })
 
-  it('H1: a strip holding ANOTHER call logs nothing and says so; the strip is left as the operator has it', async () => {
+  it('Log QSO logs the contact at the dial plus JTTY’s Tx frequency, as the strip’s own Log does', async () => {
+    vi.mocked(api.logQso).mockResolvedValue(snap)
+    vi.mocked(api.jttyLogPromptAnswer).mockResolvedValue('taken')
+    await mount()
+    fireEvent.click(within(allPane()).getByRole('button', { name: 'W1AW' }))
+    await waitFor(() => expect(logCall().value).toBe('W1AW'))
+    // Tx 1234 Hz, apart from the Rx frequency (1500 Hz): the contact is where the TU was sent.
+    const base = prompted()
+    vi.mocked(api.getJttyState).mockResolvedValue({ ...base, tx: { ...base.tx!, txHz: 1234 } })
+    await waitFor(() => expect(ask()?.textContent).toContain(t('jtty.logPrompt.text', { call: 'W1AW' })), { timeout: 3_000 })
+    pressLogQso()
+    await waitFor(() => expect(api.logQso).toHaveBeenCalledTimes(1))
+    const logged = vi.mocked(api.logQso).mock.calls[0][0] as { call: string; mode: string; freqMhz: number }
+    expect(logged).toMatchObject({ call: 'W1AW', mode: 'JTTY' })
+    expect(logged.freqMhz, '14.090 MHz dial + 1234 Hz Tx').toBe(14.091234)
+  })
+
+  it('H1:a strip holding ANOTHER call logs nothing and says so; the strip is left as the operator has it', async () => {
     vi.mocked(api.logQso).mockResolvedValue(snap)
     vi.mocked(api.jttyLogPromptAnswer).mockResolvedValue('taken')
     await mount()
