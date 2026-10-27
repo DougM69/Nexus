@@ -1601,6 +1601,7 @@ export const JA: PartialCatalog = {
   "qso.history.undo.contactsKept": "。その後変更された{{count}}件の交信は保持しました：{{calls}}",
   "qso.history.undo.duplicates": "。削除後に同じ局・同じバンド・同じモードで5分以内の交信がもう一度記録されたため、{{count}}件は戻しませんでした：{{calls}}",
   "qso.history.undo.owed": "。置き換えたコールサインがすでにログサービスに届いている可能性があるため、{{count}}件の交信を未アップロードにしました。次回のアップロードで再送します：{{calls}}",
+  "qso.history.undo.owedAt": "。置き換えたコールサインがすでに{{services}}に届いている可能性があるため、{{count}}件の交信をそこでは未アップロードにしました：{{calls}}",
   "qso.history.undo.allKept": "元に戻したものはありません。{{count}}件の交信はその後変更されたため保持しました：{{calls}}。",
   "qso.history.undo.allDuplicates": "戻したものはありません。{{count}}件の交信は削除後にもう一度記録されています（同じ局・同じバンド・同じモードで5分以内）：{{calls}}。",
   "qso.history.undo.unknownKind": "この変更は新しいバージョンのNexusによるもので、このバージョンでは元に戻せません。",

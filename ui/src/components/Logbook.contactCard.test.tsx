@@ -316,7 +316,7 @@ describe('Save is the edit form’s save, with only what was changed', () => {
       { seq: 7, kind: 'edit', source: 'operator', run: 'r7', atMs: 1_700_000_100_000, undoes: null, undoneBy: null, changes: [{ tag: 'NAME', old: null, new: 'Hans' }] },
     ])
     vi.mocked(api.undoQsoChange).mockResolvedValue({
-      changed: 1, run: 'u', kept: [], held: [], heldUnder: null, gone: 0, alreadyThere: 0, changedSince: 0, duplicate: 0, unknownKind: 0, changedSinceCalls: [], duplicateCalls: [], owedCalls: [],
+      changed: 1, run: 'u', kept: [], held: [], heldUnder: null, gone: 0, alreadyThere: 0, changedSince: 0, duplicate: 0, unknownKind: 0, changedSinceCalls: [], duplicateCalls: [], owedCalls: [], owedAt: [],
     } as never)
     await mounted()
     const card = await openCard()
@@ -333,7 +333,7 @@ describe('Save is the edit form’s save, with only what was changed', () => {
       engine.log = (engine.log as LoggedQso[]).map((r) => (r.id === 'id-dl' ? { ...r, qth: 'Bonn' } : r))
       engine.revision += 1
       return {
-        changed: 1, run: 'u', kept: [], held: [], heldUnder: null, gone: 0, alreadyThere: 0, changedSince: 0, duplicate: 0, unknownKind: 0, changedSinceCalls: [], duplicateCalls: [], owedCalls: [],
+        changed: 1, run: 'u', kept: [], held: [], heldUnder: null, gone: 0, alreadyThere: 0, changedSince: 0, duplicate: 0, unknownKind: 0, changedSinceCalls: [], duplicateCalls: [], owedCalls: [], owedAt: [],
       } as never
     })
     await mounted()

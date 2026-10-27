@@ -2379,6 +2379,11 @@ export const EN = {
     one: '; {{calls}} is marked not uploaded: the call this replaced may already be at your logging services, so it goes again with the next upload',
     other: '; {{count}} contacts are marked not uploaded: the calls this replaced may already be at your logging services, so they go again with the next upload: {{calls}}',
   },
+  // `{{services}}` is a list of services' own names: LoTW, QRZ, Club Log, eQSL, HRDLog.net, …
+  'qso.history.undo.owedAt': {
+    one: '; {{calls}} is marked not uploaded to {{services}}: the call this replaced may already be there',
+    other: '; {{count}} contacts are marked not uploaded to {{services}}: the calls this replaced may already be there: {{calls}}',
+  },
   'qso.history.undo.allKept': {
     one: 'Nothing undone: {{calls}} was changed since, and kept.',
     other: 'Nothing undone: {{count}} contacts were changed since, and kept: {{calls}}.',

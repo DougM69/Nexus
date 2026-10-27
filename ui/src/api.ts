@@ -1745,10 +1745,13 @@ export interface UndoAnswer {
   unknownKind: number
   changedSinceCalls: string[]
   duplicateCalls: string[]
-  /** The contacts whose callsign it changed while the call it replaced may already be at the
-   *  logging services: marked not uploaded, owed again. A correction whose re-send had not gone
-   *  out is not named — its undo cancelled the re-send and put the upload marks back. */
+  /** The contacts whose callsign it changed with nothing known of where the call it replaced was
+   *  sent (the session that corrected it has ended): marked not uploaded to every service. */
   owedCalls: string[]
+  /** The contacts whose callsign it changed while the call it replaced has gone, or may have
+   *  gone, to the services named (their own names): marked not uploaded there. A correction no
+   *  service was sent is not here — its undo cancelled the re-send and put the upload marks back. */
+  owedAt: { call: string; services: string[] }[]
 }
 
 /** One contact's change history, oldest first. */

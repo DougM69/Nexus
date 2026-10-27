@@ -28580,7 +28580,7 @@ fn lotw_upload_batch_with(
     // from the store, and before TQSL is spawned. Held across the spawn it would freeze the
     // whole UI for as long as ARRL takes to answer, which is tens of seconds on a big batch.
     let (chosen, rows, location, tqsl_path, (adif_location, call, grid)) = {
-        let eng = engine_lock(state);
+        let mut eng = engine_lock(state);
         let use_adif_location = eng.settings().lotw_use_adif_location;
         let location = eng.settings().lotw_station_location.trim().to_string();
         // A named Station Location is required UNLESS the operator signs from the ADIF
@@ -28606,8 +28606,18 @@ fn lotw_upload_batch_with(
             eng.settings().mycall.clone(),
             eng.settings().mygrid.clone(),
         );
+        // Counted from here to the last return: while it runs, an undo of a callsign correction
+        // cannot tell whether LoTW has the corrected call, so it does not put LoTW's marks back.
+        eng.lotw_batch_begun();
         (chosen, eng.log_rows(), location, tqsl_path, station)
     };
+    struct Running<'a>(&'a SharedEngine);
+    impl Drop for Running<'_> {
+        fn drop(&mut self) {
+            engine_lock(self.0).lotw_batch_over();
+        }
+    }
+    let _running = Running(state);
     // The contacts the batch signs, whole: the chosen ones, or every one owed to LoTW, read from
     // the store (SPEC-2 v3 C15). A batch chosen by hand bypasses the default batch's time_known
     // exclusion — filter HERE, at the one choke point every batch passes: LoTW matches on time,
@@ -41673,7 +41683,7 @@ mod tests {
             legs: legs::ALL,
             attempts: 0,
             retry_after_unix: 0,
-            corrected: None,
+            corrected: false,
         }];
 
         let lines = super::upload_dropped_lines(&dropped, legs::QRZ | legs::CLUBLOG);

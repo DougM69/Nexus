@@ -2710,6 +2710,27 @@ pub mod upload_legs {
     pub const IDS: &[&str] = &[
         "qrz", "clublog", "eqsl", "hrdlog", "n3fjp", "cloudlog", "wrl",
     ];
+
+    /// The legs the connector worker sends to under `s`, as its toggles read them: a leg it
+    /// does not send to it counts done without a try. A leg here may still be skipped (Club Log
+    /// without credentials or suspended), so this is the legs that MAY have been sent.
+    pub fn on(s: &crate::settings::Settings) -> u8 {
+        [
+            (s.qrz_logbook_upload, QRZ),
+            (s.clublog_upload, CLUBLOG),
+            (s.eqsl_upload, EQSL),
+            (s.hrdlog_upload, HRDLOG),
+            (s.n3fjp_upload && !s.n3fjp_host.trim().is_empty(), N3FJP),
+            (
+                s.cloudlog_upload && !s.cloudlog_url.trim().is_empty(),
+                CLOUDLOG,
+            ),
+            (s.wrl_upload, WRL),
+        ]
+        .into_iter()
+        .filter(|&(on, _)| on)
+        .fold(0, |mask, (_, leg)| mask | leg)
+    }
 }
 
 /// The session-scoped B4 index (§3.1) — see [`Engine::session_b4`].
@@ -2796,20 +2817,26 @@ pub struct PendingUpload {
     /// with widening gaps instead of hammered once per 2 s tick. `0` = due now (a fresh
     /// log, no prior failure). See [`upload_backoff_secs`].
     pub retry_after_unix: i64,
-    /// For a corrected call's re-send ([`crate::station::StationCore::requeue_if_corrected`]):
-    /// the upload marks the correction took off the contact. While this entry is still queued
-    /// and untried, nothing went out under the corrected call, so an undo of the correction
-    /// cancels it and puts these back. Every other entry, and every re-queue, carries `None`.
-    pub corrected: Option<Box<CorrectedFrom>>,
+    /// `true` only on a corrected call's re-send as
+    /// [`crate::station::StationCore::requeue_if_corrected`] queued it. While it is still on the
+    /// queue, no connector it fans out to has been tried with the corrected call (the worker
+    /// takes the whole queue at once), so an undo of the correction may cancel it and put those
+    /// services' marks back ([`CorrectedFrom`]). Every other entry, and every re-queue, is
+    /// `false`.
+    pub corrected: bool,
 }
 
-/// What a callsign correction took off a contact that its undo may put back
-/// ([`PendingUpload::corrected`]): the call and station call the marks were earned under, the
-/// upload stamps, and the `LOTW_QSL_SENT` mark another logger may have left.
+/// What a callsign correction took off a contact that its undo may put back, service by
+/// service ([`crate::station::StationCore::correction_undone`]): the call and station call the
+/// marks were earned under, the call it corrected them to, the upload stamps, and the
+/// `LOTW_QSL_SENT` mark another logger may have left. Kept by the station while the session
+/// lasts, by contact.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CorrectedFrom {
     pub call: String,
     pub station_callsign: Option<String>,
+    /// The call the correction gave the contact.
+    pub to: String,
     pub upload: tempo_core::logbook::UploadState,
     pub lotw_qsl_sent: Option<String>,
 }
@@ -16858,7 +16885,7 @@ impl Engine {
                 legs: upload_legs::ALL,
                 attempts: 0,
                 retry_after_unix: 0, // due now — a fresh log has no prior failure to back off from
-                corrected: None,
+                corrected: false,
             });
         }
         match persisted {
@@ -32432,6 +32459,16 @@ contact yourself."
             );
             Vec::new()
         })
+    }
+
+    /// See [`StationCore::lotw_batch_begun`].
+    pub fn lotw_batch_begun(&mut self) {
+        self.station.lotw_batch_begun()
+    }
+
+    /// See [`StationCore::lotw_batch_over`].
+    pub fn lotw_batch_over(&mut self) {
+        self.station.lotw_batch_over()
     }
 
     /// See [`StationCore::stamp_lotw_upload`]: how many were stamped.

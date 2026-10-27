@@ -723,6 +723,18 @@ fn lotw_qsl_sent(r: &QsoRecord) -> Option<&str> {
         .map(|(_, v)| v.as_str())
 }
 
+/// What the undo of a callsign correction gives each service ([`StationCore::correction_undone`]).
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct CorrectionUndone {
+    /// The upload stamps the contact comes back with: each service's from before the correction
+    /// where that service has not taken the corrected call, none where it has or may have.
+    pub upload: tempo_core::logbook::UploadState,
+    /// `LOTW_QSL_SENT` from before the correction, put back with LoTW's marks.
+    pub lotw_qsl_sent: Option<String>,
+    /// The services that took the corrected call, or may have: left marked not uploaded, named.
+    pub reached: Vec<&'static str>,
+}
+
 /// What a change that answers [`RowRefusal::Busy`] says where a string is the answer.
 pub const LOG_BUSY: &str = "The logbook kept changing while this was being saved, so it was not \
                             saved. Try again.";
@@ -2149,6 +2161,14 @@ pub struct StationCore {
     /// Uploads the full queue dropped (#290), held for the connector worker to report — see
     /// [`Self::enqueue_upload`]. Bounded like the queue.
     pub(crate) dropped_uploads: Vec<PendingUpload>,
+    /// The callsign corrections made this session, by contact: what each took off the contact,
+    /// for an undo to put back service by service ([`Self::correction_undone`]). Memory-only,
+    /// like the queue whose state it is read against: after a restart an undo knows nothing of
+    /// what was sent and leaves the contact owed to every service.
+    pub(crate) corrections: HashMap<RecordId, crate::engine::CorrectedFrom>,
+    /// LoTW batches running now (TQSL signing or sending): a contact one holds may reach LoTW
+    /// before its stamp shows. See [`Self::lotw_batch_begun`].
+    pub(crate) lotw_batches: u32,
     /// Earliest wall-clock second the NEXT catch-up upload may go out — the pacing slot
     /// allocator for [`UploadOrigin::CatchUp`] (#193). Bumped by
     /// [`CATCHUP_UPLOAD_SPACING_SECS`] every time a catch-up record is queued, so a scan
@@ -2411,6 +2431,8 @@ impl StationCore {
             all_txt_pending: Vec::new(),
             pending_uploads: VecDeque::new(),
             dropped_uploads: Vec::new(),
+            corrections: HashMap::new(),
+            lotw_batches: 0,
             catchup_slot_unix: 0,
             upload_note: None,
             upload_ok: false,
@@ -3774,7 +3796,7 @@ impl StationCore {
             legs,
             attempts,
             retry_after_unix: due,
-            corrected: None,
+            corrected: false,
         });
     }
 
@@ -4459,68 +4481,153 @@ impl StationCore {
         if !after.call.trim().eq_ignore_ascii_case(before.call.trim()) {
             // Every leg: every stamp was just cleared, so every connector is owed. The disabled
             // ones are dropped by the worker's own toggle check, the same way a freshly logged
-            // contact's are. Live and due now, as `requeue_upload` queues it, with the marks the
-            // correction took off, for its undo while this is still untried.
+            // contact's are. Live and due now, as `requeue_upload` queues it, marked as the
+            // correction's re-send, with the marks the correction took off kept for its undo.
+            if let Some(id) = after.id {
+                self.corrections.insert(
+                    id,
+                    crate::engine::CorrectedFrom {
+                        call: before.call.clone(),
+                        station_callsign: before.station_callsign.clone(),
+                        to: after.call.clone(),
+                        upload: before.upload.clone(),
+                        lotw_qsl_sent: lotw_qsl_sent(before).map(str::to_string),
+                    },
+                );
+            }
             self.enqueue_upload(crate::engine::PendingUpload {
                 rec: after.clone(),
                 origin: crate::engine::UploadOrigin::Live,
                 legs: crate::engine::upload_legs::ALL,
                 attempts: 0,
                 retry_after_unix: 0,
-                corrected: Some(Box::new(crate::engine::CorrectedFrom {
-                    call: before.call.clone(),
-                    station_callsign: before.station_callsign.clone(),
-                    upload: before.upload.clone(),
-                    lotw_qsl_sent: lotw_qsl_sent(before).map(str::to_string),
-                })),
+                corrected: true,
             });
         }
     }
 
-    /// The marks an undo of a callsign correction puts back (operator ruling): `current` is the
-    /// contact as the correction left it, `restored` as the undo would leave it. `Some` only while
-    /// nothing has gone out under the corrected call — the correction's re-send is still queued
-    /// and untried, no other send of the contact has been tried, and no service has stamped it
-    /// (a LoTW batch is not in the queue: its stamp is how it shows) — and only where the undo
-    /// puts back the call, and the station call, the marks were earned under. Anything else is
-    /// `None`: the undo leaves the contact owed to the services, as a corrected call is, and
-    /// never claims an upload that cannot be shown to be true.
-    pub(crate) fn unsent_correction(
+    /// What an undo of a callsign correction does, service by service (operator rulings):
+    /// `current` is the contact as the correction left it, `restored` as the undo would leave
+    /// it, `on` the legs the connector worker sends to ([`crate::engine::upload_legs::on`]).
+    ///
+    /// For each service the correction's re-send fans out to, and LoTW:
+    /// - **Not sent** — the contact gets back that service's marks from before the correction
+    ///   (its stamp; LoTW's with `LOTW_QSL_SENT`), and its waiting re-send is cancelled.
+    /// - **Sent, or may have been** — it stays marked not uploaded there, and is named.
+    ///
+    /// A queued service has not been sent the corrected call while the correction's own re-send
+    /// is still on the queue (the worker takes the whole queue at once, so one on it is not in
+    /// flight) and the contact carries no stamp of that service having taken it. Once the
+    /// worker took the re-send, a service it sends to may have it, and one it does not send to
+    /// (switched off) was not tried. A refusal stamp (rejected, sign-in refused) is an answer
+    /// that it did not take it. LoTW is not on the queue: it has the corrected call where its
+    /// stamp says so, or another logger's `LOTW_QSL_SENT` does, and may have it while a batch
+    /// runs.
+    ///
+    /// `None` when this session holds no record of the correction, or the undo does not put back
+    /// the call and station call the marks were earned under: nothing can be shown, so the
+    /// contact stays owed to every service, as a corrected call is.
+    pub(crate) fn correction_undone(
         &self,
         current: &QsoRecord,
         restored: &QsoRecord,
-    ) -> Option<&crate::engine::CorrectedFrom> {
+        on: u8,
+    ) -> Option<CorrectionUndone> {
+        use crate::engine::upload_legs as legs;
         let id = current.id?;
+        let from = self.corrections.get(&id)?;
         let same = |a: &str, b: &str| a.trim().eq_ignore_ascii_case(b.trim());
-        let queued: Vec<&crate::engine::PendingUpload> = self
+        let station = |s: &Option<String>| s.as_deref().map(|s| s.trim().to_ascii_uppercase());
+        if !same(&from.to, &current.call)
+            || !same(&from.call, &restored.call)
+            || station(&from.station_callsign) != station(&restored.station_callsign)
+        {
+            return None;
+        }
+        // The legs the correction's re-send still holds, untried.
+        let waiting = self
             .pending_uploads
             .iter()
-            .filter(|p| p.rec.id == Some(id))
-            .collect();
-        if queued.is_empty() || queued.iter().any(|p| p.attempts > 0) {
-            return None;
-        }
-        let u = &current.upload;
-        let stamped =
-            u.lotw.is_some() || u.eqsl.is_some() || u.qrz.is_some() || u.clublog.is_some();
-        if stamped || lotw_qsl_sent(current).is_some() {
-            return None;
-        }
-        let from = queued
-            .iter()
+            .filter(|p| p.corrected && p.attempts == 0 && p.rec.id == Some(id))
             .filter(|p| same(&p.rec.call, &current.call))
-            .find_map(|p| p.corrected.as_deref())?;
-        let station = |s: &Option<String>| s.as_deref().map(|s| s.trim().to_ascii_uppercase());
-        (same(&from.call, &restored.call)
-            && station(&from.station_callsign) == station(&restored.station_callsign))
-        .then_some(from)
+            .fold(0, |mask, p| mask | p.legs);
+        // `Some(true)`: the service took the corrected call; `Some(false)`: it refused it.
+        let took =
+            |s: &Option<tempo_core::logbook::UploadStatus>| s.as_ref().map(|u| u.outcome.is_sent());
+        let mut out = CorrectionUndone::default();
+        if took(&current.upload.lotw) == Some(true)
+            || lotw_qsl_sent(current).is_some()
+            || self.lotw_batches > 0
+        {
+            out.reached.push("LoTW");
+        } else {
+            out.upload.lotw = from.upload.lotw.clone();
+            out.lotw_qsl_sent = from.lotw_qsl_sent.clone();
+        }
+        let stamped = [
+            (
+                legs::QRZ,
+                "QRZ",
+                &current.upload.qrz,
+                &from.upload.qrz,
+                &mut out.upload.qrz,
+            ),
+            (
+                legs::CLUBLOG,
+                "Club Log",
+                &current.upload.clublog,
+                &from.upload.clublog,
+                &mut out.upload.clublog,
+            ),
+            (
+                legs::EQSL,
+                "eQSL",
+                &current.upload.eqsl,
+                &from.upload.eqsl,
+                &mut out.upload.eqsl,
+            ),
+        ];
+        for (leg, name, now, before, put) in stamped {
+            match took(now) {
+                Some(true) => out.reached.push(name),
+                Some(false) => *put = before.clone(),
+                None if waiting & leg != 0 || on & leg == 0 => *put = before.clone(),
+                None => out.reached.push(name),
+            }
+        }
+        // No stamp to put back: named where the worker may have sent it the corrected call.
+        for (leg, name) in [
+            (legs::HRDLOG, "HRDLog.net"),
+            (legs::N3FJP, "N3FJP"),
+            (legs::CLOUDLOG, "Cloudlog/Wavelog"),
+            (legs::WRL, "World Radio League"),
+        ] {
+            if waiting & leg == 0 && on & leg != 0 {
+                out.reached.push(name);
+            }
+        }
+        Some(out)
     }
 
-    /// Take the contact `id`'s queued uploads off the queue: an undo of its callsign correction
-    /// that put back the marks [`Self::unsent_correction`] found, made — what is queued would
-    /// send the call the log no longer holds.
-    pub(crate) fn cancel_queued_uploads(&mut self, id: RecordId) {
-        self.pending_uploads.retain(|p| p.rec.id != Some(id));
+    /// Take off the queue the contact `id`'s uploads under `call`: an undo moved the contact off
+    /// that call, and what is queued would send a call the log no longer holds. Its record of
+    /// the correction goes with it.
+    pub(crate) fn cancel_queued_uploads(&mut self, id: RecordId, call: &str) {
+        let same = |a: &str| a.trim().eq_ignore_ascii_case(call.trim());
+        self.pending_uploads
+            .retain(|p| p.rec.id != Some(id) || !same(&p.rec.call));
+        self.corrections.remove(&id);
+    }
+
+    /// A LoTW batch starts: until [`Self::lotw_batch_over`], a contact it holds may reach LoTW
+    /// with no stamp yet to show it.
+    pub fn lotw_batch_begun(&mut self) {
+        self.lotw_batches += 1;
+    }
+
+    /// The batch [`Self::lotw_batch_begun`] counted is over, its stamps made or not.
+    pub fn lotw_batch_over(&mut self) {
+        self.lotw_batches = self.lotw_batches.saturating_sub(1);
     }
 
     /// The Logbook form's edit of the contact `id`, as ops on the row as it stands: the field
