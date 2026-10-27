@@ -73,6 +73,7 @@ mod contest_removal_tests;
 /// The plain modes never wait on the contest picked in Settings.
 #[cfg(test)]
 mod contest_setup_tests;
+mod contest_udp;
 pub mod contest_unmerged;
 /// While contest mode is on no contact goes to the logging services live; turning it off sends
 /// what it held, once and paced, and LoTW's automatic upload waits for it.

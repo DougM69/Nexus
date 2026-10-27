@@ -62,7 +62,6 @@ fn a_loggers_reply_during_a_decode_does_not_stall_the_radio_loop() {
     let sinks = Sinks {
         wsjtx: Some(&server),
         psk: None,
-        cfg_dial_hz: 14_074_000,
     };
     let mut backend = MockBackend::new();
     let mut rig = Rig::vox();

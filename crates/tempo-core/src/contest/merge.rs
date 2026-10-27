@@ -446,6 +446,51 @@ fn named(
     })
 }
 
+/// ⭐ **A contest contact as it is LOGGED, for a program listening as it happens** — the WSJT-X
+/// UDP sink, which sends every contact the slot after it is logged, as WSJT-X sends each contest
+/// QSO from its Log QSO dialog (`MainWindow::acceptQSO`: `qso_logged`, then `logged_ADIF`).
+///
+/// The record is exactly the one a Merge writes into the Logbook ([`record_for`]), so the
+/// contact a logger receives and the one the Logbook gets later cannot disagree, with one
+/// difference the Logbook copy cannot carry: `started_unix`, when the sequencer that logged the
+/// row began the contact ([`FieldDayStation::started_unix_of`]), becomes its start time. A row
+/// records only the moment it was logged; `None` keeps that as both ends.
+///
+/// [`FieldDayStation::started_unix_of`]: crate::fieldday::FieldDayStation::started_unix_of
+pub fn logged_contact(
+    log: &FieldDayLog,
+    posid: &str,
+    q: &LoggedQso,
+    started_unix: Option<u64>,
+) -> LoggedContact {
+    let number = log.qso_numbers().get(&q.seq).copied();
+    let mut record = record_for(log, q, &MergeIdentity::of(log, posid, q), number);
+    if let Some(start) = started_unix.filter(|t| *t > 0 && *t <= q.when_unix) {
+        record.when_unix = start;
+    }
+    let spec = log.session.exchange;
+    LoggedContact {
+        record,
+        // What WSJT-X's Log QSO dialog calls "Exch sent" and "Exch rcvd": each side as it went
+        // over the air, for every contest. The sent side is the row's own rendering
+        // ([`super::sent_exchange_string`]); the received side its received values as received,
+        // `"1D EMA"`, `"559 WI"`, `"FN42"`.
+        exchange_sent: super::sent_exchange_string(q, spec),
+        exchange_rcvd: joined(q.rx.iter().map(|v| v.raw.as_str())).unwrap_or_default(),
+    }
+}
+
+/// One contest contact as [`logged_contact`] hands it over.
+#[derive(Clone, Debug)]
+pub struct LoggedContact {
+    /// The general-log record, its start time the contact's own where it is known.
+    pub record: QsoRecord,
+    /// The exchange sent, as sent.
+    pub exchange_sent: String,
+    /// The exchange received, as received.
+    pub exchange_rcvd: String,
+}
+
 /// One contest row as a general-log record. `number`: the row's QSO number
 /// ([`FieldDayLog::qso_numbers`]), which is its `STX` in a contest that sends no serial.
 fn record_for(

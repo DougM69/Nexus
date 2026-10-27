@@ -100,7 +100,6 @@ fn after_a_reply(engine: &Arc<Mutex<Engine>>) -> Answered {
     let sinks = Sinks {
         wsjtx: Some(&server),
         psk: None,
-        cfg_dial_hz: 14_074_000,
     };
     let mut backend = MockBackend::new();
     let mut rig = Rig::vox();

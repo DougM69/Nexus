@@ -117,7 +117,6 @@ fn status_for(contest: Option<&str>, hound: bool) -> u8 {
     let sinks = Sinks {
         wsjtx: Some(&server),
         psk: None,
-        cfg_dial_hz: 14_074_000,
     };
     let (mut ra, mut rr) = (mock_reopen_audio(), mock_reopen_rig());
     let mut station = StationSinks::new();

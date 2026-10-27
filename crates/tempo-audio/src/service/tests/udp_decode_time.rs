@@ -77,7 +77,6 @@ fn a_decode_goes_out_stamped_with_its_period_start_whenever_it_is_sent() {
     let sinks = Sinks {
         wsjtx: Some(&server),
         psk: None,
-        cfg_dial_hz: 14_074_000,
     };
     let (mut spots, mut cache) = (Vec::new(), SpotCache::default());
     for sent_at in [27.0, 31.0, 34.0] {
@@ -122,7 +121,6 @@ fn a_replay_sends_the_period_start() {
     let sinks = Sinks {
         wsjtx: Some(&server),
         psk: None,
-        cfg_dial_hz: 14_074_000,
     };
     let mut replay = tempo_net::qds::QdsWriter::new();
     replay
@@ -224,7 +222,6 @@ fn decodes_after(engine: Engine, ticks: &[&[Vec<u8>]]) -> Vec<(bool, u32, String
     let sinks = Sinks {
         wsjtx: Some(&server),
         psk: None,
-        cfg_dial_hz: 14_074_000,
     };
     let mut backend = MockBackend::new();
     let mut rig = Rig::vox();
