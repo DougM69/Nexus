@@ -9296,6 +9296,8 @@ export const FR: PartialCatalog = {
   "radioSwitch.radio": "Radio {{id}}",
   "radioSwitch.undo": "Annuler",
   "radioSwitch.why": "Pourquoi ?",
+  "radioSwitch.undo.onAir": "Pas pendant l'émission : appuyez de nouveau sur Annuler après le passage",
+  "radioSwitch.undo.unavailable": "{{radio}} n'est pas disponible, la radio n'a pas changé",
   "settings.radios.routes.lead": "Nexus l’utilise pour : {{list}}",
   "settings.radios.routes.rule": "règle {{n}}, {{bands}} · {{mode}}",
   "settings.radios.routes.catchAll": "toute bande qu’aucune autre radio n’indique",

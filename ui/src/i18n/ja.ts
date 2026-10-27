@@ -9279,6 +9279,8 @@ export const JA: PartialCatalog = {
   "radioSwitch.radio": "無線機 {{id}}",
   "radioSwitch.undo": "元に戻す",
   "radioSwitch.why": "理由",
+  "radioSwitch.undo.onAir": "送信中は元に戻せません。送信が終わってから「元に戻す」をもう一度押してください",
+  "radioSwitch.undo.unavailable": "{{radio}} は使用できないため、無線機は切り替わっていません",
   "settings.radios.routes.lead": "Nexusがこの無線機を使う対象: {{list}}",
   "settings.radios.routes.rule": "ルール{{n}}、{{bands}} · {{mode}}",
   "settings.radios.routes.catchAll": "他の無線機が挙げていない任意のバンド",

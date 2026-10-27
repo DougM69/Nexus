@@ -14219,6 +14219,8 @@ export const EN = {
   'radioSwitch.radio': 'Radio {{id}}',
   'radioSwitch.undo': 'Undo',
   'radioSwitch.why': 'Why?',
+  'radioSwitch.undo.onAir': 'Not while transmitting: press Undo again after the over',
+  'radioSwitch.undo.unavailable': '{{radio}} is not available, so the radio did not change',
 
   // ── The link pill ───────────────────────────────────────────────────────────────────
   // `dB` is a unit and `RV` the report's own field name; the verdict words are prose.

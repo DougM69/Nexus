@@ -19,14 +19,24 @@ void unsub
 
 const sw = (seq: number, fromId = 0, toId = 1, band = '2m'): AutoRadioSwitch => ({ seq, fromId, toId, band, mode: 'digital' })
 
+type Live = { activeRadioId?: number; onAir?: boolean }
+const radio = (onAir = false) => ({ transmitting: onAir, txBusyReason: null, rigKeyed: false })
+
 function mount(policy: RadioSwitchPolicy | undefined, first?: AutoRadioSwitch) {
-  const selectRadio = vi.fn(() => Promise.resolve())
+  // set_active_radio answers with the snapshot after the pick: the radio asked for, as a working engine does.
+  const selectRadio = vi.fn((id: number) => Promise.resolve({ activeRadioId: id } as { activeRadioId?: number }))
   const openSettingsAt = vi.fn()
-  const hook = renderHook((p: RadioSwitchNoticeDeps) => useRadioSwitchNotice(p), {
-    initialProps: { snap: { radios, autoRadioSwitch: first }, policy, selectRadio, openSettingsAt },
+  const snapOf = (s: AutoRadioSwitch | undefined, live: Live = {}) => ({
+    radios,
+    autoRadioSwitch: s,
+    activeRadioId: 'activeRadioId' in live ? live.activeRadioId : (s?.toId ?? 0),
+    radio: radio(live.onAir),
   })
-  const next = (s: AutoRadioSwitch | undefined, pol = policy) =>
-    hook.rerender({ snap: { radios, autoRadioSwitch: s }, policy: pol, selectRadio, openSettingsAt })
+  const hook = renderHook((p: RadioSwitchNoticeDeps) => useRadioSwitchNotice(p), {
+    initialProps: { snap: snapOf(first), policy, selectRadio, openSettingsAt },
+  })
+  const next = (s: AutoRadioSwitch | undefined, pol = policy, live: Live = {}) =>
+    hook.rerender({ snap: snapOf(s, live), policy: pol, selectRadio, openSettingsAt })
   return { next, selectRadio, openSettingsAt }
 }
 
@@ -70,5 +80,48 @@ describe('the radio switch notice', () => {
     next(sw(1))
     next(sw(2, 1, 0, '20m'))
     expect(toasts.map((x) => x.message)).toEqual(['Switched to FTdx10 for 20m · Weak-signal digital'])
+  })
+
+  it('closes as soon as the active radio is no longer the one it names, whoever changed it', () => {
+    const { next } = mount('tell')
+    next(sw(1))
+    expect(toasts).toHaveLength(1)
+    // Same switch record, but the operator (or Settings, or a Remote client) picked another radio.
+    next(sw(1), 'tell', { activeRadioId: 2 })
+    expect(toasts).toHaveLength(0)
+  })
+
+  it('is never shown for a switch the active radio has already moved on from', () => {
+    const { next } = mount('tell')
+    next(sw(1), 'tell', { activeRadioId: 0 })
+    expect(toasts).toHaveLength(0)
+  })
+
+  it('Undo does nothing when the active radio is no longer the one it names', async () => {
+    const { next, selectRadio } = mount('tell')
+    next(sw(1))
+    const [n] = toasts
+    // A change the closing effect has not seen yet: Undo reads the station as it is at the click.
+    next(sw(1), 'tell', { activeRadioId: 2 })
+    await n.action?.()
+    expect(selectRadio).not.toHaveBeenCalled()
+  })
+
+  it('Undo never switches radio mid-over: refused while transmitting, with the reason', async () => {
+    const { next, selectRadio } = mount('tell')
+    next(sw(1))
+    const [n] = toasts
+    next(sw(1), 'tell', { activeRadioId: 1, onAir: true })
+    await expect(n.action?.()).rejects.toThrow('Not while transmitting')
+    expect(selectRadio).not.toHaveBeenCalled()
+  })
+
+  it('Undo to a radio that is gone or disabled says so instead of closing as if it worked', async () => {
+    const { next, selectRadio } = mount('tell')
+    selectRadio.mockImplementation(() => Promise.resolve({ activeRadioId: 1 }))
+    next(sw(1))
+    const [n] = toasts
+    await expect(n.action?.()).rejects.toThrow('FTdx10')
+    expect(selectRadio).toHaveBeenCalledWith(0)
   })
 })

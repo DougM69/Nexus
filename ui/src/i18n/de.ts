@@ -9286,6 +9286,8 @@ export const DE: PartialCatalog = {
   "radioSwitch.radio": "Funkgerät {{id}}",
   "radioSwitch.undo": "Rückgängig",
   "radioSwitch.why": "Warum?",
+  "radioSwitch.undo.onAir": "Nicht während des Sendens: nach dem Durchgang erneut Rückgängig drücken",
+  "radioSwitch.undo.unavailable": "{{radio}} ist nicht verfügbar, das Funkgerät wurde nicht gewechselt",
   "settings.radios.routes.lead": "Nexus nutzt es für: {{list}}",
   "settings.radios.routes.rule": "Regel {{n}}, {{bands}} · {{mode}}",
   "settings.radios.routes.catchAll": "jedes Band, das kein anderes Funkgerät aufführt",

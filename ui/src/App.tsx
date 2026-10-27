@@ -2645,6 +2645,7 @@ function App() {
     selectRadio: (id) =>
       apiSetActiveRadio(id).then((s) => {
         if (s) setSnap(s)
+        return s
       }),
     openSettingsAt,
   })

@@ -30,20 +30,6 @@ export function isSearchChord(
 }
 
 /**
- * Find a setting by name — the answer to "I know Nexus can do this, I cannot find where".
- *
- * This is item B6 of the approved 0.17 settings plan, three batches late. The audit that
- * produced that plan called 230 controls without search "disqualifying"; it is 280-odd now, and
- * what shipped instead was two reorganisations, each of which decayed. Rearranging asks the
- * operator to guess the same shape the author did. Search lets them say what they want.
- *
- * It queries the registry's `keywords`, not just headings, and THAT is the point: the words
- * operators type live in hint text, never in the heading they would have to guess. Nothing in
- * "Rig & CAT" or "Audio" contains "COM port" or "sound card". Issue #62 was an operator who
- * could not find a toggle that had already shipped, folded inside a collapsed group — and it
- * was closed with a hint rewrite, leaving the finding problem exactly where it was.
- */
-/**
  * Things operators look for in Settings that are not settings (#343: "where are the meters?"). The
  * TX meters are a ⊞ Panels pane on the FT8, Phone and CW screens, so a search for them found
  * nothing and read as "Nexus has no meters". The box says where they are instead. Matched on whole
@@ -61,6 +47,20 @@ function panelHint(query: string): string | null {
   return null
 }
 
+/**
+ * Find a setting by name — the answer to "I know Nexus can do this, I cannot find where".
+ *
+ * This is item B6 of the approved 0.17 settings plan, three batches late. The audit that
+ * produced that plan called 230 controls without search "disqualifying"; it is 280-odd now, and
+ * what shipped instead was two reorganisations, each of which decayed. Rearranging asks the
+ * operator to guess the same shape the author did. Search lets them say what they want.
+ *
+ * It queries the registry's `keywords`, not just headings, and THAT is the point: the words
+ * operators type live in hint text, never in the heading they would have to guess. Nothing in
+ * "Rig & CAT" or "Audio" contains "COM port" or "sound card". Issue #62 was an operator who
+ * could not find a toggle that had already shipped, folded inside a collapsed group — and it
+ * was closed with a hint rewrite, leaving the finding problem exactly where it was.
+ */
 export function SettingsSearch({ onPick }: { onPick: (sectionId: string) => void }) {
   const [q, setQ] = useState('')
   const [open, setOpen] = useState(false)
