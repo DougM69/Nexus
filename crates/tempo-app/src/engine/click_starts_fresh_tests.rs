@@ -461,6 +461,73 @@ fn clearing_a_cq_runs_caller_goes_back_to_cq_behind_tx_off() {
     assert_eq!(key_once(&mut e, 10), "CQ KR4FQG EM85");
 }
 
+/// (3) The caller cleared in a CQ run usually calls again, since it never got our report. Until the
+/// operator arms TX again the run does not answer it: no report is queued to it, and Enable Tx
+/// sends the CQ. Its R-report heard while TX is off earns no RR73 and logs nothing.
+#[test]
+fn a_cleared_caller_calling_again_is_not_answered_before_tx_is_armed() {
+    let mut e = ft8();
+    e.settings.auto_log = true;
+    e.settings.prompt_to_log = false;
+    e.set_mode("qso-run").expect("CQ");
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG W1AW FN31", -7)], 3);
+    assert_eq!(tx_now(&e), "W1AW KR4FQG -07", "premise: our report queued");
+    e.clear_dx_call();
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG W1AW FN31", -7)], 5);
+    assert_eq!(
+        e.qso_dxcall(),
+        None,
+        "the run did not lock onto the cleared caller"
+    );
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG W1AW R-10", -7)], 7);
+    assert_eq!(e.qso_dxcall(), None);
+    e.set_tx_enabled(true);
+    let sent = keyed(&mut e, 8..10);
+    assert_eq!(
+        sent,
+        vec!["CQ KR4FQG EM85".to_string()],
+        "Enable Tx calls CQ"
+    );
+    assert!(
+        e.stored_log().is_empty(),
+        "nothing logged to the cleared caller"
+    );
+}
+
+/// (3) CONTROL: another caller heard after the clear, TX still off, is answered as before.
+#[test]
+fn another_caller_after_the_clear_is_still_answered() {
+    let mut e = ft8();
+    e.set_mode("qso-run").expect("CQ");
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG W1AW FN31", -7)], 3);
+    e.clear_dx_call();
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG K9XYZ EN52", -11)], 5);
+    assert_eq!(e.qso_dxcall(), Some("K9XYZ"));
+    assert_eq!(tx_now(&e), "K9XYZ KR4FQG -11");
+}
+
+/// (3) Arming TX again ends the hold: the cleared caller answering the next CQ is worked, and so
+/// is a deliberate click on it right after the clear.
+#[test]
+fn the_cleared_caller_is_worked_again_once_the_operator_chooses_it() {
+    let mut e = ft8();
+    e.set_mode("qso-run").expect("CQ");
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG W1AW FN31", -7)], 3);
+    e.clear_dx_call();
+    e.set_tx_enabled(true);
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG W1AW FN31", -7)], 5);
+    assert_eq!(tx_now(&e), "W1AW KR4FQG -07", "after Enable Tx");
+
+    let mut e = ft8();
+    e.set_mode("qso-run").expect("CQ");
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG W1AW FN31", -7)], 3);
+    e.clear_dx_call();
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG W1AW FN31", -7)], 5);
+    e.call_station("W1AW");
+    assert_eq!(e.qso_dxcall(), Some("W1AW"));
+    assert_eq!(tx_now(&e), "W1AW KR4FQG -07", "a click on it");
+}
+
 /// (3) CONTROL: calling CQ with nobody in the contact, Clear DX ends nothing and TX stays on
 /// (`if (m_QSOProgress != CALLING) auto_tx_mode(false)`, :10078).
 #[test]
@@ -597,4 +664,28 @@ fn clearing_the_dx_call_ends_a_field_day_contact() {
         !sent.iter().any(|t| t.contains("W9XYZ")),
         "nothing to the station: {sent:?}"
     );
+}
+
+/// (3) Clear DX drops an earlier abandoned contact kept for the Log button only when it is the
+/// cleared station's. CONTROL: one with another station stays loggable.
+#[test]
+fn clearing_drops_an_abandoned_contact_with_the_same_station_only() {
+    for (stalled, kept) in [("W1AW", false), ("K9XYZ", true)] {
+        let mut e = ft8();
+        e.set_mode("qso-run").expect("CQ");
+        e.ingest_decodes_for_test(&[dec_snr("KR4FQG W1AW FN31", -7)], 3);
+        e.stalled_qso = Some(StalledQso {
+            dxcall: stalled.into(),
+            dxgrid: None,
+            rx_report: Some(-5),
+            tx_report: Some(-7),
+            start_unix: None,
+        });
+        e.clear_dx_call();
+        assert_eq!(
+            e.stalled_qso.is_some(),
+            kept,
+            "abandoned contact with {stalled}"
+        );
+    }
 }

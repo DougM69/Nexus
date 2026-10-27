@@ -3532,6 +3532,11 @@ pub struct Engine {
     /// ONE more over (#170, #153) — see [`RecentPartner`] for the three bounds. Session-only,
     /// one deep, and dropped the moment it is spent or expires.
     recent_partner: Option<RecentPartner>,
+    /// The caller Clear DX just dropped from a CQ run. It usually calls again, since it never got
+    /// our report, and until the operator arms TX again (Enable Tx, Call CQ) the run does not answer
+    /// it: nothing is sent to a station after its clear (WSJT-X answers nothing while Enable Tx is
+    /// off). Other callers are answered as before, and a click on it works it as any click does.
+    cleared_dx_call: Option<String>,
     /// Completed QSOs held for the operator to confirm before they are logged (WSJT-X
     /// "Prompt me to log QSO"), oldest first. Non-empty only while `prompt_to_log` is on.
     ///
@@ -6547,6 +6552,7 @@ impl Engine {
             qso_report_sent: None,
             stalled_qso: None,
             recent_partner: None,
+            cleared_dx_call: None,
             pending_logs: VecDeque::new(),
             unconfirmed_auto_logs: Vec::new(),
             contest_held_uploads: Vec::new(),
@@ -17861,19 +17867,29 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // The partner a run has already left is still WSJT-X's DX call (`m_hisCall`), which the
         // clear empties: the one late answer still owed to it goes too.
         self.recent_partner = None;
-        let in_contact = match &self.mode {
-            Mode::Qso { station, .. } => station.dxcall.is_some(),
-            Mode::FieldDay { station, .. } => station.dxcall.is_some(),
-            Mode::Chat => false,
+        let cleared = match &self.mode {
+            Mode::Qso { station, .. } => station.dxcall.clone(),
+            Mode::FieldDay { station, .. } => station.dxcall.clone(),
+            Mode::Chat => None,
         };
-        if !in_contact {
+        let Some(cleared) = cleared else {
             return; // calling CQ, or nobody: :10078 leaves Enable Tx as it is
+        };
+        // An earlier abandoned contact with this same station goes too, so the Log button cannot
+        // log the station just cleared; one with another station stays for the Log button.
+        if self
+            .stalled_qso
+            .as_ref()
+            .is_some_and(|st| tempo_core::message::same_call(&st.dxcall, &cleared))
+        {
+            self.stalled_qso = None;
         }
         let mycall = self.settings.mycall.clone();
         let mygrid = self.settings.mygrid.clone();
         match &mut self.mode {
             Mode::FieldDay { station, running } => station.rearm(*running),
             _ if self.cq_running => {
+                self.cleared_dx_call = Some(cleared);
                 let mut s = QsoStation::calling_cq(&mycall, &mygrid);
                 s.confirm_with_rrr = self.settings.prefer_rrr;
                 s.cq_call_cap = self.cq_call_budget();
@@ -20047,6 +20063,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
         self.tx_enabled = on;
         if on {
+            // The operator's arm ends Clear DX's hold on the caller it dropped.
+            self.cleared_dx_call = None;
             // Re-enabling is an operator action: clear a tripped watchdog and
             // restart the watchdog timer on the next over.
             self.tx_watchdog = false;
@@ -30590,6 +30608,23 @@ contact yourself."
                     &picked
                 } else {
                     decodes
+                };
+                // A caller Clear DX dropped is not answered until the operator arms TX again.
+                let unheld;
+                let observed: &[modes::Decode] = match &self.cleared_dx_call {
+                    Some(cleared) if state_before == QsoState::CallingCq => {
+                        unheld = observed
+                            .iter()
+                            .filter(|d| {
+                                !Msg::parse(&d.message)
+                                    .sender()
+                                    .is_some_and(|s| tempo_core::message::same_call(s, cleared))
+                            })
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        &unheld
+                    }
+                    _ => observed,
                 };
                 // WSJT-X 3.0.2 `mainwindow.cpp:9426`: in FT8, FT4 and FST4 a repeated over
                 // from the partner re-reads the report we send back; every other mode keeps
