@@ -6111,9 +6111,17 @@ h2 {
   padding: var(--gap);
 }
 
-/* Three-pane workspace (chat/qso/fieldDay/band): waterfall on the right rail. Fluid
+/* Three-pane workspace (Tempo): a full-width waterfall strip, then three columns. Fluid
    side columns driven by CSS vars (drag-resizable via the splitters). The single-panel
-   views (.layout.single) are NOT data-three-pane and are unaffected. */
+   views (.layout.single) are NOT data-three-pane and are unaffected.
+   THE WATERFALL STRIP (2026-10-26, "width and height to be consistent"): every mode's waterfall
+   starts at the same full width and 25 % of its shell, so Tempo's is a row of this grid (`wf`)
+   across all five tracks, sized by its divider (App `--tempo-wf-h`, written on this element,
+   stored per surface as `nexus.split.tempo.waterfall`) between the yielding floor and the
+   ceiling every waterfall strip has (features/paneSeam WATERFALL_SPLIT_MIN/MAX, the JS8/RTTY
+   rule's own numbers). A track, not the item's height: a percentage resolves against this grid's
+   content height, as a shell child's basis does against its shell. The right rail (`waterfall`,
+   the area's old name) now holds Band Activity and the link pill. */
 .layout[data-three-pane] {
   grid-template-columns:
     minmax(var(--rail-min, 200px), var(--left-rail-w))
@@ -6121,16 +6129,43 @@ h2 {
     minmax(0, 1fr)
     auto
     var(--right-rail-w);
-  grid-template-areas: 'stations split-left center split waterfall';
+  grid-template-rows:
+    clamp(min(8em, calc(0.28 * var(--vh-eff, 100vh))), var(--tempo-wf-h, 25%), calc(0.45 * var(--vh-eff, 100vh)))
+    minmax(0, 1fr);
+  grid-template-areas:
+    'wf wf wf wf wf'
+    'stations split-left center split waterfall';
 }
 /* Tempo cockpit: a full-width shared header row above the three panes (chat
    view only — other three-pane views pass no header and are unaffected), so
    Tempo's header spans the whole workspace like the single-pane cockpits. */
 .layout[data-three-pane].has-tempo-header {
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows:
+    auto
+    clamp(min(8em, calc(0.28 * var(--vh-eff, 100vh))), var(--tempo-wf-h, 25%), calc(0.45 * var(--vh-eff, 100vh)))
+    minmax(0, 1fr);
   grid-template-areas:
     'header header header header header'
+    'wf wf wf wf wf'
     'stations split-left center split waterfall';
+}
+/* The strip: the Waterfall's own root, a direct grid item, drawn as a panel like the cells beside it. */
+.layout[data-three-pane] > .waterfall-wrap {
+  grid-area: wf;
+  min-width: 0;
+  min-height: 0;
+  background: var(--panel);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+/* Its divider stands in the strip's own cell, on its bottom edge, and hangs into the row gap below:
+   it takes no track of its own (a row of its own would cost the grid a second gap), and it is
+   centred in the gap, over no pane. */
+.pane-splitter.horizontal.tempo-wf-seam {
+  grid-area: wf;
+  align-self: end;
+  margin: 0 0 calc(-0.5 * var(--gap) - var(--space-1));
 }
 .grid-header {
   grid-area: header;
@@ -17037,10 +17072,8 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 [data-viewport='xs'] .layout[data-three-pane] {
   /* Narrowest desktop class: tighten further and lower the rail floor so the
-     center pane keeps usable width. The waterfall stays in its rail and is never
-     hidden — the rail only narrows. (There is no top-strip alternative: the
-     `data-layout` attribute an older comment here promised had no writer and no
-     CSS, and was deleted with the rest of that dead vocabulary.) */
+     center pane keeps usable width. The rail only narrows. (The waterfall has been a
+     full-width strip above the columns since 2026-10-26, not in this rail.) */
   --left-rail-w: 210px;
   --rail-min: 168px;
   --right-rail-w: clamp(240px, calc(0.32 * var(--vw-eff, 100vw)), 360px);
@@ -17152,11 +17185,22 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 [data-viewport='sm'] .grid-stations,
 [data-viewport='sm'] .grid-center,
 [data-viewport='sm'] .grid-waterfall,
+[data-viewport='sm'] .layout[data-three-pane] > .waterfall-wrap,
+[data-viewport='sm'] .pane-splitter.horizontal.tempo-wf-seam,
 [data-viewport='xs'] .grid-header,
 [data-viewport='xs'] .grid-stations,
 [data-viewport='xs'] .grid-center,
-[data-viewport='xs'] .grid-waterfall {
+[data-viewport='xs'] .grid-waterfall,
+[data-viewport='xs'] .layout[data-three-pane] > .waterfall-wrap,
+[data-viewport='xs'] .pane-splitter.horizontal.tempo-wf-seam {
   grid-area: auto;
+}
+/* Tempo's waterfall strip (2026-10-26) stacks under the header at the house default share of the
+   window: in the collapse its row is content-height, so the strip carries the height itself (its
+   divider is hidden here, as every divider is). */
+[data-viewport='sm'] .layout[data-three-pane] > .waterfall-wrap,
+[data-viewport='xs'] .layout[data-three-pane] > .waterfall-wrap {
+  height: max(min(8em, calc(0.28 * var(--vh-eff, 100vh))), calc(0.25 * var(--vh-eff, 100vh)));
 }
 [data-viewport='sm'] .grid-stations,
 [data-viewport='sm'] .grid-center,
@@ -19721,10 +19765,11 @@ body.pane-dragging {
    real estate goes to the decode lists + roster below. */
 .cockpit-waterfall {
   /* Height is operator-resizable (the PaneSeam under it drives --cockpit-wf-h and
-     clamps 88–420 px, and to what this rule honours); 22% stays the untouched default. `flex-shrink:1` + no px
+     clamps 88–420 px, and to what this rule honours). The untouched default is 25 % of the SHELL,
+     painted here as the body's share (OperateCockpit `defaultOf`); 25% is only the pre-paint fallback. `flex-shrink:1` + no px
      floor + a max lets it YIELD on short windows instead of starving the lists
      below — the fit-scale keeps it a comfortable size at normal sizes. */
-  flex: 0 1 var(--cockpit-wf-h, 22%);
+  flex: 0 1 var(--cockpit-wf-h, 25%);
   min-height: 0;
   max-height: 60%;
   display: flex;
@@ -26334,7 +26379,7 @@ button.sat-chip:disabled {
      hideable) and the 45% zoom-corrected cap (raw vh is zoom-blind) keep a stale
      persisted % structurally harmless. The % basis resolves against the flex container.
      Guarded by cockpit-shells.test.ts (winning flex-grow must compute to 0). */
-  flex: 0 1 var(--cw-scope-h, 22%);
+  flex: 0 1 var(--cw-scope-h, 25%);
   height: auto;
   min-height: 8em;
   max-height: calc(0.45 * var(--vh-eff, 100vh));
@@ -26346,21 +26391,10 @@ button.sat-chip:disabled {
      the scope. That band is real estate the drag now actually controls — pull the seam
      down and the scope keeps it (as the sole grower this control did nothing at all:
      rendered height was basis-independent, measured identical at 12/30/52/90%). */
-  flex: 0 1 var(--ph-scope-h, 22%);
+  flex: 0 1 var(--ph-scope-h, 25%);
   height: auto;
   min-height: 8em;
   max-height: calc(0.45 * var(--vh-eff, 100vh));
-}
-/* BESIDE THE LEFT SIDE (2026-10-03) the scope stands in the stage (cockpit-panes.css), and the row
-   that holds the stage takes the stage's INTRINSIC height as its automatic minimum — where a column
-   counts each child at its preferred size, the scope at its content height rather than the 8em floor it
-   shrinks to under deficit. On a 1280×720 effective window that scrolled the shell 22 px further and
-   set the TX strip 22 px lower than without the side (measured in Chrome). Size containment makes the
-   scope's intrinsic size its floor, which is all the flex layout gives it under deficit anyway; laid
-   out, its size is still its basis clamped by the rule above. Only beside the side: with no side its
-   basis resolves against the shell, and nothing here changes. cockpit-shells.test.ts computes both. */
-.phone-cockpit .ph-scope-panel--beside {
-  contain: size;
 }
 /* Horizontal (height-dragging) splitter variant of the workspace .pane-splitter. It never
    shrinks: as a default flex item it gave its own 8 px to an overfull column (thinning to
@@ -26393,8 +26427,6 @@ button.sat-chip:disabled {
    (`.cockpit-col`, 12 px in cockpit-panes.css, which this sheet may not name: the dividers inside
    a column carry `in-column` instead), and Operate's body, side rail and Rx Frequency column (8 px),
    and FT's arranged columns (`.op-stack`, 8 px, in cockpit-panes.css: their dividers carry `in-op-stack`).
-   Phone's scope divider carries `in-column` too since its left side (2026-10-03): it stands in the
-   stage (cockpit-panes.css), whose gap is the shell's, so a shell-child selector cannot reach it.
    Exact at the spacing scale the dividers render at: `--space-scale` drops below 1 only at the
    sm/xs viewports, which hide every divider. cockpit-shells.test.ts computes each net. */
 .layout.single.rtty-cockpit > .pane-splitter.horizontal,
@@ -26402,6 +26434,7 @@ button.sat-chip:disabled {
 .layout.single.jtty-cockpit > .pane-splitter.horizontal,
 .layout.single.sstv-view > .pane-splitter.horizontal,
 .layout.single.cw-cockpit > .pane-splitter.horizontal,
+.layout.single.phone-cockpit > .pane-splitter.horizontal,
 .layout.single.js8-cockpit > .pane-splitter.horizontal,
 .pane-splitter.horizontal.in-column {
   margin-block: calc(-0.5 * var(--space-3) - var(--space-1));
@@ -28161,7 +28194,7 @@ button.sat-chip:disabled {
      (`.rtty-cockpit > .pane-frame { min-height: 10em }`) shipped dead. Fenced:
      cockpit-panes.test.ts fails any other rule that sets this — inherited under a
      region's tier-2/3 `overflow: hidden` it would be the clip mechanism reborn. */
-  --cockpit-fill-min: var(--rtty-fill-min, 10em);
+  --cockpit-fill-min: 10em;
 }
 /* JS8 is a REGION cockpit (CW's shape: a .cockpit-panes grid, not bare fill frames), so it
    takes CW's shell rule and NOT the --cockpit-fill-min knob — cockpit-panes.test.ts fences
@@ -28216,8 +28249,12 @@ button.sat-chip:disabled {
    basis is what renders (cockpit-shells.test.ts). The default, 25 % of the shell, is where the
    old fixed `0.22 × --vh-eff` measured (base tree, in Chrome): 25.1 % at 1024×768 and 1366×768,
    24.5 % at 1920×1080. The var is the SHELL's own (each shell carries its divider's), so the one
-   name serves all three cockpits. */
-.rtty-cockpit .waterfall-wrap,
+   name serves all three cockpits.
+
+   On RTTY the strip is the ROW `.rtty-wf-row` (2026-10-26): the waterfall, then the tuning scope right of
+   it (its size: cockpit-panes.css `.rtty-tuning-box`), so the waterfall keeps this height and the scope
+   its size, and the waterfall gives up the width. The divider sizes the row. */
+.rtty-wf-row,
 .psk-cockpit .waterfall-wrap,
 .jtty-cockpit .waterfall-wrap {
   flex: 0 1 var(--rtty-wf-h, 25%);
@@ -28230,10 +28267,22 @@ button.sat-chip:disabled {
      floor: the canvas needs device pixels to draw into, and a strip that shrinks to nothing
      is a decoder with no display. Its divider's lower end is exactly this floor
      (WATERFALL_SPLIT_MIN). */
-  min-height: min(var(--rtty-wf-floor, 8em), calc(0.28 * var(--vh-eff, 100vh)));
+  min-height: min(8em, calc(0.28 * var(--vh-eff, 100vh)));
   /* The scope's ceiling (WATERFALL_SPLIT_MAX): a waterfall is a glance strip, and the
      transcript and the log strip below it are what this cockpit is for. */
   max-height: calc(0.45 * var(--vh-eff, 100vh));
+}
+/* RTTY's strip row: the waterfall takes the width the tuning scope leaves (a zero basis, so the scope's
+   own size is what stands) and the row's whole height. The row is the size container the scope's square
+   reads (`100cqh`), so where the operator drags the strip shorter than the square the square follows. */
+.rtty-wf-row {
+  display: flex;
+  gap: var(--space-2);
+  container-type: size;
+}
+.rtty-wf-row > .waterfall-wrap {
+  flex: 1 1 0;
+  min-width: 0;
 }
 /* JS8's waterfall, SIZED BY ITS DIVIDER (layout L2): the operator drags or arrows its height,
    stored per surface (`nexus.split.js8.waterfall`) and clamped against the live box on load and
@@ -28476,7 +28525,7 @@ button.sat-chip:disabled {
   background: var(--accent);
   border-color: var(--accent);
 }
-/* RTTY TUNING SCOPE — the insides of the column (its size is cockpit-panes.css `.rtty-tuning`).
+/* RTTY TUNING SCOPE — the insides of the column (its size is cockpit-panes.css `.rtty-tuning-box`).
    The picture's colours are read off the canvas's own computed tokens (--bg, --rx, --text-faint,
    --text-dim), so it follows both themes with no token of its own. */
 /* Shown over the square when there is nothing to draw: disarmed, or our own over. */

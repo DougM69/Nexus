@@ -1313,7 +1313,7 @@ export const PHONE_PANELS: PanelVocabulary<PhonePanelId> = {
   // which would stop its over and discard its recording. Below three tracks the feeds follow the rig
   // strips (`stockMerged`).
   // THE LEFT SIDE (operator's pick, 2026-10-03): Band Activity, Spots and Needed may stand in a
-  // full-height column beside the scope. Never the voice keyer or the log form: the side comes and
+  // column beside the region, under the scope (2026-10-26). Never the voice keyer or the log form: the side comes and
   // goes with the window's width (about 1280 px), and a pane that changes parent is remounted, which
   // would cut off a voice message or a half-typed contact. The rig strips stay in the region.
   // THE BOXES (BOX_IDS) stand at the foot of the leading column until ⊞ Arrange puts them elsewhere,
@@ -1422,8 +1422,9 @@ export const CW_PANELS: PanelVocabulary<CwPanelId> = {
  *  (unmounting the pane calls no wire), so it correctly carries no ⊞ note. This is the pane
  *  that falsified the FOURTH wording a second time — see the header.
  *
- *  `tuning` (2026-10-17) is the crossed-ellipse tuning scope, a square column LEFT of the decoded
- *  text, shown by default. Display plus two nudges that net the decoder (and with it the AFSK
+ *  `tuning` (2026-10-17) is the crossed-ellipse tuning scope, shown by default: since 2026-10-26 it
+ *  stands RIGHT of the waterfall in the waterfall's strip (it stood left of the decoded text before).
+ *  Hidden, the waterfall takes the strip's width; with the waterfall hidden, it holds the strip alone. Display plus two nudges that net the decoder (and with it the AFSK
  *  transmit tone) by 5 Hz; the nudges are disabled while anything of ours is keyed. It hosts no
  *  control that stops a transmission and none that starts one, and hiding it ends nothing, so it
  *  carries no ⊞ note and THE STOP LINE is untouched by it. */

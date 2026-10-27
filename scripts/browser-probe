@@ -48,7 +48,7 @@ set -u
 usage() {
   cat >&2 <<USAGE
 usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
-       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty
+       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls
 
   --scenario <pattern>  matched against the suite's test NAMES (node --test
                         --test-name-pattern). Default 'stream'. The names are built
@@ -113,6 +113,13 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         and the Log QSO prompt's words, Log QSO and Not now on screen,
                         with a control (a box over Messages and Log QSO) that must be
                         seen as covered (ui/probe/jtty-probe.mjs)
+  --desktop waterfalls  every mode's waterfall in the real app at 1024×768, 1366×768,
+                        1920×1080 and 2560×1440, asserting each starts at 25 % of its
+                        cockpit (or the layout's ceiling) and all are the same width and,
+                        where the layout lets them, the same height; Stop TX, Tune and PTT
+                        on screen; Phone's scope full width beside its left side; Tempo
+                        stacked; with a moved divider and a planted margin that must be
+                        caught (ui/probe/waterfalls-probe.mjs; it builds nothing)
 
 exit: 0 the scenario passed · 1 it failed · 2 usage, or the pattern matched no test
 USAGE
@@ -129,7 +136,7 @@ while [ $# -gt 0 ]; do
                 case "$SHARD" in 0|1) ;; *) echo "browser-probe: --shard takes 0 or 1 (CI runs two)" >&2; exit 2 ;; esac ;;
     --no-build) BUILD=0; shift ;;
     --desktop)  [ $# -ge 2 ] || { usage; exit 2; }; DESKTOP="$2"; shift 2
-                case "$DESKTOP" in rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty) ;; *) echo "browser-probe: --desktop takes rotor, contestlog, spots, callcard, activation, voicenote, contactcard, atu or jtty" >&2; exit 2 ;; esac ;;
+                case "$DESKTOP" in rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls) ;; *) echo "browser-probe: --desktop takes rotor, contestlog, spots, callcard, activation, voicenote, contactcard, atu, jtty or waterfalls" >&2; exit 2 ;; esac ;;
     -h|--help)  usage; exit 0 ;;
     *)          echo "browser-probe: unknown argument '$1'" >&2; usage; exit 2 ;;
   esac
@@ -154,6 +161,7 @@ if [ -n "$DESKTOP" ]; then
   [ "$DESKTOP" = contactcard ] && exec node "$ROOT/ui/probe/contactcard-probe.mjs"
   [ "$DESKTOP" = atu ] && exec node "$ROOT/ui/probe/atu-probe.mjs"
   [ "$DESKTOP" = jtty ] && exec node "$ROOT/ui/probe/jtty-probe.mjs"
+  [ "$DESKTOP" = waterfalls ] && exec node "$ROOT/ui/probe/waterfalls-probe.mjs"
   exec node "$ROOT/ui/probe/desktop-probe.mjs" "$DESKTOP"
 fi
 
