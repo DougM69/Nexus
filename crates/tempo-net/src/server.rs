@@ -296,6 +296,7 @@ mod tests {
             exchange_sent: "",
             exchange_recvd: "",
             adif_propmode: "",
+            ..Default::default()
         };
         server.send_qso_logged(&qso).unwrap();
 
@@ -347,6 +348,7 @@ mod tests {
                 exchange_sent: "",
                 exchange_recvd: "",
                 adif_propmode: "",
+                ..Default::default()
             })
             .unwrap();
 

@@ -194,6 +194,19 @@ pub struct QsoLogged<'a> {
     pub exchange_sent: &'a str,
     pub exchange_recvd: &'a str,
     pub adif_propmode: &'a str,
+    /// ⭐ **The three fields WSJT-X sends after the propagation mode** —
+    /// `MessageClient::qso_logged` writes `propmode << satellite << satmode << freqRx`
+    /// (`Network/MessageClient.cpp` 1081-1083), though the type-5 table in
+    /// `NetworkMessage.hpp` (307-325) stops at the propagation mode. A reader that stops there
+    /// stops there; one that reads on gets the satellite pair and the receive frequency, which a
+    /// logger reading only this message otherwise never sees.
+    ///
+    /// ADIF `SAT_NAME`, `""` unless the propagation mode is `SAT`.
+    pub satellite: &'a str,
+    /// ADIF `SAT_MODE`, `""` unless the propagation mode is `SAT`.
+    pub sat_mode: &'a str,
+    /// ADIF `FREQ_RX` as WSJT-X's Log QSO dialog holds it: MHz text, `""` for none.
+    pub freq_rx: &'a str,
 }
 
 /// **QSOLogged (type 5).**
@@ -215,7 +228,10 @@ pub fn encode_qso_logged(id: &str, q: &QsoLogged) -> Vec<u8> {
         .put_utf8(Some(q.my_grid))
         .put_utf8(Some(q.exchange_sent))
         .put_utf8(Some(q.exchange_recvd))
-        .put_utf8(Some(q.adif_propmode));
+        .put_utf8(Some(q.adif_propmode))
+        .put_utf8(Some(q.satellite))
+        .put_utf8(Some(q.sat_mode))
+        .put_utf8(Some(q.freq_rx));
     w.into_bytes()
 }
 
@@ -290,6 +306,11 @@ pub struct LoggedQso {
     pub exchange_sent: String,
     pub exchange_recvd: String,
     pub adif_propmode: String,
+    /// The three trailing fields ([`QsoLogged::satellite`]); `""` from a sender that stops at
+    /// the propagation mode.
+    pub satellite: String,
+    pub sat_mode: String,
+    pub freq_rx: String,
 }
 
 /// A parsed inbound datagram from a controlling app (e.g. GridTracker telling
@@ -479,6 +500,10 @@ pub fn parse_inbound(bytes: &[u8]) -> Option<Inbound> {
                 exchange_sent: r.read_utf8()?.unwrap_or_default(),
                 exchange_recvd: r.read_utf8()?.unwrap_or_default(),
                 adif_propmode: r.read_utf8()?.unwrap_or_default(),
+                // Optional: WSJT-X sends them, a sender following the documented table does not.
+                satellite: r.read_utf8().flatten().unwrap_or_default(),
+                sat_mode: r.read_utf8().flatten().unwrap_or_default(),
+                freq_rx: r.read_utf8().flatten().unwrap_or_default(),
             }),
         }),
         msg_type::LOGGED_ADIF => Some(Inbound::LoggedAdif {
@@ -676,7 +701,10 @@ mod tests {
             my_grid: "EN52",
             exchange_sent: "1D WI",
             exchange_recvd: "3A EMA",
-            adif_propmode: "",
+            adif_propmode: "SAT",
+            satellite: "RS-44",
+            sat_mode: "VU",
+            freq_rx: "435.640000",
         };
         let bytes = encode_qso_logged("Tempo", &q);
         let mut r = check_header(&bytes, msg_type::QSO_LOGGED);
@@ -702,7 +730,11 @@ mod tests {
         assert_eq!(r.read_utf8(), Some(Some("EN52".to_string())));
         assert_eq!(r.read_utf8(), Some(Some("1D WI".to_string())));
         assert_eq!(r.read_utf8(), Some(Some("3A EMA".to_string())));
-        assert_eq!(r.read_utf8(), Some(Some("".to_string())));
+        assert_eq!(r.read_utf8(), Some(Some("SAT".to_string())));
+        // WSJT-X's three trailing fields, in `MessageClient::qso_logged`'s order.
+        assert_eq!(r.read_utf8(), Some(Some("RS-44".to_string())));
+        assert_eq!(r.read_utf8(), Some(Some("VU".to_string())));
+        assert_eq!(r.read_utf8(), Some(Some("435.640000".to_string())));
         assert_eq!(r.remaining(), 0);
     }
 
@@ -876,6 +908,7 @@ mod tests {
             exchange_sent: "1D WI",
             exchange_recvd: "3A EMA",
             adif_propmode: "",
+            ..Default::default()
         };
         let bytes = encode_qso_logged("WSJT-X", &q);
         match parse_inbound(&bytes).unwrap() {
@@ -901,6 +934,7 @@ mod tests {
                         exchange_sent: "1D WI".to_string(),
                         exchange_recvd: "3A EMA".to_string(),
                         adif_propmode: String::new(),
+                        ..Default::default()
                     }
                 );
             }
