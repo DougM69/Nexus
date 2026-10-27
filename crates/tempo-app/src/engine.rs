@@ -33127,7 +33127,6 @@ fn restore_fd_journal(
     }
 }
 
-/// Current wall-clock time as Unix seconds (UTC), 0 before the epoch.
 /// The WSJT-X Tx message number (1-6) a queued over stands for: Tx1 our grid, Tx2 the report,
 /// Tx3 the roger with report, Tx4 RRR/RR73, Tx5 73, Tx6 CQ. Read from the message the sequencer
 /// queued, before the on-air rewrite of a compound call. `None` for free text or nothing queued.
@@ -33167,6 +33166,7 @@ pub(crate) fn wsjtx_qso_on(now: u64, ntx: u64, period_s: f64) -> u64 {
     now.saturating_sub(back)
 }
 
+/// Current wall-clock time as Unix seconds (UTC), 0 before the epoch.
 pub(crate) fn now_unix_secs() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)

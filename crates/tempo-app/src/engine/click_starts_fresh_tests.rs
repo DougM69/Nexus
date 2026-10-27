@@ -561,6 +561,57 @@ fn a_second_clear_keeps_the_first_cleared_caller_held() {
     assert!(e.stored_log().is_empty());
 }
 
+/// (3) The hold applies only while the run is calling CQ. With "Double-click sets Tx" off, a click
+/// on a cleared caller starts its contact with TX still off and the hold still in place; the
+/// contact must still advance on that station's roger, and another held caller must not take it.
+#[test]
+fn a_click_on_a_held_caller_with_double_click_sets_tx_off_advances_on_its_roger() {
+    let mut e = ft8();
+    e.settings.auto_log = true;
+    e.settings.prompt_to_log = false;
+    e.settings.double_click_sets_tx = false;
+    e.set_mode("qso-run").expect("CQ");
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG W1AW FN31", -7)], 3);
+    e.clear_dx_call();
+    e.ingest_decodes_for_test(
+        &[
+            dec_snr("KR4FQG W1AW FN31", -7),
+            dec_snr("KR4FQG K9XYZ EN52", -11),
+        ],
+        5,
+    );
+    e.clear_dx_call();
+    assert_eq!(e.cleared_dx_calls.len(), 2, "premise: two callers held");
+    e.work_station(
+        "W1AW",
+        None,
+        Some("KR4FQG W1AW FN31"),
+        Some(-7),
+        Some(1200.0),
+    )
+    .expect("click");
+    assert_eq!(e.qso_dxcall(), Some("W1AW"));
+    assert_eq!(tx_now(&e), "W1AW KR4FQG -07", "the click answers it");
+    assert!(!e.tx_enabled, "premise: the click did not arm TX");
+    e.ingest_decodes_for_test(
+        &[
+            dec_snr("KR4FQG W1AW R-10", -7),
+            dec_snr("KR4FQG K9XYZ EN52", -11),
+        ],
+        7,
+    );
+    assert_eq!(
+        e.qso_dxcall(),
+        Some("W1AW"),
+        "K9XYZ does not take the contact"
+    );
+    assert_eq!(
+        tx_now(&e),
+        "W1AW KR4FQG RR73",
+        "the clicked contact advances"
+    );
+}
+
 /// (3) The cleared caller's bare report (no grid) is the other answer a CQ run locks onto; it is
 /// held too, in the portable and the hashed forms as well. Its RR73 and 73 lock nothing either.
 #[test]
