@@ -2152,6 +2152,17 @@ pub struct StationCore {
     /// [`Self::take_all_txt_pending`] and appends to the log file. Capped so a
     /// never-draining shell can't grow it without bound.
     pub(crate) all_txt_pending: Vec<String>,
+    /// ⭐ **Our own FT `Tx` lines, held until their over has ended** — `(unix second the over
+    /// ends, line)`, at most [`ALL_TXT_HELD_TX_CAP`].
+    ///
+    /// The line is made when the over is PLANNED, just before its boundary, and the period
+    /// before's boundary-pass decodes are folded after that. Written at once, the reply we
+    /// answered read BELOW our answer, stamped 15 s earlier. WSJT-X writes its `Tx` line when PTT
+    /// goes up, after those decodes. The line is not made any later, which would move nothing
+    /// about when or what is transmitted; it waits here until the over is over (every decode of
+    /// the period before is in by then) and goes into the file in time order
+    /// ([`Self::take_all_txt_pending_at`]).
+    pub(crate) all_txt_held_tx: Vec<(u64, String)>,
     /// Freshly-logged QSOs awaiting the shell's connector auto-upload worker
     /// (QRZ / ClubLog / eQSL). EVERY `Engine::log_qso` path queues here — the
     /// engine auto-log included — so "logged locally but never uploaded" can't
@@ -2429,6 +2440,7 @@ impl StationCore {
             clock_repair_tx_hold_until: None,
             remote_transmit_held: false,
             all_txt_pending: Vec::new(),
+            all_txt_held_tx: Vec::new(),
             pending_uploads: VecDeque::new(),
             dropped_uploads: Vec::new(),
             corrections: HashMap::new(),
@@ -5469,9 +5481,37 @@ impl StationCore {
     /// Drain the WSJT-X-format ALL.TXT lines buffered since the last call (the shell
     /// appends them to the on-disk log). Empty when ALL.TXT logging is off.
     pub fn take_all_txt_pending(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.all_txt_pending)
+        self.take_all_txt_pending_at(now_unix_secs())
+    }
+
+    /// [`Self::take_all_txt_pending`] at `now` (unix seconds): the lines buffered since the last
+    /// call, with every held `Tx` line whose over has ended by `now`
+    /// ([`Self::all_txt_held_tx`]). When any is released the batch is put in time order — by its
+    /// `yyMMdd_hhmmss` stamp, stably, so lines of one second keep the order they came in.
+    pub(crate) fn take_all_txt_pending_at(&mut self, now: u64) -> Vec<String> {
+        let mut out = std::mem::take(&mut self.all_txt_pending);
+        let held = std::mem::take(&mut self.all_txt_held_tx);
+        let (due, wait): (Vec<_>, Vec<_>) = held.into_iter().partition(|(end, _)| *end <= now);
+        self.all_txt_held_tx = wait;
+        if !due.is_empty() {
+            out.extend(due.into_iter().map(|(_, line)| line));
+            out.sort_by(|a, b| a.get(..13).cmp(&b.get(..13)));
+        }
+        out
+    }
+
+    /// Hold our own FT `Tx` line until `over_end` ([`Self::all_txt_held_tx`]).
+    pub(crate) fn hold_all_txt_tx(&mut self, over_end: u64, line: String) {
+        if self.all_txt_held_tx.len() >= ALL_TXT_HELD_TX_CAP {
+            self.all_txt_held_tx.remove(0);
+        }
+        self.all_txt_held_tx.push((over_end, line));
     }
 }
+
+/// How many `Tx` lines [`StationCore::all_txt_held_tx`] holds: one over's, with room for a few
+/// mid-over switches, and a bound for a shell that never drains.
+const ALL_TXT_HELD_TX_CAP: usize = 16;
 
 #[cfg(test)]
 mod grid_tests {

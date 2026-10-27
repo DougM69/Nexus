@@ -66,7 +66,6 @@ fn deliver(engine: &Arc<Mutex<Engine>>, datagrams: &[Vec<u8>]) {
     let sinks = Sinks {
         wsjtx: Some(&server),
         psk: None,
-        cfg_dial_hz: 14_074_000,
     };
     let mut backend = MockBackend::new();
     let mut rig = Rig::vox();

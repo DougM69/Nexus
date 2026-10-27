@@ -1104,6 +1104,7 @@ mod tests {
     #[test]
     fn directed_txt_lines_are_js8calls() {
         let mut e = js8_engine();
+        e.settings.write_all_txt = false;
         e.js8_ingest(&[row(&hb("W1AW"), 1210.6, -7)], 1);
         assert!(
             e.take_js8_directed_pending().is_empty(),

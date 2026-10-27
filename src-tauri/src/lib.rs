@@ -6299,6 +6299,90 @@ fn flush_all_txt(lines: &[String]) {
     }
 }
 
+/// ALL.TXT's and DIRECTED.TXT's last lines, at quit: what the window's poll (`get_snapshot`) had
+/// not drained yet, with our own FT `Tx` line still held for the end of its over. Taken under the
+/// lock and written after releasing it, as the poll writes them.
+fn flush_decode_logs_on_quit(engine: &SharedEngine) {
+    let (all_txt, directed_txt) = {
+        let mut eng = engine_lock(engine);
+        (
+            eng.take_all_txt_pending_on_quit(),
+            eng.take_js8_directed_pending(),
+        )
+    };
+    flush_all_txt(&all_txt);
+    flush_directed_txt(&directed_txt);
+}
+
+#[cfg(test)]
+mod quit_all_txt_tests {
+    use super::*;
+    use tempo_app::dto::Tier;
+    use tempo_app::engine::TxWaveform;
+
+    /// ⭐ **A Tx line still held at quit is written.** Our own FT `Tx` line waits in the engine for
+    /// the end of its over, and the quit never drained ALL.TXT, so quitting while keyed (or within
+    /// a poll of anything heard) lost those lines: up to a whole over, two to five minutes on
+    /// Q65-120 or Q65-300. The quit now writes them.
+    #[test]
+    fn a_held_tx_line_is_written_to_all_txt_on_quit() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        e.set_frequency(14.074, "20m", "USB");
+        e.set_tx_offset(1500.0);
+        let mut s = e.settings().clone();
+        s.write_all_txt = true;
+        e.apply_settings(s);
+        // An over two periods ahead, so it cannot end while the test runs.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let slot = now / 15 + 2;
+        e.hear_for_test("KD9TAW W1AW FN31", -10, slot - 2);
+        e.call_station_ctx(
+            "W1AW",
+            Some("FN31"),
+            Some("KD9TAW W1AW FN31"),
+            Some(-10),
+            None,
+        )
+        .expect("premise: W1AW worked");
+        let _ = e.take_immediate_tx();
+        let plan = e.plan_tx(slot).expect("premise: an over is planned");
+        let TxWaveform::Native { text, .. } = &plan.waveform else {
+            panic!("an FT8 plan is a native waveform");
+        };
+        let text = text.clone();
+        let wave = plan.waveform.build();
+        assert!(!e.commit_tx(&plan, wave, slot).is_empty(), "premise: keyed");
+        let polled = e.take_all_txt_pending();
+        assert!(
+            !polled.iter().any(|l| l.ends_with(&text)),
+            "premise: the window's poll leaves it held mid-over: {polled:#?}"
+        );
+        let engine: SharedEngine = Arc::new(Mutex::new(e));
+        flush_decode_logs_on_quit(&engine);
+        let file = std::fs::read_to_string(all_txt_path()).unwrap_or_default();
+        assert!(
+            file.lines()
+                .any(|l| l.contains(" Tx FT8 ") && l.ends_with(&text)),
+            "the held line {text:?} is in ALL.TXT: {file}"
+        );
+        // And the quit writes them: after the radio is stopped, before the process goes.
+        let src = include_str!("lib.rs");
+        let quit = &src[src.find("\nfn quit_cleanup(").unwrap()..];
+        let quit = &quit[..quit.find("\n}\n").unwrap()];
+        assert!(
+            quit.find("stop_the_radio();").unwrap()
+                < quit
+                    .find("flush_decode_logs_on_quit(")
+                    .expect("quit_cleanup writes ALL.TXT"),
+            "after the unkey"
+        );
+    }
+}
+
 /// JS8Call's DIRECTED.TXT (every directed message heard), beside ALL.TXT.
 fn directed_txt_path() -> PathBuf {
     local_data_dir().join("DIRECTED.TXT")
@@ -22693,8 +22777,16 @@ async fn confirm_pending_log(
             // No key is a refusal, not a free pass: a caller that cannot say WHICH contact it
             // is confirming cannot be allowed to log one (review R2).
             let key = expected_key.unwrap_or_default();
+            let prop_mode_was = eng.settings().log_prop_mode.clone();
             if !eng.confirm_pending_log(&key, record.into()) {
                 return Err(PENDING_LOG_MOVED_ON.into());
+            }
+            // The popup's propagation mode is remembered for the next contact
+            // (`Settings::log_prop_mode`), across a restart too.
+            if eng.settings().log_prop_mode != prop_mode_was {
+                persist_settings(eng.settings().clone(), |e| {
+                    eprintln!("tempo: failed to persist the log propagation mode: {e}")
+                });
             }
             Ok(eng.snapshot())
         })
@@ -37340,6 +37432,9 @@ fn quit_cleanup(app_handle: &tauri::AppHandle) {
     // Programs on JS8Call's API hear that the station is closing, as JS8Call tells them. After the
     // unkey, and bounded: it never delays taking the transmitter off the air.
     js8_api::closing();
+    // ALL.TXT's last lines, our own Tx line held for the end of its over among them: after the
+    // unkey, so a line for an over the quit cut short is still filed.
+    flush_decode_logs_on_quit(app_handle.state::<SharedEngine>().inner());
     // The last settings change, still on its way to `settings.json` on the writer's thread. On
     // every quit, attached or not: it is only what the operator changed, written late.
     flush_settings();

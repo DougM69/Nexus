@@ -2607,7 +2607,13 @@ pub struct Settings {
     /// a remote contest scorer at once, which WSJT-X's single sink cannot.
     pub wsjtx_udp_addr: String,
     /// Append every decode to a WSJT-X-format `ALL.TXT` decode log in the app data dir —
-    /// the running record loggers/GridTracker tail. Off by default.
+    /// the running record loggers/GridTracker tail.
+    ///
+    /// ⭐ **ON for a new install, as WSJT-X writes it by default; an existing install keeps what
+    /// it had.** [`Settings::default`] (a first run: no settings file) says on. The field's own
+    /// `#[serde(default)]` beats the container's, so a key MISSING from an existing file reads as
+    /// `false` — off, the default every earlier build shipped — never as the new default.
+    #[serde(default)]
     pub write_all_txt: bool,
     /// Write the DEBUG tier to the diagnostic log — per-over keying, per-period decode counts,
     /// CAT traffic. **Off by default and meant to stay off**: it is the "we are chasing
@@ -3323,6 +3329,16 @@ pub struct Settings {
     /// absent, and this matches it byte for byte). Opt-in, exactly as WSJT-X ships it.
     #[serde(default)]
     pub log_reports_to_comments: bool,
+    /// ⭐ **The propagation mode (ADIF `PROP_MODE`) the prompt-to-log popup was last given** —
+    /// `""` for none — offered again for the next contact held for it, as WSJT-X's Log QSO
+    /// dialog keeps its Prop Mode with "Retain" ticked. An EME, sporadic-E or meteor-scatter
+    /// operator picks it once for a run.
+    ///
+    /// ONE writer, the popup's confirm ([`crate::engine::Engine::confirm_pending_log`]); a
+    /// Settings form save keeps the live value (`apply_settings_inner`), since the form's copy
+    /// can be older than the last confirm. Never `SAT`: a satellite contact carries its
+    /// satellite's name with it, which no remembered mode can.
+    pub log_prop_mode: String,
     /// Show the "Confirm" tier — worked-but-unconfirmed award slots (LoTW confirmation
     /// opportunities) — on the Needed board and as decode/roster chips. Default ON:
     /// the tier ships lit and this is the opt-OUT for operators who chase contacts,
@@ -6076,7 +6092,7 @@ impl Default for Settings {
             default_radio: None,
             wsjtx_udp: false,
             wsjtx_udp_addr: "127.0.0.1:2237".to_string(),
-            write_all_txt: false,
+            write_all_txt: true,
             diag_debug_log: false,
             hrd_logging: false,
             hrd_udp_addr: "127.0.0.1:2333".to_string(),
@@ -6202,6 +6218,7 @@ impl Default for Settings {
             show_wpx_needs: false,
             show_wae_needs: false,
             log_reports_to_comments: false, // WSJT-X parity: dBtoComments defaults false
+            log_prop_mode: String::new(),
             best_caller: default_best_caller(),
             best_caller_min_snr: None,
             blocked_calls: Vec::new(),
@@ -8162,6 +8179,40 @@ mod tests {
     /// so each caller keeps whatever create/remove/chmod dance it needs.
     fn scratch_dir(label: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("tempo_settings_{label}_{}", std::process::id()))
+    }
+
+    /// ⭐ **ALL.TXT is written on a NEW install, as WSJT-X writes it by default** ("Disable
+    /// writing of ALL.TXT" is its opt-out), and an EXISTING install keeps what it had.
+    ///
+    /// New is told from existing by the settings file: a first run has none (and so does a
+    /// factory reset's defaults). An existing file that predates the switch's key had it OFF —
+    /// the default every earlier build shipped — so a missing key reads as off, never as the new
+    /// default. CONTROL: a saved `true` stays true, and a saved `false` stays false.
+    #[test]
+    fn all_txt_is_on_for_a_new_install_and_unchanged_for_an_existing_one() {
+        let dir = scratch_dir("all_txt_default");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        assert!(
+            Settings::load(&path).write_all_txt,
+            "a first run (no settings file) writes ALL.TXT"
+        );
+        for (file, want) in [
+            (serde_json::json!({ "mycall": "KD9TAW" }), false),
+            (
+                serde_json::json!({ "mycall": "KD9TAW", "writeAllTxt": true }),
+                true,
+            ),
+            (
+                serde_json::json!({ "mycall": "KD9TAW", "writeAllTxt": false }),
+                false,
+            ),
+        ] {
+            std::fs::write(&path, file.to_string()).unwrap();
+            assert_eq!(Settings::load(&path).write_all_txt, want, "{file}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The settings files `load` kept aside in `dir` (`settings.unreadable-<UTC>[-n].json`).

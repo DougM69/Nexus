@@ -2340,7 +2340,6 @@ pub fn run_radio(engine: Arc<Mutex<Engine>>, mut cfg: RadioConfig) -> Result<(),
         let sinks = Sinks {
             wsjtx: wsjtx.as_ref(),
             psk: psk.as_ref(),
-            cfg_dial_hz: cfg.dial_hz,
         };
         let now = now_unix_ms();
         let stepped = state.step(
@@ -3172,8 +3171,6 @@ fn handoff_if_switched(
 struct Sinks<'a> {
     wsjtx: Option<&'a WsjtxServer>,
     psk: Option<&'a PskReporter>,
-    /// Startup dial (Hz) reported as the QSO-logged TX frequency.
-    cfg_dial_hz: u64,
 }
 
 /// SSTV TX working rate (12 kHz = `tempo_fast::SAMPLE_RATE`): the image is synthesized
@@ -13466,34 +13463,11 @@ impl RadioLoop {
                 (s.mycall.clone(), s.mygrid.clone())
             };
             for q in &logged_qsos {
-                let time_on = q.when_unix as i64;
                 // Spelled as the ADIF writer spells `TX_PWR`, so the two messages of one contact
                 // agree; `""` when none was recorded, as WSJT-X sends an empty Tx power box.
-                let tx_power = q.tx_power.map(|p| format!("{p}")).unwrap_or_default();
                 send_logged_contact(
                     server,
-                    &WsjtxQso {
-                        time_off: q.time_off_unix.unwrap_or(q.when_unix) as i64,
-                        dx_call: &q.call,
-                        dx_grid: q.grid.as_deref().unwrap_or(""),
-                        // The contact's own frequency, not the rig's current dial — by the time this
-                        // drains the operator may have moved on, and a logger stamping the wrong band
-                        // on a contact is worse than one stamping none.
-                        tx_freq: (q.freq_mhz * 1e6).round().max(0.0) as u64,
-                        mode: &q.mode,
-                        report_sent: q.rst_sent.as_deref().unwrap_or(""),
-                        report_recvd: q.rst_rcvd.as_deref().unwrap_or(""),
-                        tx_power: &tx_power,
-                        comments: q.comment.as_deref().unwrap_or(""),
-                        name: q.name.as_deref().unwrap_or(""),
-                        time_on,
-                        op_call: q.operator.as_deref().unwrap_or(&mycall),
-                        my_call: q.station_callsign.as_deref().unwrap_or(&mycall),
-                        my_grid: &mygrid,
-                        exchange_sent: "",
-                        exchange_recvd: "",
-                        adif_propmode: q.prop_mode.as_deref().unwrap_or(""),
-                    },
+                    &wsjtx_qso_of(q, &WsjtxText::of(q), &mycall, &mygrid, "", ""),
                     // WITHHELD here, unlike the DXKeeper/HRD Logbook syncs: this is a
                     // BROADCAST to every configured target (`parse_wsjtx_targets` returns a
                     // list, and a non-loopback one is explicitly supported), consumed by
@@ -15234,9 +15208,7 @@ impl RadioLoop {
             .unwrap_or_default();
         // --- network emission (WSJT-X UDP API + PSK Reporter) ---
         if sinks.wsjtx.is_some() || sinks.psk.is_some() || snap.field_day.is_some() {
-            let tier = tier_mode(snap.link.tier);
             let _ms_mid = (now as u64 % 86_400_000) as u32;
-            let now_secs = (now / 1000.0) as i64;
             if did_rx {
                 emit_rx_decodes(
                     sinks,
@@ -15280,16 +15252,27 @@ impl RadioLoop {
                 );
                 let _ = server.send_status(&status.as_status());
                 station.wsjtx_status = Some(status);
-                if !fd_new.is_empty() {
-                    let ctx = FdWsjtxCtx {
-                        when_secs: now_secs,
-                        dial_hz: sinks.cfg_dial_hz,
-                        tier: tier.to_string(),
-                        mycall: snap.mycall.clone(),
-                        mygrid: snap.mygrid.clone(),
-                    };
-                    for q in &fd_new {
-                        let _ = server.send_qso_logged(&fd_wsjtx_qso(q, &ctx).as_datagram());
+                // Every new contest contact, COMPLETE, as WSJT-X sends each contest QSO it logs
+                // (`MainWindow::acceptQSO`): a QSOLogged carrying the grid, both reports, the
+                // power, the frequency on the air, both times, the operator and both exchanges,
+                // then a LoggedADIF with the record. It used to be a QSOLogged built from the
+                // display row — no grid, no reports, the bare dial, the slot's clock as both ends,
+                // the station's call as the operator, a received exchange blank outside Field
+                // Day — and no LoggedADIF at all, so an ADIF-inbound logger got nothing.
+                for q in &fd_new {
+                    if let Some(c) = eng.contest_logged_contact(q.seq) {
+                        send_logged_contact(
+                            server,
+                            &wsjtx_qso_of(
+                                &c.record,
+                                &WsjtxText::of(&c.record),
+                                &snap.mycall,
+                                &snap.mygrid,
+                                &c.exchange_sent,
+                                &c.exchange_rcvd,
+                            ),
+                            &tempo_core::logbook::adif_record(&c.record),
+                        );
                     }
                 }
             }
@@ -15479,78 +15462,68 @@ impl RadioLoop {
 // sends the result; the math (audio-offset → RF frequency) and the
 // callsign-gating live here where they can be tested.
 
-/// What the WSJT-X type-5 emitter knows about the STATION rather than the contact.
-///
-/// Split out so the per-row half below is a function that can be called — and its bytes
-/// asserted — without a socket, a sound card or the slot loop around it.
-struct FdWsjtxCtx {
-    /// The slot boundary this batch is emitted on (both `time_on` and `time_off`).
-    when_secs: i64,
-    dial_hz: u64,
-    /// The link tier's WSJT-X mode token.
-    tier: String,
-    mycall: String,
-    mygrid: String,
+/// The text fields of a `QSOLogged` that a record holds as numbers, spelled once so the
+/// datagram can borrow them.
+struct WsjtxText {
+    /// Spelled as the ADIF writer spells `TX_PWR`, so the two messages of one contact agree;
+    /// `""` when none was recorded, as WSJT-X sends an empty Tx power box.
+    tx_power: String,
+    /// The receive leg in MHz as the ADIF writer spells `FREQ_RX`; `""` for a contact that was
+    /// not worked split.
+    freq_rx: String,
 }
 
-/// Every WSJT-X type-5 field a Field Day contact fills in, OWNED.
-///
-/// [`QsoLogged`](WsjtxQso) borrows, so the datagram itself cannot be returned from a
-/// builder; this is the owned half, and [`as_datagram`](Self::as_datagram) is the
-/// borrow the server encodes.
-struct FdWsjtxQso {
-    when_secs: i64,
-    dx_call: String,
-    dial_hz: u64,
-    tier: String,
-    mycall: String,
-    mygrid: String,
-    exchange_sent: String,
-    exchange_recvd: String,
-}
-
-impl FdWsjtxQso {
-    /// The datagram struct, with the fields this contest wire has never carried left
-    /// empty exactly as they have been since 0.8.0.
-    fn as_datagram(&self) -> WsjtxQso<'_> {
-        WsjtxQso {
-            time_off: self.when_secs,
-            dx_call: &self.dx_call,
-            dx_grid: "",
-            tx_freq: self.dial_hz,
-            mode: &self.tier,
-            report_sent: "",
-            report_recvd: "",
-            tx_power: "",
-            comments: "",
-            name: "",
-            time_on: self.when_secs,
-            op_call: &self.mycall,
-            my_call: &self.mycall,
-            my_grid: &self.mygrid,
-            exchange_sent: &self.exchange_sent,
-            exchange_recvd: &self.exchange_recvd,
-            adif_propmode: "",
+impl WsjtxText {
+    fn of(q: &tempo_core::logbook::QsoRecord) -> Self {
+        Self {
+            tx_power: q.tx_power.map(|p| format!("{p}")).unwrap_or_default(),
+            freq_rx: q
+                .freq_rx_mhz
+                .map(|rx| format!("{rx:.6}"))
+                .unwrap_or_default(),
         }
     }
 }
 
-/// The type-5 `QSOLogged` datagram for ONE logged contest contact.
-///
-/// ⭐ **Both exchanges come from `q` — the ROW — and from nowhere else** (spec §3.3).
-/// The sent side used to be one session-level `format!` hoisted out of the caller's
-/// loop, which relabelled every contact already logged the moment a mobile station
-/// changed county.
-fn fd_wsjtx_qso(q: &FieldDayQso, ctx: &FdWsjtxCtx) -> FdWsjtxQso {
-    FdWsjtxQso {
-        when_secs: ctx.when_secs,
-        dx_call: q.call.clone(),
-        dial_hz: ctx.dial_hz,
-        tier: ctx.tier.clone(),
-        mycall: ctx.mycall.clone(),
-        mygrid: ctx.mygrid.clone(),
-        exchange_sent: q.mex.clone(),
-        exchange_recvd: format!("{} {}", q.class, q.section),
+fn wsjtx_qso_of<'a>(
+    q: &'a tempo_core::logbook::QsoRecord,
+    text: &'a WsjtxText,
+    mycall: &'a str,
+    mygrid: &'a str,
+    exchange_sent: &'a str,
+    exchange_recvd: &'a str,
+) -> WsjtxQso<'a> {
+    // WSJT-X sends the satellite pair only with the satellite propagation mode
+    // (`LogQSO::accept`), and so does ADIF.
+    let sat = q.prop_mode.as_deref() == Some("SAT");
+    WsjtxQso {
+        time_off: q.time_off_unix.unwrap_or(q.when_unix) as i64,
+        dx_call: &q.call,
+        dx_grid: q.grid.as_deref().unwrap_or(""),
+        // The contact's own frequency, not the rig's current dial — by the time this drains the
+        // operator may have moved on, and a logger stamping the wrong band on a contact is worse
+        // than one stamping none. On the air: dial + Tx audio, as WSJT-X sends it.
+        tx_freq: (q.freq_mhz * 1e6).round().max(0.0) as u64,
+        mode: &q.mode,
+        report_sent: q.rst_sent.as_deref().unwrap_or(""),
+        report_recvd: q.rst_rcvd.as_deref().unwrap_or(""),
+        tx_power: &text.tx_power,
+        comments: q.comment.as_deref().unwrap_or(""),
+        name: q.name.as_deref().unwrap_or(""),
+        time_on: q.when_unix as i64,
+        op_call: q.operator.as_deref().unwrap_or(mycall),
+        my_call: q.station_callsign.as_deref().unwrap_or(mycall),
+        // The grid the contact was made FROM, as the record's `MY_GRIDSQUARE` says — a park's
+        // during an activation — and Settings' only where the record names none.
+        my_grid: q.my_grid.as_deref().unwrap_or(mygrid),
+        exchange_sent,
+        exchange_recvd,
+        adif_propmode: q.prop_mode.as_deref().unwrap_or(""),
+        satellite: q.sat_name.as_deref().filter(|_| sat).unwrap_or(""),
+        sat_mode: tempo_core::logbook::extra_field(q, "SAT_MODE")
+            .filter(|_| sat)
+            .unwrap_or(""),
+        freq_rx: &text.freq_rx,
     }
 }
 
@@ -15576,7 +15549,7 @@ struct FdN1mmCtx {
 /// row's place in the push batch — the third component of the 32-hex dedup id.
 ///
 /// ⭐ **The sent exchange comes from `q`, the ROW** (spec §3.3), for the same reason as
-/// [`fd_wsjtx_qso`]: this emitter hoisted its own copy of the same `format!`.
+/// the WSJT-X type-5 emitter: this emitter hoisted its own copy of the same `format!`.
 fn fd_n1mm_contact(
     q: &FieldDayQso,
     batch_index: usize,
@@ -18244,6 +18217,7 @@ fn probe_cat_or_explain(rig: &mut Rig, t: &Transport) -> (Option<bool>, String) 
 mod tests {
     mod civ_coverage;
     mod clock_repair_tests;
+    mod contest_logged;
     mod contest_reply;
     mod contest_status;
     mod cw_cat_text;
@@ -18493,11 +18467,15 @@ mod tests {
     // its rows carry exchanges the session no longer composes, so an emitter reading the
     // session instead of the row produces visibly different bytes.
 
-    // The pinned Field Day datagrams. Captured from these same encoders BEFORE the
-    // provenance change, which is what makes them a before/after measurement rather
-    // than a restatement of what the code now does.
-    const WSJTX_FD_ROW0_HEX: &str = "adbccbda000000030000000500000007544553542d49440000000000258caa033f9aa0010000000457314157000000000000000000d6c0900000000346543800000000000000000000000000000000000000000000000000258caa033f9aa00100000005573958595a00000005573958595a00000004454e353300000005334120574900000005324120435400000000";
-    const WSJTX_FD_ROW1_HEX: &str = "adbccbda000000030000000500000007544553542d49440000000000258caa033f9aa001000000054b39414243000000000000000000d6c0900000000346543800000000000000000000000000000000000000000000000000258caa033f9aa00100000005573958595a00000005573958595a00000004454e353300000005334120574900000005314420494c00000000";
+    // ⭐ THE PINNED FIELD DAY QSOLogged DATAGRAMS, RE-PINNED DELIBERATELY. The first pins were
+    // captured before the provenance change and held the contest wire as it had been since 0.8.0:
+    // no grid, no reports, no power, the bare dial, the slot's clock as both ends, the station's
+    // call as the operator. That wire was the gap — WSJT-X sends a contest contact complete
+    // (`MainWindow::acceptQSO`) — so these now pin the complete contact: start 45 s before the
+    // end, dial + Tx audio, 100 W, the operator at the key, and each row's own exchanges — then
+    // WSJT-X's three trailing fields (satellite, satellite mode, Rx frequency), empty here.
+    const WSJTX_FD_ROW0_HEX: &str = "adbccbda000000030000000500000007544553542d49440000000000258caa033e1400010000000457314157000000000000000000d6c66c0000000346543800000000000000000000000331303000000000000000000000000000258caa033d64380100000005573958595a00000005573958595a00000004454e353300000005334120574900000005324120435400000000000000000000000000000000";
+    const WSJTX_FD_ROW1_HEX: &str = "adbccbda000000030000000500000007544553542d49440000000000258caa033efe6001000000054b39414243000000000000000000d6c66c0000000346543800000000000000000000000331303000000000000000000000000000258caa033e4e980100000005573958595a00000005573958595a00000004454e353300000005334120574900000005314420494c00000000000000000000000000000000";
     const N1MM_FD_ROW0: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?><contactinfo><app>NEXUS</app><contestname>ARRL-FIELD-DAY</contestname><contestnr>1</contestnr><timestamp>2025-06-15 15:06:40</timestamp><mycall>W9XYZ</mycall><band>20</band><rxfreq>1407400</rxfreq><txfreq>1407400</txfreq><operator>W9XYZ</operator><mode>FT8</mode><call>W1AW</call><section>CT</section><points>2</points><radionr>1</radionr><IsRunQSO>0</IsRunQSO><StationName>NEXUS</StationName><ID>0000000ca18d4e80000000000bb55600</ID><IsClaimedQso>1</IsClaimedQso><SentExchange>3A WI</SentExchange></contactinfo>";
     const N1MM_FD_ROW1: &str = "<?xml version=\"1.0\" encoding=\"utf-8\"?><contactinfo><app>NEXUS</app><contestname>ARRL-FIELD-DAY</contestname><contestnr>1</contestnr><timestamp>2025-06-15 15:07:40</timestamp><mycall>W9XYZ</mycall><band>20</band><rxfreq>1407400</rxfreq><txfreq>1407400</txfreq><operator>W9XYZ</operator><mode>FT8</mode><call>K9ABC</call><section>IL</section><points>2</points><radionr>1</radionr><IsRunQSO>0</IsRunQSO><StationName>NEXUS</StationName><ID>0000000ca18d55c5000000052c38d890</ID><IsClaimedQso>1</IsClaimedQso><SentExchange>3A WI</SentExchange></contactinfo>";
 
@@ -18557,14 +18535,41 @@ mod tests {
         ]
     }
 
-    fn wsjtx_ctx() -> FdWsjtxCtx {
-        FdWsjtxCtx {
-            when_secs: 1_750_000_100,
-            dial_hz: 14_074_000,
-            tier: "FT8".into(),
-            mycall: "W9XYZ".into(),
-            mygrid: "EN53".into(),
+    /// One Field Day contact as the contest emitter hands it to the WSJT-X sink
+    /// ([`tempo_core::contest::merge::LoggedContact`]): what row `q` of the fixtures above was,
+    /// worked at 14.074 + 1500 Hz at 100 W by the operator W9XYZ from EN53, started 45 s before it
+    /// was logged.
+    fn fd_contact(q: &FieldDayQso) -> tempo_core::contest::merge::LoggedContact {
+        let mut record = tempo_core::logbook::parse_adif(&format!(
+            "<CALL:{}>{}<BAND:3>20m<FREQ:9>14.075500<MODE:3>FT8<TX_PWR:3>100\
+             <OPERATOR:5>W9XYZ<STATION_CALLSIGN:5>W9XYZ<MY_GRIDSQUARE:4>EN53<EOR>",
+            q.call.len(),
+            q.call
+        ))
+        .remove(0);
+        record.when_unix = q.when_unix - 45;
+        record.time_off_unix = Some(q.when_unix);
+        tempo_core::contest::merge::LoggedContact {
+            record,
+            exchange_sent: q.mex.clone(),
+            exchange_rcvd: format!("{} {}", q.class, q.section),
         }
+    }
+
+    /// [`fd_contact`] as the bytes of its `QSOLogged` datagram.
+    fn fd_wsjtx_bytes(q: &FieldDayQso) -> Vec<u8> {
+        let c = fd_contact(q);
+        tempo_net::wsjtx::encode_qso_logged(
+            "TEST-ID",
+            &wsjtx_qso_of(
+                &c.record,
+                &WsjtxText::of(&c.record),
+                "W9XYZ",
+                "EN53",
+                &c.exchange_sent,
+                &c.exchange_rcvd,
+            ),
+        )
     }
 
     /// The N1MM context for a session running `event_id`.
@@ -18586,22 +18591,21 @@ mod tests {
 
     /// ⭐ **THE FIELD DAY WIRE, PINNED TO ITS BYTES.**
     ///
-    /// Field Day's exchange never moves, so a Field Day operator's two interop wires
-    /// must stay byte-for-byte what they have been since 0.8.0 — the provenance change
-    /// is only allowed to matter where the exchange actually moves. These are the WHOLE
-    /// encoded datagrams from the real encoders, captured before the change and
-    /// unchanged by it, not a description of the part that was expected to move.
+    /// Field Day's exchange never moves, so the N1MM wire must stay byte-for-byte what it
+    /// has been since 0.8.0 — the provenance change is only allowed to matter where the
+    /// exchange actually moves. These are the WHOLE encoded datagrams from the real
+    /// encoders, not a description of the part that was expected to move. The WSJT-X
+    /// `QSOLogged` pins were moved on purpose, once, when the contest wire started sending
+    /// the complete contact (see the constants).
     #[test]
     fn field_day_interop_datagrams_are_byte_pinned() {
-        let ctx = wsjtx_ctx();
         let wsjtx: Vec<String> = fd_rows()
             .iter()
             .map(|q| {
-                let b = tempo_net::wsjtx::encode_qso_logged(
-                    "TEST-ID",
-                    &fd_wsjtx_qso(q, &ctx).as_datagram(),
-                );
-                b.iter().map(|x| format!("{x:02x}")).collect::<String>()
+                fd_wsjtx_bytes(q)
+                    .iter()
+                    .map(|x| format!("{x:02x}"))
+                    .collect::<String>()
             })
             .collect();
         assert_eq!(wsjtx, vec![WSJTX_FD_ROW0_HEX, WSJTX_FD_ROW1_HEX]);
@@ -18867,7 +18871,6 @@ mod tests {
     #[test]
     fn a_mobile_session_puts_each_rows_own_exchange_on_both_wires() {
         let rows = mobile_rows();
-        let ctx = wsjtx_ctx();
         let nctx = n1mm_ctx("arrlfd");
 
         // What the session is composing NOW — the value the deleted DTO pair carried,
@@ -18876,10 +18879,7 @@ mod tests {
         let session_now = "3A DAV";
 
         for (i, q) in rows.iter().enumerate() {
-            let dg = tempo_net::wsjtx::encode_qso_logged(
-                "TEST-ID",
-                &fd_wsjtx_qso(q, &ctx).as_datagram(),
-            );
+            let dg = fd_wsjtx_bytes(q);
             let hay = String::from_utf8_lossy(&dg).to_string();
             assert!(
                 hay.contains(q.mex.as_str()),
@@ -19604,7 +19604,6 @@ mod tests {
         let sinks = Sinks {
             wsjtx: Some(&server),
             psk: None,
-            cfg_dial_hz: 14_074_000,
         };
         let (mut ra, mut reopen) = (mock_reopen_audio(), mock_reopen_rig());
         let mut station = StationSinks::new();
@@ -19693,7 +19692,6 @@ mod tests {
         let sinks = Sinks {
             wsjtx: Some(&server),
             psk: None,
-            cfg_dial_hz: 14_074_000,
         };
         let mut backend = MockBackend::new();
         let mut rig = Rig::vox();
@@ -19765,7 +19763,6 @@ mod tests {
         let sinks = Sinks {
             wsjtx: Some(&server),
             psk: None,
-            cfg_dial_hz: 14_074_000,
         };
         let mut backend = MockBackend::new();
         let mut rig = Rig::vox();
@@ -19866,6 +19863,73 @@ mod tests {
         }
     }
 
+    /// ⭐ The `QSOLogged` names the grid the contact was made FROM, as its record's
+    /// `MY_GRIDSQUARE` does: a park's during an activation, not Settings' grid. The two messages
+    /// of one contact disagreed on every activation contact.
+    #[test]
+    fn a_logged_contacts_own_grid_and_satellite_ride_the_qso_logged_datagram() {
+        let engine = Arc::new(Mutex::new(Engine::new("W9XYZ", "EN37", 0)));
+        let listener = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        listener
+            .set_read_timeout(Some(std::time::Duration::from_millis(300)))
+            .unwrap();
+        let server = WsjtxServer::new(
+            "127.0.0.1:0".parse().unwrap(),
+            listener.local_addr().unwrap(),
+        )
+        .unwrap();
+        let sinks = Sinks {
+            wsjtx: Some(&server),
+            psk: None,
+        };
+        let mut backend = MockBackend::new();
+        let mut rig = Rig::vox();
+        let mut state = loop_state_for(&engine);
+        let (mut ra, mut rr) = (mock_reopen_audio(), mock_reopen_rig());
+        let mut station = StationSinks::new();
+        {
+            let mut e = engine.lock().unwrap();
+            let mut q = tempo_core::logbook::parse_adif(
+                "<CALL:4>W1AW<BAND:2>2m<FREQ:10>145.880000<MODE:3>FT8<QSO_DATE:8>20260910\
+                 <TIME_ON:6>120000<MY_GRIDSQUARE:6>EM48AB<EOR>",
+            )
+            .remove(0);
+            q.prop_mode = Some("SAT".into());
+            q.sat_name = Some("RS-44".into());
+            q.freq_rx_mhz = Some(435.640);
+            e.log_qso(q);
+        }
+        state
+            .step(
+                &engine,
+                &mut backend,
+                &mut rig,
+                &sinks,
+                100.0,
+                &mut ra,
+                &mut rr,
+                &mut station,
+            )
+            .unwrap();
+        let mut buf = [0u8; 4096];
+        let qso = loop {
+            let (n, _) = listener.recv_from(&mut buf).expect("a QSOLogged datagram");
+            if let Some(WsjtxInbound::QsoLogged { qso, .. }) =
+                tempo_net::wsjtx::parse_inbound(&buf[..n])
+            {
+                break qso;
+            }
+        };
+        assert_eq!(
+            qso.my_grid, "EM48AB",
+            "the record's own grid, not Settings' EN37"
+        );
+        // WSJT-X's three trailing fields (`MessageClient::qso_logged`).
+        assert_eq!(qso.adif_propmode, "SAT");
+        assert_eq!(qso.satellite, "RS-44");
+        assert_eq!(qso.freq_rx, "435.640000");
+    }
+
     /// The contact's transmit power rides the QSOLogged datagram's own `Tx power` field,
     /// as WSJT-X fills it from its Log QSO dialog. The record carried it and the datagram said
     /// `""` — N1MM, HRD and Log4OM log from this message, so the power never reached them.
@@ -19884,7 +19948,6 @@ mod tests {
         let sinks = Sinks {
             wsjtx: Some(&server),
             psk: None,
-            cfg_dial_hz: 14_074_000,
         };
         let mut backend = MockBackend::new();
         let mut rig = Rig::vox();
@@ -22019,7 +22082,6 @@ mod tests {
         let sinks = Sinks {
             wsjtx: None,
             psk: Some(&reporter),
-            cfg_dial_hz: 14_074_000,
         };
         let (mut ra, mut rr) = (mock_reopen_audio(), mock_reopen_rig());
         let mut station = StationSinks::new();
@@ -22650,7 +22712,6 @@ mod tests {
         let sinks = Sinks {
             wsjtx: None,
             psk: None,
-            cfg_dial_hz: 14_074_000,
         };
         let (mut ra, mut rr) = (mock_reopen_audio(), mock_reopen_rig());
         let mut station = StationSinks::new();
@@ -22785,7 +22846,6 @@ mod tests {
         Sinks {
             wsjtx: None,
             psk: None,
-            cfg_dial_hz: 14_090_500,
         }
     }
     fn mock_reopen_audio() -> impl FnMut(&Transport) -> Result<MockBackend, String> {
@@ -22979,7 +23039,6 @@ mod tests {
         let sinks = Sinks {
             wsjtx: Some(&server),
             psk: None,
-            cfg_dial_hz: 14_074_000,
         };
         let (mut ra, mut reopen) = (mock_reopen_audio(), mock_reopen_rig());
         let mut station = StationSinks::new();

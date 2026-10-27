@@ -146,11 +146,7 @@ impl Station {
 
     /// [`Self::run_to`], with a logger's WSJT-X UDP link.
     fn run_with(&mut self, wsjtx: Option<&WsjtxServer>, until: f64) {
-        let sinks = Sinks {
-            wsjtx,
-            psk: None,
-            cfg_dial_hz: FT8_DIAL,
-        };
+        let sinks = Sinks { wsjtx, psk: None };
         let (mut ra, mut rr) = (mock_reopen_audio(), mock_reopen_rig());
         let mut station = StationSinks::new();
         while self.t <= until {

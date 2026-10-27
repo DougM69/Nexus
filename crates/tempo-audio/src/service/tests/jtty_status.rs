@@ -62,7 +62,6 @@ fn status_in(section: &str) -> (String, String, u32, u32) {
     let sinks = Sinks {
         wsjtx: Some(&server),
         psk: None,
-        cfg_dial_hz: 14_090_000,
     };
     let (mut ra, mut rr) = (mock_reopen_audio(), mock_reopen_rig());
     let mut station = StationSinks::new();
@@ -114,7 +113,6 @@ fn decode_sent_in(section: &str) -> bool {
     let sinks = Sinks {
         wsjtx: Some(&server),
         psk: None,
-        cfg_dial_hz: 14_074_000,
     };
     let mut e = Engine::new("KD9TAW", "EN52", 0);
     e.set_tier(Tier::Ft8);

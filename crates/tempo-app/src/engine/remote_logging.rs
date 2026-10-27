@@ -1099,6 +1099,40 @@ mod tests {
         assert!(fixture.engine.station.pending_uploads.is_empty());
     }
 
+    /// ⛔ The Remote confirm logs a satellite contact as one too, with ES remembered from the
+    /// popup: the satellite is stamped when the contact is held, before the remembered mode.
+    #[test]
+    fn a_remote_confirmed_satellite_contact_logs_as_satellite() {
+        for remembered in ["ES", ""] {
+            let mut fixture = Fixture::new(Tier::Ft8, true);
+            fixture.engine.settings.log_prop_mode = remembered.into();
+            fixture.engine.set_sat_transponder(Some((
+                "SAUDISAT 1C (SO-50)|FM Voice Repeater".into(),
+                0,
+                tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000),
+            )));
+            fixture.engine.settings.dial_mhz = 436.7935;
+            let identity = fixture.hold();
+            let append = fixture
+                .engine
+                .confirm_pending_log_for_sync(identity.clone(), edits(&identity))
+                .unwrap();
+            let LogWriteOutcome::PendingSync(receipts) = append.outcome else {
+                panic!("expected an append")
+            };
+            for receipt in receipts {
+                receipt.sync().unwrap();
+            }
+            let logged = &fixture.engine.stored_log()[0];
+            assert_eq!(
+                (logged.prop_mode.as_deref(), logged.sat_name.as_deref()),
+                (Some("SAT"), Some("SO-50")),
+                "remembered {remembered:?}, logged at {}",
+                logged.freq_mhz
+            );
+        }
+    }
+
     #[test]
     fn invalid_edits_and_a_changed_journal_path_refuse_before_append() {
         let mut fixture = Fixture::new(Tier::Ft4, true);

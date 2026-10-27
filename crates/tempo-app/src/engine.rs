@@ -15,6 +15,9 @@
 
 /// A CAT-broker client's held key: an armed FT run plans no over under it, and keys its next free
 /// slot after the release.
+/// ALL.TXT reads in the order things happened on the air.
+#[cfg(test)]
+mod all_txt_order_tests;
 #[cfg(test)]
 mod broker_key_slot_tests;
 /// SPEC-2's C16: changes to one contact by its id.
@@ -76,6 +79,7 @@ mod contest_removal_tests;
 /// The plain modes never wait on the contest picked in Settings.
 #[cfg(test)]
 mod contest_setup_tests;
+mod contest_udp;
 pub mod contest_unmerged;
 /// While contest mode is on no contact goes to the logging services live; turning it off sends
 /// what it held, once and paced, and LoTW's automatic upload waits for it.
@@ -7277,6 +7281,9 @@ impl Engine {
         // way no other setting's is: the operator is quietly moved back to the stable channel,
         // the betas stop arriving, and there is no error, no toast and no log line to notice.
         let live_beta_updates = self.settings.beta_updates;
+        // The popup's remembered propagation mode has ONE writer too, the popup's confirm
+        // (`take_popup_prop_mode`), and a form's copy can be older than the last confirm.
+        let live_log_prop_mode = self.settings.log_prop_mode.clone();
         // ⛔ The switches that let the station transmit by itself have ONE writer each, the switch
         // the operator presses: the presence beacon (`set_beacon`) and JS8's automatic replies,
         // relay and heartbeat acks (`js8_arm`). From a computer driving the station those run only
@@ -7420,6 +7427,7 @@ impl Engine {
         // as it does with every other setting it promises to clear.
         if keep_live_roster {
             self.settings.beta_updates = live_beta_updates;
+            self.settings.log_prop_mode = live_log_prop_mode;
             (
                 self.settings.beacon,
                 self.settings.js8_autoreply,
@@ -16699,6 +16707,34 @@ impl Engine {
         }
     }
 
+    /// The satellite stamp (`PROP_MODE` SAT with its `SAT_NAME`), under the three guards
+    /// described where the log funnel calls it. A record carrying a propagation mode or a
+    /// satellite name of its own is left as it came.
+    fn stamp_satellite(&self, rec: &mut QsoRecord) {
+        if rec.prop_mode.is_some() || rec.sat_name.is_some() {
+            return;
+        }
+        // A HELD transponder first; after LOS/"None"/a track stop, the bird last worked —
+        // the guide's promise that you can log once your hands are free.
+        let Some(st) = self.sat_tune.as_ref().or(self.sat_last_worked.as_ref()) else {
+            return;
+        };
+        let Some(name) = Self::lotw_sat_name(&st.label) else {
+            return;
+        };
+        let f_hz = if rec.freq_mhz > 0.0 {
+            (rec.freq_mhz * 1e6) as i64
+        } else {
+            (self.settings.dial_mhz * 1e6) as i64
+        };
+        let centre = st.transponder.downlink_centre_hz as i64;
+        let guard = st.transponder.half_width_hz as i64 + 20_000;
+        if centre > 0 && (f_hz - centre).abs() <= guard {
+            rec.prop_mode = Some("SAT".into());
+            rec.sat_name = Some(name.to_string());
+        }
+    }
+
     /// What a contact held for the operator's confirm takes when it is HELD: the station call, the
     /// activation and the station as they are now. The confirm can come after Stop, or after a
     /// Start, and the contact then logs the park it was made from, with that park's grid and state
@@ -16709,6 +16745,16 @@ impl Engine {
         }
         self.stamp_activation(rec);
         self.stamp_station_now(rec);
+        // ⛔ The satellite FIRST, as the bird held now: the popup then opens on SAT with its name,
+        // and the propagation mode it remembers below never takes a satellite contact's place.
+        // Remembered ES or EME over a satellite contact logged it with no satellite name: no
+        // LoTW satellite credit, and a 70 cm contact counted toward terrestrial VUCC.
+        self.stamp_satellite(rec);
+        // The propagation mode the popup was last given, offered for this one
+        // ([`Settings::log_prop_mode`]). A contact carrying its own (the satellite's) keeps it.
+        if rec.prop_mode.is_none() && !self.settings.log_prop_mode.is_empty() {
+            rec.prop_mode = Some(self.settings.log_prop_mode.clone());
+        }
     }
 
     /// ⚠️ **The station as it is NOW** — the operator at the key, the radio, the power, the grid
@@ -16888,25 +16934,10 @@ impl Engine {
         // Nexus's own Satellite VUCC / sat-needs boards (`qso_is_sat` reads PROP_MODE).
         // docs/guide/satellites.md and the CHANGELOG no longer tell the operator to edit
         // ADIF by hand; the Sat VUCC card's caveat line is gone with them.
-        if rec.prop_mode.is_none() && rec.sat_name.is_none() {
-            // A HELD transponder first; after LOS/"None"/a track stop, the bird last worked —
-            // the guide's promise that you can log once your hands are free.
-            if let Some(st) = self.sat_tune.as_ref().or(self.sat_last_worked.as_ref()) {
-                if let Some(name) = Self::lotw_sat_name(&st.label) {
-                    let f_hz = if rec.freq_mhz > 0.0 {
-                        (rec.freq_mhz * 1e6) as i64
-                    } else {
-                        (self.settings.dial_mhz * 1e6) as i64
-                    };
-                    let centre = st.transponder.downlink_centre_hz as i64;
-                    let guard = st.transponder.half_width_hz as i64 + 20_000;
-                    if centre > 0 && (f_hz - centre).abs() <= guard {
-                        rec.prop_mode = Some("SAT".into());
-                        rec.sat_name = Some(name.to_string());
-                    }
-                }
-            }
-        }
+        //
+        // A contact held for the popup was stamped at the hold ([`Self::stamp_hold`]); this is
+        // the stamp for one logged straight away.
+        self.stamp_satellite(&mut rec);
 
         // Duplicate-contact guard — the LAST line of defense against logging the same
         // QSO twice. The per-Station `qso_logged` latch only blocks a re-log within ONE
@@ -18660,11 +18691,51 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // sends back exactly that, and our own dB-reports comment still follows an edited
         // report below; anything else in it is the operator's and is logged as typed.
         held.comment = rec.comment;
+        // The popup's station boxes, as WSJT-X's Log QSO dialog has them (Tx power, Operator,
+        // and the grid it was made from). They open filled with what the hold stamped, so a box
+        // left alone sends that back; one cleared logs what the log funnel fills in for it.
+        held.tx_power = rec.tx_power.filter(|w| w.is_finite() && *w > 0.0);
+        held.operator = Some(
+            rec.operator
+                .as_deref()
+                .unwrap_or_default()
+                .trim()
+                .to_ascii_uppercase(),
+        )
+        .filter(|o| !o.is_empty());
+        held.my_grid = Some(
+            rec.my_grid
+                .as_deref()
+                .unwrap_or_default()
+                .trim()
+                .to_ascii_uppercase(),
+        )
+        .filter(|g| !g.is_empty());
+        self.take_popup_prop_mode(&mut held, rec.prop_mode.as_deref());
         self.rederive_after_edits(&mut held, &was.record, was.grid_source);
         self.replace_pending_log(None); // pops it, promoting whatever was waiting
         self.persist_pending_qso(); // journals what is left — this one is in the log now
         self.log_held_qso(held);
         true
+    }
+
+    /// The popup's propagation mode into `held`, and remembered for the next contact
+    /// ([`Settings::log_prop_mode`]), as WSJT-X's Log QSO dialog keeps its Prop Mode.
+    ///
+    /// ⛔ **SAT only as the satellite stamp put it there**: TQSL refuses `PROP_MODE` SAT without
+    /// its `SAT_NAME` and rejects the batch, so a SAT the contact did not already carry with its
+    /// name is ignored, and is never remembered. Any other mode replaces a SAT, and the
+    /// satellite's name goes with it.
+    fn take_popup_prop_mode(&mut self, held: &mut QsoRecord, picked: Option<&str>) {
+        let picked = picked.unwrap_or_default().trim().to_ascii_uppercase();
+        if picked == "SAT" {
+            return;
+        }
+        if held.prop_mode.as_deref() == Some("SAT") {
+            held.sat_name = None;
+        }
+        held.prop_mode = Some(picked.clone()).filter(|m| !m.is_empty());
+        self.settings.log_prop_mode = picked;
     }
 
     /// ⭐ R2 (operator review, 2026-09-19) — WHAT THE POPUP'S EDITS MAKE STALE.
@@ -29066,7 +29137,7 @@ contact yourself."
         // this plan is re-produced by every poll inside the interval.
         if self.settings.write_all_txt && self.beacon_txline_slot != Some(slot) {
             self.beacon_txline_slot = Some(slot);
-            let mode = format!("{:?}", self.app.tier()).to_uppercase();
+            let mode = self.all_txt_mode(self.app.tier(), self.active_slot_secs());
             self.station
                 .all_txt_pending
                 .push(crate::alltxt::all_txt_line(
@@ -29606,10 +29677,13 @@ contact yourself."
                     // effect. Same clean-frame filter as record_own_tx; SNR/DT are 0 for our TX,
                     // audio = our TX offset.
                     if self.settings.write_all_txt {
-                        let mode = format!("{:?}", self.app.tier()).to_uppercase();
-                        self.station
-                            .all_txt_pending
-                            .push(crate::alltxt::all_txt_line(
+                        let mode = self.all_txt_mode(self.app.tier(), self.active_slot_secs());
+                        // Held until the over has ended, then filed in time order: see
+                        // `StationCore::all_txt_held_tx`. Made here as before.
+                        let over_end = self.all_txt_over_end(slot);
+                        self.station.hold_all_txt_tx(
+                            over_end,
+                            crate::alltxt::all_txt_line(
                                 // The period this over KEYS IN. `now_unix_secs()` was up to a
                                 // second early (the plan is made just before the boundary) and,
                                 // for a re-planned over, seconds late — the operator's log has
@@ -29622,11 +29696,8 @@ contact yourself."
                                 0.0,
                                 self.tx_offset_hz,
                                 &t,
-                            ));
-                        let len = self.station.all_txt_pending.len();
-                        if len > 5000 {
-                            self.station.all_txt_pending.drain(0..len - 5000);
-                        }
+                            ),
+                        );
                     }
                 }
                 // Robust tier (DX1) modulates 8-FSK; fast tier (FT1) uses 4-CPM.
@@ -30379,7 +30450,7 @@ contact yourself."
             _ => std::collections::HashSet::new(),
         };
         if self.settings.write_all_txt {
-            let mode = format!("{:?}", heard.tier).to_uppercase();
+            let mode = self.all_txt_mode(heard.tier, heard.period_secs);
             let stamp = crate::alltxt::period_start_unix(slot.saturating_sub(1), heard.period_secs);
             for d in decodes
                 .iter()
@@ -30753,7 +30824,7 @@ contact yourself."
         // engine is I/O-free → buffer here; the shell drains + writes.
         if self.settings.write_all_txt {
             let dial = self.settings.dial_mhz;
-            let mode = format!("{:?}", self.app.tier()).to_uppercase();
+            let mode = self.all_txt_mode(self.app.tier(), self.active_slot_secs());
             // THE PERIOD THE AUDIO CAME FROM, not the wall clock this result happened to be
             // folded at — see `alltxt::period_start_unix` for the field report. Both passes
             // carry `audio slot + 1` (the boundary pass decodes the just-ended slot; the early
@@ -33291,6 +33362,42 @@ contact yourself."
     /// See [`StationCore::take_all_txt_pending`].
     pub fn take_all_txt_pending(&mut self) -> Vec<String> {
         self.station.take_all_txt_pending()
+    }
+
+    /// Everything ALL.TXT is still owed, for the quit: the lines buffered since the last poll and
+    /// every `Tx` line held for the end of its over ([`StationCore::take_all_txt_pending_at`]), in
+    /// time order. An over the quit cut short was keyed, and WSJT-X writes its line at key-up.
+    pub fn take_all_txt_pending_on_quit(&mut self) -> Vec<String> {
+        self.station.take_all_txt_pending_at(u64::MAX)
+    }
+
+    /// See [`StationCore::take_all_txt_pending_at`]. Test hook (the `test-util` feature, never in
+    /// a shipped build): a test keying at the real clock reads what the file will hold once its
+    /// over has ended.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn take_all_txt_pending_at(&mut self, now: u64) -> Vec<String> {
+        self.station.take_all_txt_pending_at(now)
+    }
+
+    /// The mode column of an ALL.TXT line for `tier` on a `period_secs` period, as WSJT-X's
+    /// `write_all` writes it: the mode's name, except Q65's, which names its period and submode
+    /// (`"Q65-" + period + ('A' + submode)`, `Q65-30A`). Logging only.
+    pub(crate) fn all_txt_mode(&self, tier: Tier, period_secs: f64) -> String {
+        match (
+            tier,
+            Tier::q65_kind(period_secs as u16, self.settings.q65_submode),
+        ) {
+            (Tier::Q65, modes::ModeKind::Q65 { period_s, submode }) => {
+                format!("Q65-{period_s}{}", char::from(b'A' + submode))
+            }
+            _ => format!("{tier:?}").to_uppercase(),
+        }
+    }
+
+    /// The unix second `slot`'s over ends, on the active period: when its held ALL.TXT `Tx` line
+    /// is filed ([`StationCore::all_txt_held_tx`]).
+    pub(crate) fn all_txt_over_end(&self, slot: u64) -> u64 {
+        ((slot + 1) as f64 * self.active_slot_secs()).ceil() as u64
     }
 
     /// [`sync_shared_log`] in one breath, for an owner holding the engine with no Engine guard
@@ -58388,6 +58495,145 @@ mod tests {
         );
     }
 
+    /// ⭐ **The popup's propagation mode, power, operator and own grid are logged as set there**,
+    /// as WSJT-X's Log QSO dialog logs its Prop Mode, Tx power and Operator boxes. They open
+    /// filled with what Nexus stamped (the power, the operator at the key, Settings' grid), so a
+    /// popup left alone logs exactly that.
+    #[test]
+    fn the_popups_prop_mode_power_operator_and_grid_are_logged_as_set() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.prompt_to_log = true;
+        e.settings.station_power_w = Some(100.0);
+        complete_a_contact(&mut e, "W9XYZ", 1);
+        let shown = e.snapshot().pending_log.expect("shown for confirm");
+        assert_eq!(shown.tx_power, Some(100.0), "the power is filled in");
+        assert_eq!(
+            shown.operator.as_deref(),
+            Some("K2DEF"),
+            "the operator is filled in"
+        );
+        assert_eq!(
+            shown.my_grid.as_deref(),
+            Some("FN31"),
+            "my grid is filled in"
+        );
+        assert_eq!(
+            shown.prop_mode, None,
+            "no propagation mode until one is picked"
+        );
+        let mut sent = shown;
+        sent.prop_mode = Some("ES".into());
+        sent.tx_power = Some(50.0);
+        sent.operator = Some("N0OP".into());
+        sent.my_grid = Some("EN52".into());
+        assert!(confirm_held(&mut e, sent.into()));
+        let logged = &e.stored_log()[0];
+        assert_eq!(logged.prop_mode.as_deref(), Some("ES"));
+        assert_eq!(logged.tx_power, Some(50.0));
+        assert_eq!(logged.operator.as_deref(), Some("N0OP"));
+        assert_eq!(logged.my_grid.as_deref(), Some("EN52"));
+    }
+
+    /// ⭐ **The propagation mode is STICKY**, as WSJT-X's "Retain" keeps it: the next contact held
+    /// for the popup opens with the mode picked for the last one, and picking none clears it.
+    #[test]
+    fn the_picked_prop_mode_is_offered_for_the_next_contact() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.prompt_to_log = true;
+        complete_a_contact(&mut e, "W9XYZ", 1);
+        let mut sent = e.snapshot().pending_log.expect("shown");
+        sent.prop_mode = Some("EME".into());
+        assert!(confirm_held(&mut e, sent.into()));
+        assert_eq!(e.settings().log_prop_mode, "EME", "remembered");
+        // A Settings form saved from an older copy does not forget it.
+        let mut stale = e.settings().clone();
+        stale.log_prop_mode = String::new();
+        e.apply_settings(stale);
+        assert_eq!(e.settings().log_prop_mode, "EME", "a stale form keeps it");
+        complete_a_contact(&mut e, "K1ABC", 5);
+        let mut next = e.snapshot().pending_log.expect("the next one");
+        assert_eq!(next.prop_mode.as_deref(), Some("EME"), "offered again");
+        next.prop_mode = None;
+        assert!(confirm_held(&mut e, next.into()));
+        assert_eq!(e.settings().log_prop_mode, "", "picking none clears it");
+        assert_eq!(e.stored_log()[1].prop_mode, None);
+    }
+
+    /// ⛔ **SAT is never picked by hand into a contact with no satellite name**: TQSL refuses a
+    /// `PROP_MODE` of SAT without its `SAT_NAME` and would reject the whole upload batch. The
+    /// satellite stamp, which carries both, is the only way in; and a mode picked over it drops
+    /// the name with it.
+    #[test]
+    fn sat_is_never_logged_without_its_satellite() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.prompt_to_log = true;
+        complete_a_contact(&mut e, "W9XYZ", 1);
+        let mut sent = e.snapshot().pending_log.expect("shown");
+        sent.prop_mode = Some("SAT".into());
+        assert!(confirm_held(&mut e, sent.into()));
+        assert_eq!(e.stored_log()[0].prop_mode, None);
+        assert_eq!(e.settings().log_prop_mode, "", "never remembered");
+    }
+
+    /// SO-50 held, as the Satellites section holds it for a pass.
+    fn hold_so50(e: &mut Engine) {
+        e.set_sat_transponder(Some((
+            "SAUDISAT 1C (SO-50)|FM Voice Repeater".into(),
+            0,
+            tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000),
+        )));
+    }
+
+    /// ⛔ **A satellite contact is logged as a satellite contact whatever propagation mode the
+    /// popup remembers.** The remembered mode went on when the contact was held, and the satellite
+    /// stamp, at log time, only fills an empty mode: with ES remembered from a terrestrial opening,
+    /// an SO-50 contact logged ES with no satellite name, so no LoTW satellite credit and a 70 cm
+    /// contact counted toward terrestrial VUCC. The satellite is now stamped at the hold, before the
+    /// remembered mode, so the popup opens on SAT with its name; the remembered mode is kept for
+    /// the next contact that is not on a satellite.
+    #[test]
+    fn a_satellite_contact_logs_as_satellite_whatever_prop_mode_is_remembered() {
+        // CONTROL "": nothing remembered, the case that always worked.
+        for remembered in ["ES", ""] {
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            e.settings.prompt_to_log = true;
+            e.settings.log_prop_mode = remembered.into();
+            hold_so50(&mut e);
+            e.settings.dial_mhz = 436.7935;
+            complete_a_contact(&mut e, "W9XYZ", 1);
+            let shown = e.snapshot().pending_log.expect("shown for confirm");
+            assert_eq!(
+                shown.prop_mode.as_deref(),
+                Some("SAT"),
+                "the popup opens on SAT (remembered {remembered:?})"
+            );
+            assert!(confirm_held(&mut e, shown.into()));
+            let logged = &e.stored_log()[0];
+            assert_eq!(
+                (logged.prop_mode.as_deref(), logged.sat_name.as_deref()),
+                (Some("SAT"), Some("SO-50")),
+                "remembered {remembered:?}, logged at {}",
+                logged.freq_mhz
+            );
+            assert_eq!(
+                e.settings().log_prop_mode,
+                remembered,
+                "the satellite contact leaves the remembered mode alone"
+            );
+            // The next contact, off the bird's downlink, takes the remembered mode as before.
+            e.settings.dial_mhz = 50.313;
+            complete_a_contact(&mut e, "K1ABC", 5);
+            let next = e.snapshot().pending_log.expect("the next one");
+            assert_eq!(
+                next.prop_mode.as_deref(),
+                Some(remembered).filter(|m| !m.is_empty()),
+                "a 6 m contact is offered the remembered mode"
+            );
+            assert!(confirm_held(&mut e, next.into()));
+            assert_eq!(e.stored_log()[1].sat_name, None);
+        }
+    }
+
     /// Confirm the popup's contact the way the desktop does: with the key the snapshot showed.
     fn confirm_held(e: &mut Engine, rec: QsoRecord) -> bool {
         let key = e.pending_qso_log_key().unwrap_or_default();
@@ -59458,17 +59704,19 @@ mod tests {
         );
     }
 
-    /// ALL.TXT decode log: off by default (nothing buffered), and when enabled the
+    /// ALL.TXT decode log: switched off, nothing is buffered, and when enabled the
     /// live ingest path buffers one WSJT-X-format line per decode, drained by the shell.
+    /// (A new install has it on, as WSJT-X does: `settings::tests`.)
     #[test]
     fn all_txt_log_buffers_one_line_per_decode_when_enabled() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.set_tier(Tier::Ft8);
+        e.settings.write_all_txt = false;
         let frame = native_frame_for(modes::ModeKind::Ft8, "CQ W1ABC FN42", 1500.0);
         e.ingest(&frame, 2);
         assert!(
             e.take_all_txt_pending().is_empty(),
-            "off by default → no ALL.TXT lines"
+            "off → no ALL.TXT lines"
         );
 
         e.settings.write_all_txt = true;

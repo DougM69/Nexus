@@ -8739,7 +8739,9 @@ select optgroup {
   text-transform: uppercase;
   color: var(--text-faint);
 }
-.logconfirm-grid input {
+/* The propagation-mode picker sits in the grid beside the boxes, and looks like one. */
+.logconfirm-grid input,
+.logconfirm-grid select {
   padding: var(--space-2) 10px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
@@ -8747,11 +8749,12 @@ select optgroup {
   color: var(--text);
   font-size: calc(14px * var(--text-scale));
 }
-.logconfirm-grid input:focus {
+.logconfirm-grid input:focus,
+.logconfirm-grid select:focus {
   outline: none;
   border-color: var(--accent);
 }
-/* The comment is free text, so it takes the whole row under the four short fields. */
+/* The comment is free text, so it takes the whole row under the short fields. */
 .logconfirm-grid .logconfirm-comment {
   grid-column: 1 / -1;
 }

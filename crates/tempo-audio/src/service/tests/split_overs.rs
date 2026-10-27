@@ -144,7 +144,6 @@ impl<R: Radio> Bench<R> {
         let sinks = Sinks {
             wsjtx: None,
             psk: None,
-            cfg_dial_hz: FT8_DIAL,
         };
         let rebuilt = Arc::new(AtomicBool::new(false));
         let flag = rebuilt.clone();

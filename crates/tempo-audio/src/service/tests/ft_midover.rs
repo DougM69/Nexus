@@ -274,11 +274,13 @@ impl<B: AudioBackend + Default> Qso<B> {
             .collect()
     }
 
+    /// The Tx rows ALL.TXT holds once the overs keyed so far have ended: our Tx rows are filed
+    /// at the end of their over, in time order (`StationCore::all_txt_held_tx`).
     fn tx_rows(&self) -> Vec<String> {
         self.engine
             .lock()
             .unwrap()
-            .take_all_txt_pending()
+            .take_all_txt_pending_at(u64::MAX)
             .into_iter()
             .filter(|r| r.contains(" Tx "))
             .collect()
