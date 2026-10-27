@@ -22673,8 +22673,16 @@ async fn confirm_pending_log(
             // No key is a refusal, not a free pass: a caller that cannot say WHICH contact it
             // is confirming cannot be allowed to log one (review R2).
             let key = expected_key.unwrap_or_default();
+            let prop_mode_was = eng.settings().log_prop_mode.clone();
             if !eng.confirm_pending_log(&key, record.into()) {
                 return Err(PENDING_LOG_MOVED_ON.into());
+            }
+            // The popup's propagation mode is remembered for the next contact
+            // (`Settings::log_prop_mode`), across a restart too.
+            if eng.settings().log_prop_mode != prop_mode_was {
+                persist_settings(eng.settings().clone(), |e| {
+                    eprintln!("tempo: failed to persist the log propagation mode: {e}")
+                });
             }
             Ok(eng.snapshot())
         })

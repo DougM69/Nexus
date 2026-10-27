@@ -8,6 +8,60 @@ import { t } from '../i18n'
 import { FtStopControl } from './FtStopControl'
 import { upperTyped } from '../typedInput'
 
+/** WSJT-X's Log QSO dialog's propagation modes (`widgets/logqso.cpp`, `prop_modes`): the ADIF
+ *  `PROP_MODE` enumeration values, in its order. SAT is not here: it is offered only on a contact
+ *  the satellite stamp already marked, which carries the satellite's name — TQSL refuses a SAT
+ *  without one. */
+const PROP_MODES = [
+  'AS', 'AUE', 'AUR', 'BS', 'ECH', 'EME', 'ES', 'F2', 'FAI', 'INTERNET', 'ION', 'IRL', 'MS', 'RPT',
+  'RS', 'TEP', 'TR',
+] as const
+
+/** A propagation mode's name, from the catalog: one literal key per mode, so every one is
+ *  checked. */
+function propModeName(code: string): string {
+  switch (code) {
+    case 'AS':
+      return t('logPrompt.propMode.aircraftScatter')
+    case 'AUE':
+      return t('logPrompt.propMode.auroraE')
+    case 'AUR':
+      return t('logPrompt.propMode.aurora')
+    case 'BS':
+      return t('logPrompt.propMode.backScatter')
+    case 'ECH':
+      return t('logPrompt.propMode.echolink')
+    case 'EME':
+      return t('logPrompt.propMode.earthMoonEarth')
+    case 'ES':
+      return t('logPrompt.propMode.sporadicE')
+    case 'F2':
+      return t('logPrompt.propMode.f2Reflection')
+    case 'FAI':
+      return t('logPrompt.propMode.fieldAligned')
+    case 'INTERNET':
+      return t('logPrompt.propMode.internet')
+    case 'ION':
+      return t('logPrompt.propMode.ionoscatter')
+    case 'IRL':
+      return t('logPrompt.propMode.irlp')
+    case 'MS':
+      return t('logPrompt.propMode.meteorScatter')
+    case 'RPT':
+      return t('logPrompt.propMode.repeater')
+    case 'RS':
+      return t('logPrompt.propMode.rainScatter')
+    case 'SAT':
+      return t('logPrompt.propMode.satellite')
+    case 'TEP':
+      return t('logPrompt.propMode.transEquatorial')
+    case 'TR':
+      return t('logPrompt.propMode.tropoDucting')
+    default:
+      return code
+  }
+}
+
 interface Props {
   /** The completed contact awaiting confirm-before-log. */
   record: LoggedQso
@@ -26,7 +80,10 @@ interface Props {
 
 /** WSJT-X "Prompt me to log QSO" — a small confirm popup shown when a QSO
  * completes and the operator has asked to review before logging. Pre-fills the
- * exchanged details; the call/grid/reports and the comment stay editable. */
+ * exchanged details; the call/grid/reports and the comment stay editable, and so do the
+ * station boxes WSJT-X's dialog has (power, operator, the grid it was made from), filled
+ * with what Nexus stamped, and the propagation mode, which the station keeps for the next
+ * contact as WSJT-X's "Retain" does. */
 export function LogConfirm({ record, onConfirm, onDiscard, waiting = 0, autoLogged = 0, onStop }: Props) {
   const [call, setCall] = useState(record.call)
   const [grid, setGrid] = useState(record.grid ?? '')
@@ -35,6 +92,12 @@ export function LogConfirm({ record, onConfirm, onDiscard, waiting = 0, autoLogg
   // #371: the contact's COMMENT, as held (our dB-reports one when that option is on), so an
   // untouched field logs exactly what it would have; the engine logs what is sent here.
   const [comment, setComment] = useState(record.comment ?? '')
+  // The station boxes, as Nexus stamped them. A cleared one sends nothing, and the log fills it
+  // in as it would have.
+  const [power, setPower] = useState(record.txPower != null ? String(record.txPower) : '')
+  const [operator, setOperator] = useState(record.operator ?? '')
+  const [myGrid, setMyGrid] = useState(record.myGrid ?? '')
+  const [propMode, setPropMode] = useState(record.propMode ?? '')
 
   // RST is a free string now (CW "599" / phone "59" / digital "-12"); just trim.
   const parseRst = (v: string): string | null => {
@@ -51,7 +114,17 @@ export function LogConfirm({ record, onConfirm, onDiscard, waiting = 0, autoLogg
       rstSent: parseRst(rstSent),
       rstRcvd: parseRst(rstRcvd),
       comment: comment.trim() || null,
+      txPower: parsePower(power),
+      operator: operator.trim().toUpperCase() || null,
+      myGrid: myGrid.trim().toUpperCase() || null,
+      propMode: propMode || null,
     })
+  }
+
+  // Watts, as the log writes TX_PWR; anything that is not a positive number sends nothing.
+  const parsePower = (v: string): number | null => {
+    const w = Number(v.trim())
+    return v.trim() !== '' && Number.isFinite(w) && w > 0 ? w : null
   }
 
   return (
@@ -119,6 +192,49 @@ export function LogConfirm({ record, onConfirm, onDiscard, waiting = 0, autoLogg
               placeholder="—"
               onChange={(e) => setRstRcvd(e.target.value)}
             />
+          </label>
+          <label>
+            <span>{t('logPrompt.power.label')}</span>
+            <input
+              className="mono"
+              value={power}
+              inputMode="decimal"
+              placeholder="—"
+              onChange={(e) => setPower(e.target.value)}
+            />
+          </label>
+          <label>
+            <span>{t('logPrompt.operator.label')}</span>
+            <input
+              className="mono"
+              value={operator}
+              placeholder="—"
+              onChange={(e) => setOperator(upperTyped(e.target))}
+            />
+          </label>
+          <label>
+            <span>{t('logPrompt.myGrid.label')}</span>
+            <input
+              className="mono"
+              value={myGrid}
+              maxLength={10}
+              placeholder="—"
+              onChange={(e) => setMyGrid(upperTyped(e.target))}
+            />
+          </label>
+          <label title={t('logPrompt.propMode.hint')}>
+            <span>{t('logPrompt.propMode.label')}</span>
+            <select value={propMode} onChange={(e) => setPropMode(e.target.value)}>
+              <option value="">—</option>
+              {record.propMode === 'SAT' && (
+                <option value="SAT">{propModeName('SAT')}</option>
+              )}
+              {PROP_MODES.map((code) => (
+                <option key={code} value={code}>
+                  {propModeName(code)}
+                </option>
+              ))}
+            </select>
           </label>
           <label className="logconfirm-comment">
             <span>{t('logPrompt.comment.label')}</span>

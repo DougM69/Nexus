@@ -7221,6 +7221,9 @@ impl Engine {
         // way no other setting's is: the operator is quietly moved back to the stable channel,
         // the betas stop arriving, and there is no error, no toast and no log line to notice.
         let live_beta_updates = self.settings.beta_updates;
+        // The popup's remembered propagation mode has ONE writer too, the popup's confirm
+        // (`take_popup_prop_mode`), and a form's copy can be older than the last confirm.
+        let live_log_prop_mode = self.settings.log_prop_mode.clone();
         // ⛔ The switches that let the station transmit by itself have ONE writer each, the switch
         // the operator presses: the presence beacon (`set_beacon`) and JS8's automatic replies,
         // relay and heartbeat acks (`js8_arm`). From a computer driving the station those run only
@@ -7364,6 +7367,7 @@ impl Engine {
         // as it does with every other setting it promises to clear.
         if keep_live_roster {
             self.settings.beta_updates = live_beta_updates;
+            self.settings.log_prop_mode = live_log_prop_mode;
             (
                 self.settings.beacon,
                 self.settings.js8_autoreply,
@@ -16620,6 +16624,12 @@ impl Engine {
         }
         self.stamp_activation(rec);
         self.stamp_station_now(rec);
+        // The propagation mode the popup was last given, offered for this one
+        // ([`Settings::log_prop_mode`]). A contact carrying its own (the satellite stamp's) keeps
+        // it.
+        if rec.prop_mode.is_none() && !self.settings.log_prop_mode.is_empty() {
+            rec.prop_mode = Some(self.settings.log_prop_mode.clone());
+        }
     }
 
     /// ⚠️ **The station as it is NOW** — the operator at the key, the radio, the power, the grid
@@ -18487,11 +18497,51 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // sends back exactly that, and our own dB-reports comment still follows an edited
         // report below; anything else in it is the operator's and is logged as typed.
         held.comment = rec.comment;
+        // The popup's station boxes, as WSJT-X's Log QSO dialog has them (Tx power, Operator,
+        // and the grid it was made from). They open filled with what the hold stamped, so a box
+        // left alone sends that back; one cleared logs what the log funnel fills in for it.
+        held.tx_power = rec.tx_power.filter(|w| w.is_finite() && *w > 0.0);
+        held.operator = Some(
+            rec.operator
+                .as_deref()
+                .unwrap_or_default()
+                .trim()
+                .to_ascii_uppercase(),
+        )
+        .filter(|o| !o.is_empty());
+        held.my_grid = Some(
+            rec.my_grid
+                .as_deref()
+                .unwrap_or_default()
+                .trim()
+                .to_ascii_uppercase(),
+        )
+        .filter(|g| !g.is_empty());
+        self.take_popup_prop_mode(&mut held, rec.prop_mode.as_deref());
         self.rederive_after_edits(&mut held, &was.record, was.grid_source);
         self.replace_pending_log(None); // pops it, promoting whatever was waiting
         self.persist_pending_qso(); // journals what is left — this one is in the log now
         self.log_held_qso(held);
         true
+    }
+
+    /// The popup's propagation mode into `held`, and remembered for the next contact
+    /// ([`Settings::log_prop_mode`]), as WSJT-X's Log QSO dialog keeps its Prop Mode.
+    ///
+    /// ⛔ **SAT only as the satellite stamp put it there**: TQSL refuses `PROP_MODE` SAT without
+    /// its `SAT_NAME` and rejects the batch, so a SAT the contact did not already carry with its
+    /// name is ignored, and is never remembered. Any other mode replaces a SAT, and the
+    /// satellite's name goes with it.
+    fn take_popup_prop_mode(&mut self, held: &mut QsoRecord, picked: Option<&str>) {
+        let picked = picked.unwrap_or_default().trim().to_ascii_uppercase();
+        if picked == "SAT" {
+            return;
+        }
+        if held.prop_mode.as_deref() == Some("SAT") {
+            held.sat_name = None;
+        }
+        held.prop_mode = Some(picked.clone()).filter(|m| !m.is_empty());
+        self.settings.log_prop_mode = picked;
     }
 
     /// ⭐ R2 (operator review, 2026-09-19) — WHAT THE POPUP'S EDITS MAKE STALE.
@@ -57960,6 +58010,86 @@ mod tests {
             e.stored_log()[0].comment.as_deref(),
             Some("FT8  Sent: -07  Rcvd: -10")
         );
+    }
+
+    /// ⭐ **The popup's propagation mode, power, operator and own grid are logged as set there**,
+    /// as WSJT-X's Log QSO dialog logs its Prop Mode, Tx power and Operator boxes. They open
+    /// filled with what Nexus stamped (the power, the operator at the key, Settings' grid), so a
+    /// popup left alone logs exactly that.
+    #[test]
+    fn the_popups_prop_mode_power_operator_and_grid_are_logged_as_set() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.prompt_to_log = true;
+        e.settings.station_power_w = Some(100.0);
+        complete_a_contact(&mut e, "W9XYZ", 1);
+        let shown = e.snapshot().pending_log.expect("shown for confirm");
+        assert_eq!(shown.tx_power, Some(100.0), "the power is filled in");
+        assert_eq!(
+            shown.operator.as_deref(),
+            Some("K2DEF"),
+            "the operator is filled in"
+        );
+        assert_eq!(
+            shown.my_grid.as_deref(),
+            Some("FN31"),
+            "my grid is filled in"
+        );
+        assert_eq!(
+            shown.prop_mode, None,
+            "no propagation mode until one is picked"
+        );
+        let mut sent = shown;
+        sent.prop_mode = Some("ES".into());
+        sent.tx_power = Some(50.0);
+        sent.operator = Some("N0OP".into());
+        sent.my_grid = Some("EN52".into());
+        assert!(confirm_held(&mut e, sent.into()));
+        let logged = &e.stored_log()[0];
+        assert_eq!(logged.prop_mode.as_deref(), Some("ES"));
+        assert_eq!(logged.tx_power, Some(50.0));
+        assert_eq!(logged.operator.as_deref(), Some("N0OP"));
+        assert_eq!(logged.my_grid.as_deref(), Some("EN52"));
+    }
+
+    /// ⭐ **The propagation mode is STICKY**, as WSJT-X's "Retain" keeps it: the next contact held
+    /// for the popup opens with the mode picked for the last one, and picking none clears it.
+    #[test]
+    fn the_picked_prop_mode_is_offered_for_the_next_contact() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.prompt_to_log = true;
+        complete_a_contact(&mut e, "W9XYZ", 1);
+        let mut sent = e.snapshot().pending_log.expect("shown");
+        sent.prop_mode = Some("EME".into());
+        assert!(confirm_held(&mut e, sent.into()));
+        assert_eq!(e.settings().log_prop_mode, "EME", "remembered");
+        // A Settings form saved from an older copy does not forget it.
+        let mut stale = e.settings().clone();
+        stale.log_prop_mode = String::new();
+        e.apply_settings(stale);
+        assert_eq!(e.settings().log_prop_mode, "EME", "a stale form keeps it");
+        complete_a_contact(&mut e, "K1ABC", 5);
+        let mut next = e.snapshot().pending_log.expect("the next one");
+        assert_eq!(next.prop_mode.as_deref(), Some("EME"), "offered again");
+        next.prop_mode = None;
+        assert!(confirm_held(&mut e, next.into()));
+        assert_eq!(e.settings().log_prop_mode, "", "picking none clears it");
+        assert_eq!(e.stored_log()[1].prop_mode, None);
+    }
+
+    /// ⛔ **SAT is never picked by hand into a contact with no satellite name**: TQSL refuses a
+    /// `PROP_MODE` of SAT without its `SAT_NAME` and would reject the whole upload batch. The
+    /// satellite stamp, which carries both, is the only way in; and a mode picked over it drops
+    /// the name with it.
+    #[test]
+    fn sat_is_never_logged_without_its_satellite() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.prompt_to_log = true;
+        complete_a_contact(&mut e, "W9XYZ", 1);
+        let mut sent = e.snapshot().pending_log.expect("shown");
+        sent.prop_mode = Some("SAT".into());
+        assert!(confirm_held(&mut e, sent.into()));
+        assert_eq!(e.stored_log()[0].prop_mode, None);
+        assert_eq!(e.settings().log_prop_mode, "", "never remembered");
     }
 
     /// Confirm the popup's contact the way the desktop does: with the key the snapshot showed.

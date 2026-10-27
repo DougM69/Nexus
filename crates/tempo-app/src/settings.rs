@@ -3329,6 +3329,16 @@ pub struct Settings {
     /// absent, and this matches it byte for byte). Opt-in, exactly as WSJT-X ships it.
     #[serde(default)]
     pub log_reports_to_comments: bool,
+    /// ⭐ **The propagation mode (ADIF `PROP_MODE`) the prompt-to-log popup was last given** —
+    /// `""` for none — offered again for the next contact held for it, as WSJT-X's Log QSO
+    /// dialog keeps its Prop Mode with "Retain" ticked. An EME, sporadic-E or meteor-scatter
+    /// operator picks it once for a run.
+    ///
+    /// ONE writer, the popup's confirm ([`crate::engine::Engine::confirm_pending_log`]); a
+    /// Settings form save keeps the live value (`apply_settings_inner`), since the form's copy
+    /// can be older than the last confirm. Never `SAT`: a satellite contact carries its
+    /// satellite's name with it, which no remembered mode can.
+    pub log_prop_mode: String,
     /// Show the "Confirm" tier — worked-but-unconfirmed award slots (LoTW confirmation
     /// opportunities) — on the Needed board and as decode/roster chips. Default ON:
     /// the tier ships lit and this is the opt-OUT for operators who chase contacts,
@@ -6208,6 +6218,7 @@ impl Default for Settings {
             show_wpx_needs: false,
             show_wae_needs: false,
             log_reports_to_comments: false, // WSJT-X parity: dBtoComments defaults false
+            log_prop_mode: String::new(),
             best_caller: default_best_caller(),
             best_caller_min_snr: None,
             blocked_calls: Vec::new(),
