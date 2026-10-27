@@ -198,6 +198,14 @@ describe('the values the added columns print', () => {
     })
   })
 
+  it('a distance that is not a number, a 0x one among them, prints as it came', () => {
+    const at = (v: string) => addedColumnText({ ...q, extra: [['DISTANCE', v]] } as LoggedQso, 'distance')
+    expect(at('approx 500')).toBe('approx 500')
+    expect(at('0x10')).toBe('0x10')
+    expect(at('0b11')).toBe('0b11')
+    expect(at('  9.6 ')).toBe('10')
+  })
+
   it('marks each upload stamp', () => {
     expect(uploadMark(q.upload?.lotw)).toBe('done')
     expect(uploadMark(q.upload?.qrz)).toBe('failed')

@@ -49,7 +49,7 @@ pub const LAN_LABEL: &str = "lan-stations";
 
 /// The languages the Stations on this network window's page can be opened in: the catalogs it
 /// ships with.
-const LOCALES: [&str; 5] = ["en", "de", "es", "fr", "ja"];
+const LOCALES: [&str; 6] = ["en", "de", "es", "fr", "ja", "ru"];
 
 /// Opening size, in logical px: room for the shack's window and the page's own controls.
 const DEFAULT_INNER: (f64, f64) = (1280.0, 800.0);

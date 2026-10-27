@@ -216,3 +216,52 @@ describe('the search finds a contact by the country the Logbook shows', () => {
     }
   })
 })
+
+describe('every column the Logbook shows sorts (the columns added after the first sixteen)', () => {
+  // One table both sides are held to: the engine (`src-tauri/src/log_queries/tests.rs`
+  // `every_added_column_sorts_as_the_shared_table_says`) reads the same file.
+  const SHARED = JSON.parse(
+    readFileSync(new URL('./__fixtures__/log-query/sort-columns.json', import.meta.url), 'utf8'),
+  ) as { cases: { name: string; rows: LoggedQso[]; orders: (Partial<LogQuery> & { expect: string[] })[] }[] }
+  const base = (call: string, i: number) =>
+    ({ ...FIXTURE[0], call, whenUnix: 1_700_000_000 + i * 60, name: null, qth: null, comment: null, notes: null,
+      myGrid: null, myRig: null, operator: null, txPower: null, timeOffUnix: null, qslSent: { sent: false },
+      upload: undefined, contest: undefined, extra: [] }) as unknown as LoggedQso
+  const logWith = (set: (q: LoggedQso, i: number) => object) =>
+    ['AAA', 'BBB', 'CCC', 'EEE'].map((c, i) => (i < 3 ? (set(base(c, i), i) as LoggedQso) : base(c, i)))
+  const order = (log: LoggedQso[], query: Partial<LogQuery>) =>
+    logOrder(log, { sort: 'time', asc: true, search: '', needsConfirmOnly: false, ...query }).map((i) => log[i].call)
+
+  it('each as the shared table says: by value, both ways, the empty contact last both ways', () => {
+    const added = new Set(SHARED.cases.flatMap((c) => c.orders.map((o) => o.sort)))
+    expect(added.size).toBe(22)
+    for (const c of SHARED.cases)
+      for (const { expect: want, ...query } of c.orders)
+        expect(order(c.rows, query), `${c.name}: ${query.sort} ${query.asc ? 'ascending' : 'descending'}`).toEqual(want)
+  })
+
+  it('an upload outcome this build does not know is marked failed, and sorts so', () => {
+    const log = logWith((q, i) => ({ ...q, upload: { lotw: { outcome: ['retry-later', 'accepted', 'pending'][i], whenUnix: 1 } } }))
+    expect(order(log, { sort: 'upLotw', asc: true })).toEqual(['AAA', 'CCC', 'BBB', 'EEE'])
+  })
+
+  it('a blank value is empty, and the empties keep the time order in the first key’s direction', () => {
+    const log = logWith((q, i) => ({ ...q, name: ['   ', 'bob', ''][i] }))
+    expect(order(log, { sort: 'name', asc: true })).toEqual(['BBB', 'AAA', 'CCC', 'EEE'])
+    expect(order(log, { sort: 'name', asc: false })).toEqual(['BBB', 'EEE', 'CCC', 'AAA'])
+    const zones = logWith((q, i) => ({ ...q, extra: [['CQZ', ['x', '5', ' '][i]]] }))
+    // A zone that is not a number shows as it is, so it sorts after the numbers, before the blank.
+    expect(order(zones, { sort: 'cqz', asc: false })).toEqual(['BBB', 'AAA', 'EEE', 'CCC'])
+  })
+
+  it('as a shift-click key: a tie in the first ordered by the second, its empty last', () => {
+    const log = logWith((q, i) => ({ ...q, extra: [['CONT', ['EU', 'EU', 'NA'][i]]], txPower: [5, 100, 50][i] }))
+    expect(order(log, { sort: 'cont', asc: true, then: [{ sort: 'power', asc: false }] })).toEqual(['BBB', 'AAA', 'CCC', 'EEE'])
+    expect(order(log, { sort: 'cont', asc: true, then: [{ sort: 'power', asc: true }] })).toEqual(['AAA', 'BBB', 'CCC', 'EEE'])
+  })
+
+  it('times and dates open newest first; the other added columns open ascending', () => {
+    for (const k of ['end', 'qslSentDate', 'qslRcvdDate', 'lotwRcvdDate', 'eqslRcvdDate'] as const) expect(defaultAsc(k), k).toBe(false)
+    for (const k of ['name', 'power', 'cqz', 'upLotw', 'notes', 'exchSent'] as const) expect(defaultAsc(k), k).toBe(true)
+  })
+})

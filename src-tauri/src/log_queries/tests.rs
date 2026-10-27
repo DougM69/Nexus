@@ -21,6 +21,9 @@ use tempo_core::logbook::{
 // ── fixtures ────────────────────────────────────────────────────────────────────────────────────
 
 const GOLDEN_LOG: &str = include_str!("../../../ui/src/features/__fixtures__/log-query/log.json");
+/// The added columns' orders, the one table both sides are held to.
+const SORT_COLUMNS: &str =
+    include_str!("../../../ui/src/features/__fixtures__/log-query/sort-columns.json");
 const GOLDEN_ANSWERS: &str =
     include_str!("../../../ui/src/features/__fixtures__/log-query/answers.json");
 /// The statistics' counts over the golden log — what the engine answers, and the window finishes
@@ -2551,6 +2554,275 @@ fn the_engine_decides_entity_continent_and_zone_as_the_logbook_shows_them() {
     );
 }
 
+/// ★ Every Logbook column sorts in the engine, from a real store: a stored column, a passthrough
+/// tag, an upload stamp and a contest exchange (each read its own way), both directions, a contact
+/// with nothing in the column last both ways, and as a shift-click key — the upload sort among
+/// them, whose reads are all the Logbook's own columns but its stamps.
+#[test]
+fn every_logbook_column_sorts_in_the_engine_with_the_empty_last() {
+    let d = Dir::new("sort-all-columns");
+    let mut records = adif_rows(&[
+        "<CALL:3>AAA<QSO_DATE:8>20240101<TIME_ON:6>010000<TIME_OFF:6>011500<BAND:3>20m<MODE:2>CW\
+         <TX_PWR:3>100<CQZ:2>40<COMMENT:7>charlie<CONTEST_ID:8>CQ-WW-CW<SRX_STRING:6>599 33<EOR>",
+        "<CALL:3>BBB<QSO_DATE:8>20240101<TIME_ON:6>010100<TIME_OFF:6>010130<BAND:3>20m<MODE:2>CW\
+         <TX_PWR:1>9<CQZ:1>9<COMMENT:5>Alpha<CONTEST_ID:8>CQ-WW-CW<SRX_STRING:6>599 05<EOR>",
+        "<CALL:3>CCC<QSO_DATE:8>20240101<TIME_ON:6>010200<TIME_OFF:6>010520<BAND:3>20m<MODE:2>CW\
+         <TX_PWR:2>10<CQZ:2>10<NOTES:5>Bravo<CONTEST_ID:8>CQ-WW-CW<SRX_STRING:6>599 14<EOR>",
+        "<CALL:3>EEE<QSO_DATE:8>20240101<TIME_ON:6>010300<BAND:3>20m<MODE:2>CW<EOR>",
+    ]);
+    for (r, outcome) in records.iter_mut().zip([
+        UploadOutcome::Accepted,
+        UploadOutcome::Rejected,
+        UploadOutcome::Pending,
+    ]) {
+        r.upload.lotw = Some(UploadStatus {
+            outcome,
+            when_unix: 1,
+            detail: None,
+        });
+    }
+    let engine = on_store(&d, &records);
+    let queries = LogQueries::default();
+    let calls = |sort: &str, asc: bool, then: Value| -> Vec<String> {
+        let a = answered(
+            &queries,
+            &engine,
+            json!({"kind": "page", "offset": 0, "limit": 10, "query": {"sort": sort, "asc": asc,
+                "search": "", "needsConfirmOnly": false, "then": then}}),
+            &|_| None,
+        );
+        a["rows"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .map(|r| r["call"].as_str().unwrap().to_string())
+            .collect()
+    };
+    for sort in ["end", "power", "cqz", "upLotw", "exchRcvd", "notes"] {
+        assert_eq!(
+            calls(sort, true, json!([])),
+            ["BBB", "CCC", "AAA", "EEE"],
+            "{sort} ascending"
+        );
+        assert_eq!(
+            calls(sort, false, json!([])),
+            ["AAA", "CCC", "BBB", "EEE"],
+            "{sort} descending"
+        );
+    }
+    // A second key: the mode ties every contact, so the LoTW mark orders them, the empty last.
+    assert_eq!(
+        calls("mode", true, json!([{"sort": "upLotw", "asc": false}])),
+        ["AAA", "CCC", "BBB", "EEE"]
+    );
+}
+
+/// ★ The added columns' orders, from the ONE table the Logbook's reference (`logQuery.ts`) is held
+/// to as well (`sort-columns.json`): each case's rows through a real store, each order asked as a
+/// page, so the engine and the reference cannot drift apart unseen.
+#[test]
+fn every_added_column_sorts_as_the_shared_table_says() {
+    let table: Value = serde_json::from_str(SORT_COLUMNS).expect("sort-columns.json");
+    let cases = table["cases"].as_array().expect("cases");
+    assert!(cases.len() >= 30, "the table is read");
+    for (n, case) in cases.iter().enumerate() {
+        let name = case["name"].as_str().expect("a name");
+        let records: Vec<QsoRecord> = case["rows"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .map(|row| {
+                let dto: LoggedQso = serde_json::from_value(row.clone())
+                    .unwrap_or_else(|e| panic!("{name}: a row is a LoggedQso: {e}"));
+                // The DTO's contest block is a display copy the conversion drops (an edit keeps
+                // the stored one), so a contest row's block is put on the record here.
+                let contest = dto.contest.clone();
+                let mut r = QsoRecord::from(dto);
+                r.contest = contest.map(|c| {
+                    Box::new(tempo_core::logbook::ContestFields {
+                        contest_id: c.contest_id,
+                        stx: c.stx,
+                        srx: c.srx,
+                        stx_string: c.stx_string,
+                        srx_string: c.srx_string,
+                        sent: c.sent,
+                        rcvd: c.rcvd,
+                        ..Default::default()
+                    })
+                });
+                r
+            })
+            .collect();
+        let d = Dir::new(&format!("sort-table-{n}"));
+        let engine = on_store(&d, &records);
+        let queries = LogQueries::default();
+        for order in case["orders"].as_array().expect("orders") {
+            let mut query = order.clone();
+            let want = query
+                .as_object_mut()
+                .expect("an order")
+                .remove("expect")
+                .expect("expect");
+            query["search"] = json!("");
+            query["needsConfirmOnly"] = json!(false);
+            let a = answered(
+                &queries,
+                &engine,
+                json!({"kind": "page", "offset": 0, "limit": 20, "query": query}),
+                &|_| None,
+            );
+            let got: Vec<Value> = a["rows"]
+                .as_array()
+                .expect("rows")
+                .iter()
+                .map(|r| r["call"].clone())
+                .collect();
+            assert_eq!(Value::Array(got), want, "{name}: {query}");
+        }
+    }
+}
+
+/// The calls of the page `query` gives, and the page's `orderRev`.
+fn sorted_page(queries: &LogQueries, engine: &SharedEngine, query: Value) -> (Vec<String>, u64) {
+    let a = answered(
+        queries,
+        engine,
+        json!({"kind": "page", "offset": 0, "limit": 20, "query": query}),
+        &|_| None,
+    );
+    let calls = a["rows"]
+        .as_array()
+        .expect("rows")
+        .iter()
+        .map(|r| r["call"].as_str().unwrap().to_string())
+        .collect();
+    (calls, a["orderRev"].as_u64().expect("orderRev"))
+}
+
+/// Where `id` sits in `query`'s order, and the `orderRev` it was located in.
+fn located(
+    queries: &LogQueries,
+    engine: &SharedEngine,
+    query: Value,
+    id: RecordId,
+) -> (Value, u64) {
+    let a = answered(
+        queries,
+        engine,
+        json!({"kind": "locate", "query": query, "id": id.to_string()}),
+        &|_| None,
+    );
+    (
+        a["index"].clone(),
+        a["orderRev"].as_u64().expect("orderRev"),
+    )
+}
+
+/// ★ A sort by an upload mark follows the stamp, as the sent filter does
+/// (`a_sent_filter_follows_an_upload_stamp`): a stamp moves only `content_rev`, and the order of a
+/// column that SHOWS the stamp is built again on it — while an order that reads no stamp is kept.
+/// The page names its order by an `orderRev` that moved with it, so the window, which keeps the
+/// pages it has by (query, orderRev, offset), never files a page of the new order beside the old
+/// order's pages; `locate` names the same order.
+#[test]
+fn an_upload_sort_follows_an_upload_stamp() {
+    let d = Dir::new("sort-upload-stamp");
+    let mut records = adif_rows(&[
+        "<CALL:6>JA1AAA<QSO_DATE:8>20240101<TIME_ON:4>0100<BAND:3>20m<MODE:3>FT8<EOR>",
+        "<CALL:6>DL1AAA<QSO_DATE:8>20240102<TIME_ON:4>0100<BAND:3>20m<MODE:2>CW<EOR>",
+        "<CALL:6>VK2AAA<QSO_DATE:8>20240103<TIME_ON:4>0100<BAND:3>20m<MODE:2>CW<EOR>",
+    ]);
+    for (r, outcome) in records.iter_mut().zip([
+        UploadOutcome::Pending,
+        UploadOutcome::Pending,
+        UploadOutcome::Accepted,
+    ]) {
+        r.upload.lotw = Some(UploadStatus {
+            outcome,
+            when_unix: 1,
+            detail: None,
+        });
+    }
+    let engine = on_store(&d, &records);
+    let queries = LogQueries::default();
+    let q = |sort: &str, then: Value| json!({"sort": sort, "asc": true, "search": "", "needsConfirmOnly": false, "then": then});
+    let by_mark = q("upLotw", json!([]));
+    // The mark as a second key: the mode ties the CW pair.
+    let by_mode_then_mark = q("mode", json!([{"sort": "upLotw", "asc": true}]));
+    let by_call = q("call", json!([]));
+    let (order, mark_rev) = sorted_page(&queries, &engine, by_mark.clone());
+    assert_eq!(order, ["JA1AAA", "DL1AAA", "VK2AAA"], "waiting, then done");
+    let (order, _) = sorted_page(&queries, &engine, by_mode_then_mark.clone());
+    assert_eq!(order, ["DL1AAA", "VK2AAA", "JA1AAA"]);
+    let (_, call_rev) = sorted_page(&queries, &engine, by_call.clone());
+    let built = || queries.0.built.load(Ordering::Relaxed);
+    let before = built();
+    let id = engine.lock().unwrap().stored_log()[0].id.expect("an id");
+    assert_eq!(logged(&engine, id).call, "JA1AAA");
+    let signed = tempo_app::station::LotwSigned::of(&logged(&engine, id)).expect("an id");
+    tempo_app::logwrite::stamp_lotw_batch(&engine, &[signed], &accepted(1_790_000_000));
+    engine.caught_up();
+    let (order, rev) = sorted_page(&queries, &engine, by_mark.clone());
+    assert_eq!(
+        order,
+        ["DL1AAA", "JA1AAA", "VK2AAA"],
+        "the stamped contact is done now"
+    );
+    assert!(
+        rev > mark_rev,
+        "a new order under a new orderRev: {mark_rev} -> {rev}"
+    );
+    assert_eq!(
+        located(&queries, &engine, by_mark, id),
+        (json!(1), rev),
+        "locate names the order the page does"
+    );
+    let (order, _) = sorted_page(&queries, &engine, by_mode_then_mark);
+    assert_eq!(order, ["DL1AAA", "VK2AAA", "JA1AAA"]);
+    assert_eq!(
+        built(),
+        before + 2,
+        "each order that shows the stamp was built again"
+    );
+    let (_, rev) = sorted_page(&queries, &engine, by_call);
+    assert_eq!(
+        rev, call_rev,
+        "an order that reads no stamp keeps its orderRev"
+    );
+    assert_eq!(built(), before + 2, "…and is kept through the stamp");
+}
+
+/// The QSL-sent date: marking a card sent moves only `content_rev`, and a sort by the date the
+/// card went shows it at once.
+#[test]
+fn a_qsl_sent_date_sort_follows_a_card_marked_sent() {
+    let d = Dir::new("sort-qsl-sent");
+    let records = adif_rows(&[
+        "<CALL:6>JA1AAA<QSO_DATE:8>20240101<TIME_ON:4>0100<BAND:3>20m<MODE:3>FT8<QSLSDATE:8>20240105<QSL_SENT:1>Y<EOR>",
+        "<CALL:6>DL1AAA<QSO_DATE:8>20240102<TIME_ON:4>0100<BAND:3>20m<MODE:2>CW<EOR>",
+    ]);
+    let engine = on_store(&d, &records);
+    let queries = LogQueries::default();
+    let by_date =
+        json!({"sort": "qslSentDate", "asc": false, "search": "", "needsConfirmOnly": false});
+    let (order, before) = sorted_page(&queries, &engine, by_date.clone());
+    assert_eq!(order, ["JA1AAA", "DL1AAA"], "no date last");
+    let id = engine.lock().unwrap().stored_log()[1].id.expect("an id");
+    assert_eq!(logged(&engine, id).call, "DL1AAA");
+    assert!(change(
+        &engine,
+        id,
+        &[tempo_app::logwrite::qsl_sent(
+            id,
+            Some(tempo_core::logbook::QslVia::Bureau)
+        )]
+    ));
+    engine.caught_up();
+    let (order, after) = sorted_page(&queries, &engine, by_date);
+    assert_eq!(order, ["DL1AAA", "JA1AAA"], "the card sent today first");
+    assert!(after > before);
+}
+
 /// ★ "Award need": the contacts whose band slot is worked and not yet confirmed, as the award fold
 /// counts it — a slot another contact already confirmed is not needed, a satellite contact fills
 /// no terrestrial slot, and VUCC's squares are held to the fold's own per-band counts.
@@ -2750,6 +3022,49 @@ fn synthetic_log(d: &Dir, n: usize) {
         }
         if i % 5 == 0 {
             let _ = write!(adif, "<LOTW_QSL_RCVD:1>Y");
+        }
+        // What the other Logbook columns show, so each sorts over real values: an end time, a
+        // name and QTH, power, operator, the station's grid and rig, the zones, continent and
+        // distance, the QSL dates, each service's stamp, a contest exchange — on a share of the
+        // rows each, the rest left empty, as a lifetime log has them.
+        let mut tag = |name: &str, val: &str| {
+            let _ = write!(adif, "<{name}:{}>{val}", val.len());
+        };
+        if i % 2 == 0 {
+            tag("TIME_OFF", &format!("{h:02}{:02}30", (m + 1 + i % 7) % 60));
+            tag("NAME", ["Ann", "bob", "Carl", "dora", "Ed"][i % 5]);
+            tag("TX_PWR", &format!("{}", [5, 10, 50, 100, 500, 1000][i % 6]));
+        }
+        if i % 3 == 0 {
+            tag("QTH", ["Boston", "denver", "Tokyo", "berlin"][i % 4]);
+            tag("CQZ", &format!("{}", 1 + i % 40));
+            tag("ITUZ", &format!("{}", 1 + i % 75));
+            tag("CONT", ["NA", "EU", "AS", "SA", "OC", "AF"][i % 6]);
+            tag("DISTANCE", &format!("{}.{}", i % 19_000, i % 10));
+        }
+        if i % 4 == 0 {
+            tag("OPERATOR", ["K2DEF", "w2xyz"][i % 2]);
+            tag("MY_GRIDSQUARE", &format!("FN{:02}", i % 50));
+            tag("MY_RIG", ["IC-7300", "ft-710", "K3"][i % 3]);
+            tag("NOTES", ["met at hamfest", "QSL via buro"][i % 2]);
+        }
+        if i % 6 == 0 {
+            let date = format!("{}{:02}{:02}", 2011 + i % 14, 1 + i % 12, day);
+            tag("QSLSDATE", &date);
+            tag("QSLRDATE", &date);
+            tag("LOTW_QSLRDATE", &date);
+            tag("EQSL_QSLRDATE", &date);
+        }
+        if i % 2 == 1 {
+            let outcome = ["accepted", "pending", "rejected", "duplicate"][i % 4];
+            let stamp = format!("{outcome}|{}", 1_700_000_000 + i);
+            for service in ["LOTW", "EQSL", "QRZ", "CLUBLOG"] {
+                tag(&format!("APP_TEMPO_UL_{service}"), &stamp);
+            }
+        }
+        if i % 11 == 0 {
+            tag("STX_STRING", &format!("599 {:02}", i % 40));
+            tag("SRX_STRING", &format!("599 {:02}", (i / 3) % 40));
         }
         let _ = writeln!(adif, "<EOR>");
     }
@@ -2990,6 +3305,62 @@ fn log_query_bench() {
             ),
         ),
     ];
+    // Every sortable column, cold (each its own order, built once): the sixteen that sorted
+    // before, then the columns added since. Every added column's cold order is held within ten
+    // times the slowest of the sixteen's — the same order of magnitude.
+    const BEFORE: [&str; 15] = [
+        "call", "country", "band", "freq", "mode", "sent", "rcvd", "time", "park", "qsl", "grid",
+        "state", "iota", "contest", "county",
+    ];
+    const ADDED: [&str; 22] = [
+        "end",
+        "myGrid",
+        "myRig",
+        "name",
+        "qth",
+        "power",
+        "operator",
+        "cqz",
+        "ituz",
+        "cont",
+        "distance",
+        "qslSentDate",
+        "qslRcvdDate",
+        "lotwRcvdDate",
+        "eqslRcvdDate",
+        "upLotw",
+        "upEqsl",
+        "upQrz",
+        "upClublog",
+        "exchSent",
+        "exchRcvd",
+        "notes",
+    ];
+    let mut sort_line = format!("LOG_QUERY_BENCH_SORTS rows={n}");
+    let mut slowest_before = 0f64;
+    let mut added_took = Vec::new();
+    for (i, sort) in BEFORE.iter().chain(ADDED.iter()).enumerate() {
+        // Ascending, which the default order is not, so `time` too builds its order.
+        let (a, took) = run(sort, page(query(sort, true, ""), 0));
+        assert_eq!(
+            a["total"], a["logSize"],
+            "{sort}: every contact in the order"
+        );
+        let _ = write!(sort_line, " {sort}={took:.1}ms");
+        if i < BEFORE.len() {
+            slowest_before = slowest_before.max(took);
+        } else {
+            added_took.push((*sort, took));
+        }
+    }
+    println!("{sort_line}");
+    for (sort, took) in added_took {
+        assert!(
+            took <= 10.0 * slowest_before,
+            "{sort}: {took:.1} ms, more than ten times the slowest column that sorted before \
+             ({slowest_before:.1} ms)"
+        );
+    }
     let mut filter_line = format!("LOG_QUERY_BENCH_FILTERS rows={n}");
     for (name, q) in filter_steps {
         let (a, took) = run(name, q);

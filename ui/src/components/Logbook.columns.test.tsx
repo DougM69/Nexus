@@ -146,13 +146,26 @@ describe('the added columns show what the store holds', () => {
     expect(table(container).style.getPropertyValue('--log-min-w')).toMatch(/rem$/)
   })
 
-  it('an added column sorts only where the engine can order it: its header is a button or not', async () => {
-    await renderLog({ columns: ALL_ADDED })
-    const header = (name: string) => screen.getAllByRole('columnheader').find((x) => x.textContent?.startsWith(name))
-    // A passthrough tag with no index does not sort; the county, which the store indexes, does.
-    expect(header('CQ zone')?.tagName).toBe('SPAN')
-    expect(header('County')?.tagName).toBe('BUTTON')
-    expect(screen.getByRole('columnheader', { name: 'Call' }).tagName).toBe('BUTTON')
+  it('every column but the actions sorts: its header is a button, and a click asks the engine for that order', async () => {
+    const MORE = ['end', 'myGrid', 'myRig', 'name', 'qth', 'state', 'power', 'operator']
+    await renderLog({ columns: { ...ALL_ADDED, shown: [...ALL_ADDED.shown, ...MORE] } })
+    const all = screen.getAllByRole('columnheader')
+    const buttons = all.filter((h) => h.tagName === 'BUTTON')
+    // Every column is shown: 39, of which the action cluster alone has no order.
+    expect(all).toHaveLength(39)
+    expect(buttons).toHaveLength(38)
+    expect(all.filter((h) => h.tagName !== 'BUTTON').map((h) => h.getAttribute('aria-label'))).toEqual(['Edit / delete'])
+    const header = (name: string) => all.find((x) => x.textContent?.startsWith(name)) as HTMLElement
+    const asked = () => vi.mocked(api.askLog).mock.calls.map(([q]) => q).filter((q) => q.kind === 'page').slice(-1)[0]
+    // The end time opens newest first; a click again flips it.
+    fireEvent.click(header('End'))
+    await waitFor(() => expect(asked()).toMatchObject({ query: { sort: 'end', asc: false } }))
+    expect(header('End').getAttribute('aria-sort')).toBe('descending')
+    fireEvent.click(header('End'))
+    await waitFor(() => expect(asked()).toMatchObject({ query: { sort: 'end', asc: true } }))
+    // Shift adds a second key: the CQ zone, ascending.
+    fireEvent.click(header('CQ zone'), { shiftKey: true })
+    await waitFor(() => expect(asked()).toMatchObject({ query: { sort: 'end', asc: true, then: [{ sort: 'cqz', asc: true }] } }))
   })
 })
 

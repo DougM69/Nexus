@@ -2780,8 +2780,9 @@ export function Logbook({
               Time header sort on the SAME key, because a record carries ONE instant: there is no
               ordering by time of day that ignores the date, and a header that looks like its
               neighbours while doing nothing is worse than two that say they order the same thing.
-              Free-text columns do not sort: sorting a log by remark answers no question an
-              operator asks. Of the passthrough tags only the county sorts, which has an index. */}
+              Every other column that shows data sorts too (an operator looking for a contact by
+              its end time had no way to), with a row empty in the column last either way; only
+              the action cluster has no order. */}
           {cols.map((c) =>
             c.sort ? (
               th(c, c.sort)

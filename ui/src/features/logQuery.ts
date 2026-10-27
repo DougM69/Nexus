@@ -20,6 +20,7 @@
 import type { LoggedQso } from '../types'
 import { modeKey } from './callHistory'
 import { filterKey, type LogFilter, type LogSortTerm } from './logFilter'
+import { adifNumber, contestExchange, extraTag, uploadMark, uploadOf } from './logColumns'
 
 /** Sortable columns. `band` sorts by frequency (more meaningful than the label string). */
 export type LogSortKey =
@@ -38,6 +39,30 @@ export type LogSortKey =
   | 'iota'
   | 'contest'
   | 'county'
+  // Every other column the Logbook shows. Each sorts as its cell reads, and a row with nothing in
+  // the column comes after every row with something, whichever way it is sorted (`sortVal` null).
+  | 'end'
+  | 'myGrid'
+  | 'myRig'
+  | 'name'
+  | 'qth'
+  | 'power'
+  | 'operator'
+  | 'cqz'
+  | 'ituz'
+  | 'cont'
+  | 'distance'
+  | 'qslSentDate'
+  | 'qslRcvdDate'
+  | 'lotwRcvdDate'
+  | 'eqslRcvdDate'
+  | 'upLotw'
+  | 'upEqsl'
+  | 'upQrz'
+  | 'upClublog'
+  | 'exchSent'
+  | 'exchRcvd'
+  | 'notes'
 
 /** What the Logbook list shows: the rows the search and the filter chip let through, in the
  *  order the sorted column gives. The same four fields identify an order everywhere — the view,
@@ -68,7 +93,46 @@ export function fmtUtc(whenUnix: number): string {
   )}:${p(d.getUTCMinutes())}Z`
 }
 
-export function sortVal(q: LoggedQso, k: LogSortKey): string | number {
+/** Text as an added column sorts it: trimmed and upper-cased; null when blank. */
+const textOrNull = (s: string | null | undefined): string | null => {
+  const v = (s ?? '').trim()
+  return v ? v.toUpperCase() : null
+}
+
+/** A number as an added column sorts it; null when there is none. */
+const numOrNull = (n: number | null | undefined): number | null => (n != null && Number.isFinite(n) ? n : null)
+
+/** A passthrough tag that holds a number (a zone, the distance): its value, or — as the cell
+ *  prints it as it came — its text, which sorts after every number; null when there is none. */
+const tagNum = (q: LoggedQso, tag: string): number | string | null => {
+  const v = extraTag(q, tag)
+  return v === null ? null : (adifNumber(v) ?? v.toUpperCase())
+}
+
+/** How much of the notes the sort reads: the first characters, so an order over a log of long
+ *  notes holds a short key per contact. Contacts that agree that far keep the time order. The
+ *  engine cuts at the same place (`query.rs` `NOTES_KEY_CHARS`). */
+const NOTES_KEY_CHARS = 64
+
+/** The notes as they sort: trimmed, cut to {@link NOTES_KEY_CHARS} characters, upper-cased. */
+const notesKey = (s: string | null | undefined): string | null => {
+  const v = (s ?? '').trim()
+  if (!v) return null
+  let out = ''
+  let n = 0
+  for (const ch of v) {
+    if (n++ === NOTES_KEY_CHARS) break
+    out += ch
+  }
+  return out.toUpperCase()
+}
+
+/** An upload mark's place: failed, waiting, done; null with no stamp. */
+const UPLOAD_RANK = { failed: 0, waiting: 1, done: 2, none: null } as const
+
+/** A row's value in a sorted column. Null — only from the columns added after the first sixteen —
+ *  is "nothing here", which `logOrder` puts last in either direction. */
+export function sortVal(q: LoggedQso, k: LogSortKey): string | number | null {
   switch (k) {
     case 'call':
       return q.call.toUpperCase()
@@ -102,12 +166,58 @@ export function sortVal(q: LoggedQso, k: LogSortKey): string | number {
     case 'county':
       // A tag the log keeps only as passthrough (ADIF `CNTY`), as the import spelled it.
       return (q.extra?.find(([k]) => k === 'CNTY')?.[1] ?? '').toUpperCase()
+    case 'end':
+      return numOrNull(q.timeOffUnix)
+    case 'myGrid':
+      return textOrNull(q.myGrid)
+    case 'myRig':
+      return textOrNull(q.myRig)
+    case 'name':
+      return textOrNull(q.name)
+    case 'qth':
+      return textOrNull(q.qth)
+    case 'power':
+      return numOrNull(q.txPower)
+    case 'operator':
+      return textOrNull(q.operator)
+    case 'cqz':
+      return tagNum(q, 'CQZ')
+    case 'ituz':
+      return tagNum(q, 'ITUZ')
+    case 'cont':
+      return textOrNull(extraTag(q, 'CONT'))
+    case 'distance':
+      return tagNum(q, 'DISTANCE')
+    case 'qslSentDate':
+      return q.qslSent?.dateUnix ? q.qslSent.dateUnix : null
+    // `YYYYMMDD` orders by date as text does.
+    case 'qslRcvdDate':
+      return textOrNull(extraTag(q, 'QSLRDATE'))
+    case 'lotwRcvdDate':
+      return textOrNull(extraTag(q, 'LOTW_QSLRDATE'))
+    case 'eqslRcvdDate':
+      return textOrNull(extraTag(q, 'EQSL_QSLRDATE'))
+    case 'upLotw':
+    case 'upEqsl':
+    case 'upQrz':
+    case 'upClublog':
+      return UPLOAD_RANK[uploadMark(uploadOf(q, k))]
+    case 'exchSent':
+      return textOrNull(contestExchange(q, 'sent'))
+    case 'exchRcvd':
+      return textOrNull(contestExchange(q, 'rcvd'))
+    case 'notes':
+      return notesKey(q.comment?.trim() || q.notes)
   }
 }
 
-/** Sensible default direction when switching TO a column: text ascending, numeric/time descending. */
+/** Columns that open newest first, as the contact time does. */
+const NEWEST_FIRST: ReadonlySet<LogSortKey> = new Set<LogSortKey>(['end', 'qslSentDate', 'qslRcvdDate', 'lotwRcvdDate', 'eqslRcvdDate'])
+
+/** Sensible default direction when switching TO a column: text ascending, the band, frequency,
+ *  QSL state and every time and date descending. */
 export function defaultAsc(k: LogSortKey): boolean {
-  return k !== 'band' && k !== 'freq' && k !== 'time' && k !== 'qsl'
+  return k !== 'band' && k !== 'freq' && k !== 'time' && k !== 'qsl' && !NEWEST_FIRST.has(k)
 }
 
 /** Whether the Logbook shows `q` under `query` — Logbook.tsx's `matchesSearch`, verbatim. */
@@ -148,6 +258,13 @@ export function logOrder(log: readonly LoggedQso[], query: LogQuery): number[] {
     for (const k of keys) {
       const av = sortVal(a.q, k.sort)
       const bv = sortVal(b.q, k.sort)
+      // Nothing in the column: after every value, in either direction.
+      if (av === null || bv === null) {
+        if (av !== bv) return av === null ? 1 : -1
+        continue
+      }
+      // A column of numbers: a value that is not one after every number, in either direction.
+      if (typeof av !== typeof bv) return typeof av === 'number' ? -1 : 1
       const cmp = av < bv ? -1 : av > bv ? 1 : 0
       if (cmp) return k.asc ? cmp : -cmp
     }

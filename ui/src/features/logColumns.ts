@@ -47,10 +47,10 @@ export interface LogColumn {
   narrow?: boolean
   /** Cannot be hidden: the callsign names the row, the actions are its controls. */
   fixed?: boolean
-  /** The engine's sort for it. Modelled fields sort, and of the `extra`-only tags the county:
-   *  the store indexes it (`qso_extra_cnty`, which its filter reads) and the order reads it by the
-   *  passthrough's own key, one lookup per contact, as the search reads the SUBMODE. Any other
-   *  passthrough tag stays unsorted until it has an index of its own. */
+  /** The engine's sort for it. Every column that shows data sorts; only the action cluster does
+   *  not. A passthrough tag (county, zones, continent, distance, the received dates) is read by
+   *  the passthrough's own key, and an upload mark or an exchange by its table's, one lookup per
+   *  contact, as the search reads the SUBMODE. */
   sort?: LogSortKey
   /** The catalog parameter the label takes, if any (the upload columns name their service). */
   labelVars?: Record<string, string>
@@ -75,35 +75,35 @@ export const LOG_COLUMNS: readonly LogColumn[] = [
   { id: 'park', labelKey: 'logbook.column.park', track: '0.9fr', minPx: 40, group: 'location', base: true, sort: 'park' },
   { id: 'qsl', labelKey: 'logbook.column.qsl', track: '0.7fr', minPx: 32, group: 'qsl', base: true, narrow: true, sort: 'qsl' },
   // The old "More columns" block, in its order.
-  { id: 'end', labelKey: 'logbook.column.end', track: '0.9fr', minPx: 40, group: 'contact', more: true },
-  { id: 'myGrid', labelKey: 'logbook.column.myGrid', track: '0.8fr', minPx: 40, group: 'station', more: true },
-  { id: 'myRig', labelKey: 'logbook.column.myRig', track: '1.1fr', minPx: 40, group: 'station', more: true },
-  { id: 'name', labelKey: 'logbook.column.name', track: '1fr', minPx: 40, group: 'contact', more: true },
-  { id: 'qth', labelKey: 'logbook.column.qth', track: '1fr', minPx: 40, group: 'location', more: true },
+  { id: 'end', labelKey: 'logbook.column.end', track: '0.9fr', minPx: 40, group: 'contact', more: true, sort: 'end' },
+  { id: 'myGrid', labelKey: 'logbook.column.myGrid', track: '0.8fr', minPx: 40, group: 'station', more: true, sort: 'myGrid' },
+  { id: 'myRig', labelKey: 'logbook.column.myRig', track: '1.1fr', minPx: 40, group: 'station', more: true, sort: 'myRig' },
+  { id: 'name', labelKey: 'logbook.column.name', track: '1fr', minPx: 40, group: 'contact', more: true, sort: 'name' },
+  { id: 'qth', labelKey: 'logbook.column.qth', track: '1fr', minPx: 40, group: 'location', more: true, sort: 'qth' },
   { id: 'state', labelKey: 'logbook.column.state', track: '0.5fr', minPx: 32, group: 'location', more: true, sort: 'state' },
-  { id: 'power', labelKey: 'logbook.column.power', track: '0.6fr', minPx: 32, group: 'station', more: true },
-  { id: 'operator', labelKey: 'logbook.column.operator', track: '0.8fr', minPx: 40, group: 'station', more: true },
+  { id: 'power', labelKey: 'logbook.column.power', track: '0.6fr', minPx: 32, group: 'station', more: true, sort: 'power' },
+  { id: 'operator', labelKey: 'logbook.column.operator', track: '0.8fr', minPx: 40, group: 'station', more: true, sort: 'operator' },
   // What the log stores and the table never showed. Off until the operator turns one on.
   { id: 'grid', labelKey: 'logbook.column.grid', track: '0.7fr', minPx: 40, group: 'location', sort: 'grid' },
   { id: 'iota', labelKey: 'logbook.column.iota', track: '0.7fr', minPx: 40, group: 'location', sort: 'iota' },
   { id: 'county', labelKey: 'logbook.column.county', track: '1fr', minPx: 40, group: 'location', sort: 'county' },
-  { id: 'cqz', labelKey: 'logbook.column.cqz', track: '0.5fr', minPx: 28, group: 'location' },
-  { id: 'ituz', labelKey: 'logbook.column.ituz', track: '0.5fr', minPx: 28, group: 'location' },
-  { id: 'cont', labelKey: 'logbook.column.cont', track: '0.5fr', minPx: 28, group: 'location' },
-  { id: 'distance', labelKey: 'logbook.column.distance', track: '0.7fr', minPx: 40, group: 'location' },
-  { id: 'qslSentDate', labelKey: 'logbook.column.qslSentDate', track: '0.9fr', minPx: 56, group: 'qsl' },
-  { id: 'qslRcvdDate', labelKey: 'logbook.column.qslRcvdDate', track: '0.9fr', minPx: 56, group: 'qsl' },
-  { id: 'lotwRcvdDate', labelKey: 'logbook.column.lotwRcvdDate', track: '0.9fr', minPx: 56, group: 'qsl' },
-  { id: 'eqslRcvdDate', labelKey: 'logbook.column.eqslRcvdDate', track: '0.9fr', minPx: 56, group: 'qsl' },
-  { id: 'upLotw', labelKey: 'logbook.column.upload', labelVars: { service: 'LoTW' }, track: '0.6fr', minPx: 28, group: 'uploads' },
-  { id: 'upEqsl', labelKey: 'logbook.column.upload', labelVars: { service: 'eQSL' }, track: '0.6fr', minPx: 28, group: 'uploads' },
-  { id: 'upQrz', labelKey: 'logbook.column.upload', labelVars: { service: 'QRZ' }, track: '0.6fr', minPx: 28, group: 'uploads' },
-  { id: 'upClublog', labelKey: 'logbook.column.upload', labelVars: { service: 'Club Log' }, track: '0.6fr', minPx: 28, group: 'uploads' },
+  { id: 'cqz', labelKey: 'logbook.column.cqz', track: '0.5fr', minPx: 28, group: 'location', sort: 'cqz' },
+  { id: 'ituz', labelKey: 'logbook.column.ituz', track: '0.5fr', minPx: 28, group: 'location', sort: 'ituz' },
+  { id: 'cont', labelKey: 'logbook.column.cont', track: '0.5fr', minPx: 28, group: 'location', sort: 'cont' },
+  { id: 'distance', labelKey: 'logbook.column.distance', track: '0.7fr', minPx: 40, group: 'location', sort: 'distance' },
+  { id: 'qslSentDate', labelKey: 'logbook.column.qslSentDate', track: '0.9fr', minPx: 56, group: 'qsl', sort: 'qslSentDate' },
+  { id: 'qslRcvdDate', labelKey: 'logbook.column.qslRcvdDate', track: '0.9fr', minPx: 56, group: 'qsl', sort: 'qslRcvdDate' },
+  { id: 'lotwRcvdDate', labelKey: 'logbook.column.lotwRcvdDate', track: '0.9fr', minPx: 56, group: 'qsl', sort: 'lotwRcvdDate' },
+  { id: 'eqslRcvdDate', labelKey: 'logbook.column.eqslRcvdDate', track: '0.9fr', minPx: 56, group: 'qsl', sort: 'eqslRcvdDate' },
+  { id: 'upLotw', labelKey: 'logbook.column.upload', labelVars: { service: 'LoTW' }, track: '0.6fr', minPx: 28, group: 'uploads', sort: 'upLotw' },
+  { id: 'upEqsl', labelKey: 'logbook.column.upload', labelVars: { service: 'eQSL' }, track: '0.6fr', minPx: 28, group: 'uploads', sort: 'upEqsl' },
+  { id: 'upQrz', labelKey: 'logbook.column.upload', labelVars: { service: 'QRZ' }, track: '0.6fr', minPx: 28, group: 'uploads', sort: 'upQrz' },
+  { id: 'upClublog', labelKey: 'logbook.column.upload', labelVars: { service: 'Club Log' }, track: '0.6fr', minPx: 28, group: 'uploads', sort: 'upClublog' },
   { id: 'contest', labelKey: 'logbook.column.contest', track: '1fr', minPx: 48, group: 'contest', sort: 'contest' },
-  { id: 'exchSent', labelKey: 'logbook.column.exchSent', track: '1fr', minPx: 40, group: 'contest' },
-  { id: 'exchRcvd', labelKey: 'logbook.column.exchRcvd', track: '1fr', minPx: 40, group: 'contest' },
+  { id: 'exchSent', labelKey: 'logbook.column.exchSent', track: '1fr', minPx: 40, group: 'contest', sort: 'exchSent' },
+  { id: 'exchRcvd', labelKey: 'logbook.column.exchRcvd', track: '1fr', minPx: 40, group: 'contest', sort: 'exchRcvd' },
   // The tail: the notes, then the controls.
-  { id: 'notes', labelKey: 'logbook.column.notes', track: '1.4fr', narrowTrack: '1fr', minPx: 48, group: 'contact', base: true, narrow: true },
+  { id: 'notes', labelKey: 'logbook.column.notes', track: '1.4fr', narrowTrack: '1fr', minPx: 48, group: 'contact', base: true, narrow: true, sort: 'notes' },
   { id: 'actions', labelKey: 'logbook.column.actions', track: ACTIONS_TRACK, minPx: 384, group: 'contact', base: true, narrow: true, fixed: true },
 ]
 
@@ -300,6 +300,15 @@ export function extraTag(q: LoggedQso, tag: string): string | null {
   return null
 }
 
+/** A passthrough tag's value as a number (ADIF numbers are decimal), or null when it is not one.
+ *  `Number()` would read `0x10` as 16; the engine (`query.rs` `tag_num`) reads it as text, and so
+ *  does this. */
+export function adifNumber(v: string): number | null {
+  if (/^[+-]?0[xob]/i.test(v.trim())) return null
+  const n = Number(v)
+  return Number.isFinite(n) ? n : null
+}
+
 /** An ADIF date (`YYYYMMDD`) as the table prints dates; anything else as it came. */
 export function adifDate(v: string | null): string | null {
   if (!v) return null
@@ -380,8 +389,8 @@ export function addedColumnText(q: LoggedQso, id: string): string | null {
       return extraTag(q, 'CONT')
     case 'distance': {
       const v = extraTag(q, 'DISTANCE')
-      const n = v === null ? NaN : Number(v)
-      return Number.isFinite(n) ? String(Math.round(n)) : v
+      const n = v === null ? null : adifNumber(v)
+      return n !== null ? String(Math.round(n)) : v
     }
     case 'qslRcvdDate':
       return adifDate(extraTag(q, 'QSLRDATE'))
