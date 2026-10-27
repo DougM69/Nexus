@@ -10,6 +10,9 @@ jobs:
     runs-on: macos-15-intel
 
     steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4 # <--- Mandated so isolated workspace has repository files
+
     - name: Install System Dependencies
       run: |
         brew install cmake ninja gcc fftw boost node libusb
