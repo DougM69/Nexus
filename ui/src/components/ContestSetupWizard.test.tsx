@@ -95,6 +95,7 @@ function preview(patch: Partial<Settings>): FdRulesetDto {
     }
   }
   // The ARRL VHF contests send the grid, from the station's own grid: not a location "I moved" changes.
+  // They head the file with the ARRL section (LOCATION), as the engine previews it.
   if (event.startsWith('arrlvhf')) {
     return {
       event,
@@ -106,7 +107,7 @@ function preview(patch: Partial<Settings>): FdRulesetDto {
       role: '',
       exchange: [s.mygrid ?? ''],
       problem: '',
-      sentSettings: ['mygrid'],
+      sentSettings: ['mygrid', 'fd_section'],
     }
   }
   return {
@@ -725,8 +726,9 @@ describe('Change setup… on other contests', () => {
     await screen.findByText('You send: EN52')
     expect(screen.queryByText('A change here is "I moved": it takes effect on your next contact.')).toBeNull()
     expect(screen.queryByRole('textbox')).toBeNull()
+    // …and the ARRL section the file is headed with (LOCATION), read at start as the grid is.
     expect(document.querySelector('[data-read-at-start]')!.textContent).toBe(
-      'Read when the contest starts: Grid square. To change it, stop the contest, then start it again.',
+      'Read when the contest starts: Grid square, ARRL Section. To change them, stop the contest, then start it again.',
     )
     await nextWhenChecked()
     next()

@@ -4620,7 +4620,8 @@ mod tests {
             vec!["contest_qth_county", "contest_qth_state"]
         );
         assert_eq!(sent("cqww_cw"), vec!["contest_cq_zone"]);
-        assert_eq!(sent("arrlvhf_jun"), vec!["mygrid"]);
+        // ARRL VHF sends the grid and heads its file with the ARRL section (LOCATION).
+        assert_eq!(sent("arrlvhf_jun"), vec!["mygrid", "fd_section"]);
         // ⭐ A QTH with no in-state role sends the state alone: the county is sent only by a
         // QSO party's in-state station, so a contest without one never asks for it. The ARRL
         // RTTY Roundup's W/VE station sends its state or province (Special Rules 4.2.1), and its
