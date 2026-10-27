@@ -32922,9 +32922,11 @@ contact yourself."
         self.station.take_all_txt_pending()
     }
 
-    /// See [`StationCore::take_all_txt_pending_at`].
-    #[cfg(test)]
-    pub(crate) fn take_all_txt_pending_at(&mut self, now: u64) -> Vec<String> {
+    /// See [`StationCore::take_all_txt_pending_at`]. Test hook (the `test-util` feature, never in
+    /// a shipped build): a test keying at the real clock reads what the file will hold once its
+    /// over has ended.
+    #[cfg(any(test, feature = "test-util"))]
+    pub fn take_all_txt_pending_at(&mut self, now: u64) -> Vec<String> {
         self.station.take_all_txt_pending_at(now)
     }
 
