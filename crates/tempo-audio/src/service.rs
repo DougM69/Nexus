@@ -5808,6 +5808,17 @@ impl RadioLoop {
         }
     }
 
+    /// The Flex's native audio leaves the headphones with its client, wherever the client goes (a
+    /// switch's handoff, a rebuild of the CAT link, the CAT probe's hold): the monitor plays the
+    /// sound card until the next radio's source takes it. Done as the client goes, before the next
+    /// source is set up, so the next tick's [`Self::feed_flex_monitor`] finds nothing of the Flex's
+    /// to switch off under it.
+    fn let_go_of_flex_monitor(&mut self) {
+        if let Some((m, _)) = self.flex_monitor.take() {
+            m.set_active(false);
+        }
+    }
+
     /// Nexus's TCI client's receive audio in the sound card's place, while the radio's TCI audio
     /// is on (`tci_audio`). The decoders take it each tick (the receive block at the top of
     /// `step`), and the session's thread feeds a ring of its own on the receive tap, published here
@@ -5850,6 +5861,11 @@ impl RadioLoop {
             if is_receive_of(d, &rx.receive) && on_the_tap(&rx.ring) && same_monitor(&rx.monitor) {
                 if let Some(r) = d.receive() {
                     r.set_gain(self.applied.rx_gain);
+                }
+                // The headphones are the source's every tick, as the Flex's are: a source that
+                // left and switched the monitor off on its way does not leave them on the card.
+                if let Some(m) = &rx.monitor {
+                    m.set_active(true);
                 }
                 return;
             }
@@ -7075,11 +7091,8 @@ impl RadioLoop {
                 r.set_monitor(None);
             }
         }
-        // A Flex radio's native audio leaves the headphones with it: the monitor plays the sound
-        // card until the next radio's source takes it.
-        if let Some((m, _)) = self.flex_monitor.take() {
-            m.set_active(false);
-        }
+        // A Flex radio's native audio leaves the headphones with it.
+        self.let_go_of_flex_monitor();
         let mut old_transport = std::mem::replace(&mut self.applied, conn.transport);
         // The demoted transport keeps the broker's port, which the monitor's own want carries
         // too (`monitor_want`), so ordinary reconciliation keeps the connection. Not the keying
@@ -7848,6 +7861,7 @@ impl RadioLoop {
                     let radio = self.remote_radio_id.unwrap_or(remote_want_radio);
                     raise_client_alarm(self.rigctld_proc.as_ref(), radio, engine);
                     self.rigctld_proc = None; // drop kills + reaps the daemon (frees the port)
+                    self.let_go_of_flex_monitor();
                     *rig = Rig::vox();
                     self.rig_asserted = false;
                     self.cat_hold_active = true;
@@ -7922,7 +7936,8 @@ impl RadioLoop {
                     .and_then(CatDaemon::icom_lan)
                     .and_then(crate::icomlan::IcomLanDaemon::loss);
                 self.rigctld_proc = None; // drop kills + reaps the old daemon (frees its port)
-                                          // A rig that came back under a NEW port name is followed by USB identity.
+                self.let_go_of_flex_monitor();
+                // A rig that came back under a NEW port name is followed by USB identity.
                 let open_want = self.resolve_port_alias(&want);
                 engine_lock(engine).remote_close_radio();
                 self.remote_connection = None;

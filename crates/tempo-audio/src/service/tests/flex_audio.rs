@@ -242,6 +242,16 @@ impl FlexScene {
             if !replace {
                 return (Rig::vox(), None, CatProbe::status(None, ""));
             }
+            // A radio saved as a TCI one: Nexus's TCI client on its server, as `open_cat` starts it.
+            if let Some(mut target) = t.tci_target() {
+                target.rigctld_port = 0;
+                let d = crate::tci::TciDaemon::start_receiving(&target, Default::default())
+                    .expect("the TCI client starts");
+                let mut rig = Rig::rigctld(&format!("127.0.0.1:{}", d.local_addr().port()));
+                rig.set_slow_transport(true);
+                let probe = finish_cat_open(&mut rig, t);
+                return (rig, Some(CatDaemon::Tci(d)), probe);
+            }
             // What `open_cat` does for a radio Nexus's own client serves: a fresh client, which
             // remembers the handles of the sessions it replaces, probed as every open is.
             match FlexDaemon::start(radio, 0, t.flex_native_unbenched) {
@@ -1227,14 +1237,27 @@ fn native_flex_audio_never_reaches_a_monitor_on_the_tx_device_or_while_keyed() {
         0,
         "Flex audio queued for the TX device"
     );
-    // A monitor on its own device, muted as the loop mutes it while the PTT is down.
+    // A monitor on its own device, and the operator's PTT down: the loop mutes it.
     monitor_on(&s, "Headphones");
     run_until(&mut s, "the monitor never played the Flex", |s| {
         s.backend.monitor.queued() > 0
     });
-    s.backend
-        .mon_tx_mute
-        .store(true, std::sync::atomic::Ordering::SeqCst);
+    {
+        let mut e = s.engine.lock().unwrap();
+        e.set_license_class("extra");
+        e.set_operating_mode("phone", true);
+        e.set_frequency(14.250, "20m", "USB");
+        e.set_ptt(true);
+    }
+    run_until(
+        &mut s,
+        "the loop never muted the monitor for the PTT",
+        |s| {
+            s.backend
+                .mon_tx_mute
+                .load(std::sync::atomic::Ordering::SeqCst)
+        },
+    );
     let _ = drain_monitor(&s);
     let since = s.state.dax_last_audio;
     s.run(500);
@@ -1247,6 +1270,39 @@ fn native_flex_audio_never_reaches_a_monitor_on_the_tx_device_or_while_keyed() {
         0,
         "the monitor played while keyed"
     );
+    s.engine.lock().unwrap().set_ptt(false);
+    run_until(&mut s, "the monitor never came back after the unkey", |s| {
+        s.backend.monitor.queued() > 0
+    });
+}
+
+/// ⛔ NOR ON SMARTSDR'S DAX TRANSMIT DEVICE: with native audio the rig's TX audio device is not DAX
+/// TX, but what plays on DAX TX still goes to the radio's transmitter, so the loop keeps the
+/// monitor off there and queues none of the Flex's audio for it.
+#[test]
+fn native_flex_audio_never_reaches_a_monitor_on_the_dax_transmit_device() {
+    let mut s = native_audio_with_the_monitor_on("DAX Audio TX (FlexRadio Systems DAX TX)");
+    s.run(1_000);
+    assert!(
+        peak(&s.state.rx.tail_window(2_400, 2_400)) > 0.01,
+        "control: audio arrived"
+    );
+    assert!(
+        !s.backend
+            .mon_enabled
+            .load(std::sync::atomic::Ordering::SeqCst),
+        "the guard let the monitor open on DAX TX"
+    );
+    assert_eq!(
+        s.backend.monitor.queued(),
+        0,
+        "Flex audio queued for DAX TX"
+    );
+    // Control: the same scene on headphones plays.
+    monitor_on(&s, "Headphones");
+    run_until(&mut s, "the monitor never played the Flex", |s| {
+        s.backend.monitor.queued() > 0
+    });
 }
 
 /// ⛔ A FLEX RADIO SWITCHED AWAY STOPS FEEDING THE HEADPHONES: the switch hands its client to the
@@ -1275,6 +1331,76 @@ fn a_flex_radio_switched_away_stops_feeding_the_headphones() {
         s.backend.monitor.queued(),
         0,
         "the pooled Flex queued audio for the monitor"
+    );
+}
+
+/// ⛔ A FLEX REPLACED WITHOUT THE HANDOFF LEAVES THE HEADPHONES TO THE NEXT RADIO: the operator
+/// saves the radio as a TCI one, so the loop rebuilds its CAT link (no switch through the monitor
+/// pool), and the TCI radio's receive audio plays in the headphones and keeps playing. The Flex's
+/// hold on the monitor goes with its client, the tick the client goes, rather than switching the
+/// monitor back to the idle sound card a tick after the TCI radio took it.
+#[test]
+fn a_flex_replaced_by_a_tci_radio_without_the_handoff_leaves_the_headphones_on() {
+    let mut s = native_audio_with_the_monitor_on("Headphones");
+    run_until(&mut s, "the monitor never played the Flex", |s| {
+        s.backend.monitor.queued() > 0
+    });
+    assert!(
+        s.state.flex_monitor.is_some(),
+        "premise: the Flex feeds the monitor"
+    );
+    let sdr = tempo_tcisim::Simulator::start(tempo_tcisim::Config::dialect(
+        tempo_tcisim::Dialect::expert_sdr3(),
+    ))
+    .expect("the TCI simulator starts");
+    crate::tci::registry::forget((sdr.addr(), tempo_net::tci::Trx::new(0).unwrap()));
+    {
+        let mut e = s.engine.lock().unwrap();
+        let mut settings = e.settings().clone();
+        settings.rig_model = 7;
+        settings.rig_conn = "tci".into();
+        settings.tci_host = "127.0.0.1".into();
+        settings.tci_port = sdr.addr().port();
+        settings.flex_native_cat = false;
+        settings.flex_native_audio = false;
+        e.apply_settings(settings);
+    }
+    s.replace_on_rebuild = true;
+    // The tick the Flex's client goes, its hold on the monitor goes with it.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !s.rebuilt.load(std::sync::atomic::Ordering::Relaxed) {
+        assert!(
+            Instant::now() < deadline,
+            "the loop never rebuilt the CAT link"
+        );
+        s.step(now_unix_ms());
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(
+        s.state
+            .rigctld_proc
+            .as_ref()
+            .and_then(CatDaemon::tci)
+            .is_some(),
+        "premise: the rebuild opened the TCI radio"
+    );
+    assert!(
+        s.state.flex_monitor.is_none(),
+        "the departed Flex still holds the monitor"
+    );
+    run_until(&mut s, "TCI audio never became the receive source", |s| {
+        s.state.tci_rx.is_some()
+    });
+    s.run(300);
+    let _ = drain_monitor(&s);
+    s.run(1_000);
+    assert!(
+        s.backend.monitor.is_active(),
+        "the departed Flex switched the TCI radio's monitor off"
+    );
+    assert!(
+        s.backend.monitor.queued() > 0,
+        "the TCI radio's audio never reached the headphones"
     );
 }
 

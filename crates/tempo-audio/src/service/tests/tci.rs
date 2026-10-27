@@ -865,6 +865,26 @@ fn tci_audio_on_the_monitor() -> TciScene {
     s
 }
 
+/// ⭐ TCI AUDIO HOLDS THE HEADPHONES WHILE IT IS THE SOURCE: the loop asserts its monitor every
+/// tick, so a source that left and switched the monitor off on its way out (a Flex client a rebuild
+/// replaced) does not leave the headphones on the idle sound card until something rebuilds the
+/// session.
+#[test]
+fn tci_audio_takes_the_monitor_back_from_a_source_that_switched_it_off() {
+    let mut s = tci_audio_on_the_monitor();
+    // As a departed source switches the feed it held off.
+    s.card.monitor.set_active(false);
+    s.step();
+    assert!(
+        s.state.tci_rx.is_some(),
+        "premise: TCI audio is still the source"
+    );
+    assert!(
+        s.card.monitor.is_active(),
+        "the monitor stayed on the sound card"
+    );
+}
+
 /// Whether a TCI session the loop let go of, `left`, still writes into the monitor once its feed is
 /// played again (the next TCI radio's audio becoming the source re-activates the same feed): the
 /// samples it queued in a second, with the control that it kept streaming all the while.

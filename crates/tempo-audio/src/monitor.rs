@@ -31,6 +31,8 @@ use std::sync::Arc;
 /// empty (each meaning "system default output", i.e. the same device). An empty
 /// against a named device is treated as distinct — we cannot prove by name that a
 /// named device *is* the current system default, so the guard doesn't block it.
+/// SmartSDR's DAX transmit device is refused whatever `audio_out` is
+/// ([`is_flex_dax_tx_device`]).
 /// Resolve an empty device name ("system default output") to the ACTUAL default
 /// output device's name, so the TX guard can compare real devices instead of
 /// treating "" as unknowable. Returns the input unchanged when it's non-empty or
@@ -55,6 +57,9 @@ pub fn resolve_output_name(name: &str) -> String {
 pub fn monitor_would_transmit(monitor_device: &str, audio_out: &str) -> bool {
     let m = monitor_device.trim();
     let o = audio_out.trim();
+    if is_flex_dax_tx_device(m) {
+        return true;
+    }
     if m.is_empty() && o.is_empty() {
         return true; // both "system default output" → the same device
     }
@@ -62,6 +67,20 @@ pub fn monitor_would_transmit(monitor_device: &str, audio_out: &str) -> bool {
         return false;
     }
     m.eq_ignore_ascii_case(o)
+}
+
+/// Whether `name` is SmartSDR's DAX transmit device on Windows: "DAX Audio TX (FlexRadio Systems
+/// DAX TX)" as SmartSDR's DAX documents it, or "DAX TX (FlexRadio DAX)" as newer DAX drivers name
+/// the live endpoint. What plays on it goes to a Flex's transmitter, whatever Nexus's own TX audio
+/// device is (with native Flex audio it is not that device at all), so [`monitor_would_transmit`]
+/// refuses it as it refuses the TX device. Matched on the name's start, as a whole word, case-blind:
+/// the DAX receive and IQ devices, and a device that only mentions DAX, are not it.
+fn is_flex_dax_tx_device(name: &str) -> bool {
+    let n = name.trim().to_ascii_lowercase();
+    ["dax audio tx", "dax tx"].iter().any(|p| {
+        n.strip_prefix(p)
+            .is_some_and(|rest| !rest.starts_with(|c: char| c.is_ascii_alphanumeric()))
+    })
 }
 
 /// Nearest-neighbour (sample-and-hold) mono resampler driven by an [`SpscRing`],
@@ -184,11 +203,22 @@ impl MonitorFeed {
         self.ring.pop()
     }
 
-    /// Discard what is queued. As the card ring's clear on a keying edge (see
-    /// `Monitor::set_tx_mute`).
+    /// Discard what is queued, with no output reading it (the monitor's stream gone).
     #[cfg(feature = "device")]
     fn clear(&self) {
         self.ring.clear();
+    }
+
+    /// Ask the output to discard what is queued now, at the top of its next callback
+    /// ([`Playout::fill`]), on a keying edge (`Monitor::set_tx_mute`). The ring's read side is the
+    /// output callback's alone: a clear from the loop thread racing its read can lose, and then
+    /// the whole jitter buffer of audio from before the key plays into the over. The request
+    /// records how far the queue reached, so audio queued after it is kept. The loop is not this
+    /// ring's producer for TCI audio: an older reading of how far it reached only discards less,
+    /// never audio that is not queued.
+    #[cfg(feature = "device")]
+    fn request_flush(&self) {
+        self.ring.request_flush();
     }
 }
 
@@ -241,6 +271,8 @@ impl Playout {
         frames: usize,
         mut out: impl FnMut(f32),
     ) {
+        // A keying edge's discard, asked for by the loop (`MonitorFeed::request_flush`).
+        feed.ring.apply_flush();
         if !feed.is_active() {
             feed.ring.clear();
             self.primed = false;
@@ -362,12 +394,14 @@ mod device_monitor {
         /// On the RISING edge the ring is cleared as well as gated: whatever the capture pushed in
         /// the moments before the key went down is band audio from before the over, and playing it
         /// out when the over ends would be a small burst of the past. Cheap — `clear` is two atomic
-        /// stores — and it runs on the loop thread, never in an audio callback.
+        /// stores — and it runs on the loop thread, never in an audio callback. Another source's
+        /// queue (TCI, native Flex audio) holds up to its jitter buffer, so its discard is left to
+        /// the output callback (`MonitorFeed::request_flush`), which cannot lose a race to itself.
         pub fn set_tx_mute(&mut self, muted: bool) {
             let was = self.tx_mute.swap(muted, Ordering::Release);
             if muted && !was {
                 self.ring.clear();
-                self.feed.clear();
+                self.feed.request_flush();
             }
         }
 
@@ -788,12 +822,38 @@ mod tests {
         let feed = m.feed();
         feed.set_active(true);
         assert!(feed.open(), "control: on, unmuted, the source");
-        feed.push(&[0.5; 16]);
+        // More than the pre-roll, so the output would play it at once.
+        let preroll = 48_000 * super::FEED_PREROLL_MS / 1_000;
+        feed.push(&vec![0.5; preroll + 480]);
         m.set_tx_mute(true);
         assert!(!feed.open(), "the mute closes another source's gate too");
+        // The discard is the output callback's to make: the ring's read side is its alone, and a
+        // clear from the loop thread racing its read can lose, replaying the whole jitter buffer
+        // of pre-key audio into the over.
+        assert_eq!(
+            feed.queued(),
+            preroll + 480,
+            "the loop thread moved the output's read side"
+        );
+        let card = SpscRing::new(16);
+        let mut p = Playout::new(48_000, 48_000);
+        let mut played = Vec::new();
+        p.fill(&card, &feed, 480, |s| played.push(s));
+        assert!(
+            played.iter().all(|s| *s == 0.0),
+            "audio from before the key played in the over"
+        );
         assert_eq!(feed.queued(), 0, "and its pre-TX audio went with it");
+        // Audio after the over is the band's now: none of it is eaten by the discard.
         m.set_tx_mute(false);
         assert!(feed.open(), "reopened after the over");
+        feed.push(&vec![0.25; preroll + 480]);
+        let mut played = Vec::new();
+        p.fill(&card, &feed, 480, |s| played.push(s));
+        assert!(
+            played.iter().all(|s| *s == 0.25),
+            "the audio after the over did not play"
+        );
     }
 
     /// A feed at 1 kHz (so a millisecond is a sample), on and unmuted, and the output's consumer
@@ -963,6 +1023,39 @@ mod tests {
         // One default, one named → cannot prove collision by name → allowed.
         assert!(!monitor_would_transmit("Headphones", ""));
         assert!(!monitor_would_transmit("", "USB Audio CODEC"));
+    }
+
+    /// SmartSDR's DAX transmit device carries what is played on it to a Flex's transmitter, whatever
+    /// Nexus's own TX audio device is (with native Flex audio, it is not that device at all): the
+    /// monitor never opens on it. Its names as SmartSDR's DAX documents it, and as newer DAX
+    /// drivers name the live endpoint (see the DAX pairing in Settings).
+    #[test]
+    fn guard_blocks_the_flex_dax_transmit_device() {
+        for dax_tx in [
+            "DAX Audio TX (FlexRadio Systems DAX TX)",
+            "DAX Audio TX",
+            "DAX TX (FlexRadio DAX)",
+            " dax tx ",
+        ] {
+            assert!(
+                monitor_would_transmit(dax_tx, "Speakers"),
+                "{dax_tx:?} let through"
+            );
+            assert!(monitor_would_transmit(dax_tx, ""), "{dax_tx:?} let through");
+        }
+        // The receive devices, and devices that only mention DAX, are headphones like any other.
+        for other in [
+            "DAX Audio RX 1 (FlexRadio Systems DAX Audio)",
+            "DAX RESERVED AUDIO RX 3",
+            "DAX IQ RX 1",
+            "Headphones (DAX TX helper)",
+            "DAX TXT",
+        ] {
+            assert!(
+                !monitor_would_transmit(other, "USB Audio CODEC"),
+                "{other:?} refused"
+            );
+        }
     }
 
     #[test]
