@@ -12,38 +12,54 @@ jobs:
       contents: write
 
     steps:
-      - name: Checkout Fork
-        uses: actions/checkout@v4
+      - name: Fetch and Sync Upstream Tag Natively
+        uses: actions/github-script@v7
         with:
-          fetch-depth: 0 # Pulls full git history to safely map new tags
+          script: |
+            // 1. Get the latest release/tag from the original repository
+            const upstream = await github.rest.repos.getLatestRelease({
+              owner: 'kd9taw',
+              repo: 'Nexus'
+            });
+            const latestTag = upstream.data.tag_name;
+            console.log(`Latest upstream tag is: ${latestTag}`);
 
-      - name: Fetch and Sync Upstream Tags
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # Configure local tracking variables safely
-          git remote add upstream "https://github.com"
-          git fetch upstream --tags
-          
-          # Identify the single absolute latest tag from the upstream source repo
-          LATEST_UPSTREAM_TAG=$(git describe --tags $(git rev-list --tags --max-count=1 upstream/main))
-          echo "Latest Upstream Tag is: $LATEST_UPSTREAM_TAG"
-          
-          # Check if this tag already exists in your fork execution memory
-          if git rev-parse "$LATEST_UPSTREAM_TAG" >/dev/null 2>&1; then
-            echo "Your fork is already up-to-date with tag $LATEST_UPSTREAM_TAG. Skipping sync."
-          else
-            echo "New version detected ($LATEST_UPSTREAM_TAG). Proceeding with Sync..."
-            
-            # Configure git author profile information
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            
-            # Merge down the changes cleanly from upstream main
-            git merge upstream/main --no-edit || git merge upstream/main --strategy-option theirs --no-edit
-            
-            # Push changes and anchor the new tag version straight into your fork
-            git push origin main
-            git tag "$LATEST_UPSTREAM_TAG"
-            git push origin "$LATEST_UPSTREAM_TAG"
-          fi
+            // 2. Check if this tag already exists in your fork
+            try {
+              await github.rest.repos.getRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `tags/${latestTag}`
+              });
+              console.log(`Your fork already has the tag ${latestTag}. Skipping sync.`);
+            } catch (error) {
+              if (error.status === 404) {
+                console.log(`New version detected (${latestTag}). Natively syncing fork...`);
+
+                // 3. Trigger the native upstream merge of code commits
+                await github.rest.repos.mergeUpstream({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  branch: 'main'
+                });
+
+                // 4. Get the latest commit SHA of your main branch to attach the tag to
+                const mainBranch = await github.rest.repos.getBranch({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  branch: 'main'
+                });
+                const latestSHA = mainBranch.data.commit.sha;
+
+                // 5. Natively create and push the exact version tag to your fork
+                await github.rest.git.createRef({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: `refs/tags/${latestTag}`,
+                  sha: latestSHA
+                });
+                console.log(`Successfully created tag ${latestTag} on your fork!`);
+              } else {
+                throw error;
+              }
+            }
