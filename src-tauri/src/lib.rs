@@ -43598,7 +43598,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             rru["sentSettings"],
-            serde_json::json!(["contest_qth_state"]),
+            serde_json::json!(["contest_qth_state", "fd_section"]),
             "{rru}"
         );
         assert_eq!(rru["role"], "w_ve", "{rru}");

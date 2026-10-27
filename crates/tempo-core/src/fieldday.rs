@@ -3345,9 +3345,15 @@ impl FieldDayLog {
             // for it, and what CQ WW RTTY X.3 asks for: "other stations indicate 'DX'". A
             // sponsor whose LOCATION list spells a place differently from its exchange
             // (CQ WW RTTY's `PEI` is `PE` there) maps it through `cabrillo.location`.
+            //
+            // A sponsor whose LOCATION is a station setting (the ARRL RTTY Roundup's ARRL/RAC
+            // section, `cabrillo.location_setting`) heads a W/VE entry with it; a blank one
+            // falls back to the state.
             location: sent_location.unwrap_or_else(|| {
                 if self.session.role().id == "dx" {
                     "DX".to_string()
+                } else if !self.session.location_setting.is_empty() {
+                    self.session.location_setting.clone()
                 } else {
                     let state = self.session.my_location.state.as_str();
                     rs.cabrillo_location

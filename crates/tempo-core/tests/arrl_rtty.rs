@@ -542,6 +542,51 @@ fn a_dx_log_writes_rst_and_its_serial() {
     assert!(cab.lines().any(|l| l == "LOCATION: DX"), "{cab}");
 }
 
+/// ⭐ **LOCATION is the ARRL/RAC section for a W/VE entry, and DX for everyone else.** ARRL's log
+/// upload (contest-log-submission.arrl.org, read 2026-10-26): *"Location During Contest: Select
+/// ARRL/RAC sections or DX Outside US/Canada"*. The Cabrillo header specification
+/// (wwrof.org/cabrillo/cabrillo-v3-header, read 2026-10-26): *"For USA and Canada stations
+/// LOCATION must be the ARRL section abbreviation. For foreign stations LOCATION must be 'DX'.
+/// This information is required for IARU-HF and for all ARRL and CQ contests."* A station in
+/// Massachusetts sends `MA` on the air and heads its file with its section, `EMA`; a DX station
+/// with a section left in its settings is still `DX`.
+#[test]
+fn location_is_the_arrl_section_and_dx_for_a_dx_entry() {
+    let mut st = station("W1XYZ", "MA");
+    st.fd_section = "EMA".to_string();
+    let mut log = FieldDayLog::new("W1XYZ", select(&st), "20m");
+    assert!(work_on(
+        &mut log,
+        "20m",
+        14_080,
+        "K2DEF",
+        &[("RST", "599"), ("QTH", "NY")],
+        1
+    ));
+    let cab = log.cabrillo(14_080).expect("one entry");
+    assert!(cab.lines().any(|l| l == "LOCATION: EMA"), "{cab}");
+    assert_eq!(
+        qso_lines(&cab),
+        vec!["QSO: 14080 RY 2027-01-02 1801 W1XYZ 599 MA K2DEF 599 NY"],
+        "the state is what goes out on the air"
+    );
+
+    let mut dx = station("DL9XYZ", "");
+    dx.fd_section = "EMA".to_string();
+    let mut log = FieldDayLog::new("DL9XYZ", select(&dx), "20m");
+    log.session.compose_for("W9ABC", START + 50);
+    assert!(work_on(
+        &mut log,
+        "20m",
+        14_080,
+        "W9ABC",
+        &[("RST", "599"), ("QTH", "IL")],
+        1
+    ));
+    let cab = log.cabrillo(14_080).expect("one entry");
+    assert!(cab.lines().any(|l| l == "LOCATION: DX"), "{cab}");
+}
+
 /// The token every registry agrees on, and the advisory band list: *"Use only the 3.5, 7, 14,
 /// 21, and 28 MHz bands."*
 #[test]

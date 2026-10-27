@@ -448,6 +448,18 @@ pub struct FdRuleset {
     /// QTH slot, which is the whole of this key. The loader refuses a slot some role does
     /// not send.
     pub cabrillo_location_slot: &'static str,
+    /// ⭐ **The station setting a W/VE entry's `LOCATION` is**, by its Rust name, or `""` for
+    /// every contest whose `LOCATION` is the entrant's state. A `dx`-role entry is `DX` whatever
+    /// it names, and a blank setting falls back to the state, as before this key.
+    ///
+    /// The ARRL RTTY Roundup's is `fd_section`, the operator's ARRL/RAC section: ARRL's log
+    /// upload asks *"Location During Contest: Select ARRL/RAC sections or DX Outside US/Canada"*,
+    /// and the Cabrillo header specification (WWROF) *"For USA and Canada stations LOCATION must
+    /// be the ARRL section abbreviation. For foreign stations LOCATION must be 'DX'."* Its
+    /// exchange sends the STATE, so the section cannot be read off what the entry sends, as
+    /// Field Day's and Sweepstakes' is. The loader takes only a name in [`SENT_SLOT_SETTINGS`],
+    /// and never beside `location_slot`.
+    pub cabrillo_location_setting: &'static str,
     /// ⭐ **The bands this contest runs on, as ADVISORY data** (`"20m"`), or empty when the
     /// ruleset names none. Nothing scores or dupes off it: a contact on another band is
     /// logged, and the entry strip says the contest does not use that band.
@@ -615,7 +627,8 @@ impl FdRuleset {
     /// ⭐ **The settings this contest's exchange sends from**: every `setting:` source, and every
     /// input of a `derived:` one, among the slots any role sends, in field order and each once.
     /// What a setup screen asks for before the contest starts, so it asks for this contest's and
-    /// no other's. Rust field names, as [`SENT_SLOT_SETTINGS`] holds them.
+    /// no other's. Rust field names, as [`SENT_SLOT_SETTINGS`] holds them. Last, the setting a W/VE
+    /// entry's `LOCATION` is ([`Self::cabrillo_location_setting`]), which the setup asks for too.
     pub fn sent_settings(&self) -> Vec<&'static str> {
         let sent = |key: &str| self.exchange.roles.iter().any(|r| r.sends.contains(&key));
         let mut out: Vec<&'static str> = Vec::new();
@@ -648,6 +661,10 @@ impl FdRuleset {
                     out.push(name);
                 }
             }
+        }
+        let location = self.cabrillo_location_setting;
+        if !location.is_empty() && !out.contains(&location) {
+            out.push(location);
         }
         out
     }
@@ -1216,6 +1233,11 @@ struct CabrilloSpec {
     /// state, which is what every contest before this key writes.
     #[serde(default)]
     location_slot: String,
+    /// The station setting a W/VE entry's `LOCATION` is (the Roundup's `fd_section`); `""` = the
+    /// entrant's state. A key of its own, so a build that predates it still loads this file and
+    /// writes the state, as it did.
+    #[serde(default)]
+    location_setting: String,
     /// The `CATEGORY-TRANSMITTER` values the sponsor takes, in its order; `[]` = none is
     /// written. This and the three keys under it are keys of their own, never names in
     /// `headers` or `entry_headers`, so a build that predates them still loads this file (see
@@ -2623,6 +2645,21 @@ mode class ({})",
                     ));
                 }
             }
+            // The LOCATION setting is one a station carries, and one source of LOCATION only.
+            let setting = r.cabrillo.location_setting.as_str();
+            if !setting.is_empty() {
+                if !SENT_SLOT_SETTINGS.contains(&setting) {
+                    return Err(format!(
+                        "{tag}: cabrillo location_setting {setting:?} is not a station setting"
+                    ));
+                }
+                if !slot.is_empty() {
+                    return Err(format!(
+                        "{tag}: cabrillo location_setting and location_slot both name the \
+                         LOCATION"
+                    ));
+                }
+            }
             // ⭐ The entry declarations a sponsor's template names. A value refused here is a
             // line that would ship wrong: a transmitter class Cabrillo does not have, an overlay
             // no robot could read as one word, an address part with no ADDRESS to belong to.
@@ -3455,6 +3492,7 @@ fn build(spec: FileSpec) -> RulesTable {
                         .into_boxed_slice(),
                 ),
                 cabrillo_location_slot: leak_str(r.cabrillo.location_slot),
+                cabrillo_location_setting: leak_str(r.cabrillo.location_setting),
                 bands: leak_keys(r.bands),
                 location_aliases: Box::leak(
                     r.location_aliases
@@ -4587,7 +4625,8 @@ mod tests {
         // QSO party's in-state station, so a contest without one never asks for it. The ARRL
         // RTTY Roundup's W/VE station sends its state or province (Special Rules 4.2.1), and its
         // DX station a serial, which no setting holds.
-        assert_eq!(sent("arrlrtty"), vec!["contest_qth_state"]);
+        // The Roundup sends the state and heads its file with the ARRL section (LOCATION).
+        assert_eq!(sent("arrlrtty"), vec!["contest_qth_state", "fd_section"]);
         assert_eq!(
             sent("cqww_rtty"),
             vec!["contest_cq_zone", "contest_qth_state"]
@@ -5521,6 +5560,35 @@ mod tests {
     /// role never sends, would head that role's file with a value nobody sent. (The corpus
     /// pins the first refusal; every role in the corpus seed sends every slot it declares,
     /// so the second cannot be one mutation off it and is pinned here instead.)
+    /// The LOCATION setting is a setting a station carries, and never a second source of
+    /// LOCATION beside `location_slot`. Control: the shipped seed (the Roundup's `fd_section`)
+    /// loads.
+    #[test]
+    fn a_cabrillo_location_setting_is_a_station_setting_and_the_only_location_source() {
+        let with = |event: &str, key: &str, value: &str| {
+            let mut v: serde_json::Value = serde_json::from_str(SEED).unwrap();
+            let i = v["rulesets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .position(|r| r["event"] == event)
+                .expect("seeded");
+            v["rulesets"][i]["cabrillo"][key] = value.into();
+            parse_spec(&v.to_string())
+        };
+        assert!(with("arrlrtty", "location_setting", "fd_section").is_ok());
+        let e = with("arrlrtty", "location_setting", "arrl_section").unwrap_err();
+        assert!(
+            e.contains("cabrillo location_setting \"arrl_section\" is not a station setting"),
+            "{e}"
+        );
+        let e = with("nyqp", "location_setting", "fd_section").unwrap_err();
+        assert!(
+            e.contains("cabrillo location_setting and location_slot both name the LOCATION"),
+            "{e}"
+        );
+    }
+
     #[test]
     fn a_cabrillo_location_slot_must_be_a_slot_every_role_sends() {
         let with = |slot: &str| {
@@ -6628,6 +6696,11 @@ mod tests {
             assert_eq!(
                 x.cabrillo_location_slot, y.cabrillo_location_slot,
                 "{}: location slot",
+                x.event
+            );
+            assert_eq!(
+                x.cabrillo_location_setting, y.cabrillo_location_setting,
+                "{}: location setting",
                 x.event
             );
             assert_eq!(

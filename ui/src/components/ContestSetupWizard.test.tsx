@@ -75,8 +75,8 @@ function preview(patch: Partial<Settings>): FdRulesetDto {
     }
   }
   // The ARRL RTTY Roundup, as the engine previews it (src-tauri's
-  // `the_preview_offers_the_declarations_the_sponsor_names`): a W/VE station sends its state, and the
-  // contest takes RTTY alone.
+  // `the_preview_offers_the_declarations_the_sponsor_names`): a W/VE station sends its state, heads its
+  // file with its ARRL section (LOCATION), and the contest takes RTTY alone.
   if (event === 'arrlrtty') {
     const state = (s.contestQthState ?? '').trim()
     return {
@@ -89,7 +89,7 @@ function preview(patch: Partial<Settings>): FdRulesetDto {
       role: 'w_ve',
       exchange: ['599', state],
       problem: '',
-      sentSettings: ['contest_qth_state'],
+      sentSettings: ['contest_qth_state', 'fd_section'],
       cabrilloHeaders: ['CATEGORY-ASSISTED', 'CATEGORY-MODE', 'CATEGORY-POWER', 'CLAIMED-SCORE', 'CLUB', 'OPERATORS'],
       transmitterCategories: ['ONE', 'TWO', 'UNLIMITED'],
     }
@@ -295,6 +295,8 @@ describe('the steps', () => {
     await screen.findByText('You send: 599 IL')
     // Only what a W/VE station sends (Special Rules 4.2.1): no county, no zone, no class.
     expect(screen.getByLabelText('State or province')).toBeTruthy()
+    // …and the ARRL section its log is filed under (the Cabrillo LOCATION ARRL's upload asks for).
+    expect(screen.getByLabelText('ARRL Section')).toBeTruthy()
     expect(screen.queryByLabelText('County')).toBeNull()
     expect(screen.queryByLabelText('FD Class')).toBeNull()
     next()
