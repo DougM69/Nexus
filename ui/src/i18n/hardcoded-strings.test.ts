@@ -314,6 +314,9 @@ const MIGRATED = [
   'selfSpot.ts',
   // The activation's notices (2026-10-25): born migrated, both sentences catalog keys.
   'useActivationNotices.ts',
+  // The radio switch notice (2026-10-27): born migrated. The radio name, the band and the routing
+  // mode name in it are data.
+  'useRadioSwitchNotice.ts',
   'components/ContestView.tsx',
   'components/ContestOperators.tsx',
   // The activator's pane and its Stop checklist (2026-10-25): born migrated.

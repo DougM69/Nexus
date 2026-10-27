@@ -294,7 +294,95 @@ pub enum SortKey {
     Contest,
     /// ADIF `CNTY`, which the log keeps only as passthrough.
     County,
+    // Every other column the Logbook shows. Each sorts as its cell reads — times and dates in
+    // time order, numbers by value, text without regard to case — and a row with nothing in
+    // the column comes after every row with something, whichever way the column is sorted.
+    /// The contact's end time.
+    End,
+    #[serde(rename = "myGrid")]
+    MyGrid,
+    #[serde(rename = "myRig")]
+    MyRig,
+    Name,
+    Qth,
+    /// Transmit power, by value.
+    Power,
+    Operator,
+    /// ADIF `CQZ`, `ITUZ`, `CONT` and `DISTANCE`, passthrough; the zones and the distance by value.
+    Cqz,
+    Ituz,
+    Cont,
+    Distance,
+    /// The date a card was sent.
+    #[serde(rename = "qslSentDate")]
+    QslSentDate,
+    /// ADIF `QSLRDATE`, `LOTW_QSLRDATE` and `EQSL_QSLRDATE`, passthrough, as `YYYYMMDD`.
+    #[serde(rename = "qslRcvdDate")]
+    QslRcvdDate,
+    #[serde(rename = "lotwRcvdDate")]
+    LotwRcvdDate,
+    #[serde(rename = "eqslRcvdDate")]
+    EqslRcvdDate,
+    /// A service's upload mark: failed, then waiting, then done; no stamp is empty.
+    #[serde(rename = "upLotw")]
+    UpLotw,
+    #[serde(rename = "upEqsl")]
+    UpEqsl,
+    #[serde(rename = "upQrz")]
+    UpQrz,
+    #[serde(rename = "upClublog")]
+    UpClublog,
+    /// A contest contact's exchange as the column prints it, a number in it by value (serial 9
+    /// before 10).
+    #[serde(rename = "exchSent")]
+    ExchSent,
+    #[serde(rename = "exchRcvd")]
+    ExchRcvd,
+    /// The comment, or the private note where there is no comment.
+    Notes,
 }
+
+/// What an order reads from the store's child tables beside the `qso` columns: the upload stamps
+/// (`qso_upload`) and the contest exchange (`contest_exchange`), each on its table's own key,
+/// one lookup per contact. Only a sort on a column that shows them asks, and only for the service
+/// or side that column shows.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ChildReads {
+    /// Each service's stamp: LoTW, eQSL, QRZ, Club Log.
+    pub uploads: [bool; 4],
+    /// Each side of the exchange: sent, received.
+    pub exchange: [bool; 2],
+}
+
+impl ChildReads {
+    pub fn is_empty(self) -> bool {
+        self == Self::default()
+    }
+
+    /// What either reads.
+    fn or(self, other: Self) -> Self {
+        let mut out = self;
+        for (a, b) in out.uploads.iter_mut().zip(other.uploads) {
+            *a |= b;
+        }
+        for (a, b) in out.exchange.iter_mut().zip(other.exchange) {
+            *a |= b;
+        }
+        out
+    }
+}
+
+/// The `qso` columns a contest block is decoded from, so a narrow row's block is empty exactly
+/// when a whole row's is.
+const CONTEST_COLUMNS: &[&str] = &[
+    "contest_id",
+    "contest_session_id",
+    "contest_qid",
+    "stx",
+    "stx_string",
+    "srx",
+    "srx_string",
+];
 
 impl SortKey {
     /// The `qso` columns this key reads beyond the Logbook's own ([`super::sqlite::ORDER_COLUMNS`]),
@@ -306,8 +394,53 @@ impl SortKey {
             SortKey::Iota => (&["ota_iota"], None),
             SortKey::Contest => (&["contest_id"], None),
             SortKey::County => (&[], Some("CNTY")),
+            SortKey::End => (&["time_off_unix"], None),
+            SortKey::MyGrid => (&["my_grid"], None),
+            SortKey::MyRig => (&["my_rig"], None),
+            SortKey::Name => (&["name"], None),
+            SortKey::Qth => (&["qth"], None),
+            SortKey::Power => (&["tx_power"], None),
+            SortKey::Operator => (&["operator"], None),
+            SortKey::Cqz => (&[], Some("CQZ")),
+            SortKey::Ituz => (&[], Some("ITUZ")),
+            SortKey::Cont => (&[], Some("CONT")),
+            SortKey::Distance => (&[], Some("DISTANCE")),
+            SortKey::QslSentDate => (&["qsl_sent_date_unix"], None),
+            SortKey::QslRcvdDate => (&[], Some("QSLRDATE")),
+            SortKey::LotwRcvdDate => (&[], Some("LOTW_QSLRDATE")),
+            SortKey::EqslRcvdDate => (&[], Some("EQSL_QSLRDATE")),
+            SortKey::ExchSent | SortKey::ExchRcvd => (CONTEST_COLUMNS, None),
+            SortKey::Notes => (&["comment", "notes"], None),
             _ => (&[], None),
         }
+    }
+
+    /// What this key reads from the store's child tables ([`ChildReads`]).
+    pub fn children(self) -> ChildReads {
+        let mut out = ChildReads::default();
+        match self {
+            SortKey::UpLotw => out.uploads[0] = true,
+            SortKey::UpEqsl => out.uploads[1] = true,
+            SortKey::UpQrz => out.uploads[2] = true,
+            SortKey::UpClublog => out.uploads[3] = true,
+            SortKey::ExchSent => out.exchange[0] = true,
+            SortKey::ExchRcvd => out.exchange[1] = true,
+            _ => {}
+        }
+        out
+    }
+
+    /// Whether this key reads what an upload stamp or a card marked sent changes — writes that
+    /// move the log's `content_rev` and not its `index_rev`.
+    pub fn reads_stamps(self) -> bool {
+        matches!(
+            self,
+            SortKey::UpLotw
+                | SortKey::UpEqsl
+                | SortKey::UpQrz
+                | SortKey::UpClublog
+                | SortKey::QslSentDate
+        )
     }
 }
 
@@ -357,6 +490,16 @@ impl LogQuery {
     pub fn then_keys(&self) -> &[SortTerm] {
         &self.then[..self.then.len().min(MAX_SORT_KEYS - 1)]
     }
+
+    /// Whether this order reads what an upload stamp or a card marked sent changes — its filter
+    /// asks what was sent, or a key shows an upload mark or the QSL-sent date. Those writes move
+    /// the log's `content_rev` and not its `index_rev`, so such an order is built on both.
+    pub fn reads_content(&self) -> bool {
+        self.filter.reads_sent()
+            || std::iter::once(self.sort)
+                .chain(self.then_keys().iter().map(|t| t.sort))
+                .any(SortKey::reads_stamps)
+    }
 }
 
 /// A row's value in a sorted column (`sortVal`).
@@ -364,29 +507,149 @@ impl LogQuery {
 enum SortVal {
     Text(Box<str>),
     Num(f64),
+    /// Nothing in the column (`null`): after every value, in either direction, in every column.
+    Empty,
+}
+
+/// Text as a column sorts it: trimmed and upper-cased, or [`SortVal::Empty`] when blank.
+fn text_or_empty(s: Option<&str>) -> SortVal {
+    match js_trim(s.unwrap_or("")) {
+        "" => SortVal::Empty,
+        t => SortVal::Text(js_upper(t).into_boxed_str()),
+    }
+}
+
+/// An exchange as its column sorts it (`naturalKey`): [`text_or_empty`], with every run of digits
+/// written so that text order is number order — a marker, the run's length without its leading
+/// zeros, then those digits. Serial 9 then sorts before 10 and 100, `05` ties `5`, and the text
+/// around the numbers orders as before. The marker is `0`, which no other character of the key
+/// can be, so a number meets a number; it sorts where a digit does, before the letters. The key
+/// is made once per contact, so the order compares plain text.
+fn natural_or_empty(s: Option<&str>) -> SortVal {
+    let SortVal::Text(t) = text_or_empty(s) else {
+        return SortVal::Empty;
+    };
+    let mut out = String::with_capacity(t.len() + 4);
+    let mut rest = &*t;
+    while let Some(at) = rest.find(|c: char| c.is_ascii_digit()) {
+        out.push_str(&rest[..at]);
+        rest = &rest[at..];
+        let end = rest
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(rest.len());
+        let digits = match rest[..end].trim_start_matches('0') {
+            "" => "0",
+            d => d,
+        };
+        out.push('0');
+        // The length as one character above the marker, held below the surrogates so that it
+        // compares the same as UTF-16.
+        out.push(char::from_u32(0x30 + digits.len().min(NATURAL_MAX_RUN) as u32).unwrap_or('0'));
+        out.push_str(digits);
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    SortVal::Text(out.into_boxed_str())
+}
+
+/// The longest run of digits [`natural_or_empty`] tells apart by length (the window's
+/// `NATURAL_MAX_RUN`); longer runs compare as runs of this length do.
+const NATURAL_MAX_RUN: usize = 0xCFCF;
+
+/// A number as a column sorts it, or [`SortVal::Empty`] when there is none.
+fn num_or_empty(n: Option<f64>) -> SortVal {
+    n.filter(|n| n.is_finite())
+        .map_or(SortVal::Empty, SortVal::Num)
+}
+
+/// A passthrough tag as an added column reads it (`extraTag`): the first entry of that name
+/// with something in it, trimmed.
+fn extra_tag<'r>(r: &'r QsoRecord, tag: &str) -> Option<&'r str> {
+    r.extra
+        .iter()
+        .find(|(k, v)| js_upper(k) == tag && !js_trim(v).is_empty())
+        .map(|(_, v)| js_trim(v))
+}
+
+/// A passthrough tag that holds a number (a zone, the distance), as `tagNum` reads it: its value,
+/// or — as the cell prints it as it came — its text, which sorts after every number
+/// ([`key_cmp`]); empty when there is none. ADIF numbers are decimal: `0x10` does not parse here
+/// and is text, as `adifNumber` makes it in the window.
+fn extra_num(r: &QsoRecord, tag: &str) -> SortVal {
+    match extra_tag(r, tag) {
+        None => SortVal::Empty,
+        Some(v) => match v.parse::<f64>() {
+            Ok(n) if n.is_finite() => SortVal::Num(n),
+            _ => SortVal::Text(js_upper(v).into_boxed_str()),
+        },
+    }
+}
+
+/// How much of the notes an order reads: the first characters, so an order over a log of long
+/// notes keeps a short key per contact. Contacts that agree that far keep the time order. The
+/// window cuts at the same place (`logQuery.ts` `NOTES_KEY_CHARS`).
+const NOTES_KEY_CHARS: usize = 64;
+
+/// The notes as they sort (`notesKey`): trimmed, cut to [`NOTES_KEY_CHARS`] characters,
+/// upper-cased; empty when blank.
+fn notes_key(s: Option<&str>) -> SortVal {
+    let t = js_trim(s.unwrap_or(""));
+    let cut = t
+        .char_indices()
+        .nth(NOTES_KEY_CHARS)
+        .map_or(t, |(at, _)| &t[..at]);
+    match cut {
+        "" => SortVal::Empty,
+        c => SortVal::Text(js_upper(c).into_boxed_str()),
+    }
+}
+
+/// An upload stamp as its column marks it (`uploadMark`): failed, waiting, done; none is empty.
+fn upload_rank(s: Option<&super::UploadStatus>) -> SortVal {
+    s.map_or(SortVal::Empty, |s| {
+        SortVal::Num(match s.outcome {
+            UploadOutcome::Rejected | UploadOutcome::AuthFail => 0.0,
+            UploadOutcome::Pending => 1.0,
+            UploadOutcome::Accepted | UploadOutcome::Duplicate => 2.0,
+        })
+    })
+}
+
+/// One side of a contest contact's exchange as its column prints it (`contestExchange`): the
+/// exchange as logged, else the ADIF string, else the serial.
+fn exchange(r: &QsoRecord, sent: bool) -> Option<String> {
+    let c = r.contest.as_deref()?;
+    let slots = if sent { &c.sent } else { &c.rcvd };
+    let joined = slots
+        .iter()
+        .map(|(_, v)| v.as_str())
+        .filter(|v| !v.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if !joined.is_empty() {
+        return Some(joined);
+    }
+    let string = if sent { &c.stx_string } else { &c.srx_string };
+    if let Some(s) = string.as_deref().filter(|s| !s.is_empty()) {
+        return Some(s.to_string());
+    }
+    (if sent { c.stx } else { c.srx }).map(|n| n.to_string())
 }
 
 /// `entity` is the row's DXCC entity (`q.entity`), asked for only when the column is the country.
 fn sort_val(r: &QsoRecord, k: SortKey, entity: Option<&str>) -> SortVal {
-    let text = |s: &str| SortVal::Text(js_upper(s).into_boxed_str());
     match k {
-        SortKey::Call => text(&r.call),
+        SortKey::Call => text_or_empty(Some(&r.call)),
         // The country the Logbook shows (`q.entity ?? q.country`): the DXCC entity, so a QRZ
         // `Germany` and a `Fed. Rep. of Germany` sort together, and the stored text only where
         // the call resolves to none.
-        SortKey::Country => text(entity.or(r.country.as_deref()).unwrap_or("")),
+        SortKey::Country => text_or_empty(entity.or(r.country.as_deref())),
         SortKey::Band | SortKey::Freq => SortVal::Num(ui_mhz(r.freq_mhz)),
-        SortKey::Mode => text(&r.mode),
-        SortKey::Sent => text(r.rst_sent.as_deref().unwrap_or("")),
-        SortKey::Rcvd => text(r.rst_rcvd.as_deref().unwrap_or("")),
+        SortKey::Mode => text_or_empty(Some(&r.mode)),
+        SortKey::Sent => text_or_empty(r.rst_sent.as_deref()),
+        SortKey::Rcvd => text_or_empty(r.rst_rcvd.as_deref()),
         SortKey::Time => SortVal::Num(r.when_unix as f64),
-        SortKey::Park => text(
-            r.ota
-                .their_ref
-                .as_deref()
-                .or(r.ota.my_ref.as_deref())
-                .unwrap_or(""),
-        ),
+        SortKey::Park => text_or_empty(r.ota.their_ref.as_deref().or(r.ota.my_ref.as_deref())),
         SortKey::Qsl => SortVal::Num(if r.award_confirmed {
             2.0
         } else if r.confirmed {
@@ -394,16 +657,45 @@ fn sort_val(r: &QsoRecord, k: SortKey, entity: Option<&str>) -> SortVal {
         } else {
             0.0
         }),
-        SortKey::Grid => text(r.grid.as_deref().unwrap_or("")),
-        SortKey::State => text(super::record_field(r, "STATE").unwrap_or("")),
-        SortKey::Iota => text(r.ota.iota.as_deref().unwrap_or("")),
-        SortKey::Contest => text(r.contest.as_deref().map_or("", |c| c.contest_id.as_str())),
-        SortKey::County => text(
+        SortKey::Grid => text_or_empty(r.grid.as_deref()),
+        SortKey::State => text_or_empty(super::record_field(r, "STATE")),
+        SortKey::Iota => text_or_empty(r.ota.iota.as_deref()),
+        SortKey::Contest => text_or_empty(r.contest.as_deref().map(|c| c.contest_id.as_str())),
+        SortKey::County => text_or_empty(
             r.extra
                 .iter()
                 .find(|(k, _)| k == "CNTY")
-                .map_or("", |(_, v)| v.as_str()),
+                .map(|(_, v)| v.as_str()),
         ),
+        SortKey::End => num_or_empty(r.time_off_unix.map(|t| t as f64)),
+        SortKey::MyGrid => text_or_empty(r.my_grid.as_deref()),
+        SortKey::MyRig => text_or_empty(r.my_rig.as_deref()),
+        SortKey::Name => text_or_empty(r.name.as_deref()),
+        SortKey::Qth => text_or_empty(r.qth.as_deref()),
+        SortKey::Power => num_or_empty(r.tx_power),
+        SortKey::Operator => text_or_empty(r.operator.as_deref()),
+        SortKey::Cqz => extra_num(r, "CQZ"),
+        SortKey::Ituz => extra_num(r, "ITUZ"),
+        SortKey::Cont => text_or_empty(extra_tag(r, "CONT")),
+        SortKey::Distance => extra_num(r, "DISTANCE"),
+        // `dateUnix ? … : null`: an unset date and the epoch alike show nothing.
+        SortKey::QslSentDate => {
+            num_or_empty(r.qsl_sent.date_unix.filter(|&d| d != 0).map(|d| d as f64))
+        }
+        // `YYYYMMDD` orders by date as text does.
+        SortKey::QslRcvdDate => text_or_empty(extra_tag(r, "QSLRDATE")),
+        SortKey::LotwRcvdDate => text_or_empty(extra_tag(r, "LOTW_QSLRDATE")),
+        SortKey::EqslRcvdDate => text_or_empty(extra_tag(r, "EQSL_QSLRDATE")),
+        SortKey::UpLotw => upload_rank(r.upload.lotw.as_ref()),
+        SortKey::UpEqsl => upload_rank(r.upload.eqsl.as_ref()),
+        SortKey::UpQrz => upload_rank(r.upload.qrz.as_ref()),
+        SortKey::UpClublog => upload_rank(r.upload.clublog.as_ref()),
+        SortKey::ExchSent => natural_or_empty(exchange(r, true).as_deref()),
+        SortKey::ExchRcvd => natural_or_empty(exchange(r, false).as_deref()),
+        SortKey::Notes => {
+            let comment = r.comment.as_deref().map(js_trim).filter(|c| !c.is_empty());
+            notes_key(comment.or(r.notes.as_deref()))
+        }
     }
 }
 
@@ -415,6 +707,21 @@ fn sort_val_cmp(a: &SortVal, b: &SortVal) -> Ordering {
         (SortVal::Num(a), SortVal::Num(b)) => a.partial_cmp(b).unwrap_or(Ordering::Equal),
         // One column gives one kind of value.
         _ => Ordering::Equal,
+    }
+}
+
+/// Two rows' values in one key, in that key's direction — an empty value after every other in
+/// either direction, and in a column of numbers a value that is not one after the numbers.
+fn key_cmp(a: &SortVal, b: &SortVal, asc: bool) -> Ordering {
+    match (a, b) {
+        (SortVal::Empty, SortVal::Empty) => Ordering::Equal,
+        (SortVal::Empty, _) => Ordering::Greater,
+        (_, SortVal::Empty) => Ordering::Less,
+        // A column of numbers: a value that is not one after every number, either way.
+        (SortVal::Num(_), SortVal::Text(_)) => Ordering::Less,
+        (SortVal::Text(_), SortVal::Num(_)) => Ordering::Greater,
+        _ if asc => sort_val_cmp(a, b),
+        _ => sort_val_cmp(a, b).reverse(),
     }
 }
 
@@ -582,6 +889,13 @@ impl<'a, H> OrderBuilder<'a, H> {
         (columns, extras)
     }
 
+    /// What this order reads from the store's child tables ([`ChildReads`]).
+    pub fn children(&self) -> ChildReads {
+        std::iter::once(self.sort)
+            .chain(self.then.iter().map(|t| t.sort))
+            .fold(ChildReads::default(), |acc, k| acc.or(k.children()))
+    }
+
     /// The next row, in LOG ORDER after every row pushed before it.
     pub fn push(&mut self, h: H, r: &QsoRecord) {
         let resolve = self.resolve;
@@ -618,9 +932,9 @@ impl<'a, H> OrderBuilder<'a, H> {
         let dirs: Vec<bool> = self.then.iter().map(|t| t.asc).collect();
         let way = |cmp: Ordering, asc: bool| if asc { cmp } else { cmp.reverse() };
         self.kept.sort_by(|a, b| {
-            let mut cmp = way(sort_val_cmp(&a.1, &b.1), asc);
+            let mut cmp = key_cmp(&a.1, &b.1, asc);
             for (i, &up) in dirs.iter().enumerate() {
-                cmp = cmp.then_with(|| way(sort_val_cmp(&a.2[i], &b.2[i]), up));
+                cmp = cmp.then_with(|| key_cmp(&a.2[i], &b.2[i], up));
             }
             cmp.then_with(|| way(a.3.cmp(&b.3), asc))
         });

@@ -166,6 +166,9 @@ pub mod tx_extras;
 #[cfg(test)]
 mod tx_extras_tests;
 // Debug builds only, like the station's parity tests: they read the debug build's counters.
+/// The radio switch notice's record and the switch policy's one writer.
+#[cfg(test)]
+mod radio_switch_notice_tests;
 /// WSJT-X's FT8 47 step as a decode job: it decodes and folds nothing, and the full pass after it
 /// hands on no early decode again.
 #[cfg(test)]
@@ -3744,6 +3747,11 @@ pub struct Engine {
     /// FM & APRS rule. Consumed unconditionally; applied only when peg-lock is off, exactly
     /// like the computed answer it replaces.
     route_target: Option<Option<u32>>,
+    /// The last time the routing in [`Self::tune_dial`] switched the active radio BY ITSELF, for
+    /// the on-screen switch notice (`AppSnapshot::auto_radio_switch`). An observation only: it is
+    /// written after the switch and read by nothing that decides one. The operator's own pick
+    /// (`set_active_radio`) never writes it.
+    auto_radio_switch: Option<crate::dto::AutoRadioSwitch>,
     /// Rolling received-decode history (slot, row) across the last several T/R
     /// cycles — NOT just the last slot. This is what makes a roster/late click on
     /// a caller resolve to the RIGHT QSO step: `last_decodes` is replaced on every
@@ -6687,6 +6695,7 @@ impl Engine {
             immediate_retune: false,
             route_intent: None,
             route_target: None,
+            auto_radio_switch: None,
             decode_history: std::collections::VecDeque::new(),
             band_activity: std::collections::VecDeque::new(),
             early_seen: None,
@@ -7284,6 +7293,8 @@ impl Engine {
         // The popup's remembered propagation mode has ONE writer too, the popup's confirm
         // (`take_popup_prop_mode`), and a form's copy can be older than the last confirm.
         let live_log_prop_mode = self.settings.log_prop_mode.clone();
+        // …and the radio switch policy, for the same reason (`set_radio_switch_policy`).
+        let live_radio_switch_policy = self.settings.radio_switch_policy;
         // ⛔ The switches that let the station transmit by itself have ONE writer each, the switch
         // the operator presses: the presence beacon (`set_beacon`) and JS8's automatic replies,
         // relay and heartbeat acks (`js8_arm`). From a computer driving the station those run only
@@ -7428,6 +7439,7 @@ impl Engine {
         if keep_live_roster {
             self.settings.beta_updates = live_beta_updates;
             self.settings.log_prop_mode = live_log_prop_mode;
+            self.settings.radio_switch_policy = live_radio_switch_policy;
             (
                 self.settings.beacon,
                 self.settings.js8_autoreply,
@@ -7955,6 +7967,19 @@ impl Engine {
     /// only has to persist (the caller saves) and be visible to the next `get_settings`.
     pub fn set_beta_updates(&mut self, on: bool) -> &Settings {
         self.settings.beta_updates = on;
+        &self.settings
+    }
+
+    /// ⛔ **THE ONE WRITER of the radio switch policy** (Settings ▸ Radio ▸ Radios: whether an
+    /// automatic radio switch is said on screen). Narrow for `set_beta_updates`' reason: a
+    /// surface holding an old settings snapshot must not post an old choice over the live one,
+    /// and `apply_settings` keeps the live value. It changes no routing: the switch is the same
+    /// under either policy, only the notice differs, and the frontend reads it.
+    pub fn set_radio_switch_policy(
+        &mut self,
+        policy: crate::settings::RadioSwitchPolicy,
+    ) -> &Settings {
+        self.settings.radio_switch_policy = policy;
         &self.settings
     }
 
@@ -8817,7 +8842,20 @@ impl Engine {
                     self.settings.route_radio(band, route_mode)
                 }
             }) {
+                let from = self.settings.active_radio;
                 self.set_active_radio_with_reset(id, &mut reset);
+                // Said on screen when the policy asks for it (the switch notice). Recorded only
+                // when the switch really happened (it refuses a disabled radio).
+                if self.settings.active_radio != from {
+                    let seq = self.auto_radio_switch.as_ref().map_or(0, |n| n.seq) + 1;
+                    self.auto_radio_switch = Some(crate::dto::AutoRadioSwitch {
+                        seq,
+                        from_id: from,
+                        to_id: id,
+                        band: band.to_string(),
+                        mode: route_mode,
+                    });
+                }
             }
         }
         // A normal QSY leaves the APRS FM-simplex context (aprs_tune re-sets it right after its own
@@ -28559,6 +28597,7 @@ contact yourself."
         // model), so `catOk`/`smeterDb` are None for them.
         s.active_radio_id = self.settings.active_radio;
         s.radio_pegged = self.settings.radio_pegged;
+        s.auto_radio_switch = self.auto_radio_switch.clone();
         // No AI copy or status from an unassisted entry, however it was declared (`cw_decode`).
         let decoding = self.settings.cw_decoder_active();
         s.ai_cw = crate::dto::AiCwStatus {

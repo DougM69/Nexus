@@ -133,13 +133,17 @@ export function macroEditShortcut(key: string): string {
  *  words a catalog never writes alone — and ALL the Remote page has, since it installs no
  *  catalog. Reviewed 2026-10-04 against each catalog's own captions for a stop, which
  *  `macroSets.test.ts` holds them to: German says "beenden" as often as "stoppen"
- *  ("Mithören beenden" is Stop listening), and Japanese uses 終了 for a Stop. */
+ *  ("Mithören beenden" is Stop listening), Japanese uses 終了 for a Stop, and Russian
+ *  «Выключить»/«Завершить» (reviewed 2026-10-27). */
 export const STOP_WORDS: Record<string, readonly string[]> = {
   en: ['stop', 'halt', 'abort', 'cancel', 'esc', 'escape'],
   de: ['stopp', 'stoppen', 'halt', 'anhalten', 'abbrechen', 'abbruch', 'beenden'],
   es: ['parar', 'pare', 'parada', 'detener', 'detén', 'abortar', 'anular', 'cancelar', 'dejar de'],
   fr: ['arrêter', 'arrête', 'arrêt', 'interrompre', 'abandonner', 'annuler', 'échap', 'échappement'],
   ja: ['停止', '停波', '中止', '中断', '止め', '止まれ', 'ストップ', 'キャンセル', '取消', '取り消', '終了', 'エスケープ'],
+  // Russian inflects, and a word here must match whole, so each form a caption takes is listed.
+  // The catalog says «Выключить будильник» for Stop alarm and «Завершить» for a Stop that ends.
+  ru: ['стоп', 'остановить', 'остановите', 'останови', 'остановка', 'остановки', 'прервать', 'прервите', 'прерви', 'отменить', 'отмените', 'отмена', 'выключить', 'завершить', 'эскейп'],
 }
 
 /** For matching only: lower case, one space between words, compatibility forms folded (full-width

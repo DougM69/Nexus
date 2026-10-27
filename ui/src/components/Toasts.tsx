@@ -103,6 +103,20 @@ export function Toasts() {
               </button>
             </RToast.Action>
           )}
+          {toast.secondaryAction && toast.secondaryLabel && (
+            <RToast.Action asChild altText={toast.secondaryLabel}>
+              <button
+                type="button"
+                className="ui-toast-action ui-toast-secondary"
+                onClick={() => {
+                  toast.secondaryAction?.()
+                  dismissToast(toast.id)
+                }}
+              >
+                {toast.secondaryLabel}
+              </button>
+            </RToast.Action>
+          )}
           <RToast.Close className="ui-toast-close" aria-label={t('toast.dismiss')}>
             ×
           </RToast.Close>

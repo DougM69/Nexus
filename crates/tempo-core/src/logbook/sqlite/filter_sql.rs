@@ -16,11 +16,11 @@
 //! The plan test below holds it to that.
 
 use super::{
-    contest_is_empty, extra_columns, extras_width, record_from_row, with_extras, with_submode,
-    Error, LogDb, Result, QSO_COLUMNS, SUBMODE_JOIN, SUBMODE_VALUE,
+    contest_is_empty, extra_columns, extras_width, record_from_row, stamp_of, stamp_slot,
+    with_extras, with_submode, Error, LogDb, Result, QSO_COLUMNS, SUBMODE_JOIN, SUBMODE_VALUE,
 };
 use crate::logbook::query::filter::{field, LogFilter, QslState, SentState};
-use crate::logbook::query::{ui_band_edges, UI_BAND_LABELS};
+use crate::logbook::query::{ui_band_edges, ChildReads, UI_BAND_LABELS};
 use crate::logbook::QsoRecord;
 use rusqlite::params_from_iter;
 use rusqlite::types::Value;
@@ -250,6 +250,7 @@ impl LogDb {
         &self,
         columns: &[&str],
         extras: &[&str],
+        children: ChildReads,
         submode: bool,
         filter: &Where,
     ) -> Result<String> {
@@ -260,9 +261,10 @@ impl LogDb {
         };
         let (extra_values, extra_joins) = extra_columns(extras)?;
         Ok(format!(
-            "SELECT {}{value}{extra_values}, q.rowid FROM qso q{join}{extra_joins} WHERE {} \
+            "SELECT {}{value}{extra_values}{}, q.rowid FROM qso q{join}{extra_joins} WHERE {} \
              ORDER BY q.rowid",
             self.narrow_projection(columns)?,
+            child_values(children),
             filter.sql()
         ))
     }
@@ -279,18 +281,43 @@ impl LogDb {
         filter: &LogFilter,
         each: &mut dyn FnMut(u32, &QsoRecord),
     ) -> Result<()> {
+        self.each_filtered_with(
+            columns,
+            extras,
+            ChildReads::default(),
+            submode,
+            filter,
+            each,
+        )
+    }
+
+    /// [`Self::each_filtered`], each row with what `children` names from the child tables as
+    /// well — its upload stamps, its contest exchange — as a whole row holds them: what a sort on
+    /// an upload or exchange column reads.
+    pub fn each_filtered_with(
+        &self,
+        columns: &[&str],
+        extras: &[&str],
+        children: ChildReads,
+        submode: bool,
+        filter: &LogFilter,
+        each: &mut dyn FnMut(u32, &QsoRecord),
+    ) -> Result<()> {
         let w = where_of(filter);
         let mut stmt = self
             .conn
-            .prepare(&self.filtered_sql(columns, extras, submode, &w)?)?;
+            .prepare(&self.filtered_sql(columns, extras, children, submode, &w)?)?;
         let mut rows = stmt.query(params_from_iter(w.params.iter()))?;
         let submode_at = QSO_COLUMNS.len();
         let extras_at = submode_at + usize::from(submode);
-        let rowid_at = extras_at + extras_width(extras);
+        let children_at = extras_at + extras_width(extras);
+        let rowid_at = children_at + child_width(children);
         while let Some(row) = rows.next()? {
             let rowid = u32::try_from(row.get::<_, i64>(rowid_at)?)
                 .map_err(|_| Error::Sql(rusqlite::Error::IntegralValueOutOfRange(rowid_at, 0)))?;
             let mut rec = record_from_row(row)?;
+            // Before the emptiness test, as the whole-row decoder attaches them.
+            with_children(&mut rec, row, children_at, children)?;
             if rec.contest.as_deref().is_some_and(contest_is_empty) {
                 rec.contest = None;
             }
@@ -303,6 +330,99 @@ impl LogDb {
         }
         Ok(())
     }
+}
+
+/// The upload services in [`ChildReads::uploads`]'s order, which [`child_values`] selects them in.
+const UPLOAD_SERVICES: [&str; 4] = ["lotw", "eqsl", "qrz", "clublog"];
+
+/// The exchange's sides in [`ChildReads::exchange`]'s order: sent, received.
+const EXCHANGE_SIDES: [&str; 2] = ["tx", "rx"];
+
+/// What a read selects, after the passthrough, for `children`: each service's stamp outcome
+/// (`qso_upload`, on its key `(qso_id, service)`), and each side's exchange as a JSON array of
+/// `[slot, raw]` in `ord` order (`contest_exchange`, on its key `(qso_id, side, ord)`) — one
+/// lookup per contact each, never a walk of the table.
+fn child_values(children: ChildReads) -> String {
+    let mut out = String::new();
+    for (service, read) in UPLOAD_SERVICES.into_iter().zip(children.uploads) {
+        if read {
+            out.push_str(&format!(
+                ", (SELECT u.outcome FROM qso_upload u WHERE u.qso_id = q.id \
+                 AND u.service = '{service}')"
+            ));
+        }
+    }
+    for (side, read) in EXCHANGE_SIDES.into_iter().zip(children.exchange) {
+        if read {
+            out.push_str(&format!(
+                ", (SELECT json_group_array(json_array(e.slot, e.raw) ORDER BY e.ord) \
+                 FROM contest_exchange e WHERE e.qso_id = q.id AND e.side = '{side}')"
+            ));
+        }
+    }
+    out
+}
+
+/// How many values [`child_values`] selects for `children`.
+fn child_width(children: ChildReads) -> usize {
+    children
+        .uploads
+        .iter()
+        .chain(&children.exchange)
+        .filter(|&&read| read)
+        .count()
+}
+
+/// Put what [`child_values`] read, from `at` on, where a whole row holds it: the stamps through
+/// the whole-row decoder's own reading of one ([`stamp_of`]; the outcome is all a sort reads),
+/// the exchange in the row's contest block.
+fn with_children(
+    rec: &mut QsoRecord,
+    row: &rusqlite::Row<'_>,
+    mut at: usize,
+    children: ChildReads,
+) -> Result<()> {
+    for (service, read) in UPLOAD_SERVICES.into_iter().zip(children.uploads) {
+        if !read {
+            continue;
+        }
+        if let Some(code) = row.get::<_, Option<String>>(at)? {
+            if let (Some(st), Some(slot)) = (
+                stamp_of(&code, None, None),
+                stamp_slot(&mut rec.upload, service),
+            ) {
+                *slot = Some(st);
+            }
+        }
+        at += 1;
+    }
+    let side = |at: usize| -> Result<Vec<(String, String)>> {
+        let json: String = row.get(at)?;
+        serde_json::from_str(&json).map_err(|e| {
+            Error::Sql(rusqlite::Error::FromSqlConversionFailure(
+                at,
+                rusqlite::types::Type::Text,
+                Box::new(e),
+            ))
+        })
+    };
+    let mut sides: [Option<Vec<(String, String)>>; 2] = [None, None];
+    for (slot, read) in sides.iter_mut().zip(children.exchange) {
+        if read {
+            *slot = Some(side(at)?);
+            at += 1;
+        }
+    }
+    if let Some(c) = rec.contest.as_deref_mut() {
+        let [sent, rcvd] = sides;
+        if let Some(sent) = sent {
+            c.sent = sent;
+        }
+        if let Some(rcvd) = rcvd {
+            c.rcvd = rcvd;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -863,10 +983,11 @@ mod tests {
             ),
             ["K1ABC", "DL1XYZ", "K1ABD/P", "W6[X]"]
         );
-        // County ascending: no county sorts first, the time breaking that tie ascending.
+        // County ascending: no county sorts last, as in every column, the time breaking that
+        // tie ascending.
         assert_eq!(
             order_of(SortKey::County, true, Vec::new()),
-            ["DL1XYZ", "W6[X]", "K1ABC", "K1ABD/P"]
+            ["K1ABC", "K1ABD/P", "DL1XYZ", "W6[X]"]
         );
         // A key past the third is not read.
         let many = vec![
@@ -889,6 +1010,543 @@ mod tests {
         );
     }
 
+    /// The order `q` gives over `db`, read as the engine reads it (the columns, passthrough and
+    /// child tables its keys name), as calls.
+    fn ordered(db: &LogDb, q: &LogQuery) -> Vec<String> {
+        let mut b = OrderBuilder::new(q, &|_| None);
+        let (columns, extras) = b.reads(ORDER_COLUMNS);
+        let children = b.children();
+        let mut calls = HashMapCalls::default();
+        db.each_filtered_with(
+            &columns,
+            &extras,
+            children,
+            false,
+            &q.filter,
+            &mut |rowid, r| {
+                calls.0.push((rowid, r.call.clone()));
+                b.push(rowid, r)
+            },
+        )
+        .unwrap();
+        calls.named(&b.finish())
+    }
+
+    fn sorted_by(sort: SortKey, asc: bool, then: Vec<SortTerm>) -> LogQuery {
+        LogQuery {
+            sort,
+            asc,
+            search: String::new(),
+            needs_confirm_only: false,
+            then,
+            filter: LogFilter::default(),
+        }
+    }
+
+    fn stamp(outcome: UploadOutcome) -> Option<UploadStatus> {
+        Some(UploadStatus {
+            outcome,
+            when_unix: 1,
+            detail: None,
+        })
+    }
+
+    /// Three contacts given values `set` puts in one column — AAA's the greatest, BBB's the
+    /// least — logged in call order, then EEE with nothing in it, through a store.
+    fn three_and_an_empty(set: &dyn Fn(&mut QsoRecord, usize)) -> LogDb {
+        let mut rows: Vec<QsoRecord> = ["AAA", "BBB", "CCC", "EEE"]
+            .iter()
+            .enumerate()
+            .map(|(i, call)| qso(call, "20m", "FT8", 60 * i as u64))
+            .collect();
+        for (i, r) in rows.iter_mut().enumerate() {
+            if i < 3 {
+                set(r, i);
+            }
+            r.id = Some(RecordId::Provisional {
+                hash: 1_000 + i as u64,
+                ordinal: 0,
+            });
+        }
+        let mut db = LogDb::open_in_memory().unwrap();
+        db.insert_all(rows.iter().map(|r| (r, Resolved::default())))
+            .unwrap();
+        db
+    }
+
+    /// ★ Every column the Logbook shows sorts: by value both ways — times and dates in time
+    /// order, numbers as numbers (9 before 10 before 100, which text would not give), text
+    /// without regard to case — and a contact with nothing in the column last BOTH ways. Each
+    /// column's values are read from the store as the engine reads them, the passthrough and the
+    /// upload and exchange tables among them.
+    #[test]
+    fn every_added_column_sorts_both_ways_with_the_empty_last() {
+        type Set = Box<dyn Fn(&mut QsoRecord, usize)>;
+        let pick = |v: [&'static str; 3]| move |i: usize| v[i].to_string();
+        let extra = |tag: &'static str, v: [&'static str; 3]| -> Set {
+            let v = pick(v);
+            Box::new(move |r: &mut QsoRecord, i| r.extra.push((tag.into(), v(i))))
+        };
+        let up = |which: fn(&mut QsoRecord) -> &mut Option<UploadStatus>| -> Set {
+            let o = [
+                UploadOutcome::Accepted,
+                UploadOutcome::Rejected,
+                UploadOutcome::Pending,
+            ];
+            Box::new(move |r: &mut QsoRecord, i| *which(r) = stamp(o[i]))
+        };
+        let cases: Vec<(SortKey, Set)> = vec![
+            (
+                SortKey::End,
+                Box::new(|r, i| r.time_off_unix = Some(r.when_unix + [900, 30, 200][i])),
+            ),
+            (
+                SortKey::MyGrid,
+                Box::new(|r, i| r.my_grid = Some(["jo22", "EM10", "fn31"][i].into())),
+            ),
+            (
+                SortKey::MyRig,
+                Box::new(|r, i| r.my_rig = Some(["ic-7300", "Elecraft K3", "FT-710"][i].into())),
+            ),
+            (
+                SortKey::Name,
+                Box::new(|r, i| r.name = Some(["carol", "Alice", "bob"][i].into())),
+            ),
+            (
+                SortKey::Qth,
+                Box::new(|r, i| r.qth = Some(["Zurich", "berlin", "Paris"][i].into())),
+            ),
+            (
+                SortKey::Power,
+                Box::new(|r, i| r.tx_power = Some([100.0, 9.0, 10.0][i])),
+            ),
+            (
+                SortKey::Operator,
+                Box::new(|r, i| r.operator = Some(["w1xyz", "K1ABC", "n2def"][i].into())),
+            ),
+            (SortKey::Cqz, extra("CQZ", ["40", "9", "10"])),
+            (SortKey::Ituz, extra("ITUZ", ["28", "8", "11"])),
+            (SortKey::Cont, extra("CONT", ["na", "AS", "eu"])),
+            (SortKey::Distance, extra("DISTANCE", ["1200", "9.5", "10"])),
+            (
+                SortKey::QslSentDate,
+                Box::new(|r, i| r.qsl_sent.date_unix = Some([300_000, 100_000, 200_000][i])),
+            ),
+            (
+                SortKey::QslRcvdDate,
+                extra("QSLRDATE", ["20220101", "20200101", "20211231"]),
+            ),
+            (
+                SortKey::LotwRcvdDate,
+                extra("LOTW_QSLRDATE", ["20220101", "20200101", "20211231"]),
+            ),
+            (
+                SortKey::EqslRcvdDate,
+                extra("EQSL_QSLRDATE", ["20220101", "20200101", "20211231"]),
+            ),
+            (SortKey::UpLotw, up(|r| &mut r.upload.lotw)),
+            (SortKey::UpEqsl, up(|r| &mut r.upload.eqsl)),
+            (SortKey::UpQrz, up(|r| &mut r.upload.qrz)),
+            (SortKey::UpClublog, up(|r| &mut r.upload.clublog)),
+            (
+                // The exchange as logged, slot by slot — read from the exchange table.
+                SortKey::ExchSent,
+                Box::new(|r, i| {
+                    r.contest = Some(Box::new(ContestFields {
+                        contest_id: "ARRL-SS-CW".into(),
+                        sent: vec![
+                            ("SERIAL".into(), ["3", "1", "2"][i].into()),
+                            ("CHECK".into(), "99".into()),
+                        ],
+                        ..Default::default()
+                    }))
+                }),
+            ),
+            (
+                // The ADIF string where nothing was logged slot by slot.
+                SortKey::ExchRcvd,
+                Box::new(|r, i| {
+                    r.contest = Some(Box::new(ContestFields {
+                        contest_id: "CQ-WW-CW".into(),
+                        srx_string: Some(["599 33", "599 05", "599 14"][i].into()),
+                        ..Default::default()
+                    }))
+                }),
+            ),
+            (
+                // The comment, else the private note.
+                SortKey::Notes,
+                Box::new(|r, i| match i {
+                    0 => r.comment = Some("charlie".into()),
+                    1 => r.comment = Some("Alpha".into()),
+                    _ => r.notes = Some("Bravo".into()),
+                }),
+            ),
+        ];
+        assert_eq!(cases.len(), 22, "every added column");
+        for (key, set) in &cases {
+            let db = three_and_an_empty(set.as_ref());
+            assert_eq!(
+                ordered(&db, &sorted_by(*key, true, Vec::new())),
+                ["BBB", "CCC", "AAA", "EEE"],
+                "{key:?} ascending"
+            );
+            assert_eq!(
+                ordered(&db, &sorted_by(*key, false, Vec::new())),
+                ["AAA", "CCC", "BBB", "EEE"],
+                "{key:?} descending"
+            );
+        }
+    }
+
+    /// An empty value counts as empty however it is blank — whitespace, an epoch date, a zone
+    /// that is not a number — and the empties keep the time's order among themselves, in the
+    /// first key's direction, as every tie does.
+    #[test]
+    fn blank_values_are_empty_and_empties_tie_on_the_time() {
+        let db = three_and_an_empty(&|r, i| match i {
+            0 => r.name = Some("   ".into()),
+            1 => r.name = Some("bob".into()),
+            _ => r.name = Some(String::new()),
+        });
+        assert_eq!(
+            ordered(&db, &sorted_by(SortKey::Name, true, Vec::new())),
+            ["BBB", "AAA", "CCC", "EEE"]
+        );
+        assert_eq!(
+            ordered(&db, &sorted_by(SortKey::Name, false, Vec::new())),
+            ["BBB", "EEE", "CCC", "AAA"]
+        );
+        // A zone that is not a number shows as it came, so it is a value: after the numbers,
+        // before the blank.
+        let db =
+            three_and_an_empty(&|r, i| r.extra.push(("CQZ".into(), ["x", "5", " "][i].into())));
+        assert_eq!(
+            ordered(&db, &sorted_by(SortKey::Cqz, true, Vec::new())),
+            ["BBB", "AAA", "CCC", "EEE"]
+        );
+        assert_eq!(
+            ordered(&db, &sorted_by(SortKey::Cqz, false, Vec::new())),
+            ["BBB", "AAA", "EEE", "CCC"]
+        );
+        let db = three_and_an_empty(&|r, i| r.qsl_sent.date_unix = Some([0, 86_400, 0][i]));
+        assert_eq!(
+            ordered(&db, &sorted_by(SortKey::QslSentDate, true, Vec::new())),
+            ["BBB", "AAA", "CCC", "EEE"]
+        );
+    }
+
+    /// ★ The first sixteen columns put a contact with nothing in them last as well, whichever
+    /// way they are sorted, and read their text trimmed: one rule for every column the Logbook
+    /// shows. (The band, frequency, time and QSL mark always hold a value.)
+    #[test]
+    fn the_first_columns_put_the_empty_last_both_ways() {
+        type Set = Box<dyn Fn(&mut QsoRecord, usize)>;
+        let s = |v: [&'static str; 3], i: usize| Some(v[i].to_string());
+        let cases: Vec<(SortKey, Set)> = vec![
+            (
+                SortKey::Country,
+                Box::new(move |r, i| r.country = s(["Japan", "brazil", "Canada"], i)),
+            ),
+            (
+                SortKey::Sent,
+                Box::new(move |r, i| r.rst_sent = s(["579", "559", "569"], i)),
+            ),
+            (
+                SortKey::Rcvd,
+                Box::new(move |r, i| r.rst_rcvd = s(["559", "339", "449"], i)),
+            ),
+            (
+                SortKey::Park,
+                Box::new(move |r, i| r.ota.their_ref = s(["US-4567", "K-0001", "us-0042"], i)),
+            ),
+            (
+                SortKey::Grid,
+                Box::new(move |r, i| r.grid = s(["FN31", "DM79", "EM10"], i)),
+            ),
+            (
+                SortKey::State,
+                Box::new(move |r, i| r.state = s(["TX", "CA", "MA"], i)),
+            ),
+            (
+                SortKey::Iota,
+                Box::new(move |r, i| r.ota.iota = s(["NA-001", "AF-004", "EU-005"], i)),
+            ),
+            (
+                SortKey::Contest,
+                Box::new(|r, i| {
+                    r.contest = Some(Box::new(ContestFields {
+                        contest_id: ["NAQP-CW", "ARRL-DX-CW", "CQ-WW-CW"][i].into(),
+                        ..Default::default()
+                    }))
+                }),
+            ),
+            (
+                SortKey::County,
+                Box::new(|r, i| {
+                    r.extra.push((
+                        "CNTY".into(),
+                        ["WA,King", "CA,Alameda", "MA,Essex"][i].into(),
+                    ))
+                }),
+            ),
+        ];
+        for (key, set) in &cases {
+            let db = three_and_an_empty(set.as_ref());
+            assert_eq!(
+                ordered(&db, &sorted_by(*key, true, Vec::new())),
+                ["BBB", "CCC", "AAA", "EEE"],
+                "{key:?} ascending"
+            );
+            assert_eq!(
+                ordered(&db, &sorted_by(*key, false, Vec::new())),
+                ["AAA", "CCC", "BBB", "EEE"],
+                "{key:?} descending"
+            );
+        }
+        // Blank is empty however it is blank, a value is read trimmed, and the empties keep the
+        // time order in the first key's direction. EEE's mode is FT8.
+        let db = three_and_an_empty(&|r, i| r.mode = ["", "CW", "  "][i].into());
+        assert_eq!(
+            ordered(&db, &sorted_by(SortKey::Mode, true, Vec::new())),
+            ["BBB", "EEE", "AAA", "CCC"]
+        );
+        assert_eq!(
+            ordered(&db, &sorted_by(SortKey::Mode, false, Vec::new())),
+            ["EEE", "BBB", "CCC", "AAA"]
+        );
+        let db = three_and_an_empty(&|r, i| r.rst_sent = s([" 599", "  ", "579"], i));
+        assert_eq!(
+            ordered(&db, &sorted_by(SortKey::Sent, true, Vec::new())),
+            ["CCC", "AAA", "BBB", "EEE"]
+        );
+        assert_eq!(
+            ordered(&db, &sorted_by(SortKey::Sent, false, Vec::new())),
+            ["AAA", "CCC", "EEE", "BBB"]
+        );
+    }
+
+    /// ★ The exchange columns read their numbers as numbers: serial 9 before 10 before 100, a
+    /// leading zero not counted, and the text around them without regard to case — where plain
+    /// text would put "10" before "9".
+    #[test]
+    fn an_exchange_sorts_its_numbers_as_numbers() {
+        let sent = |v: [&'static str; 3]| {
+            move |r: &mut QsoRecord, i: usize| {
+                r.contest = Some(Box::new(ContestFields {
+                    contest_id: "ARRL-SS-CW".into(),
+                    sent: vec![("SERIAL".into(), v[i].into()), ("PREC".into(), "A".into())],
+                    ..Default::default()
+                }))
+            }
+        };
+        let rcvd = |v: [&'static str; 3]| {
+            move |r: &mut QsoRecord, i: usize| {
+                r.contest = Some(Box::new(ContestFields {
+                    contest_id: "NAQP-CW".into(),
+                    srx_string: Some(v[i].into()),
+                    ..Default::default()
+                }))
+            }
+        };
+        let both_ways = |db: &LogDb, key: SortKey, what: &str| {
+            assert_eq!(
+                ordered(db, &sorted_by(key, true, Vec::new())),
+                ["BBB", "CCC", "AAA", "EEE"],
+                "{what} ascending"
+            );
+            assert_eq!(
+                ordered(db, &sorted_by(key, false, Vec::new())),
+                ["AAA", "CCC", "BBB", "EEE"],
+                "{what} descending"
+            );
+        };
+        both_ways(
+            &three_and_an_empty(&sent(["100", "9", "10"])),
+            SortKey::ExchSent,
+            "serials",
+        );
+        both_ways(
+            &three_and_an_empty(&sent(["0100", "009", "10"])),
+            SortKey::ExchSent,
+            "serials with leading zeros",
+        );
+        // Text first by its letters, a number in it by value, capitals ignored; a number at
+        // the start before the letters, as a digit is.
+        both_ways(
+            &three_and_an_empty(&rcvd(["ny 12", "5 MA", "NY 3"])),
+            SortKey::ExchRcvd,
+            "mixed",
+        );
+        both_ways(
+            &three_and_an_empty(&rcvd(["KEN 10 b", "ken 9 c", "KEN 10 A"])),
+            SortKey::ExchRcvd,
+            "a number, then text",
+        );
+    }
+
+    /// Shift-click keys over the added columns: a tie in the first is ordered by the second in
+    /// its own direction, a contact empty in the second still last among that tie, and an
+    /// upload key reads its stamps when it is not the first key.
+    #[test]
+    fn added_columns_order_as_second_and_third_keys() {
+        let db = three_and_an_empty(&|r, i| {
+            r.extra.push(("CONT".into(), ["EU", "EU", "NA"][i].into()));
+            r.tx_power = [Some(5.0), Some(100.0), Some(50.0)][i];
+            r.upload.lotw = stamp(
+                [
+                    UploadOutcome::Pending,
+                    UploadOutcome::Accepted,
+                    UploadOutcome::Accepted,
+                ][i],
+            );
+        });
+        let then = |sort, asc| vec![SortTerm { sort, asc }];
+        // Continent ascending, then power descending: EU 100 W, EU 5 W, NA; EEE (no continent) last.
+        assert_eq!(
+            ordered(
+                &db,
+                &sorted_by(SortKey::Cont, true, then(SortKey::Power, false))
+            ),
+            ["BBB", "AAA", "CCC", "EEE"]
+        );
+        // The positive control: power ascending flips the EU pair.
+        assert_eq!(
+            ordered(
+                &db,
+                &sorted_by(SortKey::Cont, true, then(SortKey::Power, true))
+            ),
+            ["AAA", "BBB", "CCC", "EEE"]
+        );
+        // The LoTW mark second: done before waiting descending, AAA's waiting after.
+        assert_eq!(
+            ordered(
+                &db,
+                &sorted_by(
+                    SortKey::Cont,
+                    true,
+                    vec![
+                        SortTerm {
+                            sort: SortKey::UpLotw,
+                            asc: false
+                        },
+                        SortTerm {
+                            sort: SortKey::Power,
+                            asc: true
+                        }
+                    ]
+                )
+            ),
+            ["BBB", "AAA", "CCC", "EEE"]
+        );
+    }
+
+    /// An upload sort reads the one service it shows, and an exchange sort the one side: a sort
+    /// by the QRZ mark looks up QRZ's stamp alone, not all four services'.
+    #[test]
+    fn a_child_read_names_only_the_service_or_side_it_sorts() {
+        let db = store();
+        let w = where_of(&LogFilter::default());
+        let sql_of = |sort: SortKey| {
+            let q = sorted_by(sort, true, Vec::new());
+            let b: OrderBuilder<'_, u32> = OrderBuilder::new(&q, &|_| None);
+            db.filtered_sql(ORDER_COLUMNS, &[], b.children(), false, &w)
+                .unwrap()
+        };
+        let qrz = sql_of(SortKey::UpQrz);
+        assert_eq!(qrz.matches("FROM qso_upload").count(), 1, "{qrz}");
+        assert!(qrz.contains("'qrz'"), "{qrz}");
+        let rcvd = sql_of(SortKey::ExchRcvd);
+        assert_eq!(rcvd.matches("FROM contest_exchange").count(), 1, "{rcvd}");
+        assert!(rcvd.contains("'rx'"), "{rcvd}");
+        // Each still orders by the stamp it shows.
+        let db = three_and_an_empty(&|r, i| {
+            r.upload.lotw = stamp(UploadOutcome::Rejected);
+            r.upload.qrz = stamp(
+                [
+                    UploadOutcome::Accepted,
+                    UploadOutcome::AuthFail,
+                    UploadOutcome::Pending,
+                ][i],
+            );
+        });
+        assert_eq!(
+            ordered(&db, &sorted_by(SortKey::UpQrz, true, Vec::new())),
+            ["BBB", "CCC", "AAA", "EEE"]
+        );
+    }
+
+    /// A stamp whose outcome this build cannot read is no stamp, as the whole-row decoder reads
+    /// it (and the Logbook then marks it "none"): it sorts with the empties.
+    #[test]
+    fn an_unknown_upload_outcome_sorts_as_no_stamp() {
+        let db = three_and_an_empty(&|r, i| {
+            r.upload.lotw = stamp(
+                [
+                    UploadOutcome::Accepted,
+                    UploadOutcome::Rejected,
+                    UploadOutcome::Pending,
+                ][i],
+            )
+        });
+        let changed = db
+            .conn
+            .execute(
+                "UPDATE qso_upload SET outcome = 'retry-later' WHERE service = 'lotw' AND \
+                 qso_id = (SELECT id FROM qso WHERE call = 'BBB')",
+                [],
+            )
+            .unwrap();
+        assert_eq!(changed, 1);
+        assert_eq!(
+            ordered(&db, &sorted_by(SortKey::UpLotw, true, Vec::new())),
+            ["CCC", "AAA", "BBB", "EEE"]
+        );
+    }
+
+    /// The child tables are read on their own keys, one lookup per contact — never a scan.
+    #[test]
+    fn the_child_reads_use_the_tables_keys() {
+        let db = store();
+        let w = where_of(&LogFilter::default());
+        let sql = db
+            .filtered_sql(
+                ORDER_COLUMNS,
+                &["CQZ"],
+                ChildReads {
+                    uploads: [true; 4],
+                    exchange: [true; 2],
+                },
+                false,
+                &w,
+            )
+            .unwrap();
+        let mut stmt = db
+            .conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+            .unwrap();
+        let plan: Vec<String> = stmt
+            .query_map(params_from_iter(w.params.iter()), |r| r.get::<_, String>(3))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        let joined = plan.join("\n");
+        // The one walk is the log's own, in log order; every other table is searched.
+        let scans: Vec<&String> = plan.iter().filter(|l| l.starts_with("SCAN")).collect();
+        assert_eq!(scans, ["SCAN q"], "{joined}");
+        for key in [
+            "sqlite_autoindex_qso_upload_1 (qso_id=? AND service=?)",
+            "sqlite_autoindex_contest_exchange_1 (qso_id=? AND side=?)",
+            "sqlite_autoindex_qso_extra_1 (qso_id=? AND name=?)",
+        ] {
+            assert!(
+                plan.iter()
+                    .any(|l| l.starts_with("SEARCH") && l.contains(key)),
+                "{key}:\n{joined}"
+            );
+        }
+    }
+
     /// The plans: the county filter reads its partial index, the date range the time index, and
     /// a call prefix may take the call index — never a walk of the passthrough.
     #[test]
@@ -896,7 +1554,9 @@ mod tests {
         let db = store();
         let plan = |f: LogFilter| -> Vec<String> {
             let w = where_of(&f);
-            let sql = db.filtered_sql(ORDER_COLUMNS, &[], false, &w).unwrap();
+            let sql = db
+                .filtered_sql(ORDER_COLUMNS, &[], ChildReads::default(), false, &w)
+                .unwrap();
             let mut stmt = db
                 .conn
                 .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))

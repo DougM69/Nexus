@@ -45,6 +45,7 @@ const REFUSED: Record<string, string[]> = {
   es: ['Parar', 'PARAR', 'Parar TX', 'Pare', 'Parada', 'Detener', 'Detén', 'Abortar', 'Anular', 'Cancelar', 'Dejar de emitir'],
   fr: ['Arrêter', 'ARRÊTER', 'ARRETER', 'Arrête !', 'Arrêt', "Arrêt d'urgence", 'Interrompre', 'Abandonner', 'Annuler', 'Échap'],
   ja: ['停止', '送信停止', 'TX停止', '停波', '中止', '中断', '止めて', '止まれ', 'ストップ', 'ｽﾄｯﾌﾟ', 'キャンセル', '取り消し', '終了', 'エスケープ', 'Stopボタン', 'ＥＳＣ'],
+  ru: ['Стоп', 'СТОП', 'Стоп TX', 'Остановить', 'Остановка', 'Прервать', 'Отменить', 'Отмена', 'Выключить', 'Завершить', 'Остановить передачу'],
 }
 
 /** On-air shorthand is the same in every language — an invariant token, never translated — and
@@ -59,6 +60,7 @@ const ALLOWED: Record<string, string[]> = {
   es: ['Responder', 'Intercambio', 'Mi ind.', 'Llamar', 'Gracias 73', 'Repetir', 'Otra vez', 'Nombre', 'Saludo', 'Despedida', 'Info para QSL', 'Comparar'],
   fr: ['Répondre', 'Échange', 'Mon IND.', 'Appel', 'Merci 73', 'Répéter', 'Encore', 'Nom', 'Bonjour', 'Au revoir', 'Fin'],
   ja: ['応答', 'ナンバー', '自局コール', '相手コール', '呼出', 'ありがとう', '再送', 'もう一度', '名前', '挨拶', 'コンテスト', '最後'],
+  ru: ['Ответ', 'Обмен', 'Мой позывной', 'Вызов', 'Спасибо 73', 'Повторить', 'Ещё раз', 'Имя', 'Привет', 'До связи', 'Стоповый', 'Отменённый'],
 }
 
 /** The catalogs' own captions for a stop. Chosen by English words, not by the function under
