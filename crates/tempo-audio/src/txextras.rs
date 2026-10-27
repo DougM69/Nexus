@@ -48,7 +48,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use tempo_app::engine::Engine;
+use tempo_app::engine::{engine_lock, Engine, EngineGuard};
 
 use crate::rig::Rig;
 
@@ -391,8 +391,8 @@ fn read_bw_index(rig: &mut Rig, spec: BwSpec) -> Option<usize> {
     }
 }
 
-fn lock(engine: &Arc<Mutex<Engine>>) -> std::sync::MutexGuard<'_, Engine> {
-    engine.lock().unwrap_or_else(|p| p.into_inner())
+fn lock(engine: &Arc<Mutex<Engine>>) -> EngineGuard<'_> {
+    engine_lock(engine)
 }
 
 #[cfg(test)]
