@@ -328,14 +328,29 @@ struct Card {
     /// The card's own ring on the receive tap.
     ring: Arc<crate::monitor::SpscRing>,
     tee: Arc<Mutex<Option<crate::backend::TxTeeHandle>>>,
+    /// The headphone monitor's gates, as the sound card's `Monitor` sets them: on once the loop
+    /// turns it on (its TX-device guard already passed), muted while the operator's PTT is down.
+    mon_enabled: Arc<std::sync::atomic::AtomicBool>,
+    mon_tx_mute: Arc<std::sync::atomic::AtomicBool>,
+    /// The monitor's way in for audio other than the card's own, at the card's 48 kHz.
+    monitor: crate::monitor::MonitorFeed,
 }
 
 impl Default for Card {
     fn default() -> Card {
+        let mon_enabled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let mon_tx_mute = Arc::new(std::sync::atomic::AtomicBool::new(false));
         Card {
             played: Arc::default(),
             ring: Arc::new(crate::monitor::SpscRing::new(1 << 14)),
             tee: Arc::default(),
+            monitor: crate::monitor::MonitorFeed::new(
+                48_000,
+                mon_enabled.clone(),
+                mon_tx_mute.clone(),
+            ),
+            mon_enabled,
+            mon_tx_mute,
         }
     }
 }
@@ -365,6 +380,18 @@ impl AudioBackend for Card {
             .unwrap()
             .as_ref()
             .is_some_and(|t| t.retune(tail))
+    }
+    fn set_monitor(&mut self, enabled: bool, _device: &str, _level: f32) -> Result<(), String> {
+        self.mon_enabled
+            .store(enabled, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+    fn set_monitor_tx_mute(&mut self, muted: bool) {
+        self.mon_tx_mute
+            .store(muted, std::sync::atomic::Ordering::SeqCst);
+    }
+    fn monitor_feed(&self) -> Option<crate::monitor::MonitorFeed> {
+        Some(self.monitor.clone())
     }
 }
 
@@ -691,6 +718,241 @@ fn the_sdr_programs_receive_audio_takes_the_sound_cards_place() {
             .any(|c| c.starts_with("audio_start")),
         "the new session asked for no audio"
     );
+}
+
+/// "Play receive audio here" on, to `device`, with the rig's TX audio on its own device.
+fn monitor_on(e: &mut Engine, device: &str) {
+    let mut settings = e.settings().clone();
+    settings.audio_out = "USB Audio CODEC".into();
+    settings.monitor_enabled = true;
+    settings.monitor_device = device.into();
+    e.apply_settings(settings);
+}
+
+/// Everything queued for the monitor from `feed`, emptied.
+fn drain(feed: &crate::monitor::MonitorFeed) -> Vec<f32> {
+    let mut out = Vec::new();
+    while let Some(s) = feed.pop() {
+        out.push(s);
+    }
+    out
+}
+
+/// ⭐ PLAY RECEIVE AUDIO HERE PLAYS WHAT THE DECODERS HEAR WITH AUDIO OVER TCI ON (#372): the monitor
+/// plays the SDR program's receive audio, the carrier 1 kHz above the dial at the decoders' level,
+/// at the monitor's own rate, not the sound card the program's audio replaced. When Audio over TCI
+/// stops being the source, the monitor plays the sound card again.
+#[test]
+fn play_receive_audio_here_plays_the_sdr_programs_audio() {
+    let mut s = TciScene::new([], waits(), listen);
+    s.run_until("TCI audio never became the receive source", |s| {
+        s.state.tci_rx.is_some()
+    });
+    monitor_on(&mut s.engine(), "Headphones");
+    s.run_until("the monitor never turned on", |s| {
+        s.card.mon_enabled.load(std::sync::atomic::Ordering::SeqCst)
+    });
+    let _ = drain(&s.card.monitor);
+    s.run(1_500);
+    assert!(
+        s.card.monitor.is_active(),
+        "the monitor still plays the sound card, not the SDR program"
+    );
+    let played = drain(&s.card.monitor);
+    let heard = s.state.rx.tail_window(2_400, 2_400);
+    assert!(
+        played.len() > 48_000 / 2,
+        "{} samples reached the monitor in 1.5 s at 48 kHz",
+        played.len()
+    );
+    let (p, d) = (peak(&played[played.len() / 2..]), peak(&heard));
+    assert!(
+        d > 0.01,
+        "control: the decoders heard the program (peak {d})"
+    );
+    assert!(
+        (p - d).abs() < 0.2 * d,
+        "the monitor's level {p} is not the decoders' {d}"
+    );
+    // Audio over TCI off: the sound card is the monitor's source again.
+    {
+        let mut e = s.engine();
+        let mut settings = e.settings().clone();
+        settings.tci_audio = false;
+        e.apply_settings(settings);
+    }
+    s.reopen = Reopen::Client;
+    s.run_until("TCI audio never stopped being the source", |s| {
+        s.state.tci_rx.is_none()
+    });
+    assert!(
+        !s.card.monitor.is_active(),
+        "the monitor still plays a source that is gone"
+    );
+}
+
+/// ⛔ THE MONITOR'S TX-DEVICE GUARD HOLDS FOR TCI AUDIO: monitor output set to the rig's TX audio
+/// device, the loop keeps the monitor off, and none of the SDR program's audio is queued for it
+/// while the decoders hear it.
+#[test]
+fn tci_audio_never_reaches_a_monitor_on_the_tx_device() {
+    let mut s = TciScene::new([], waits(), listen);
+    s.run_until("TCI audio never became the receive source", |s| {
+        s.state.tci_rx.is_some()
+    });
+    monitor_on(&mut s.engine(), "usb audio codec");
+    s.run(1_500);
+    assert!(
+        !s.card.mon_enabled.load(std::sync::atomic::Ordering::SeqCst),
+        "the guard let the monitor open on the TX device"
+    );
+    assert!(
+        peak(&s.state.rx.tail_window(2_400, 2_400)) > 0.01,
+        "control: audio arrived"
+    );
+    assert_eq!(
+        s.card.monitor.queued(),
+        0,
+        "TCI audio queued for the TX device"
+    );
+}
+
+/// THE MONITOR IS MUTED WHILE KEYED ON TCI AUDIO TOO, as on the sound card: while the operator's PTT
+/// is down nothing of the program's audio is queued for the monitor, though the program keeps
+/// streaming it, and it plays again after the unkey.
+#[test]
+fn the_monitor_is_muted_on_tci_audio_while_the_ptt_is_down() {
+    let mut s = TciScene::new([], waits(), phone);
+    s.run_until("TCI audio never became the receive source", |s| {
+        s.state.tci_rx.is_some()
+    });
+    monitor_on(&mut s.engine(), "Headphones");
+    s.run_until("the monitor never played the program", |s| {
+        s.card.monitor.queued() > 0
+    });
+    s.engine().set_ptt(true);
+    s.run_until("the PTT never keyed", |s| s.sent(0, "trx:0,true") == 1);
+    assert!(
+        s.card.mon_tx_mute.load(std::sync::atomic::Ordering::SeqCst),
+        "the loop never muted the monitor"
+    );
+    let _ = drain(&s.card.monitor);
+    let keyed_at = Instant::now();
+    s.run(1_000);
+    let last = s.daemon().receive().and_then(|r| r.last_block());
+    assert!(
+        last.is_some_and(|t| t > keyed_at),
+        "control: the program kept streaming while keyed"
+    );
+    assert_eq!(s.card.monitor.queued(), 0, "the monitor played while keyed");
+    s.engine().set_ptt(false);
+    s.run_until("the monitor never came back after the unkey", |s| {
+        s.card.monitor.queued() > 0
+    });
+}
+
+/// The scene with TCI audio playing on the headphone monitor: the source, the monitor on, audio
+/// queued for it.
+fn tci_audio_on_the_monitor() -> TciScene {
+    let mut s = TciScene::new([], waits(), listen);
+    s.run_until("TCI audio never became the receive source", |s| {
+        s.state.tci_rx.is_some()
+    });
+    monitor_on(&mut s.engine(), "Headphones");
+    s.run_until("the monitor never played the program", |s| {
+        s.card.monitor.queued() > 0
+    });
+    s
+}
+
+/// ⭐ TCI AUDIO HOLDS THE HEADPHONES WHILE IT IS THE SOURCE: the loop asserts its monitor every
+/// tick, so a source that left and switched the monitor off on its way out (a Flex client a rebuild
+/// replaced) does not leave the headphones on the idle sound card until something rebuilds the
+/// session.
+#[test]
+fn tci_audio_takes_the_monitor_back_from_a_source_that_switched_it_off() {
+    let mut s = tci_audio_on_the_monitor();
+    // As a departed source switches the feed it held off.
+    s.card.monitor.set_active(false);
+    s.step();
+    assert!(
+        s.state.tci_rx.is_some(),
+        "premise: TCI audio is still the source"
+    );
+    assert!(
+        s.card.monitor.is_active(),
+        "the monitor stayed on the sound card"
+    );
+}
+
+/// Whether a TCI session the loop let go of, `left`, still writes into the monitor once its feed is
+/// played again (the next TCI radio's audio becoming the source re-activates the same feed): the
+/// samples it queued in a second, with the control that it kept streaming all the while.
+fn queued_by_a_session_that_left(s: &TciScene, left: &TciDaemon) -> usize {
+    assert!(
+        s.state.tci_rx.is_none(),
+        "premise: TCI audio is not the source"
+    );
+    let _ = drain(&s.card.monitor);
+    s.card.monitor.set_active(true);
+    let since = Instant::now();
+    std::thread::sleep(Duration::from_millis(1_000));
+    let last = left.receive().and_then(|r| r.last_block());
+    assert!(
+        last.is_some_and(|t| t > since),
+        "control: the session it left kept streaming"
+    );
+    s.card.monitor.queued()
+}
+
+/// ⛔ A TCI SESSION THAT LEAVES THE LOOP STOPS WRITING TO THE HEADPHONE MONITOR, though it lives on
+/// (a switch hands it to the monitor pool). Its handle on the monitor goes when TCI audio stops
+/// being the source, whichever connection now holds the session, so the next radio's audio is the
+/// monitor's one producer and the two radios' audio never interleave in the headphones.
+#[test]
+fn a_tci_session_that_leaves_the_loop_stops_feeding_the_monitor() {
+    let mut s = tci_audio_on_the_monitor();
+    // The session leaves the loop alive, as a switch's pool keeps it, and the loop reconciles.
+    let left = s.state.rigctld_proc.take().expect("the TCI client");
+    s.state.reconcile_tci_audio(&s.engine, &s.card);
+    assert!(
+        !s.card.monitor.is_active(),
+        "premise: the monitor plays the card"
+    );
+    let queued = queued_by_a_session_that_left(&s, left.tci().unwrap());
+    assert_eq!(queued, 0, "the session that left queued {queued} samples");
+}
+
+/// ⛔ THE SAME FOR A RADIO SWITCH ON ITS OWN: the handoff that hands a TCI radio to the monitor pool
+/// takes its session's handle on the headphone monitor, before the loop next reconciles.
+#[test]
+fn a_tci_radio_handed_to_the_monitor_stops_feeding_the_headphones() {
+    let mut s = tci_audio_on_the_monitor();
+    let incoming = MonitorConn {
+        id: 9,
+        transport: cat_transport(4600, None),
+        rig: Rig::vox(),
+        rigctld_proc: None,
+        last_poll: 0.0,
+        ticks: 0,
+        smeter_supported: None,
+        freq_misses: 0,
+        open_failures: 0,
+        retry_after_ms: 0.0,
+    };
+    let want = incoming.transport.clone();
+    let demoted = s
+        .state
+        .install_handoff_connection(&mut s.rig, incoming, &want, 2);
+    let left = demoted
+        .rigctld_proc
+        .as_ref()
+        .and_then(CatDaemon::tci)
+        .expect("the TCI client in the monitor");
+    // As the loop's next reconcile leaves it: TCI audio is no longer the source.
+    s.state.tci_rx = None;
+    let queued = queued_by_a_session_that_left(&s, left);
+    assert_eq!(queued, 0, "the pooled session queued {queued} samples");
 }
 
 /// ⭐ RECEIVE AUDIO THAT STOPS FALLS BACK TO THE SOUND CARD, AND SAYS WHY (the receive floor): the

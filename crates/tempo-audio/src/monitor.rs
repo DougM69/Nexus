@@ -19,6 +19,9 @@
 // it always was.
 pub use tempo_codec::ring::SpscRing;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 /// The TX-device guard, as a pure predicate: `true` when opening the monitor on
 /// `monitor_device` would feed the received band into the rig's TX audio device
 /// (`audio_out`) and thus transmit it back out. When it returns `true` the monitor
@@ -28,6 +31,8 @@ pub use tempo_codec::ring::SpscRing;
 /// empty (each meaning "system default output", i.e. the same device). An empty
 /// against a named device is treated as distinct — we cannot prove by name that a
 /// named device *is* the current system default, so the guard doesn't block it.
+/// SmartSDR's DAX transmit device is refused whatever `audio_out` is
+/// ([`is_flex_dax_tx_device`]).
 /// Resolve an empty device name ("system default output") to the ACTUAL default
 /// output device's name, so the TX guard can compare real devices instead of
 /// treating "" as unknowable. Returns the input unchanged when it's non-empty or
@@ -52,6 +57,9 @@ pub fn resolve_output_name(name: &str) -> String {
 pub fn monitor_would_transmit(monitor_device: &str, audio_out: &str) -> bool {
     let m = monitor_device.trim();
     let o = audio_out.trim();
+    if is_flex_dax_tx_device(m) {
+        return true;
+    }
     if m.is_empty() && o.is_empty() {
         return true; // both "system default output" → the same device
     }
@@ -59,6 +67,20 @@ pub fn monitor_would_transmit(monitor_device: &str, audio_out: &str) -> bool {
         return false;
     }
     m.eq_ignore_ascii_case(o)
+}
+
+/// Whether `name` is SmartSDR's DAX transmit device on Windows: "DAX Audio TX (FlexRadio Systems
+/// DAX TX)" as SmartSDR's DAX documents it, or "DAX TX (FlexRadio DAX)" as newer DAX drivers name
+/// the live endpoint. What plays on it goes to a Flex's transmitter, whatever Nexus's own TX audio
+/// device is (with native Flex audio it is not that device at all), so [`monitor_would_transmit`]
+/// refuses it as it refuses the TX device. Matched on the name's start, as a whole word, case-blind:
+/// the DAX receive and IQ devices, and a device that only mentions DAX, are not it.
+fn is_flex_dax_tx_device(name: &str) -> bool {
+    let n = name.trim().to_ascii_lowercase();
+    ["dax audio tx", "dax tx"].iter().any(|p| {
+        n.strip_prefix(p)
+            .is_some_and(|rest| !rest.starts_with(|c: char| c.is_ascii_alphanumeric()))
+    })
 }
 
 /// Nearest-neighbour (sample-and-hold) mono resampler driven by an [`SpscRing`],
@@ -88,12 +110,200 @@ impl MonoResampler {
     /// The next output-rate mono sample, consuming from `ring` as needed. On
     /// underrun (a needed sample is missing) it yields `0.0` (silence).
     pub fn next(&mut self, ring: &SpscRing) -> f32 {
+        self.next_from(|| ring.pop())
+    }
+
+    /// [`Self::next`], consuming from `pop` (`None` = nothing to play: silence).
+    fn next_from(&mut self, mut pop: impl FnMut() -> Option<f32>) -> f32 {
         self.acc += self.in_rate;
         while self.acc >= self.out_rate {
             self.acc -= self.out_rate;
-            self.last = ring.pop().unwrap_or(0.0);
+            self.last = pop().unwrap_or(0.0);
         }
         self.last
+    }
+}
+
+/// The headphone monitor's way in for a receive source that is not the sound card's capture
+/// callback: Nexus's TCI client, whose receive audio arrives over the network on its session's
+/// thread and is what the decoders hear while Audio over TCI is on, or native Flex audio, which the
+/// radio loop takes from Nexus's Flex client (#372: the monitor kept playing the idle sound card,
+/// so "Play receive audio here" was silent).
+///
+/// It is a second [`SpscRing`] of the monitor's, at the monitor's own rate, with the source of the
+/// moment (the TCI session's thread, or the radio loop for the Flex) as its one producer and the
+/// monitor's output callback as its one consumer, so neither ring ever has two producers: a source
+/// lets go of the feed before another takes it, even a TCI session a switch keeps alive. The output plays this ring while the feed is active and the
+/// card's otherwise ([`Playout`]). It shares the card path's two gates: nothing is written unless
+/// the operator's monitor is on (the TX-device guard has already refused a collision before the
+/// monitor turns on) and the monitor is not muted for a transmission.
+#[derive(Clone)]
+pub struct MonitorFeed {
+    ring: Arc<SpscRing>,
+    rate: u32,
+    enabled: Arc<AtomicBool>,
+    tx_mute: Arc<AtomicBool>,
+    active: Arc<AtomicBool>,
+}
+
+impl MonitorFeed {
+    /// A feed at `rate` sharing the monitor's two gates, inactive.
+    pub fn new(rate: u32, enabled: Arc<AtomicBool>, tx_mute: Arc<AtomicBool>) -> MonitorFeed {
+        MonitorFeed {
+            // ~0.5 s, as the card's monitor ring.
+            ring: Arc::new(SpscRing::new((rate as usize / 2).max(4096))),
+            rate,
+            enabled,
+            tx_mute,
+            active: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// The rate the monitor plays this feed at: what a source resamples to before [`Self::push`].
+    pub fn rate(&self) -> u32 {
+        self.rate
+    }
+
+    /// Whether `other` is this same feed (the same monitor), not another backend's.
+    pub fn is(&self, other: &MonitorFeed) -> bool {
+        Arc::ptr_eq(&self.ring, &other.ring)
+    }
+
+    /// Play this feed in the sound card's place, or the sound card again. The radio loop's.
+    pub fn set_active(&self, active: bool) {
+        self.active.store(active, Ordering::Release);
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.active.load(Ordering::Acquire)
+    }
+
+    /// Whether audio pushed now would be played: the feed is the monitor's source, the operator's
+    /// monitor is on, and it is not muted for a transmission.
+    pub fn open(&self) -> bool {
+        self.is_active()
+            && self.enabled.load(Ordering::Acquire)
+            && !self.tx_mute.load(Ordering::Acquire)
+    }
+
+    /// Producer: queue `samples` (at [`Self::rate`]) for the monitor. Never blocks; a full ring
+    /// drops, as the card's does. The caller checks [`Self::open`] first.
+    pub fn push(&self, samples: &[f32]) {
+        self.ring.push_slice(samples);
+    }
+
+    /// Queued samples, for tests and diagnostics.
+    pub fn queued(&self) -> usize {
+        self.ring.len()
+    }
+
+    /// Consumer: the oldest queued sample, as the monitor's output takes it. For tests.
+    #[cfg(all(test, feature = "device"))]
+    pub(crate) fn pop(&self) -> Option<f32> {
+        self.ring.pop()
+    }
+
+    /// Discard what is queued, with no output reading it (the monitor's stream gone).
+    #[cfg(feature = "device")]
+    fn clear(&self) {
+        self.ring.clear();
+    }
+
+    /// Ask the output to discard what is queued now, at the top of its next callback
+    /// ([`Playout::fill`]), on a keying edge (`Monitor::set_tx_mute`). The ring's read side is the
+    /// output callback's alone: a clear from the loop thread racing its read can lose, and then
+    /// the whole jitter buffer of audio from before the key plays into the over. The request
+    /// records how far the queue reached, so audio queued after it is kept. The loop is not this
+    /// ring's producer for TCI audio: an older reading of how far it reached only discards less,
+    /// never audio that is not queued.
+    #[cfg(feature = "device")]
+    fn request_flush(&self) {
+        self.ring.request_flush();
+    }
+}
+
+/// How much of a [`MonitorFeed`]'s audio the monitor holds before it plays it, and again after it
+/// ran dry. The feed's audio arrives over the network in bursts (a TCI block is about 43 ms, and
+/// LAN or Wi-Fi timing wanders by tens of milliseconds more) while the output takes it at the
+/// device's steady pace, so playing from an empty start turns every late burst into a gap of hard
+/// zeros: clicks and dropouts. The sound card's own capture needs none of this: its producer and
+/// the output are both device-clocked.
+pub const FEED_PREROLL_MS: usize = 100;
+/// The most of a feed's audio the monitor lets queue. Past it (a burst after a stall, or a source
+/// whose clock runs a little fast) the oldest goes, down to the pre-roll, so the headphones never
+/// fall further and further behind the band.
+pub const FEED_MAX_MS: usize = 300;
+
+/// The monitor output's consumer side: which ring it plays each callback, and the feed's jitter
+/// buffer. The output callback owns it and is both rings' one consumer.
+///
+/// While the feed is not active it plays the sound card's ring exactly as it always did (the feed's
+/// is emptied). While the feed is active it empties the card's, holds silence until
+/// [`FEED_PREROLL_MS`] of the feed's audio is queued, plays it, and when the feed runs dry goes
+/// back to holding silence until the pre-roll is queued again, rather than stuttering through every
+/// burst that arrives late. Nothing a source queued before a switch plays after it.
+pub struct Playout {
+    rs: MonoResampler,
+    /// Whether the feed's pre-roll is queued and its audio is playing.
+    primed: bool,
+    preroll: usize,
+    max: usize,
+}
+
+impl Playout {
+    /// The consumer for rings at `in_rate`, played at `out_rate`.
+    pub fn new(in_rate: u32, out_rate: u32) -> Playout {
+        let ms = |n: usize| (in_rate as usize * n / 1_000).max(1);
+        Playout {
+            rs: MonoResampler::new(in_rate, out_rate),
+            primed: false,
+            preroll: ms(FEED_PREROLL_MS),
+            max: ms(FEED_MAX_MS),
+        }
+    }
+
+    /// One output callback: `frames` mono samples at the output rate, handed to `out` in order.
+    /// Wait-free and allocation-free: the rings' atomics and the resampler's phase only.
+    pub fn fill(
+        &mut self,
+        card: &SpscRing,
+        feed: &MonitorFeed,
+        frames: usize,
+        mut out: impl FnMut(f32),
+    ) {
+        // A keying edge's discard, asked for by the loop (`MonitorFeed::request_flush`).
+        feed.ring.apply_flush();
+        if !feed.is_active() {
+            feed.ring.clear();
+            self.primed = false;
+            for _ in 0..frames {
+                out(self.rs.next(card));
+            }
+            return;
+        }
+        card.clear();
+        let ring = &*feed.ring;
+        let queued = ring.len();
+        if queued > self.max {
+            for _ in 0..queued - self.preroll {
+                ring.pop();
+            }
+        }
+        if !self.primed && ring.len() >= self.preroll {
+            self.primed = true;
+        }
+        let Playout { rs, primed, .. } = self;
+        for _ in 0..frames {
+            out(rs.next_from(|| {
+                if !*primed {
+                    return None;
+                }
+                let s = ring.pop();
+                // Dry: silence until the pre-roll is queued again.
+                *primed = s.is_some();
+                s
+            }));
+        }
     }
 }
 
@@ -102,7 +312,7 @@ pub use device_monitor::Monitor;
 
 #[cfg(feature = "device")]
 mod device_monitor {
-    use super::{MonoResampler, SpscRing};
+    use super::{MonitorFeed, Playout, SpscRing};
     use crate::device::{dispatch_format, AUDIO_HOST_LOCK};
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     use cpal::{SampleFormat, Stream};
@@ -138,6 +348,9 @@ mod device_monitor {
         /// The device name `out_stream` targets ("" = system default), so a device
         /// change rebuilds only the output stream.
         active_device: String,
+        /// The way in for a receive source other than the capture callback (Nexus's TCI client),
+        /// at `in_rate`, on the same two gates; the output plays it while it is active.
+        feed: MonitorFeed,
     }
 
     impl Monitor {
@@ -148,6 +361,7 @@ mod device_monitor {
             level_bits: Arc<AtomicU32>,
             in_rate: u32,
         ) -> Self {
+            let feed = MonitorFeed::new(in_rate, enabled.clone(), tx_mute.clone());
             Self {
                 ring,
                 enabled,
@@ -156,7 +370,13 @@ mod device_monitor {
                 in_rate,
                 out_stream: None,
                 active_device: String::new(),
+                feed,
             }
+        }
+
+        /// The monitor's way in for a receive source other than the sound card's capture.
+        pub fn feed(&self) -> MonitorFeed {
+            self.feed.clone()
         }
 
         /// Reconfigure the monitor in place. `enabled` is the guard-resolved decision
@@ -174,11 +394,14 @@ mod device_monitor {
         /// On the RISING edge the ring is cleared as well as gated: whatever the capture pushed in
         /// the moments before the key went down is band audio from before the over, and playing it
         /// out when the over ends would be a small burst of the past. Cheap — `clear` is two atomic
-        /// stores — and it runs on the loop thread, never in an audio callback.
+        /// stores — and it runs on the loop thread, never in an audio callback. Another source's
+        /// queue (TCI, native Flex audio) holds up to its jitter buffer, so its discard is left to
+        /// the output callback (`MonitorFeed::request_flush`), which cannot lose a race to itself.
         pub fn set_tx_mute(&mut self, muted: bool) {
             let was = self.tx_mute.swap(muted, Ordering::Release);
             if muted && !was {
                 self.ring.clear();
+                self.feed.request_flush();
             }
         }
 
@@ -187,6 +410,7 @@ mod device_monitor {
             self.out_stream = None;
             self.active_device.clear();
             self.ring.clear();
+            self.feed.clear();
         }
         pub fn apply(&mut self, enabled: bool, device: &str, level: f32) -> Result<(), String> {
             self.level_bits
@@ -201,13 +425,21 @@ mod device_monitor {
                 }
                 self.active_device.clear();
                 self.ring.clear();
+                self.feed.clear();
                 return Ok(());
             }
             if self.out_stream.is_none() || self.active_device != device {
                 let _guard = AUDIO_HOST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
                 self.out_stream = None; // drop the old stream (frees the device) first
                 self.ring.clear();
-                let stream = build_output(device, self.in_rate, &self.ring, &self.level_bits)?;
+                self.feed.clear();
+                let stream = build_output(
+                    device,
+                    self.in_rate,
+                    &self.ring,
+                    &self.feed,
+                    &self.level_bits,
+                )?;
                 self.out_stream = Some(stream);
                 self.active_device = device.to_string();
             }
@@ -274,25 +506,32 @@ mod device_monitor {
         in_rate: u32,
         out_rate: u32,
         ring: &Arc<SpscRing>,
+        feed: &MonitorFeed,
         level_bits: &Arc<AtomicU32>,
     ) -> Result<Stream, String> {
         let ring_cb = ring.clone();
+        let feed_cb = feed.clone();
         let level_cb = level_bits.clone();
-        let mut rs = MonoResampler::new(in_rate, out_rate);
+        let mut playout = Playout::new(in_rate, out_rate);
         dev.build_output_stream(
             // `StreamConfig` is `Copy` in 0.18 and taken BY VALUE.
             *config,
             move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
                 let level = f32::from_bits(level_cb.load(Ordering::Relaxed));
-                for frame in data.chunks_mut(out_ch) {
+                let n = data.len().div_ceil(out_ch);
+                let mut frames = data.chunks_mut(out_ch);
+                // The capture's ring, or another source's while it is the station's (TCI audio,
+                // native Flex audio), through its jitter buffer.
+                playout.fill(&ring_cb, &feed_cb, n, |s| {
                     // Clamped HERE, on every format including f32: unlike the TX path this is a
                     // product of two operator-set gains and can genuinely exceed unity.
-                    let s = (rs.next(&ring_cb) * level).clamp(-1.0, 1.0);
-                    let v = T::from_unit(s);
-                    for x in frame.iter_mut() {
-                        *x = v;
+                    let v = T::from_unit((s * level).clamp(-1.0, 1.0));
+                    if let Some(frame) = frames.next() {
+                        for x in frame.iter_mut() {
+                            *x = v;
+                        }
                     }
-                }
+                });
             },
             err_fn,
             None,
@@ -315,6 +554,7 @@ mod device_monitor {
         device_name: &str,
         in_rate: u32,
         ring: &Arc<SpscRing>,
+        feed: &MonitorFeed,
         level_bits: &Arc<AtomicU32>,
     ) -> Result<Stream, String> {
         let host = cpal::default_host();
@@ -346,6 +586,7 @@ mod device_monitor {
             in_rate,
             out_rate,
             ring,
+            feed,
             level_bits,
         )?;
         stream.play().map_err(|e| e.to_string())?;
@@ -563,6 +804,211 @@ mod tests {
             "the operator's monitor setting survives a transmission unchanged"
         );
     }
+
+    /// Another source's audio (TCI) queued for the monitor is discarded on the keying edge too, and
+    /// its writes see the same mute gate as the capture callback.
+    #[cfg(feature = "device")]
+    #[test]
+    fn muting_for_a_transmission_also_discards_another_sources_audio() {
+        let enabled = Arc::new(AtomicBool::new(true));
+        let tx_mute = Arc::new(AtomicBool::new(false));
+        let mut m = Monitor::new(
+            Arc::new(SpscRing::new(64)),
+            enabled,
+            tx_mute,
+            Arc::new(AtomicU32::new(0.5f32.to_bits())),
+            48_000,
+        );
+        let feed = m.feed();
+        feed.set_active(true);
+        assert!(feed.open(), "control: on, unmuted, the source");
+        // More than the pre-roll, so the output would play it at once.
+        let preroll = 48_000 * super::FEED_PREROLL_MS / 1_000;
+        feed.push(&vec![0.5; preroll + 480]);
+        m.set_tx_mute(true);
+        assert!(!feed.open(), "the mute closes another source's gate too");
+        // The discard is the output callback's to make: the ring's read side is its alone, and a
+        // clear from the loop thread racing its read can lose, replaying the whole jitter buffer
+        // of pre-key audio into the over.
+        assert_eq!(
+            feed.queued(),
+            preroll + 480,
+            "the loop thread moved the output's read side"
+        );
+        let card = SpscRing::new(16);
+        let mut p = Playout::new(48_000, 48_000);
+        let mut played = Vec::new();
+        p.fill(&card, &feed, 480, |s| played.push(s));
+        assert!(
+            played.iter().all(|s| *s == 0.0),
+            "audio from before the key played in the over"
+        );
+        assert_eq!(feed.queued(), 0, "and its pre-TX audio went with it");
+        // Audio after the over is the band's now: none of it is eaten by the discard.
+        m.set_tx_mute(false);
+        assert!(feed.open(), "reopened after the over");
+        feed.push(&vec![0.25; preroll + 480]);
+        let mut played = Vec::new();
+        p.fill(&card, &feed, 480, |s| played.push(s));
+        assert!(
+            played.iter().all(|s| *s == 0.25),
+            "the audio after the over did not play"
+        );
+    }
+
+    /// A feed at 1 kHz (so a millisecond is a sample), on and unmuted, and the output's consumer
+    /// at the same rate: a pre-roll of 100 samples, at most 300 queued.
+    fn feed_and_playout() -> (MonitorFeed, Playout) {
+        let feed = MonitorFeed::new(
+            1_000,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        );
+        (feed, Playout::new(1_000, 1_000))
+    }
+
+    /// One output callback of `frames`: what it played.
+    fn callback(p: &mut Playout, card: &SpscRing, feed: &MonitorFeed, frames: usize) -> Vec<f32> {
+        let mut out = Vec::new();
+        p.fill(card, feed, frames, |s| out.push(s));
+        out
+    }
+
+    /// ⭐ THE OUTPUT PLAYS THE SOURCE THE STATION HEARS. With no other source active it plays the
+    /// capture's ring as it always did (the card path unchanged: no pre-roll, sample for sample);
+    /// while one is active it plays that one's, and each switch empties the ring it leaves, so
+    /// nothing from before a switch plays after it.
+    #[test]
+    fn the_monitor_plays_the_active_source_and_the_card_otherwise() {
+        let card = SpscRing::new(16);
+        let (feed, mut p) = feed_and_playout();
+        card.push_slice(&[0.1, 0.2]);
+        feed.push(&[0.9]);
+        assert_eq!(
+            callback(&mut p, &card, &feed, 1),
+            [0.1],
+            "inactive: the card's audio at once, in order"
+        );
+        assert_eq!(feed.queued(), 0, "the inactive source's audio was dropped");
+        feed.set_active(true);
+        feed.push(&[0.7; 100]);
+        assert_eq!(
+            callback(&mut p, &card, &feed, 1),
+            [0.7],
+            "active: the other source's audio"
+        );
+        assert!(card.is_empty(), "the card's leftover went at the switch");
+        feed.set_active(false);
+        card.push(0.3);
+        assert_eq!(callback(&mut p, &card, &feed, 1), [0.3], "the card again");
+        assert_eq!(feed.queued(), 0);
+    }
+
+    /// ⭐ NETWORK JITTER IS NOT A GAP IN THE HEADPHONES. A source's audio arrives in 43 ms blocks
+    /// whose arrival wanders by up to 70 ms (each one on time on average), while the output takes
+    /// 10 ms a callback at the device's steady pace. Once the pre-roll is queued, every sample
+    /// played is the band's: no hole of silence anywhere. The control: the same feed played from an
+    /// empty start with no pre-roll (what the monitor did before) is full of holes.
+    #[test]
+    fn a_feed_arriving_irregularly_plays_without_gaps() {
+        let run = |preroll: bool| {
+            let card = SpscRing::new(16);
+            let (feed, mut p) = feed_and_playout();
+            if !preroll {
+                p.preroll = 1;
+            }
+            feed.set_active(true);
+            // Block k is due at 43k ms and arrives up to 70 ms late, in order.
+            let jitter = [0, 70, 10, 65, 0, 40, 70, 5, 55, 20, 70, 0, 30, 60];
+            let mut arrive: Vec<usize> = Vec::new();
+            for k in 0..140 {
+                let at = 43 * k + jitter[k % jitter.len()];
+                arrive.push(at.max(arrive.last().copied().unwrap_or(0)));
+            }
+            let mut played = Vec::new();
+            let mut next = 0;
+            for now in (0..43 * 140).step_by(10) {
+                while next < arrive.len() && arrive[next] <= now {
+                    feed.push(&[0.5; 43]);
+                    next += 1;
+                }
+                played.extend(callback(&mut p, &card, &feed, 10));
+            }
+            let first = played.iter().position(|&s| s != 0.0).expect("audio played");
+            played[first..played.len() - 200]
+                .iter()
+                .filter(|&&s| s == 0.0)
+                .count()
+        };
+        assert!(
+            run(false) > 0,
+            "control: with no pre-roll the jitter is heard as holes"
+        );
+        assert_eq!(
+            run(true),
+            0,
+            "holes in the monitor's audio after the pre-roll"
+        );
+    }
+
+    /// A feed that runs dry (the source stalled) holds silence until the pre-roll is queued again,
+    /// rather than playing each scrap the moment it arrives; then it plays on.
+    #[test]
+    fn a_feed_that_ran_dry_waits_for_the_pre_roll_again() {
+        let card = SpscRing::new(16);
+        let (feed, mut p) = feed_and_playout();
+        feed.set_active(true);
+        feed.push(&[0.5; 99]);
+        assert!(
+            callback(&mut p, &card, &feed, 10).iter().all(|&s| s == 0.0),
+            "short of the pre-roll: silence"
+        );
+        feed.push(&[0.5]);
+        assert!(
+            callback(&mut p, &card, &feed, 100)
+                .iter()
+                .all(|&s| s == 0.5),
+            "the pre-roll queued: it plays, all of it"
+        );
+        assert_eq!(callback(&mut p, &card, &feed, 1), [0.0], "dry");
+        feed.push(&[0.5; 50]);
+        assert!(
+            callback(&mut p, &card, &feed, 10).iter().all(|&s| s == 0.0),
+            "a scrap after running dry waits for the rest of the pre-roll"
+        );
+        feed.push(&[0.5; 50]);
+        assert_eq!(
+            callback(&mut p, &card, &feed, 10),
+            [0.5; 10],
+            "and plays on"
+        );
+    }
+
+    /// ⛔ THE HEADPHONES NEVER FALL FURTHER AND FURTHER BEHIND. A source whose clock runs 2% fast
+    /// for ten minutes, and a 600 ms burst after a stall, never leave more than the jitter buffer's
+    /// ceiling queued after a callback: the oldest goes, down to the pre-roll.
+    #[test]
+    fn the_jitter_buffer_is_bounded() {
+        let card = SpscRing::new(16);
+        let (feed, mut p) = feed_and_playout();
+        feed.set_active(true);
+        let mut most = 0;
+        for i in 0..60_000 {
+            feed.push(&[0.5; 10]);
+            if i % 50 == 0 {
+                feed.push(&[0.5]);
+            }
+            let _ = callback(&mut p, &card, &feed, 10);
+            most = most.max(feed.queued());
+        }
+        assert!(most <= FEED_MAX_MS, "{most} ms queued from a fast clock");
+        feed.push(&[0.5; 600]);
+        let _ = callback(&mut p, &card, &feed, 10);
+        assert!(
+            feed.queued() <= FEED_PREROLL_MS,
+            "a burst caught up to the pre-roll"
+        );
+    }
     use super::*;
 
     #[test]
@@ -577,6 +1023,39 @@ mod tests {
         // One default, one named → cannot prove collision by name → allowed.
         assert!(!monitor_would_transmit("Headphones", ""));
         assert!(!monitor_would_transmit("", "USB Audio CODEC"));
+    }
+
+    /// SmartSDR's DAX transmit device carries what is played on it to a Flex's transmitter, whatever
+    /// Nexus's own TX audio device is (with native Flex audio, it is not that device at all): the
+    /// monitor never opens on it. Its names as SmartSDR's DAX documents it, and as newer DAX
+    /// drivers name the live endpoint (see the DAX pairing in Settings).
+    #[test]
+    fn guard_blocks_the_flex_dax_transmit_device() {
+        for dax_tx in [
+            "DAX Audio TX (FlexRadio Systems DAX TX)",
+            "DAX Audio TX",
+            "DAX TX (FlexRadio DAX)",
+            " dax tx ",
+        ] {
+            assert!(
+                monitor_would_transmit(dax_tx, "Speakers"),
+                "{dax_tx:?} let through"
+            );
+            assert!(monitor_would_transmit(dax_tx, ""), "{dax_tx:?} let through");
+        }
+        // The receive devices, and devices that only mention DAX, are headphones like any other.
+        for other in [
+            "DAX Audio RX 1 (FlexRadio Systems DAX Audio)",
+            "DAX RESERVED AUDIO RX 3",
+            "DAX IQ RX 1",
+            "Headphones (DAX TX helper)",
+            "DAX TXT",
+        ] {
+            assert!(
+                !monitor_would_transmit(other, "USB Audio CODEC"),
+                "{other:?} refused"
+            );
+        }
     }
 
     #[test]

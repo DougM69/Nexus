@@ -138,6 +138,12 @@ pub trait AudioBackend {
     /// therefore DELAYED. Delayed sidetone is hard to talk over. A no-op for backends with no
     /// monitor.
     fn set_monitor_tx_mute(&mut self, _muted: bool) {}
+    /// The headphone monitor's way in for a receive source other than this backend's own capture
+    /// (Nexus's TCI client, native Flex audio), with the monitor's gates and rate. `None` for backends with no
+    /// monitor; the real sound card overrides it.
+    fn monitor_feed(&self) -> Option<crate::monitor::MonitorFeed> {
+        None
+    }
     /// Open (`Some(name)`) or close (`None`) a transient SECOND input stream capturing
     /// the operator's voice from a dedicated mic, used only while a recording is in
     /// progress — so "record a voice message" captures the mic, not the shared rig-codec

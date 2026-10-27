@@ -3359,6 +3359,9 @@ struct TciRx {
     receive: std::sync::Weak<crate::tci::audio::Receive>,
     /// The receive tap's ring the session feeds (the waterfall, Remote Listen).
     ring: Arc<crate::monitor::SpscRing>,
+    /// The headphone monitor's way in, playing this audio in the sound card's place ("Play
+    /// receive audio here" plays what the decoders hear); `None` for a backend with no monitor.
+    monitor: Option<crate::monitor::MonitorFeed>,
     /// The receive floor's clocks, as `dax_started`/`dax_last_audio` are native DAX's: when the
     /// TCI audio became the source, and when the loop last took a sample of it.
     started: Instant,
@@ -4071,6 +4074,12 @@ struct RadioLoop {
     /// ([`RadioLoop::reconcile_tci_audio`]): the session it comes from, the receive tap's ring it
     /// feeds, and the receive floor's clocks.
     tci_rx: Option<TciRx>,
+    /// The headphone monitor's way in while native Flex audio is the receive source, and the
+    /// resampler from the DAX stream's rate to the monitor's ([`RadioLoop::feed_flex_monitor`]).
+    flex_monitor: Option<(
+        crate::monitor::MonitorFeed,
+        crate::capture_resample::CaptureResampler,
+    )>,
     /// The radio name the active radio's TCI server reported, as last handed to the engine
     /// ([`RadioLoop::note_tci_device`]), so the engine is told only when it changes.
     tci_device: Option<String>,
@@ -4694,6 +4703,7 @@ impl RadioLoop {
             flex_client_audio: false,
             flex_client_audio_failed: false,
             tci_rx: None,
+            flex_monitor: None,
             tci_device: None,
             tci_rx_failed: None,
             flex_mic_off_pushed: None,
@@ -5789,6 +5799,50 @@ impl RadioLoop {
         }
     }
 
+    /// "Play receive audio here" with native Flex audio on: the monitor plays the DAX receive audio
+    /// the decoders take (`dax`, this tick's, the operator's RX gain already applied), resampled to
+    /// the monitor's rate, in the sound card's place, as it plays Nexus's TCI client's audio
+    /// (`reconcile_tci_audio`), through the same jitter buffer (`monitor::Playout`). The loop is the
+    /// feed's one producer, because it is what takes the client's audio: a client a switch moved to
+    /// the monitor pool writes nothing. Written only while the feed is open: the operator's monitor
+    /// on (its TX-device guard passed) and not muted for a transmission. When native audio stops
+    /// being the source, or the sound card is rebuilt with another monitor, the monitor plays the
+    /// sound card again.
+    fn feed_flex_monitor<B: AudioBackend>(&mut self, backend: &B, dax: Option<&[f32]>) {
+        let feed = dax.and_then(|_| backend.monitor_feed());
+        if let Some((held, _)) = &self.flex_monitor {
+            if !feed.as_ref().is_some_and(|f| f.is(held)) {
+                held.set_active(false);
+                self.flex_monitor = None;
+            }
+        }
+        let (Some(samples), Some(feed)) = (dax, feed) else {
+            return;
+        };
+        let (held, resampler) = self.flex_monitor.get_or_insert_with(|| {
+            let rs = crate::capture_resample::CaptureResampler::new(
+                crate::flex::audio::MODEM_RATE,
+                feed.rate(),
+            );
+            (feed, rs)
+        });
+        held.set_active(true);
+        if held.open() && !samples.is_empty() {
+            held.push(&resampler.process(samples));
+        }
+    }
+
+    /// The Flex's native audio leaves the headphones with its client, wherever the client goes (a
+    /// switch's handoff, a rebuild of the CAT link, the CAT probe's hold): the monitor plays the
+    /// sound card until the next radio's source takes it. Done as the client goes, before the next
+    /// source is set up, so the next tick's [`Self::feed_flex_monitor`] finds nothing of the Flex's
+    /// to switch off under it.
+    fn let_go_of_flex_monitor(&mut self) {
+        if let Some((m, _)) = self.flex_monitor.take() {
+            m.set_active(false);
+        }
+    }
+
     /// Nexus's TCI client's receive audio in the sound card's place, while the radio's TCI audio
     /// is on (`tci_audio`). The decoders take it each tick (the receive block at the top of
     /// `step`), and the session's thread feeds a ring of its own on the receive tap, published here
@@ -5796,7 +5850,9 @@ impl RadioLoop {
     /// card's ring goes back on the tap when TCI audio stops being the source: the session goes (a
     /// switch, a rebuild, a lost link), the receive floor gives up on it, or the tap was given
     /// another ring (a sound-card rebuild publishes its own, and TCI's is published again over it).
-    /// The operator's RX gain reaches the session's thread every tick (an atomic store).
+    /// The operator's RX gain reaches the session's thread every tick (an atomic store). The
+    /// headphone monitor follows the same source: the session feeds it while TCI audio is the
+    /// source, and it plays the sound card again when it stops being (#372).
     fn reconcile_tci_audio<B: AudioBackend>(&mut self, engine: &Arc<Mutex<Engine>>, backend: &B) {
         let tci = self.rigctld_proc.as_ref().and_then(CatDaemon::tci);
         // A failure is about the session it happened on: another one tries again.
@@ -5819,15 +5875,31 @@ impl RadioLoop {
                 .current()
                 .is_some_and(|s| Arc::ptr_eq(&s.ring, ring))
         };
+        let monitor = backend.monitor_feed();
+        let same_monitor = |held: &Option<crate::monitor::MonitorFeed>| match (held, &monitor) {
+            (Some(a), Some(b)) => a.is(b),
+            (None, None) => true,
+            _ => false,
+        };
         if let (Some(rx), Some(d)) = (&self.tci_rx, want) {
-            if is_receive_of(d, &rx.receive) && on_the_tap(&rx.ring) {
+            if is_receive_of(d, &rx.receive) && on_the_tap(&rx.ring) && same_monitor(&rx.monitor) {
                 if let Some(r) = d.receive() {
                     r.set_gain(self.applied.rx_gain);
+                }
+                // The headphones are the source's every tick, as the Flex's are: a source that
+                // left and switched the monitor off on its way does not leave them on the card.
+                if let Some(m) = &rx.monitor {
+                    m.set_active(true);
                 }
                 return;
             }
         }
         if let Some(rx) = self.tci_rx.take() {
+            // The headphone monitor plays the sound card again, and a session anywhere stops
+            // writing to it (`MonitorFeed::open`).
+            if let Some(m) = &rx.monitor {
+                m.set_active(false);
+            }
             // The session stops feeding the old ring, if it is still the loop's; a session moved
             // to the monitor pool stops once the tap lets the ring go (it holds the ring weakly).
             if let Some(r) = tci
@@ -5835,6 +5907,13 @@ impl RadioLoop {
                 .and_then(crate::tci::TciDaemon::receive)
             {
                 r.set_tap(None);
+            }
+            // ⛔ The monitor's handle goes from the session itself, wherever it lives now. It holds
+            // the feed strongly, and the next TCI radio's audio re-activates the same feed: a
+            // session a switch moved to the monitor pool would otherwise go on writing into the
+            // headphones beside it, a second producer on a single-producer ring.
+            if let Some(r) = rx.receive.upgrade() {
+                r.set_monitor(None);
             }
             // The sound card back on the tap, unless it already has another source.
             if on_the_tap(&rx.ring) {
@@ -5864,9 +5943,15 @@ impl RadioLoop {
         // No capture device to name: the audio is the SDR program's, over the network.
         self.rx_tap
             .publish_card_with_origin(ring.clone(), crate::tci::audio::MODEM_RATE, None);
+        // The headphone monitor plays what the decoders hear: this audio, in the card's place.
+        receive.set_monitor(monitor.clone());
+        if let Some(m) = &monitor {
+            m.set_active(true);
+        }
         self.tci_rx = Some(TciRx {
             receive: Arc::downgrade(receive),
             ring,
+            monitor,
             started: Instant::now(),
             last_audio: None,
         });
@@ -7022,9 +7107,16 @@ impl RadioLoop {
         }
         // A TCI radio leaves the loop's transmit tee behind: no audio of Nexus's reaches its
         // session from the monitor, so its client keys none.
+        // Nor does any of its receive audio reach the headphone monitor: that is the next
+        // source's alone (`reconcile_tci_audio`).
         if let Some(daemon) = old_proc.as_ref().and_then(CatDaemon::tci) {
             daemon.set_tx_route(false);
+            if let Some(r) = daemon.receive() {
+                r.set_monitor(None);
+            }
         }
+        // A Flex radio's native audio leaves the headphones with it.
+        self.let_go_of_flex_monitor();
         let mut old_transport = std::mem::replace(&mut self.applied, conn.transport);
         // The demoted transport keeps the broker's port, which the monitor's own want carries
         // too (`monitor_want`), so ordinary reconciliation keeps the connection. Not the keying
@@ -7312,6 +7404,8 @@ impl RadioLoop {
             crate::flex::audio::MODEM_RATE,
             dax_is_the_source.then_some(captured.as_slice()),
         );
+        // The headphone monitor plays what the decoders hear: the DAX audio, while it is the source.
+        self.feed_flex_monitor(&*backend, dax_is_the_source.then_some(captured.as_slice()));
         // ⚠️ RX FLOOR. Taking DAX audio means IGNORING the sound card, so a DAX source that never
         // streams (wrong IP, firewall, DAX off on the radio, slice never bound) — or one that
         // streamed and then STOPPED (a WAN drop, a radio reboot, SmartSDR restarted) — leaves the
@@ -7794,6 +7888,7 @@ impl RadioLoop {
                     let radio = self.remote_radio_id.unwrap_or(remote_want_radio);
                     raise_client_alarm(self.rigctld_proc.as_ref(), radio, engine);
                     self.rigctld_proc = None; // drop kills + reaps the daemon (frees the port)
+                    self.let_go_of_flex_monitor();
                     *rig = Rig::vox();
                     self.rig_asserted = false;
                     self.cat_hold_active = true;
@@ -7868,7 +7963,8 @@ impl RadioLoop {
                     .and_then(CatDaemon::icom_lan)
                     .and_then(crate::icomlan::IcomLanDaemon::loss);
                 self.rigctld_proc = None; // drop kills + reaps the old daemon (frees its port)
-                                          // A rig that came back under a NEW port name is followed by USB identity.
+                self.let_go_of_flex_monitor();
+                // A rig that came back under a NEW port name is followed by USB identity.
                 let open_want = self.resolve_port_alias(&want);
                 engine_lock(engine).remote_close_radio();
                 self.remote_connection = None;

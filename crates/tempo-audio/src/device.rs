@@ -2366,6 +2366,10 @@ impl AudioBackend for CpalBackend {
         self.monitor.set_tx_mute(muted);
     }
 
+    fn monitor_feed(&self) -> Option<crate::monitor::MonitorFeed> {
+        Some(self.monitor.feed())
+    }
+
     /// Open (`Some(name)`) or close (`None`) the transient voice-mic input stream. Opens
     /// a SECOND cpal input on the named device WITHOUT touching the main capture/TX
     /// streams (the decode path never restarts). All host/device/stream work is under
