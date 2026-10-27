@@ -54,6 +54,7 @@ import { normalizeOverlayText } from '../sstvOverlayFont'
 import { SSTV_PANEL_IDS, SSTV_PANELS, type SstvPanelId, type PanelLayoutApi } from '../features/panelState'
 import { setViewerPicture, SSTV_VIEWER_PANEL } from './SstvViewer'
 import {
+  atuBypass,
   atuTune,
   getLicensedBandPlan,
   getSstvState,
@@ -1951,6 +1952,11 @@ export function SstvView({ snap, theme = 'default', onSnap, active = true, onSet
           onTune={(on) => { void setTune(on).then((st) => onSnap?.(st)).catch((e) => pushToast(String(e), 'error')) }}
           onAtuTune={() =>
             void atuTune()
+              .then((st) => onSnap?.(st))
+              .catch((e) => pushToast(String(e), 'error'))
+          }
+          onAtuBypass={() =>
+            void atuBypass()
               .then((st) => onSnap?.(st))
               .catch((e) => pushToast(String(e), 'error'))
           }

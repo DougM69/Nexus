@@ -1554,6 +1554,10 @@ export interface RadioStatus {
    * its in-line state are real) and is disabled with a reason pointing at the radio's own TUNER
    * button. Absent = nothing says it can't, which is how every station behaved before 1.14. */
   atuStartTuneUnsupported?: boolean
+  /** The ATU button's menu offers "Switch tuner out" (#344): a tuner, and a CAT path that can
+   * switch it out — never Nexus's own Flex client, never the native Icom path. Absent (an older
+   * station) = not offered. */
+  atuSwitchOut?: boolean
   /** Rig RX passband / filter width in Hz over CAT; null/absent = unknown or the rig's default. */
   filterWidthHz?: number | null
   /** RIT (receive incremental tuning) offset in Hz — last commanded (0 = off). */
@@ -4890,6 +4894,9 @@ export interface Settings {
   /** Hold the FM DATA submode for as long as the SSTV receiver is running, rather than only
    * around a send. Per radio (flat mirror of the active radio). Off by default. */
   sstvHoldDataSubmode: boolean
+  /** APRS in this radio's DATA-FM mode instead of plain FM (#393). Per radio, off by default;
+   * obeyed only on a radio that has one (`APRS_DATA_FM_MODELS`). */
+  aprsDataFm: boolean
   /** Antenna rotator: rotctld daemon `host:port` (empty = no rotator). */
   /** Integrated rotator: Hamlib rotator model # (0 = none) + serial port +
    * baud — Nexus launches the bundled rotctld itself, like the rig. */
@@ -5707,6 +5714,9 @@ export interface RadioProfile {
    * call made without stopping it first is commanded in the data submode and modulates from
    * the data port, not the microphone. */
   sstvHoldDataSubmode: boolean
+  /** APRS in this radio's DATA-FM mode instead of plain FM (#393). Per radio, off by default;
+   * obeyed only on a radio that has one (`APRS_DATA_FM_MODELS`). */
+  aprsDataFm: boolean
   audioIn: string
   audioOut: string
   txLevel: number

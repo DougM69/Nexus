@@ -70,6 +70,7 @@ import {
 } from '../features/js8View'
 import { Js8SoundWatch, js8SoundsToPlay, playJs8Sound, type Js8SoundEvent } from '../features/js8Sounds'
 import {
+  atuBypass,
   atuTune,
   getJs8State,
   getLicensedBandPlan,
@@ -1767,6 +1768,11 @@ export function Js8Cockpit({
           onTune={(on) => { void setTune(on).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error')) }}
           onAtuTune={() =>
             void atuTune()
+              .then((s) => onSnap?.(s))
+              .catch((e) => pushToast(String(e), 'error'))
+          }
+          onAtuBypass={() =>
+            void atuBypass()
               .then((s) => onSnap?.(s))
               .catch((e) => pushToast(String(e), 'error'))
           }

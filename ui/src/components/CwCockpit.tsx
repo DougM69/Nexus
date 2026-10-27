@@ -93,6 +93,7 @@ import {
   openPanelWindow,
   setTune,
   setTxEnabled,
+  atuBypass,
   atuTune,
   setFrequency,
   haltTx,
@@ -2121,6 +2122,11 @@ export function CwCockpit({
       }
       onAtuTune={() =>
         void atuTune()
+          .then((s) => onSnap?.(s))
+          .catch((e) => pushToast(String(e), 'error'))
+      }
+      onAtuBypass={() =>
+        void atuBypass()
           .then((s) => onSnap?.(s))
           .catch((e) => pushToast(String(e), 'error'))
       }

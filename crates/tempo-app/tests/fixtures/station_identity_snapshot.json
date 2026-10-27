@@ -70,6 +70,7 @@
     "attStepsDb": null,
     "atu": null,
     "atuStartTuneUnsupported": false,
+    "atuSwitchOut": false,
     "audioError": null,
     "band": "20m",
     "beacon": false,

@@ -25,6 +25,7 @@ import { rotorPointAt } from './rotorPointAt'
 import { Waterfall } from './Waterfall'
 import { RfScopePane } from './RfScopePane'
 import {
+  atuBypass,
   atuTune,
   getLicensedBandPlan,
   getPskState,
@@ -772,6 +773,11 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           onTune={(on) => { void setTune(on).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error')) }}
           onAtuTune={() =>
             void atuTune()
+              .then((s) => onSnap?.(s))
+              .catch((e) => pushToast(String(e), 'error'))
+          }
+          onAtuBypass={() =>
+            void atuBypass()
               .then((s) => onSnap?.(s))
               .catch((e) => pushToast(String(e), 'error'))
           }

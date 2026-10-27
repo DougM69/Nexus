@@ -48,7 +48,7 @@ set -u
 usage() {
   cat >&2 <<USAGE
 usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
-       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|activation|voicenote|contactcard
+       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu
 
   --scenario <pattern>  matched against the suite's test NAMES (node --test
                         --test-name-pattern). Default 'stream'. The names are built
@@ -101,6 +101,12 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         Save and Cancel on screen at its top and foot and lists ten recent
                         contacts, with a control (the Save bar in the flow) that must hide
                         Save (ui/probe/contactcard-probe.mjs)
+  --desktop atu         the TX strip's ATU button and its "Switch tuner out" menu at 1024×768
+                        and 1920×1080 in both themes, asserting nothing scrolls sideways, the
+                        strip's four controls are on screen, Stop TX does not move for ATU ON,
+                        ATU ON is lit, a click tunes, and the right-click and long-press menu
+                        switches the tuner out clear of Stop TX, with a planted overflow and a
+                        cover that must be caught (ui/probe/atu-probe.mjs)
 
 exit: 0 the scenario passed · 1 it failed · 2 usage, or the pattern matched no test
 USAGE
@@ -117,7 +123,7 @@ while [ $# -gt 0 ]; do
                 case "$SHARD" in 0|1) ;; *) echo "browser-probe: --shard takes 0 or 1 (CI runs two)" >&2; exit 2 ;; esac ;;
     --no-build) BUILD=0; shift ;;
     --desktop)  [ $# -ge 2 ] || { usage; exit 2; }; DESKTOP="$2"; shift 2
-                case "$DESKTOP" in rotor|contestlog|spots|callcard|activation|voicenote|contactcard) ;; *) echo "browser-probe: --desktop takes rotor, contestlog, spots, callcard, activation, voicenote or contactcard" >&2; exit 2 ;; esac ;;
+                case "$DESKTOP" in rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu) ;; *) echo "browser-probe: --desktop takes rotor, contestlog, spots, callcard, activation, voicenote, contactcard or atu" >&2; exit 2 ;; esac ;;
     -h|--help)  usage; exit 0 ;;
     *)          echo "browser-probe: unknown argument '$1'" >&2; usage; exit 2 ;;
   esac
@@ -140,6 +146,7 @@ if [ -n "$DESKTOP" ]; then
   [ "$DESKTOP" = activation ] && exec node "$ROOT/ui/probe/activation-probe.mjs"
   [ "$DESKTOP" = voicenote ] && exec node "$ROOT/ui/probe/voicenote-probe.mjs"
   [ "$DESKTOP" = contactcard ] && exec node "$ROOT/ui/probe/contactcard-probe.mjs"
+  [ "$DESKTOP" = atu ] && exec node "$ROOT/ui/probe/atu-probe.mjs"
   exec node "$ROOT/ui/probe/desktop-probe.mjs" "$DESKTOP"
 fi
 

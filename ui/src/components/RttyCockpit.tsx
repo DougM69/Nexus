@@ -32,6 +32,7 @@ import { Waterfall } from './Waterfall'
 import { RfScopePane } from './RfScopePane'
 import { RttyTuningScope } from './RttyTuningScope'
 import {
+  atuBypass,
   atuTune,
   getLicensedBandPlan,
   getRttyState,
@@ -1193,6 +1194,11 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           onTune={(on) => { void setTune(on).then((s) => onSnap?.(s)).catch((e) => pushToast(String(e), 'error')) }}
           onAtuTune={() =>
             void atuTune()
+              .then((s) => onSnap?.(s))
+              .catch((e) => pushToast(String(e), 'error'))
+          }
+          onAtuBypass={() =>
+            void atuBypass()
               .then((s) => onSnap?.(s))
               .catch((e) => pushToast(String(e), 'error'))
           }

@@ -44,7 +44,7 @@ import {
   toggleIgnored,
   txRowIndex,
 } from '../txMessages'
-import { atuTune, closePanelWindow, openPanelWindow, getSettings, notifyErase, setSettings, setMsk144Period, type FdRulesetDto } from '../api'
+import { atuBypass, atuTune, closePanelWindow, openPanelWindow, getSettings, notifyErase, setSettings, setMsk144Period, type FdRulesetDto } from '../api'
 import { WSPR_WATERFALL_WINDOW } from '../waterfall'
 import { ftOverlay } from '../spectrum/overlays'
 import { FdAdvisories } from './FdAdvisories'
@@ -1998,6 +1998,11 @@ export function OperateCockpit({
             // A control that keys the transmitter must never fail silently: the backend
             // returns every refusal (TX off, busy, lockout) WITH ITS REASON — show it.
             void atuTune()
+              .then((s) => onSnap?.(s))
+              .catch((e) => pushToast(String(e), 'error'))
+          }
+          onAtuBypass={() =>
+            void atuBypass()
               .then((s) => onSnap?.(s))
               .catch((e) => pushToast(String(e), 'error'))
           }

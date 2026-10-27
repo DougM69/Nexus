@@ -44,6 +44,8 @@ interface Props {
   onSetTxEnabled: (on: boolean) => void
   onSetTune: (on: boolean) => void
   onAtuTune: () => void
+  /** The click on ATU ON (#344): switch the tuner out of line. */
+  onAtuBypass?: () => void
   onHaltTx: () => void
   onSetHoldTxFreq: (on: boolean) => void
 }
@@ -71,6 +73,7 @@ export function TempoHeader({
   onSetTxEnabled,
   onSetTune,
   onAtuTune,
+  onAtuBypass,
   onHaltTx,
   onSetHoldTxFreq,
 }: Props) {
@@ -183,6 +186,7 @@ export function TempoHeader({
       onSetTxEnabled={onSetTxEnabled}
       onTune={onSetTune}
       onAtuTune={onAtuTune}
+      onAtuBypass={onAtuBypass}
       onStopTx={onHaltTx}
       hold={{ on: snap.radio.holdTxFreq, onChange: onSetHoldTxFreq }}
     />

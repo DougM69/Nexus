@@ -19,6 +19,7 @@ import { ContestScoreChip } from './ContestScoreChip'
 import { Waterfall } from './Waterfall'
 import { RfScopePane } from './RfScopePane'
 import {
+  atuBypass,
   atuTune,
   getJttyState,
   getLicensedBandPlan,
@@ -716,6 +717,11 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           }}
           onAtuTune={() =>
             void atuTune()
+              .then((s) => onSnap?.(s))
+              .catch((e) => pushToast(String(e), 'error'))
+          }
+          onAtuBypass={() =>
+            void atuBypass()
               .then((s) => onSnap?.(s))
               .catch((e) => pushToast(String(e), 'error'))
           }

@@ -198,6 +198,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       // reporter named for 80 m was not. The other two are the SYMPTOM, which is what an
       // operator types when they have never seen the switch: "the icom are back in USB mode".
       'lsb-d', 'back to usb', 'stays in usb',
+      // #393: APRS in DATA-FM on the FT-991A, under the words its menu and the report use.
+      'aprs data-fm', 'aprs fm-data', 'fm pkt port', 'menu 077', 'aprs silent',
       // The #145 declarations. The words here are the SYMPTOM, not the setting name — an
       // operator whose rig keys the moment Nexus opens does not search for "handshake".
       'serial handshake', 'flow control', 'xonxoff', 'rts state', 'dtr state', 'keying line',

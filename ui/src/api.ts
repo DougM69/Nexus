@@ -3400,6 +3400,10 @@ export interface RadioProfilePatch {
    * instead of only around a send (#130). Per radio, so it must ride the patch — a per-radio
    * field missing here is silently dropped on Save (the 2026-08-17 Flex-three data loss). */
   sstvHoldDataSubmode: boolean
+  /** APRS in this radio's DATA-FM mode instead of plain FM (#393). Per radio, off by default;
+   * obeyed only on a radio that has one (`APRS_DATA_FM_MODELS`). Rides the patch like its
+   * neighbours — a per-radio field missing here is blanked on Save. */
+  aprsDataFm: boolean
   audioIn: string
   audioOut: string
   txLevel: number
@@ -3486,6 +3490,12 @@ export async function setTune(on: boolean): Promise<AppSnapshot> {
  * a TX gate is down (TX off, outside privileges, transmitter busy) — it keys the transmitter. */
 export async function atuTune(): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('atu_tune')
+}
+
+/** Switch the radio's built-in tuner OUT of line — the click on ATU ON (#344). Keys nothing;
+ * rejects with the reason while anything is on the air or when the tuner is not in line. */
+export async function atuBypass(): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('atu_bypass')
 }
 
 /** Emergency stop: halt any transmit immediately. Returns the fresh snapshot. */

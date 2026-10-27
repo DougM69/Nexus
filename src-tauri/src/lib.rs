@@ -20137,6 +20137,17 @@ fn atu_tune(
     Ok(eng.snapshot())
 }
 
+/// Switch the radio's built-in tuner OUT of line — the click on ATU ON (#344). Keys nothing, so it
+/// is not a transmit command; `Engine::atu_bypass` refuses it while anything is on the air (a
+/// tuner's relays are not switched under power) and when the radio reports no tuner in line, and
+/// the reason comes back as `Err` for the button's toast.
+#[tauri::command(async)]
+fn atu_bypass(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    eng.atu_bypass()?;
+    Ok(eng.snapshot())
+}
+
 /// Stop transmitting now: drop any queued frames and clear the TX indicator.
 #[tauri::command(async)]
 fn halt_tx(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
@@ -40423,6 +40434,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         update_radio_profile,
         set_tune,
         atu_tune,
+        atu_bypass,
         halt_tx,
         dismiss_tx_alarm,
         tci_server_disconnect,
