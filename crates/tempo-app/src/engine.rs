@@ -59032,17 +59032,19 @@ mod tests {
         );
     }
 
-    /// ALL.TXT decode log: off by default (nothing buffered), and when enabled the
+    /// ALL.TXT decode log: switched off, nothing is buffered, and when enabled the
     /// live ingest path buffers one WSJT-X-format line per decode, drained by the shell.
+    /// (A new install has it on, as WSJT-X does: `settings::tests`.)
     #[test]
     fn all_txt_log_buffers_one_line_per_decode_when_enabled() {
         let mut e = Engine::new("KD9TAW", "EN52", 0);
         e.set_tier(Tier::Ft8);
+        e.settings.write_all_txt = false;
         let frame = native_frame_for(modes::ModeKind::Ft8, "CQ W1ABC FN42", 1500.0);
         e.ingest(&frame, 2);
         assert!(
             e.take_all_txt_pending().is_empty(),
-            "off by default → no ALL.TXT lines"
+            "off → no ALL.TXT lines"
         );
 
         e.settings.write_all_txt = true;
