@@ -48,7 +48,7 @@ set -u
 usage() {
   cat >&2 <<USAGE
 usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
-       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|topbar
+       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|topbar|header
 
   --scenario <pattern>  matched against the suite's test NAMES (node --test
                         --test-name-pattern). Default 'stream'. The names are built
@@ -138,6 +138,11 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         group sits on, shows its flag, and nothing runs past the window, with a
                         control (the lane's old sizing) that must make the bar taller
                         (ui/probe/topbar-probe.mjs; it builds nothing)
+  --desktop header      the cockpit header with a CW header's controls, 1024 to 2560 wide and
+                        110-175 % on 1920×1080, asserting ⊞ Panels and CAT never take a line of
+                        their own while the mode controls' last line has room for them and
+                        nothing runs past the window, with the header's previous shape as the
+                        control (ui/probe/header-probe.mjs; it builds nothing)
 
 exit: 0 the scenario passed · 1 it failed · 2 usage, or the pattern matched no test
 USAGE
@@ -154,7 +159,7 @@ while [ $# -gt 0 ]; do
                 case "$SHARD" in 0|1) ;; *) echo "browser-probe: --shard takes 0 or 1 (CI runs two)" >&2; exit 2 ;; esac ;;
     --no-build) BUILD=0; shift ;;
     --desktop)  [ $# -ge 2 ] || { usage; exit 2; }; DESKTOP="$2"; shift 2
-                case "$DESKTOP" in rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|topbar) ;; *) echo "browser-probe: --desktop takes rotor, contestlog, spots, callcard, activation, voicenote, contactcard, atu, jtty, waterfalls, txmeters, radioswitch or topbar" >&2; exit 2 ;; esac ;;
+                case "$DESKTOP" in rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|topbar|header) ;; *) echo "browser-probe: --desktop takes rotor, contestlog, spots, callcard, activation, voicenote, contactcard, atu, jtty, waterfalls, txmeters, radioswitch, topbar or header" >&2; exit 2 ;; esac ;;
     -h|--help)  usage; exit 0 ;;
     *)          echo "browser-probe: unknown argument '$1'" >&2; usage; exit 2 ;;
   esac
@@ -183,6 +188,7 @@ if [ -n "$DESKTOP" ]; then
   [ "$DESKTOP" = txmeters ] && exec node "$ROOT/ui/probe/txmeters-probe.mjs"
   [ "$DESKTOP" = radioswitch ] && exec node "$ROOT/ui/probe/radioswitch-probe.mjs"
   [ "$DESKTOP" = topbar ] && exec node "$ROOT/ui/probe/topbar-probe.mjs"
+  [ "$DESKTOP" = header ] && exec node "$ROOT/ui/probe/header-probe.mjs"
   exec node "$ROOT/ui/probe/desktop-probe.mjs" "$DESKTOP"
 fi
 

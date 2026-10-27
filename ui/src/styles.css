@@ -19021,7 +19021,12 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 }
 /* The elastic member: fills the middle when wide, and (since both base clusters are flex:0 0 auto
    under flex-wrap) drops to its own row first when space is tight — so the mode-specific controls
-   stay in a consistent location and the base row never reflows out from under the operator. */
+   stay in a consistent location and the base row never reflows out from under the operator. It
+   carries the header's actions (`.ch-actions`) at the end of its own row, so they share its last
+   line instead of taking a line of their own; it is therefore never empty, and a passed child that
+   renders nothing (the rotor strip with no rotator: the RTTY, PSK and JS8 headers' only child)
+   leaves it holding just the actions, the header item they were before (guarded by
+   CockpitHeader.emptyExtras.test.tsx). */
 .ch-mode-extras {
   flex: 1 1 auto;
   min-width: 0;
@@ -19029,13 +19034,6 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   align-items: center;
   gap: var(--space-3);
   flex-wrap: wrap;
-}
-/* A passed child can render nothing: the rotor strip on a station with no rotator, which is the
-   RTTY, PSK and JS8 headers' only child. Empty, the region would still cost the header's line a
-   gap (and the Remote Quick header a grid row), so it leaves layout until something is in it.
-   Guarded by CockpitHeader.emptyExtras.test.tsx. */
-.ch-mode-extras:empty {
-  display: none;
 }
 /* The band control + Tune as one unit: it wraps as a whole, so Tune stays beside the band
    control on whichever line the pair lands (#287, measured at 1024x768 110-125%). */
