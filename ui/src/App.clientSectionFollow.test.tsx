@@ -30,6 +30,9 @@ const bridgeCalls: BridgeCall[] = []
 
 /** The station's live section, as its snapshot reports it. */
 let section = 'digital'
+/** The Keyboard section's modem on the air, as the station names it (`radio.keyboardMode`); absent
+ *  from a station older than it. */
+let keyboardMode: string | undefined
 /** What the station answers to a section change: the snapshot, or this refusal. */
 let refuseEntry: string | null = null
 
@@ -44,6 +47,7 @@ function snapshot(): AppSnapshot {
       catOk: true,
       sideband: 'USB',
       operatingMode: section,
+      keyboardMode,
       transmitting: false,
       txEnabled: false,
       txAllowed: true,
@@ -129,6 +133,7 @@ beforeEach(() => {
   pastTheSwitch()
   bridgeCalls.length = 0
   section = 'digital'
+  keyboardMode = undefined
   refuseEntry = null
   window.__TAURI_INTERNALS__ = {
     invoke: async <T,>(cmd: string, args?: Record<string, unknown>): Promise<T> => {
@@ -220,6 +225,57 @@ describe('a computer driving a station', () => {
     expect(shown(), 'a refused pick does not switch the screen').toBe(ftLabel)
     expect(document.body.textContent).toContain(EN['client.refused.notLive'])
     expect(entries(), 'going back sends nothing').toHaveLength(1)
+  }, MOUNTS)
+})
+
+describe('a computer driving a station in the Keyboard section', () => {
+  // PSK and JTTY are one section ('keyboard'); the station names the modem on the air
+  // (`keyboardMode`), and the screen follows that.
+  const byAria = (re: RegExp) =>
+    [...document.querySelectorAll<HTMLButtonElement>('.mode-nav .mode-btn')]
+      .find((b) => re.test(b.getAttribute('aria-label') ?? ''))
+      ?.querySelector('.mode-label')?.textContent ?? ''
+  const keyboardFeatures = () =>
+    localStorage.setItem(
+      'nexus.features.v1',
+      JSON.stringify({ profile: 'custom', enabled: { operate: true, phone: true, cw: true, psk: true, jtty: true } }),
+    )
+
+  it('lands on JTTY when the station is on JTTY, and on PSK when it changes to PSK, sending nothing', async () => {
+    keyboardFeatures()
+    setRemoteStation(true)
+    section = 'keyboard'
+    keyboardMode = 'JTTY'
+    await mountOn('operate')
+    const jttyLabel = byAria(/jtty/i)
+    const pskLabel = byAria(/psk/i)
+    expect(jttyLabel && pskLabel, 'the navigation names JTTY and PSK').toBeTruthy()
+    await nextPoll()
+    expect(shown(), 'a station on JTTY: the JTTY screen').toBe(jttyLabel)
+    keyboardMode = 'QPSK31'
+    await nextPoll()
+    expect(shown(), 'the station changes to PSK: the PSK screen').toBe(pskLabel)
+    keyboardMode = 'JTTY'
+    await nextPoll()
+    expect(shown(), 'and back to JTTY').toBe(jttyLabel)
+    expect(entries(), 'following moves nothing at the station').toEqual([])
+  }, MOUNTS)
+
+  it('a station too old to name its modem: PSK’s screen from elsewhere, and a JTTY screen is left alone', async () => {
+    keyboardFeatures()
+    setRemoteStation(true)
+    section = 'keyboard'
+    await mountOn('jtty')
+    const jttyLabel = byAria(/jtty/i)
+    const pskLabel = byAria(/psk/i)
+    await nextPoll()
+    expect(shown(), 'the JTTY screen is in the station’s section').toBe(jttyLabel)
+    section = 'cw'
+    await nextPoll()
+    section = 'keyboard'
+    await nextPoll()
+    expect(shown(), 'the section’s own landing').toBe(pskLabel)
+    expect(entries()).toEqual([])
   }, MOUNTS)
 })
 
