@@ -51,6 +51,7 @@ import type {
   Js8Filter,
   Js8Freq,
   Js8State,
+  JttyLogPromptAnswer,
   JttySent,
   JttyState,
   Js8Typeahead,
@@ -4159,31 +4160,56 @@ export async function jttyClear(): Promise<JttyState> {
   return invoke<JttyState>('jtty_clear')
 }
 
-/** Send typed text (WSJT-X's Send): all of it, its macros expanded, ending the message (and a live
- * session). `hisCall` is the dock's Call (`%H`). */
-export async function jttySend(text: string, hisCall: string): Promise<JttySent> {
-  return invoke<JttySent>('jtty_send', { text, hisCall })
+/** Decode again (WSJT-X's Decode button, and a double-click on a waterfall row with that row's
+ * time): the receive audio still kept, or 40 s of it from 5 s before the row. Receive only. */
+export async function jttyDecodeAgain(atUtcMs: number | null = null): Promise<JttyState> {
+  return invoke<JttyState>('jtty_decode_again', { atUtcMs })
 }
 
-/** F-key `n` (1–8): WSJT-X's Contest template, compiled into JTTY's atoms. */
-export async function jttyFkey(n: number, hisCall: string): Promise<JttySent> {
-  return invoke<JttySent>('jtty_fkey', { n, hisCall })
+/** Answer the JTTY Log QSO prompt `id` (Log QSO or Not now). `taken` for the first answer of the
+ * prompt still asked, which takes it for every screen; log the contact only on `taken`. Any other
+ * answer says why it took nothing. */
+export async function jttyLogPromptAnswer(id: number): Promise<JttyLogPromptAnswer> {
+  return invoke<JttyLogPromptAnswer>('jtty_log_prompt_answer', { id })
+}
+
+/** Give back JTTY Log QSO prompt `id`, taken by a Log QSO that then logged nothing: every screen
+ * asks it again. Logs and sends nothing. */
+export async function jttyLogPromptRelease(id: number): Promise<void> {
+  return invoke<void>('jtty_log_prompt_release', { id })
+}
+
+/** Send typed text (WSJT-X's Send): all of it, its macros expanded, ending the message (and a live
+ * session). `hisCall` is the dock's Call (`%H`); `hisSnr` the SNR of the decode it was picked
+ * from (`%R`), null when it was typed (WSJT-X's -10). */
+export async function jttySend(text: string, hisCall: string, hisSnr: number | null = null): Promise<JttySent> {
+  return invoke<JttySent>('jtty_send', { text, hisCall, hisSnr })
+}
+
+/** F-key `n` (1–8): its template in the message style in force, compiled as WSJT-X compiles it. */
+export async function jttyFkey(n: number, hisCall: string, hisSnr: number | null = null): Promise<JttySent> {
+  return invoke<JttySent>('jtty_fkey', { n, hisCall, hisSnr })
 }
 
 /** Start live entry with what is typed so far (WSJT-X's Alt+J). */
-export async function jttyLiveStart(typed: string, hisCall: string): Promise<JttySent> {
-  return invoke<JttySent>('jtty_live_start', { typed, hisCall })
+export async function jttyLiveStart(typed: string, hisCall: string, hisSnr: number | null = null): Promise<JttySent> {
+  return invoke<JttySent>('jtty_live_start', { typed, hisCall, hisSnr })
 }
 
 /** Commit live typing: `flush` after a pause (all of it), otherwise once five words are complete
  * beyond the three WSJT-X holds back. */
-export async function jttyLiveCommit(typed: string, hisCall: string, flush: boolean): Promise<JttySent> {
-  return invoke<JttySent>('jtty_live_commit', { typed, hisCall, flush })
+export async function jttyLiveCommit(
+  typed: string,
+  hisCall: string,
+  flush: boolean,
+  hisSnr: number | null = null,
+): Promise<JttySent> {
+  return invoke<JttySent>('jtty_live_commit', { typed, hisCall, flush, hisSnr })
 }
 
 /** Sign off (WSJT-X's Alt+K): `DE <my call> K` after what is typed; the session ends. */
-export async function jttySignOff(typed: string, hisCall: string): Promise<JttySent> {
-  return invoke<JttySent>('jtty_sign_off', { typed, hisCall })
+export async function jttySignOff(typed: string, hisCall: string, hisSnr: number | null = null): Promise<JttySent> {
+  return invoke<JttySent>('jtty_sign_off', { typed, hisCall, hisSnr })
 }
 
 /** Stop JTTY now: everything queued dropped, a live session ended, what is on the air cut. */

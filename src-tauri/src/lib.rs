@@ -18727,6 +18727,38 @@ fn jtty_clear(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::JttyStat
     Ok(eng.jtty_state())
 }
 
+/// Decode again (WSJT-X's Decode button and a double-click on a waterfall row): the receive audio
+/// still kept, or, with `at_utc_ms`, 40 s of it from 5 s before that row. RECEIVE ONLY: what it
+/// finds is shown and nothing else. Refused, with WSJT-X's words, when that audio is gone.
+#[tauri::command(async)]
+fn jtty_decode_again(
+    state: State<'_, SharedEngine>,
+    at_utc_ms: Option<i64>,
+) -> Result<tempo_app::dto::JttyState, String> {
+    let mut eng = engine_lock(&state);
+    eng.jtty_decode_again(at_utc_ms)?;
+    Ok(eng.jtty_state())
+}
+
+/// Answer the JTTY Log QSO prompt `id` (Log QSO or Not now): `taken` for the first answer of the
+/// prompt still asked, which takes it for every screen, shack and Remote alike; otherwise why it
+/// took nothing. A screen logs the contact only on `taken`, so one TU is never logged twice. Logs
+/// and sends nothing itself.
+#[tauri::command(async)]
+fn jtty_log_prompt_answer(
+    state: State<'_, SharedEngine>,
+    id: u64,
+) -> tempo_app::dto::JttyLogPromptAnswer {
+    engine_lock(&state).jtty_log_prompt_answer(id)
+}
+
+/// Give back JTTY Log QSO prompt `id`, taken by a Log QSO that then logged nothing (the log strip
+/// refused it): every screen asks it again. Logs and sends nothing.
+#[tauri::command(async)]
+fn jtty_log_prompt_release(state: State<'_, SharedEngine>, id: u64) {
+    engine_lock(&state).jtty_log_prompt_release(id)
+}
+
 // ---- JTTY transmit (`tempo_app::engine::jtty_tx`). Every send passes the engine's JTTY TX gate
 // (`Engine::jtty_tx_gate`: the JTTY screen, clock repair, TX on, the connection, a callsign, the
 // licence, the transmitter's owner) before anything reaches the radio. A send is planned under
@@ -18783,21 +18815,30 @@ async fn jtty_send(
     state: State<'_, SharedEngine>,
     text: String,
     his_call: String,
+    his_snr: Option<i32>,
     afar: Option<command_dispatch::Afar>,
 ) -> Result<JttySentDto, String> {
-    jtty_send_with(&state, afar, move |e| e.jtty_plan_send(&text, &his_call)).await
+    jtty_send_with(&state, afar, move |e| {
+        e.jtty_plan_send(&text, &his_call, his_snr)
+    })
+    .await
 }
 
-/// F-key `n` (1..8): WSJT-X's Contest template, compiled into JTTY's atoms. `afar`: as
-/// [`jtty_send_with`]'s.
+/// F-key `n` (1..8): its template in the message style in force, compiled as WSJT-X compiles it
+/// (a native form into JTTY's atoms, anything else as text). `his_snr` is the SNR of the decode
+/// the DX call was picked from (`%R`; none = WSJT-X's -10). `afar`: as [`jtty_send_with`]'s.
 #[tauri::command]
 async fn jtty_fkey(
     state: State<'_, SharedEngine>,
     n: u8,
     his_call: String,
+    his_snr: Option<i32>,
     afar: Option<command_dispatch::Afar>,
 ) -> Result<JttySentDto, String> {
-    jtty_send_with(&state, afar, move |e| e.jtty_plan_fkey(n, &his_call)).await
+    jtty_send_with(&state, afar, move |e| {
+        e.jtty_plan_fkey(n, &his_call, his_snr)
+    })
+    .await
 }
 
 /// Start live entry with what is typed so far (WSJT-X's Alt+J). `afar`: as [`jtty_send_with`]'s.
@@ -18806,10 +18847,11 @@ async fn jtty_live_start(
     state: State<'_, SharedEngine>,
     typed: String,
     his_call: String,
+    his_snr: Option<i32>,
     afar: Option<command_dispatch::Afar>,
 ) -> Result<JttySentDto, String> {
     jtty_send_with(&state, afar, move |e| {
-        e.jtty_plan_live_start(&typed, &his_call)
+        e.jtty_plan_live_start(&typed, &his_call, his_snr)
     })
     .await
 }
@@ -18821,6 +18863,7 @@ async fn jtty_live_commit(
     state: State<'_, SharedEngine>,
     typed: String,
     his_call: String,
+    his_snr: Option<i32>,
     flush: bool,
     afar: Option<command_dispatch::Afar>,
 ) -> Result<JttySentDto, String> {
@@ -18830,7 +18873,7 @@ async fn jtty_live_commit(
         tempo_app::engine::jtty_tx::JttyCommit::Advance
     };
     jtty_send_with(&state, afar, move |e| {
-        e.jtty_plan_live(&typed, &his_call, how)
+        e.jtty_plan_live(&typed, &his_call, his_snr, how)
     })
     .await
 }
@@ -18842,10 +18885,11 @@ async fn jtty_sign_off(
     state: State<'_, SharedEngine>,
     typed: String,
     his_call: String,
+    his_snr: Option<i32>,
     afar: Option<command_dispatch::Afar>,
 ) -> Result<JttySentDto, String> {
     jtty_send_with(&state, afar, move |e| {
-        e.jtty_plan_sign_off(&typed, &his_call)
+        e.jtty_plan_sign_off(&typed, &his_call, his_snr)
     })
     .await
 }
@@ -40278,6 +40322,9 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         jtty_set_rx,
         jtty_set_band,
         jtty_clear,
+        jtty_decode_again,
+        jtty_log_prompt_answer,
+        jtty_log_prompt_release,
         jtty_send,
         jtty_fkey,
         jtty_live_start,

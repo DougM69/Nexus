@@ -34,9 +34,13 @@ export function jttyPaneText(line: Pick<JttyLine, 'line' | 'startUtcMs'>, o: Jtt
 
 /** WSJT-X's All Decodes pane: every message received, in the order they STARTED (a message found
  *  late by a retro search still lands where it began), ties by message id. What this station
- *  sent is not among them: WSJT-X shows it in the QSO Frequency pane only. */
+ *  sent is not among them: WSJT-X shows it in the QSO Frequency pane only. A review's lines
+ *  (decode again) follow everything received live, each review after its heading, in the order
+ *  they started, as WSJT-X adds a review below its spacer (`insertLineSpacer`). */
 export function jttyAllPane(lines: readonly JttyLine[]): JttyLine[] {
-  return lines.filter((l) => !l.tx).sort((a, b) => a.startUtcMs - b.startUtcMs || a.id - b.id)
+  return lines
+    .filter((l) => !l.tx)
+    .sort((a, b) => (a.review ?? 0) - (b.review ?? 0) || a.startUtcMs - b.startUtcMs || a.id - b.id)
 }
 
 /** WSJT-X's QSO Frequency pane: the messages first heard within F Tol of Rx, in the order they

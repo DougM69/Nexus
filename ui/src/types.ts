@@ -2004,6 +2004,9 @@ export interface JttyLine {
   /** A message this station SENT (WSJT-X shows it in the QSO Frequency pane, its SNR blank);
    *  absent on a received one. */
   tx?: boolean
+  /** Found by decoding again (WSJT-X's review): which review, numbered from 1. The panes show
+   *  each review's lines together under a heading. Absent for live reception. */
+  review?: number
 }
 
 /** A JTTY station decoded in two separate messages (`tempo_app::dto::JttyHeard`). */
@@ -2055,7 +2058,40 @@ export interface JttyTxState {
   pending: string
   /** WSJT-X's queue notice: replaced characters, complete, cancelled, or why it stopped. */
   notice: string | null
+  /** WSJT-X's "Frames: sent/total" for this over (the filler in neither). Absent in an older
+   *  fixture. */
+  framesSent?: number
+  framesTotal?: number
+  /** The newest Log QSO prompt: a send starting "TU " went out (WSJT-X's `logQSOTimer`). A
+   *  prompt only; nothing is logged unless the operator logs it. Absent in an older fixture. */
+  logPrompt?: JttyLogPrompt | null
+  /** WSJT-X's "Message style": which of the two F-key sets F1-F8 send. Absent in an older
+   *  fixture, which reads as Contest. */
+  style?: JttyMessageStyle
+  /** The eight templates F1-F8 send in that style: the keys' captions. */
+  fkeys?: string[]
 }
+
+/** The Log QSO prompt after a JTTY "TU " send (`tempo_app::dto::JttyLogPrompt`). */
+export interface JttyLogPrompt {
+  /** Numbered from 1 each session: the cockpit asks once per prompt. */
+  id: number
+  /** The DX call the send was made with; empty when there was none. */
+  call: string
+  /** The serial number the exchange sent, before it moved on. */
+  serial: number
+  atUtcMs: number
+  /** The station whose prompt this one replaced while it was still unanswered: that contact is
+   *  logged from the log strip. Absent in an older engine's answer. */
+  replaced?: string | null
+}
+
+/** How an answer of a JTTY Log QSO prompt went (`tempo_app::dto::JttyLogPromptAnswer`): `taken`
+ *  lets this screen log; the rest say why not. */
+export type JttyLogPromptAnswer = 'taken' | 'answered' | 'logged' | 'replaced' | 'expired'
+
+/** WSJT-X's two JTTY F-key sets (`Jtty::MessageStyle`): Contest, and FT8 style. */
+export type JttyMessageStyle = 'contest' | 'ft8'
 
 /** What a JTTY send did: how much of the typed text it took (UTF-16 units), what goes in its
  *  place (the macros expanded), and the state after it. */
@@ -5400,6 +5436,12 @@ export interface Settings {
   /** JTTY's F Tol, Hz (`jtty_ftol_hz`, WSJT-X's `JTTY_FTol`). The JTTY cockpit is its one
    *  writer, through `jtty_set_rx`; a form save keeps the live value. */
   jttyFtolHz?: number
+  /** JTTY's F1-F8 templates in WSJT-X's Contest style (`jtty_fkeys`, WSJT-X's `JTTY_msg1..8`) and
+   *  in its FT8 style (`jtty_ft8_fkeys`, `JTTY_FT8_msg1..8`), and which set the keys send
+   *  (`jtty_message_style`). The JTTY cockpit edits them, through the patch seam. */
+  jttyFkeys?: string[]
+  jttyFt8Fkeys?: string[]
+  jttyMessageStyle?: JttyMessageStyle
   /** The Keyboard section's modem (`keyboard_modem`): written by entering the PSK or JTTY
    *  cockpit, never by the form. */
   keyboardModem?: 'psk' | 'jtty'

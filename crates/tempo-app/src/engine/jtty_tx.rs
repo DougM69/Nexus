@@ -117,6 +117,11 @@ const WATCHDOG_TRIPPED: &str = "JTTY stopped by the TX watchdog: nothing was typ
 const STOPPED_FOR_PREP: &str =
     "JTTY was stopped while the message was being prepared; nothing was sent.";
 
+/// How long a Log QSO prompt nobody answered is still asked: two minutes after its TU went on the
+/// air. Later, a press would log the contact at that later time, and a screen opened then (a
+/// reload, a Remote client) would ask about a contact long over.
+pub(crate) const JTTY_LOG_PROMPT_MS: i64 = 120_000;
+
 /// One segment ready for the transmitter: its audio, made at the Tx offset it was sent at.
 #[derive(Debug, Clone)]
 pub struct JttySegment {
@@ -132,6 +137,9 @@ pub struct JttySegment {
     first: bool,
     /// The Tx offset it was rendered at.
     tx_hz: f32,
+    /// The DX call the send was made with (the Call box, `%H`), on its first segment: whom a
+    /// "TU " send's Log QSO prompt names.
+    his_call: String,
 }
 
 impl JttySegment {
@@ -184,6 +192,22 @@ pub struct JttyTx {
     notice: Option<String>,
     /// Bumped by every stop, drop and Tx change: a send planned before one is not committed.
     pub(super) gen: u64,
+    /// The newest Log QSO prompt, raised when a send starting "TU " goes out (WSJT-X's
+    /// `logQSOTimer`), and its number: the cockpit asks the operator once per prompt. It logs
+    /// nothing; the operator does, from the log strip. Kept once it is closed, to tell a later
+    /// answer why it took nothing.
+    log_prompt: Option<crate::dto::JttyLogPrompt>,
+    log_prompts: u64,
+    /// How `log_prompt` was closed: `None` while it is still asked (until it is too old),
+    /// `Answered` once an answer took it, `Logged` once its contact reached the log by any route.
+    log_prompt_end: Option<crate::dto::JttyLogPromptAnswer>,
+    /// The station the last send made with a call in the Call box went to (a CQ goes to nobody):
+    /// the one a later TU thanks. F6 (`TU NOW %Q %E`) goes out with the NEXT station in the Call
+    /// box, so the station it closes is this one, not the Call box's.
+    addressed: String,
+    /// Frames of what was sent (not the filler) this over has put on the air: WSJT-X's "Frames:
+    /// sent/total" (`updateJttyLiveEntryFrameLabel`), from the first send of an over to the next.
+    over_frames_sent: u32,
 }
 
 impl JttyTx {
@@ -204,6 +228,11 @@ impl JttyTx {
             keyed_since_ms: None,
             notice: None,
             gen: 0,
+            log_prompt: None,
+            log_prompts: 0,
+            log_prompt_end: None,
+            addressed: String::new(),
+            over_frames_sent: 0,
         }
     }
 
@@ -234,6 +263,23 @@ impl JttyTx {
             .collect::<Vec<_>>()
             .join("\n");
         (segs.len() as u32, text)
+    }
+
+    /// The frames of what was sent (not the filler) still to go, the rest of the segment being
+    /// fed included.
+    fn frames_left(&self) -> u32 {
+        let left = self
+            .playing
+            .as_ref()
+            .filter(|p| !p.seg.filler)
+            .map_or(0, |p| p.seg.pcm.len().saturating_sub(p.at));
+        let queued: usize = self
+            .queue
+            .iter()
+            .filter(|s| !s.filler)
+            .map(|s| s.pcm.len())
+            .sum();
+        ((left + queued) / FRAME_SAMPLES) as u32
     }
 
     /// Air time still queued, the rest of the segment being fed included (ms).
@@ -288,6 +334,8 @@ pub struct JttyPlan {
     pub sent: String,
     /// Characters outside the JTTY alphabet were replaced.
     substituted: bool,
+    /// The DX call the send was made with (`%H`), for its Log QSO prompt.
+    his_call: String,
 }
 
 #[derive(Debug, Clone)]
@@ -507,7 +555,8 @@ pub fn is_native_call(raw: &str) -> bool {
     call[area + 1..].iter().all(|c| c.is_ascii_uppercase()) && call.len() - area - 1 <= 3
 }
 
-/// WSJT-X's eight JTTY Contest templates (`Jtty::nativeMacroTemplate`), F1 to F8.
+/// WSJT-X's eight JTTY Contest templates (`Jtty::nativeMacroTemplate`), F1 to F8: the keys'
+/// defaults in its Contest style (3.3.0-beta4 `widgets/JttyMessages.hpp` 200-215).
 pub const FKEY_TEMPLATES: [&str; 8] = [
     "CQ %M CQ",
     "%H %E",
@@ -519,12 +568,34 @@ pub const FKEY_TEMPLATES: [&str; 8] = [
     "%E",
 ];
 
+/// WSJT-X's eight JTTY FT8-style templates (`Jtty::ft8StyleMacroTemplate`, 3.3.0-beta4
+/// `widgets/JttyMessages.hpp` 217-233): F7 and F8 left blank. None of them is a native form, so
+/// each goes as text, its macros expanded.
+pub const FT8_FKEY_TEMPLATES: [&str; 8] = [
+    "%H %M %G",
+    "%H %M %R",
+    "%H %M R%R",
+    "%H %M RRR",
+    "%H %M 73",
+    "CQ %M %G",
+    "",
+    "",
+];
+
 /// `Jtty::CallAction`, the call atom's subtype.
 const CQ: i8 = 0;
 const CALL: i8 = 1;
 const CALL_TU: i8 = 3;
 const CALL_AGN: i8 = 4;
 const TU_NOW_CALL: i8 = 5;
+
+/// `Jtty::NativeAtomKind` (3.3.0-beta4 `lib/jtty/JttyTransmit.hpp` 14-24) for the atoms a
+/// template compiles to beyond calls and serials.
+const KIND_CONTROL: i8 = 5;
+const KIND_GRID: i8 = 6;
+/// `Jtty::ExchangeRole`: the field alone, or with its report.
+const ROLE_FIELD_ONLY: i8 = 0;
+const ROLE_FULL: i8 = 1;
 
 fn call_atom(action: i8, call: &str) -> jtty::AtomDescriptor {
     jtty::atom(0, action, 0, 0, &call.trim().to_uppercase())
@@ -536,11 +607,130 @@ fn serial_atom(serial: u32) -> jtty::AtomDescriptor {
     jtty::atom(1, 0, 1, serial as i32, "").expect("no text")
 }
 
-/// F-key `n` (1..=8) compiled as WSJT-X compiles its Contest template (`Jtty::compileNativeMacro`):
-/// the atoms and the text they read as, the exchange in the context's profile
-/// ([`native_exchange`]). A call the template needs that is not a native one, or an exchange the
-/// atom cannot carry, REFUSES the key — never literal text in its place.
-fn compile_fkey(n: u8, ctx: &MacroContext) -> Result<(Vec<jtty::AtomDescriptor>, String), String> {
+/// `Jtty::controlPhrase` (3.3.0-beta4 `lib/jtty/JttyTransmit.cpp` 533-557): the 18 phrases a
+/// control atom carries, by its subtype.
+const CONTROL_PHRASES: [&str; 18] = [
+    "AGN?", "CALL?", "AGN CALL", "NR?", "AGN NR", "EXCH?", "STATE?", "SECTION?", "ZONE?", "GRID?",
+    "RPRT?", "QSL TU", "TU", "QRZ?", "QSO B4", "WAIT", "NIL?", "OK?",
+];
+
+/// `Jtty::Encoder::NativeForm`: the templates WSJT-X compiles into atoms rather than text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeForm {
+    Cq,
+    CallExchange,
+    CallSerial,
+    CallGrid,
+    CallTuCq,
+    MyCall,
+    HisCall,
+    TuNowExchange,
+    TuNowSerial,
+    TuNowGrid,
+    CallAgn,
+    Exchange,
+    Serial,
+    Grid,
+    ReportGrid,
+}
+
+/// WSJT-X's form table (3.3.0-beta4 `lib/jtty/JttyTransmit.cpp` 57-73), in its order: the form,
+/// its template, and whether the template must match exactly (otherwise it is compared upper-cased
+/// with its spaces collapsed).
+const NATIVE_FORMS: [(NativeForm, &str, bool); 15] = [
+    (NativeForm::Cq, "CQ %M CQ", false),
+    (NativeForm::CallExchange, "%H %E", false),
+    (NativeForm::CallSerial, "%H 599 %N", true),
+    (NativeForm::CallGrid, "%H %G", false),
+    (NativeForm::CallTuCq, "%H TU CQ %M CQ", false),
+    (NativeForm::MyCall, "%M", false),
+    (NativeForm::HisCall, "%H", false),
+    (NativeForm::TuNowExchange, "TU NOW %Q %E", false),
+    (NativeForm::TuNowSerial, "TU NOW %Q 599 %N", true),
+    (NativeForm::TuNowGrid, "TU NOW %Q %G", false),
+    (NativeForm::CallAgn, "%H AGN?", false),
+    (NativeForm::Exchange, "%E", false),
+    (NativeForm::Serial, "599 %N", true),
+    (NativeForm::Grid, "%G", false),
+    (NativeForm::ReportGrid, "599 %G", false),
+];
+
+/// `normalizedMacroTemplate`: upper case, the spaces collapsed (`QString::simplified`).
+fn normalized_template(template: &str) -> String {
+    template
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_uppercase()
+}
+
+/// `nativeForm`: the form `template` is, if any.
+fn native_form(template: &str) -> Option<NativeForm> {
+    let normalized = normalized_template(template);
+    NATIVE_FORMS
+        .iter()
+        .find(|(_, text, exact)| (if *exact { template } else { &normalized }) == *text)
+        .map(|(form, _, _)| *form)
+}
+
+/// `isLocator`: a four-, six- or eight-character Maidenhead locator.
+fn is_locator(l: &str) -> bool {
+    let b = l.as_bytes();
+    let within = |i: usize, lo: u8, hi: u8| (lo..=hi).contains(&b[i]);
+    matches!(b.len(), 4 | 6 | 8)
+        && within(0, b'A', b'R')
+        && within(1, b'A', b'R')
+        && within(2, b'0', b'9')
+        && within(3, b'0', b'9')
+        && (b.len() < 6 || (within(4, b'A', b'X') && within(5, b'A', b'X')))
+        && (b.len() < 8 || (within(6, b'0', b'9') && within(7, b'0', b'9')))
+}
+
+/// `nativeGridExchange`: my grid's first four characters as a grid atom, with its report when
+/// `full`. WSJT-X's reason when the grid is not a locator.
+fn native_grid(ctx: &MacroContext, full: bool) -> Result<(jtty::AtomDescriptor, String), String> {
+    let locator = ctx.grid.trim().to_uppercase();
+    if !is_locator(&locator) {
+        return Err("a grid: your grid must be a four-, six- or eight-character locator".into());
+    }
+    let grid = &locator[..4];
+    let role = if full { ROLE_FULL } else { ROLE_FIELD_ONLY };
+    let atom = jtty::atom(KIND_GRID, 0, role, 0, grid).expect("four characters");
+    let text = if full {
+        format!("599 {grid}")
+    } else {
+        grid.to_string()
+    };
+    Ok((atom, text))
+}
+
+/// A template compiled as WSJT-X compiles it (`Jtty::compileNativeMacro`).
+#[derive(Debug, Clone)]
+enum Compiled {
+    /// Call and exchange atoms, and the text they read as.
+    Native(Vec<jtty::AtomDescriptor>, String),
+    /// Not a native form: the template's text, its macros expanded, sent as typed text is.
+    Literal(String),
+}
+
+/// Compile the template on F-key `n` as WSJT-X 3.3.0-beta4 compiles it
+/// (`Jtty::compileNativeMacro`, `lib/jtty/JttyTransmit.cpp` 673-800): a control phrase
+/// (`AGN?`, `QSL TU`, …) is its control atom; a native form (`CQ %M CQ`, `%H %E`, …) is its
+/// call and exchange atoms, the exchange in the context's profile ([`native_exchange`]); anything
+/// else is literal text with its macros expanded. A native form whose call is not a standard one,
+/// or whose exchange the atom cannot carry, REFUSES the key — never literal text in its place.
+fn compile_macro(n: u8, template: &str, ctx: &MacroContext) -> Result<Compiled, String> {
+    let normalized = normalized_template(template);
+    if let Some(id) = CONTROL_PHRASES.iter().position(|p| *p == normalized) {
+        let atom = jtty::atom(KIND_CONTROL, id as i8, 0, 0, "").expect("no text");
+        return Ok(Compiled::Native(
+            vec![atom],
+            CONTROL_PHRASES[id].to_string(),
+        ));
+    }
+    let Some(form) = native_form(template) else {
+        return Ok(Compiled::Literal(expand_literal(template, ctx)));
+    };
     let my = ctx.my_call.trim().to_uppercase();
     let his = ctx.his_call.trim().to_uppercase();
     let need_my = || -> Result<(), String> {
@@ -568,19 +758,40 @@ fn compile_fkey(n: u8, ctx: &MacroContext) -> Result<(Vec<jtty::AtomDescriptor>,
             ))
         }
     };
-    let exchange =
-        || native_exchange(ctx).map_err(|why| format!("F{n} cannot send {why}. Nothing was sent."));
-    Ok(match n {
-        1 => {
+    let refused = |why: String| format!("F{n} cannot send {why}. Nothing was sent.");
+    // `appendExchange`: the grid when the template names one (with its report only as
+    // `599 %G`), else the exchange of the profile in force.
+    let exchange = || {
+        if normalized.contains("%G") {
+            native_grid(ctx, normalized == "599 %G")
+        } else {
+            native_exchange(ctx)
+        }
+        .map_err(refused)
+    };
+    let serial = || {
+        (
+            serial_atom(ctx.serial),
+            format!("599 {}", serial_text(ctx.serial)),
+        )
+    };
+    use NativeForm as F;
+    let (atoms, text) = match form {
+        F::Cq => {
             need_my()?;
             (vec![call_atom(CQ, &my)], format!("CQ {my} CQ"))
         }
-        2 => {
+        F::CallSerial => {
+            need_his()?;
+            let (atom, text) = serial();
+            (vec![call_atom(CALL, &his), atom], format!("{his} {text}"))
+        }
+        F::CallExchange | F::CallGrid => {
             need_his()?;
             let (atom, text) = exchange()?;
             (vec![call_atom(CALL, &his), atom], format!("{his} {text}"))
         }
-        3 => {
+        F::CallTuCq => {
             need_his()?;
             need_my()?;
             (
@@ -588,15 +799,23 @@ fn compile_fkey(n: u8, ctx: &MacroContext) -> Result<(Vec<jtty::AtomDescriptor>,
                 format!("{his} TU CQ {my} CQ"),
             )
         }
-        4 => {
+        F::MyCall => {
             need_my()?;
             (vec![call_atom(CALL, &my)], my.clone())
         }
-        5 => {
+        F::HisCall => {
             need_his()?;
             (vec![call_atom(CALL, &his)], his.clone())
         }
-        6 => {
+        F::TuNowSerial => {
+            need_his()?;
+            let (atom, text) = serial();
+            (
+                vec![call_atom(TU_NOW_CALL, &his), atom],
+                format!("TU NOW {his} {text}"),
+            )
+        }
+        F::TuNowExchange | F::TuNowGrid => {
             need_his()?;
             let (atom, text) = exchange()?;
             (
@@ -604,16 +823,20 @@ fn compile_fkey(n: u8, ctx: &MacroContext) -> Result<(Vec<jtty::AtomDescriptor>,
                 format!("TU NOW {his} {text}"),
             )
         }
-        7 => {
+        F::CallAgn => {
             need_his()?;
             (vec![call_atom(CALL_AGN, &his)], format!("{his} AGN?"))
         }
-        8 => {
+        F::Serial => {
+            let (atom, text) = serial();
+            (vec![atom], text)
+        }
+        F::Exchange | F::Grid | F::ReportGrid => {
             let (atom, text) = exchange()?;
             (vec![atom], text)
         }
-        _ => return Err(format!("There is no F{n}: JTTY has F1 to F8.")),
-    })
+    };
+    Ok(Compiled::Native(atoms, text))
 }
 
 /// Render `text` as WSJT-X's `Jtty::encodeTransmitText` does: line by line, each line in segments
@@ -679,6 +902,7 @@ fn segment(
         filler,
         first: false,
         tx_hz,
+        his_call: String::new(),
     })
 }
 
@@ -705,10 +929,15 @@ pub fn render(plan: &JttyPlan) -> Result<JttyRendered, String> {
                 filler: false,
                 first: true,
                 tx_hz: plan.tx_hz,
+                his_call: String::new(),
             }]
         }
         Planned::Nothing => Vec::new(),
     };
+    let mut segments = segments;
+    if let Some(first) = segments.first_mut() {
+        first.his_call = plan.his_call.clone();
+    }
     let filler = if plan.start_live {
         let encoded = jtty::encode_segment(FILLER, plan.profile, false)
             .map_err(|_| "JTTY could not encode its filler.".to_string())?;
@@ -783,9 +1012,11 @@ impl Engine {
         }
     }
 
-    /// What the macros read. `%R` sends WSJT-X's -10 until the cockpit can say which line the DX
-    /// call came from (WSJT-X takes the SNR of the decoded word the operator picked).
-    fn jtty_macro_context(&self, his_call: &str) -> MacroContext {
+    /// What the macros read. `%R` is the SNR of the decode the operator picked the DX call from,
+    /// as WSJT-X takes it (`m_jttyHisCallSnr`, 3.3.0-beta4 `widgets/mainwindow.cpp` 9276-9283),
+    /// and WSJT-X's -10 when there is none: a call typed, or none picked
+    /// (`ReceiveResultController::snrForSelectedWord`, `mainwindow.cpp` 10565).
+    fn jtty_macro_context(&self, his_call: &str, his_snr: Option<i32>) -> MacroContext {
         let (profile, exchange) = self.jtty_exchange();
         MacroContext {
             my_call: self.settings.mycall.trim().to_uppercase(),
@@ -794,7 +1025,7 @@ impl Engine {
             profile,
             exchange,
             grid: self.settings.mygrid.clone(),
-            snr: -10,
+            snr: his_snr.unwrap_or(-10),
         }
     }
 
@@ -809,14 +1040,20 @@ impl Engine {
             consumed: 0,
             sent: String::new(),
             substituted: false,
+            his_call: String::new(),
         }
     }
 
     /// Plan a one-shot send of typed text — WSJT-X's Send (Ctrl+K): all of it, the macros in it
     /// expanded, ending the message (and a live session, if one is running).
-    pub fn jtty_plan_send(&mut self, text: &str, his_call: &str) -> Result<JttyPlan, String> {
+    pub fn jtty_plan_send(
+        &mut self,
+        text: &str,
+        his_call: &str,
+        his_snr: Option<i32>,
+    ) -> Result<JttyPlan, String> {
         self.jtty_tx_gate()?;
-        let ctx = self.jtty_macro_context(his_call);
+        let ctx = self.jtty_macro_context(his_call, his_snr);
         let expanded = expand_literal(text, &ctx);
         let prepared = crate::keyboard::kb_filter(crate::keyboard::JTTY, &expanded);
         if prepared.trim().is_empty() {
@@ -827,6 +1064,7 @@ impl Engine {
             text: prepared.clone(),
             last: true,
         });
+        plan.his_call = ctx.his_call.clone();
         plan.end_live = true;
         plan.consumed = text.encode_utf16().count();
         plan.sent = prepared;
@@ -834,18 +1072,87 @@ impl Engine {
         Ok(plan)
     }
 
-    /// Plan F-key `n` (1..=8) with `his_call` (the log strip's Call), compiled as WSJT-X compiles
-    /// its Contest templates ([`FKEY_TEMPLATES`]): one message, ending there.
-    pub fn jtty_plan_fkey(&mut self, n: u8, his_call: &str) -> Result<JttyPlan, String> {
+    /// The template on F-key `n` (1..=8) in the message style in force (WSJT-X's `msg1`..`msg8`,
+    /// `sendJttyFunctionKey`): the operator's own, or WSJT-X's default for a set that has none.
+    pub fn jtty_fkey_template(&self, n: u8) -> Option<String> {
+        if !(1..=8).contains(&n) {
+            return None;
+        }
+        let (set, defaults) = match self.settings.jtty_message_style {
+            crate::settings::JttyMessageStyle::Contest => {
+                (&self.settings.jtty_fkeys, FKEY_TEMPLATES)
+            }
+            crate::settings::JttyMessageStyle::Ft8 => {
+                (&self.settings.jtty_ft8_fkeys, FT8_FKEY_TEMPLATES)
+            }
+        };
+        let i = usize::from(n - 1);
+        Some(
+            set.get(i)
+                .cloned()
+                .unwrap_or_else(|| defaults[i].to_string()),
+        )
+    }
+
+    /// Plan F-key `n` (1..=8) with `his_call` (the log strip's Call), as WSJT-X's
+    /// `sendJttyFunctionKey` sends it (3.3.0-beta4 `widgets/mainwindow_jtty.cpp` 973-1015): its
+    /// template compiled ([`compile_macro`]), a native form into atoms as one message, anything
+    /// else as text the way Send sends it, ending the message. An empty key sends nothing.
+    pub fn jtty_plan_fkey(
+        &mut self,
+        n: u8,
+        his_call: &str,
+        his_snr: Option<i32>,
+    ) -> Result<JttyPlan, String> {
         self.jtty_tx_gate()?;
-        let ctx = self.jtty_macro_context(his_call);
-        let (atoms, text) = compile_fkey(n, &ctx)?;
-        let mut plan = self.jtty_new_plan(Planned::Atoms {
-            atoms,
-            text: text.clone(),
-        });
-        plan.sent = text;
+        let template = self
+            .jtty_fkey_template(n)
+            .ok_or_else(|| format!("There is no F{n}: JTTY has F1 to F8."))?;
+        if template.trim().is_empty() {
+            return Err(format!(
+                "F{n} is empty: give it a message first. Nothing was sent."
+            ));
+        }
+        let ctx = self.jtty_macro_context(his_call, his_snr);
+        let mut plan = self.jtty_fkey_plan(n, &template, &ctx)?;
+        plan.his_call = ctx.his_call;
         Ok(plan)
+    }
+
+    /// F-key `n`'s template compiled and planned ([`Engine::jtty_plan_fkey`]).
+    fn jtty_fkey_plan(
+        &self,
+        n: u8,
+        template: &str,
+        ctx: &MacroContext,
+    ) -> Result<JttyPlan, String> {
+        match compile_macro(n, template, ctx)? {
+            Compiled::Native(atoms, text) => {
+                let mut plan = self.jtty_new_plan(Planned::Atoms {
+                    atoms,
+                    text: text.clone(),
+                });
+                plan.sent = text;
+                Ok(plan)
+            }
+            Compiled::Literal(expanded) => {
+                // `jtty_tx(compiled.text)`: the expanded text, sent as Send sends text.
+                let prepared = crate::keyboard::kb_filter(crate::keyboard::JTTY, &expanded);
+                if prepared.trim().is_empty() {
+                    return Err(format!(
+                        "F{n} has nothing to send once its macros are filled."
+                    ));
+                }
+                let substituted = prepared != expanded.replace('\r', "\n");
+                let mut plan = self.jtty_new_plan(Planned::Text {
+                    text: prepared.clone(),
+                    last: true,
+                });
+                plan.sent = prepared;
+                plan.substituted = substituted;
+                Ok(plan)
+            }
+        }
     }
 
     /// Plan the start of a live session (WSJT-X's Alt+J): what is typed so far goes out with
@@ -854,9 +1161,10 @@ impl Engine {
         &mut self,
         typed: &str,
         his_call: &str,
+        his_snr: Option<i32>,
     ) -> Result<JttyPlan, String> {
         self.jtty_tx_gate()?;
-        let mut plan = self.jtty_plan_typed(typed, his_call, true, false)?;
+        let mut plan = self.jtty_plan_typed(typed, his_call, his_snr, true, false)?;
         plan.start_live = !self.jtty_tx.latched;
         Ok(plan)
     }
@@ -867,6 +1175,7 @@ impl Engine {
         &mut self,
         typed: &str,
         his_call: &str,
+        his_snr: Option<i32>,
         how: JttyCommit,
     ) -> Result<JttyPlan, String> {
         self.jtty_tx_gate()?;
@@ -878,22 +1187,27 @@ impl Engine {
                 if complete_words(typed).saturating_sub(HOLDBACK_WORDS) < BATCH_WORDS {
                     return Ok(self.jtty_new_plan(Planned::Nothing));
                 }
-                self.jtty_plan_typed(typed, his_call, false, false)
+                self.jtty_plan_typed(typed, his_call, his_snr, false, false)
             }
-            JttyCommit::Flush => self.jtty_plan_typed(typed, his_call, true, false),
+            JttyCommit::Flush => self.jtty_plan_typed(typed, his_call, his_snr, true, false),
         }
     }
 
     /// Plan the sign-off (WSJT-X's Alt+K): `DE %M K ` added where the typing ends — no space put
     /// before it, as WSJT-X inserts it at the cursor — and all of it sent, ending the message;
     /// the live session ends once it has gone.
-    pub fn jtty_plan_sign_off(&mut self, typed: &str, his_call: &str) -> Result<JttyPlan, String> {
+    pub fn jtty_plan_sign_off(
+        &mut self,
+        typed: &str,
+        his_call: &str,
+        his_snr: Option<i32>,
+    ) -> Result<JttyPlan, String> {
         self.jtty_tx_gate()?;
         if !self.jtty_tx.latched {
             return Err("Live entry is off — there is nothing to sign off".to_string());
         }
         let with = format!("{typed}DE %M K ");
-        let mut plan = self.jtty_plan_typed(&with, his_call, true, true)?;
+        let mut plan = self.jtty_plan_typed(&with, his_call, his_snr, true, true)?;
         plan.consumed = typed.encode_utf16().count();
         plan.end_live = true;
         Ok(plan)
@@ -905,6 +1219,7 @@ impl Engine {
         &mut self,
         typed: &str,
         his_call: &str,
+        his_snr: Option<i32>,
         force: bool,
         last: bool,
     ) -> Result<JttyPlan, String> {
@@ -915,7 +1230,7 @@ impl Engine {
             plan.consumed = 0;
             return Ok(plan);
         }
-        let ctx = self.jtty_macro_context(his_call);
+        let ctx = self.jtty_macro_context(his_call, his_snr);
         let expanded = expand_literal(part, &ctx);
         let prepared = crate::keyboard::kb_filter(crate::keyboard::JTTY, &expanded);
         let substituted = prepared != expanded.replace('\r', "\n");
@@ -923,6 +1238,7 @@ impl Engine {
             text: prepared.clone(),
             last,
         });
+        plan.his_call = ctx.his_call.clone();
         plan.consumed = part.encode_utf16().count();
         plan.sent = prepared;
         plan.substituted = substituted;
@@ -977,6 +1293,10 @@ impl Engine {
             .latch_on(now);
             self.jtty_tx.filler = rendered.filler;
             self.jtty_tx.live_keyed = false;
+        }
+        if !rendered.segments.is_empty() && !self.jtty_tx.active() {
+            // A new over: WSJT-X's frame count starts again.
+            self.jtty_tx.over_frames_sent = 0;
         }
         if !rendered.segments.is_empty() {
             tempo_core::applog::info(
@@ -1067,6 +1387,10 @@ impl Engine {
     /// (`noteTxModeChange`), and so does this.
     pub(super) fn jtty_left(&mut self) {
         self.jtty_drop(LEFT_SCREEN);
+        // The question about the last contact ends with the screen, and so does whom it was with.
+        self.jtty_tx.log_prompt = None;
+        self.jtty_tx.log_prompt_end = None;
+        self.jtty_tx.addressed.clear();
     }
 
     /// JTTY was selected: the Tx offset goes back to 1500 Hz with the Rx frequency, as WSJT-X's
@@ -1350,6 +1674,9 @@ impl Engine {
             self.jtty_tx.playing = Some(Playing { seg: next, at: 0 });
         }
         let p = self.jtty_tx.playing.as_mut()?;
+        if !p.seg.filler {
+            self.jtty_tx.over_frames_sent += 1;
+        }
         let end = (p.at + FRAME_SAMPLES).min(p.seg.pcm.len());
         let frame = p.seg.pcm[p.at..end].to_vec();
         p.at = end;
@@ -1372,15 +1699,123 @@ impl Engine {
                 pending.drain(0..len - 5000);
             }
         }
-        if seg.first
-            && seg
-                .text
-                .get(..3)
-                .is_some_and(|t| t.eq_ignore_ascii_case("TU "))
+        if !seg.first {
+            return;
+        }
+        if seg
+            .text
+            .get(..3)
+            .is_some_and(|t| t.eq_ignore_ascii_case("TU "))
         {
-            let next = (self.jtty_tx.serial + 1).min(JTTY_SERIAL_MAX);
+            // `handleJttyContestSerial` (3.3.0-beta4 `widgets/mainwindow_jtty.cpp` 701-709): the
+            // serial moves on, and WSJT-X starts `logQSOTimer`, which opens its Log QSO dialog
+            // (`on_logQSOButton_clicked`, `widgets/mainwindow.cpp` 1552-1553) with the exchange
+            // sent (`m_xSent`) the serial that went. Here that is a PROMPT for the cockpit: it
+            // logs nothing, and the operator confirms it from the log strip, or not.
+            let sent = self.jtty_tx.serial;
+            let next = (sent + 1).min(JTTY_SERIAL_MAX);
             self.jtty_tx.serial = next;
             self.settings.jtty_serial = next;
+            //
+            // The prompt names the station the TU THANKED: the one the sends before it went to
+            // (F6 thanks it while calling the next), else the Call box's. It is worked out before
+            // this send moves `addressed` on, below.
+            let thanked = if self.jtty_tx.addressed.is_empty() {
+                seg.his_call.clone()
+            } else {
+                self.jtty_tx.addressed.clone()
+            };
+            // A prompt for another station still asked is replaced, and this one says so: that
+            // contact is logged from the strip now.
+            let replaced = self
+                .jtty_open_log_prompt(at_ms)
+                .filter(|p| !p.call.is_empty() && !p.call.eq_ignore_ascii_case(&thanked))
+                .map(|p| p.call.clone());
+            self.jtty_tx.log_prompts += 1;
+            self.jtty_tx.log_prompt = Some(crate::dto::JttyLogPrompt {
+                id: self.jtty_tx.log_prompts,
+                call: thanked,
+                serial: sent,
+                at_utc_ms: at_ms,
+                replaced,
+            });
+            self.jtty_tx.log_prompt_end = None;
+        }
+        // Whom this send went to, for the next TU: the Call box's station, whether or not the
+        // message names it (WSJT-X's search-and-pounce keys F4 `%M` and F8 `%E` name nobody), but
+        // not for a CQ, which goes to nobody whatever the box holds.
+        let cq = seg
+            .text
+            .get(..3)
+            .is_some_and(|t| t.eq_ignore_ascii_case("CQ "));
+        if !seg.his_call.is_empty() && !cq {
+            self.jtty_tx.addressed = seg.his_call.clone();
+        }
+    }
+
+    /// A contact with `call` reached the log, by any route (the log strip's own Log, the
+    /// logbook, a Remote client, the contest log): a prompt asking to log it is closed for every
+    /// screen, so Log QSO cannot log it again. Another station's contact leaves it open.
+    pub(super) fn jtty_contact_logged(&mut self, call: &str) {
+        let call = call.trim();
+        if self
+            .jtty_tx
+            .log_prompt
+            .as_ref()
+            .is_some_and(|p| !p.call.is_empty() && p.call.eq_ignore_ascii_case(call))
+        {
+            self.jtty_tx.log_prompt_end = Some(crate::dto::JttyLogPromptAnswer::Logged);
+        }
+    }
+
+    /// The Log QSO prompt still to be asked: the newest, unanswered, and no older than
+    /// [`JTTY_LOG_PROMPT_MS`].
+    fn jtty_open_log_prompt(&self, now_ms: i64) -> Option<&crate::dto::JttyLogPrompt> {
+        self.jtty_tx
+            .log_prompt
+            .as_ref()
+            .filter(|_| self.jtty_tx.log_prompt_end.is_none())
+            .filter(|p| now_ms - p.at_utc_ms <= JTTY_LOG_PROMPT_MS)
+    }
+
+    /// Answer Log QSO prompt `id` (Log QSO or Not now, from any screen): `Taken` for the first
+    /// answer of the prompt still asked, which takes it, so no screen asks again; for anything else
+    /// why it took nothing (answered already, its contact logged, replaced by a newer TU, too old).
+    /// A screen logs only on `Taken`, so one TU is never logged twice from two screens. Logs and
+    /// sends nothing itself.
+    pub fn jtty_log_prompt_answer(&mut self, id: u64) -> crate::dto::JttyLogPromptAnswer {
+        use crate::dto::JttyLogPromptAnswer as A;
+        let Some(newest) = self.jtty_tx.log_prompt.as_ref() else {
+            return A::Expired;
+        };
+        if id < newest.id {
+            return A::Replaced;
+        }
+        if id > newest.id {
+            return A::Expired;
+        }
+        if let Some(end) = self.jtty_tx.log_prompt_end {
+            return end;
+        }
+        if self
+            .jtty_open_log_prompt(now_unix_millis() as i64)
+            .is_none()
+        {
+            return A::Expired;
+        }
+        self.jtty_tx.log_prompt_end = Some(A::Answered);
+        A::Taken
+    }
+
+    /// Give back prompt `id`, taken by a Log QSO whose log then logged nothing (the strip refused
+    /// it after the claim): it is asked again, on every screen, as it was. Only while it is the
+    /// newest prompt and was closed by an answer, not by its contact reaching the log. Logs and
+    /// sends nothing.
+    pub fn jtty_log_prompt_release(&mut self, id: u64) {
+        if self.jtty_tx.log_prompt.as_ref().is_some_and(|p| p.id == id)
+            && self.jtty_tx.log_prompt_end == Some(crate::dto::JttyLogPromptAnswer::Answered)
+        {
+            self.jtty_tx.log_prompt_end = None;
         }
     }
 
@@ -1396,6 +1831,13 @@ impl Engine {
             left,
             pending,
             notice: self.jtty_tx.notice.clone(),
+            log_prompt: self.jtty_open_log_prompt(now_unix_millis() as i64).cloned(),
+            frames_sent: self.jtty_tx.over_frames_sent,
+            frames_total: self.jtty_tx.over_frames_sent + self.jtty_tx.frames_left(),
+            style: self.settings.jtty_message_style,
+            fkeys: (1..=8)
+                .map(|n| self.jtty_fkey_template(n).unwrap_or_default())
+                .collect(),
         }
     }
 }
@@ -1452,17 +1894,17 @@ pub fn run_bound(
 
 /// Send typed text (WSJT-X's Send): see [`Engine::jtty_plan_send`].
 pub fn send_text(engine: &Mutex<Engine>, text: &str, his_call: &str) -> Result<JttySent, String> {
-    run(engine, |e| e.jtty_plan_send(text, his_call))
+    run(engine, |e| e.jtty_plan_send(text, his_call, None))
 }
 
 /// Send F-key `n`: see [`Engine::jtty_plan_fkey`].
 pub fn send_fkey(engine: &Mutex<Engine>, n: u8, his_call: &str) -> Result<JttySent, String> {
-    run(engine, |e| e.jtty_plan_fkey(n, his_call))
+    run(engine, |e| e.jtty_plan_fkey(n, his_call, None))
 }
 
 /// Start live entry with what is typed so far: see [`Engine::jtty_plan_live_start`].
 pub fn live_start(engine: &Mutex<Engine>, typed: &str, his_call: &str) -> Result<JttySent, String> {
-    run(engine, |e| e.jtty_plan_live_start(typed, his_call))
+    run(engine, |e| e.jtty_plan_live_start(typed, his_call, None))
 }
 
 /// Commit live typing: see [`Engine::jtty_plan_live`].
@@ -1472,12 +1914,12 @@ pub fn live_commit(
     his_call: &str,
     how: JttyCommit,
 ) -> Result<JttySent, String> {
-    run(engine, |e| e.jtty_plan_live(typed, his_call, how))
+    run(engine, |e| e.jtty_plan_live(typed, his_call, None, how))
 }
 
 /// Sign off: see [`Engine::jtty_plan_sign_off`].
 pub fn sign_off(engine: &Mutex<Engine>, typed: &str, his_call: &str) -> Result<JttySent, String> {
-    run(engine, |e| e.jtty_plan_sign_off(typed, his_call))
+    run(engine, |e| e.jtty_plan_sign_off(typed, his_call, None))
 }
 
 #[cfg(test)]
@@ -1592,7 +2034,7 @@ mod tests {
                 &e,
                 |g| {
                     planned.store(true, Ordering::SeqCst);
-                    let plan = g.jtty_plan_send("CQ W9XYZ", "");
+                    let plan = g.jtty_plan_send("CQ W9XYZ", "", None);
                     if lapse == "while it renders" {
                         transmit.revoke();
                     }
@@ -1765,7 +2207,7 @@ mod tests {
     fn a_line_that_will_not_encode_refuses_the_whole_send() {
         let roundup = |text: &'static str| {
             move |g: &mut Engine| {
-                let mut plan = g.jtty_plan_send(text, "")?;
+                let mut plan = g.jtty_plan_send(text, "", None)?;
                 plan.profile = jtty::Profile::RttyRoundup;
                 Ok(plan)
             }
@@ -1877,6 +2319,89 @@ mod tests {
         assert!(send_fkey(&e, 9, "W1AW").is_err());
     }
 
+    /// EDITED F-KEYS compile as WSJT-X 3.3.0-beta4 compiles them (`Jtty::compileNativeMacro`,
+    /// `lib/jtty/JttyTransmit.cpp` 673-800): a control phrase is one control atom, the native forms
+    /// beyond the eight defaults (a grid, the exact `599 %N` serial forms) their atoms, and
+    /// anything else literal text with its macros expanded, which a receiver reads back as sent.
+    /// An empty key sends nothing; a grid that is not a locator refuses a grid form.
+    #[test]
+    fn edited_f_keys_compile_as_wsjtx_compiles_them() {
+        let e = jtty_engine();
+        engine_lock(&e).settings.jtty_fkeys = [
+            "agn?",
+            "%H %G",
+            "599 %G",
+            "TU NOW %Q 599 %N",
+            "HELLO %H DE %M",
+            "",
+            "%h  agn?",
+        ]
+        .map(String::from)
+        .to_vec();
+        let want = [
+            (1, "AGN?", Some(1)),
+            (2, "W1AW EN37", Some(2)),
+            (3, "599 EN37", Some(1)),
+            (4, "TU NOW W1AW 599 007", Some(2)),
+            (5, "HELLO W1AW DE W9XYZ", None),
+            (7, "W1AW AGN?", Some(1)),
+        ];
+        for (n, text, atoms) in want {
+            engine_lock(&e).set_jtty_serial(7).unwrap();
+            let done = send_fkey(&e, n, "w1aw").unwrap();
+            assert_eq!(done.sent, text, "F{n}");
+            let air = drain(&e);
+            if let Some(frames) = atoms {
+                assert_eq!(air.len(), frames * FRAME_SAMPLES, "F{n}: one frame an atom");
+            }
+            assert_eq!(complete(&receive(&air)), vec![text], "F{n}");
+        }
+        let err = send_fkey(&e, 6, "W1AW").unwrap_err();
+        assert!(err.contains("F6 is empty"), "{err}");
+        // A set shorter than eight: the rest are WSJT-X's defaults.
+        assert_eq!(engine_lock(&e).jtty_fkey_template(8).as_deref(), Some("%E"));
+        engine_lock(&e).settings.mygrid = "XX".into();
+        let err = send_fkey(&e, 2, "W1AW").unwrap_err();
+        assert!(err.contains("locator"), "{err}");
+        assert_eq!(
+            engine_lock(&e).tx_owner(),
+            None,
+            "a refused or empty key queued nothing"
+        );
+    }
+
+    /// WSJT-X's FT8 MESSAGE STYLE (`Jtty::ft8StyleMacroTemplate`): its six chat templates go as
+    /// text, and `%R` is the SNR of the decode the DX call was picked from, WSJT-X's -10 when
+    /// there is none (`m_jttyHisCallSnr`); F7 and F8 are blank and send nothing.
+    #[test]
+    fn the_ft8_message_style_sends_the_picked_snr() {
+        let e = jtty_engine();
+        engine_lock(&e).settings.jtty_message_style = crate::settings::JttyMessageStyle::Ft8;
+        let fkey = |n: u8, snr: Option<i32>| run(&e, |g| g.jtty_plan_fkey(n, "W1AW", snr));
+        for (n, snr, text) in [
+            (1, Some(-15), "W1AW W9XYZ EN37"),
+            (2, Some(-15), "W1AW W9XYZ -15"),
+            (3, Some(3), "W1AW W9XYZ R+03"),
+            (2, None, "W1AW W9XYZ -10"),
+            (4, None, "W1AW W9XYZ RRR"),
+            (5, None, "W1AW W9XYZ 73"),
+            (6, None, "CQ W9XYZ EN37"),
+        ] {
+            assert_eq!(fkey(n, snr).unwrap().sent, text, "F{n} {snr:?}");
+            assert_eq!(complete(&receive(&drain(&e))), vec![text], "F{n}");
+        }
+        for n in [7, 8] {
+            assert!(fkey(n, None).unwrap_err().contains("is empty"), "F{n}");
+        }
+        // The style picks the set: the Contest set is untouched by the FT8 one.
+        engine_lock(&e).settings.jtty_message_style = crate::settings::JttyMessageStyle::Contest;
+        assert_eq!(fkey(2, Some(-15)).unwrap().sent, "W1AW 599 001");
+        drain(&e);
+        // `%R` in typed text is the same SNR.
+        let typed = run(&e, |g| g.jtty_plan_send("%H %R", "W1AW", Some(-7))).unwrap();
+        assert_eq!(typed.sent, "W1AW -07");
+    }
+
     /// THE SERIAL, as WSJT-X moves it (`handleJttyContestSerial`): on after a send whose first
     /// segment starts "TU " (either case), when it starts on the air — F6's "TU NOW" — and not
     /// after any other. Settings keeps it.
@@ -1906,6 +2431,412 @@ mod tests {
         send_text(&e, "W1AW TU", "").unwrap();
         drain(&e);
         assert_eq!(engine_lock(&e).jtty_serial(), 3, "only at the start");
+    }
+
+    /// WSJT-X'S "FRAMES: SENT/TOTAL" (`updateJttyLiveEntryFrameLabel`): the frames of what was sent
+    /// this over that are on the air, and those plus what is still queued; the filler counts in
+    /// neither, and the next over starts the count again.
+    #[test]
+    fn the_frame_count_is_sent_over_total_for_the_over() {
+        let e = jtty_engine();
+        let count = || {
+            let st = engine_lock(&e).jtty_tx_state();
+            (st.frames_sent, st.frames_total)
+        };
+        assert_eq!(count(), (0, 0));
+        send_fkey(&e, 2, "W1AW").unwrap();
+        send_fkey(&e, 1, "").unwrap();
+        assert_eq!(count(), (0, 3), "F2 is two atoms, F1 one");
+        frames(&e, 1);
+        assert_eq!(count(), (1, 3));
+        drain(&e);
+        assert_eq!(count(), (3, 3), "kept once the over has gone");
+        send_fkey(&e, 1, "").unwrap();
+        assert_eq!(count(), (0, 1), "a new over counts again");
+        drain(&e);
+        // A live session's filler is not counted.
+        live_start(&e, "", "").unwrap();
+        live_commit(&e, "HI ", "", JttyCommit::Flush).unwrap();
+        let typed = count().1;
+        for _ in 0..(typed as usize + 3) {
+            engine_lock(&e).poll_jtty(true, 0.0);
+        }
+        assert_eq!(
+            count(),
+            (typed, typed),
+            "the filler that followed is not a frame sent"
+        );
+        engine_lock(&e).jtty_stop();
+    }
+
+    /// THE LOG QSO PROMPT, as WSJT-X raises it (`handleJttyContestSerial` starts `logQSOTimer`,
+    /// 3.3.0-beta4 `widgets/mainwindow_jtty.cpp` 701-709): when a send starting "TU " starts on
+    /// the air, naming the call it was sent with and the serial that went, and after no other
+    /// send. It is a prompt and nothing more: no contact is logged or held for logging, and
+    /// nothing more is queued.
+    #[test]
+    fn a_tu_send_raises_a_log_prompt_and_logs_nothing() {
+        let e = jtty_engine();
+        let logged = || {
+            use crate::test_util::StoredLog;
+            let pending = engine_lock(&e).pending_log().is_some();
+            (e.stored_log().len(), pending)
+        };
+        let before = logged();
+        let prompt = || engine_lock(&e).jtty_tx_state().log_prompt;
+        send_fkey(&e, 2, "W1AW").unwrap();
+        drain(&e);
+        assert_eq!(prompt(), None, "F2 is no TU");
+        send_fkey(&e, 6, "w1aw").unwrap();
+        assert_eq!(prompt(), None, "not before it is on the air");
+        frames(&e, 1);
+        let first = prompt().expect("F6 raised it");
+        assert_eq!(
+            (first.id, first.call.as_str(), first.serial),
+            (1, "W1AW", 1)
+        );
+        assert_eq!(engine_lock(&e).jtty_serial(), 2, "and the serial moved on");
+        drain(&e);
+        assert_eq!(engine_lock(&e).tx_owner(), None, "nothing more was queued");
+        send_text(&e, "tu 73", "").unwrap();
+        drain(&e);
+        let second = prompt().expect("typed TU raised it");
+        // The station F6 last named is the one a TU typed with an empty Call box thanks.
+        assert_eq!(
+            (second.id, second.call.as_str(), second.serial),
+            (2, "W1AW", 2)
+        );
+        send_text(&e, "W1AW TU", "W1AW").unwrap();
+        drain(&e);
+        assert_eq!(prompt().map(|p| p.id), Some(2), "only at the start");
+        assert_eq!(logged(), before, "a prompt logs nothing");
+        let json = serde_json::to_string(&engine_lock(&e).jtty_tx_state()).unwrap();
+        assert!(
+            json.contains(r#""logPrompt":{"id":2,"call":"W1AW","serial":2,"atUtcMs":"#),
+            "{json}"
+        );
+    }
+
+    /// THE PROMPT NAMES THE STATION THE TU THANKED. F6 (`TU NOW %Q %E`) thanks the station just
+    /// worked and calls the next one, whose call is in the Call box by then; a typed "TU 73"
+    /// thanks the station last sent to, whatever the Call box holds now. The station a send last
+    /// named is the one a later TU closes; with none named yet, the Call box's.
+    #[test]
+    fn the_prompt_names_the_station_the_tu_thanked() {
+        let e = jtty_engine();
+        let prompt_call = || {
+            engine_lock(&e)
+                .jtty_tx_state()
+                .log_prompt
+                .map(|p| p.call)
+                .unwrap_or_default()
+        };
+        // First send of the session, a TU with the Call box W1AW: nothing named before it.
+        send_text(&e, "TU 73", "W1AW").unwrap();
+        drain(&e);
+        assert_eq!(
+            prompt_call(),
+            "W1AW",
+            "the Call box, with nothing named before"
+        );
+        send_fkey(&e, 2, "K1ABC").unwrap();
+        drain(&e);
+        // The next caller is put in the Call box, and F6 thanks K1ABC as it calls him.
+        send_fkey(&e, 6, "N0XX").unwrap();
+        drain(&e);
+        assert_eq!(
+            prompt_call(),
+            "K1ABC",
+            "F6 thanked K1ABC, not the next station"
+        );
+        // A CQ does not name the Call box's station: it moves nothing.
+        send_fkey(&e, 1, "W9ZZZ").unwrap();
+        drain(&e);
+        send_text(&e, "tu 73", "W9ZZZ").unwrap();
+        drain(&e);
+        assert_eq!(prompt_call(), "N0XX", "the station F6 last sent to");
+        // Leaving the screen forgets it.
+        engine_lock(&e).jtty_left();
+        engine_lock(&e).set_operating_mode("jtty", false);
+        engine_lock(&e).set_tx_enabled(true);
+        send_text(&e, "TU 73", "W2AA").unwrap();
+        drain(&e);
+        assert_eq!(prompt_call(), "W2AA");
+    }
+
+    /// A PROMPT IS ANSWERED ONCE, FOR EVERY SCREEN. The first answer (Log QSO or Not now, from
+    /// the shack or a Remote client) takes it and every screen stops asking; a second answer of
+    /// the same prompt, an answer of an older one, a prompt older than two minutes and leaving
+    /// the screen all leave nothing to take, so one TU can never be logged twice.
+    #[test]
+    fn a_prompt_is_answered_once_for_every_screen() {
+        let e = jtty_engine();
+        use crate::dto::JttyLogPromptAnswer as A;
+        let shown = || engine_lock(&e).jtty_tx_state().log_prompt.map(|p| p.id);
+        send_text(&e, "TU 73", "W1AW").unwrap();
+        drain(&e);
+        send_text(&e, "TU 73", "W1AW").unwrap();
+        drain(&e);
+        assert_eq!(shown(), Some(2));
+        assert_eq!(
+            engine_lock(&e).jtty_log_prompt_answer(1),
+            A::Replaced,
+            "an older prompt"
+        );
+        assert_eq!(shown(), Some(2), "is no answer to this one");
+        assert_eq!(
+            engine_lock(&e).jtty_log_prompt_answer(2),
+            A::Taken,
+            "the first answer takes it"
+        );
+        assert_eq!(shown(), None, "and no screen asks again");
+        assert_eq!(
+            engine_lock(&e).jtty_log_prompt_answer(2),
+            A::Answered,
+            "a second screen's answer takes nothing"
+        );
+        // Two minutes on, a prompt nobody answered is not asked, nor can it be taken.
+        send_text(&e, "TU 73", "W1AW").unwrap();
+        drain(&e);
+        assert_eq!(shown(), Some(3));
+        engine_lock(&e)
+            .jtty_tx
+            .log_prompt
+            .as_mut()
+            .unwrap()
+            .at_utc_ms -= JTTY_LOG_PROMPT_MS + 1_000;
+        assert_eq!(shown(), None, "too old to ask");
+        assert_eq!(engine_lock(&e).jtty_log_prompt_answer(3), A::Expired);
+        // Leaving the screen ends the question.
+        send_text(&e, "TU 73", "W1AW").unwrap();
+        drain(&e);
+        assert_eq!(shown(), Some(4));
+        engine_lock(&e).jtty_left();
+        assert_eq!(shown(), None, "left the screen");
+    }
+
+    /// THE TU THANKS THE STATION THE LAST SENDS WENT TO, even when they never named it.
+    /// WSJT-X's search-and-pounce keys F4 (`%M`) and F8 (`%E`) carry no call: with K1ABC in the
+    /// Call box, the TU after them thanks K1ABC, not the station before. F6 still thanks the
+    /// station worked while calling the next, and a typed TU with the Call box emptied thanks
+    /// the station last sent to.
+    #[test]
+    fn the_prompt_names_the_station_worked_with_keys_that_name_nobody() {
+        let e = jtty_engine();
+        let prompt_call = || {
+            engine_lock(&e)
+                .jtty_tx_state()
+                .log_prompt
+                .map(|p| p.call)
+                .unwrap_or_default()
+        };
+        // The contact before: F2 to W1AW, a typed TU.
+        send_fkey(&e, 2, "W1AW").unwrap();
+        drain(&e);
+        send_text(&e, "TU 73", "W1AW").unwrap();
+        drain(&e);
+        assert_eq!(prompt_call(), "W1AW", "control: the contact before");
+        // Search and pounce on K1ABC with the keys that name nobody.
+        send_fkey(&e, 4, "K1ABC").unwrap();
+        drain(&e);
+        send_fkey(&e, 8, "K1ABC").unwrap();
+        drain(&e);
+        send_text(&e, "TU 73", "K1ABC").unwrap();
+        drain(&e);
+        assert_eq!(prompt_call(), "K1ABC", "the TU thanked K1ABC");
+        // A run: F6 thanks N0XX while calling W2BB, whose call is in the box by then.
+        send_fkey(&e, 2, "N0XX").unwrap();
+        drain(&e);
+        send_fkey(&e, 6, "W2BB").unwrap();
+        drain(&e);
+        assert_eq!(prompt_call(), "N0XX", "F6 thanked N0XX");
+        // A typed TU with the Call box emptied thanks the station last sent to: W2BB.
+        send_text(&e, "TU 73", "").unwrap();
+        drain(&e);
+        assert_eq!(prompt_call(), "W2BB", "the station F6 called");
+        // A CQ with a call left in the box sends to nobody.
+        send_fkey(&e, 1, "W9ZZZ").unwrap();
+        drain(&e);
+        send_text(&e, "TU 73", "").unwrap();
+        drain(&e);
+        assert_eq!(prompt_call(), "W2BB", "a CQ moved nothing");
+    }
+
+    /// A CONTACT LOGGED BY ANY ROUTE CLOSES ITS PROMPT, for every screen. Logged with the strip's
+    /// own Log (the logbook, a Remote client, the contest log), the contact is in the log: Log QSO
+    /// must not log it again, so the prompt is no longer asked and an answer of it says why.
+    /// Another station's contact leaves it open.
+    #[test]
+    fn a_contact_logged_by_any_route_closes_its_prompt() {
+        use crate::dto::JttyLogPromptAnswer as A;
+        let contact = |call: &str| {
+            tempo_core::logbook::parse_adif(&format!(
+                "<CALL:{}>{call}<BAND:3>20m<MODE:4>JTTY<FREQ:6>14.090<QSO_DATE:8>20261026\
+                 <TIME_ON:6>120000<EOR>",
+                call.len()
+            ))
+            .pop()
+            .expect("one record")
+        };
+        let e = jtty_engine();
+        let shown = || engine_lock(&e).jtty_tx_state().log_prompt.map(|p| p.id);
+        send_text(&e, "TU 73", "W1AW").unwrap();
+        drain(&e);
+        assert_eq!(shown(), Some(1));
+        engine_lock(&e).log_qso(contact("K1ABC"));
+        assert_eq!(shown(), Some(1), "control: another station's contact");
+        engine_lock(&e).log_qso(contact("w1aw"));
+        assert_eq!(shown(), None, "W1AW is in the log: nothing to ask");
+        assert_eq!(engine_lock(&e).jtty_log_prompt_answer(1), A::Logged);
+        // The contest log, as the strip logs in a contest session.
+        let e = jtty_in_contest("arrlfd", "3A");
+        send_text(&e, "TU 73", "W1AW").unwrap();
+        drain(&e);
+        let id = engine_lock(&e)
+            .jtty_tx_state()
+            .log_prompt
+            .expect("asked")
+            .id;
+        assert!(engine_lock(&e)
+            .contest_log_manual_sent(
+                "W1AW",
+                &[
+                    ("CLASS".into(), "2A".into()),
+                    ("SECTION".into(), "EMA".into())
+                ],
+                "DIG",
+                Some("JTTY"),
+                None,
+            )
+            .unwrap());
+        assert_eq!(engine_lock(&e).jtty_tx_state().log_prompt, None);
+        assert_eq!(engine_lock(&e).jtty_log_prompt_answer(id), A::Logged);
+        // The class-and-section door the Field Day strip used before the field vector.
+        send_fkey(&e, 2, "N0XX").unwrap();
+        drain(&e);
+        send_text(&e, "TU 73", "N0XX").unwrap();
+        drain(&e);
+        assert!(engine_lock(&e).jtty_tx_state().log_prompt.is_some());
+        assert!(engine_lock(&e)
+            .fd_log_manual_submode("N0XX", "2A", "EMA", "DIG", "JTTY")
+            .unwrap());
+        assert_eq!(engine_lock(&e).jtty_tx_state().log_prompt, None);
+    }
+
+    /// WHY AN ANSWER TOOK NOTHING. The first answer takes the prompt; any other is told whether
+    /// it was answered already, replaced by a newer TU, or too old, so the cockpit never says
+    /// "answered on another screen" when nobody answered it.
+    #[test]
+    fn an_answer_that_takes_nothing_says_why() {
+        use crate::dto::JttyLogPromptAnswer as A;
+        let e = jtty_engine();
+        send_text(&e, "TU 73", "W1AW").unwrap();
+        drain(&e);
+        send_text(&e, "TU 73", "K1ABC").unwrap();
+        drain(&e);
+        assert_eq!(engine_lock(&e).jtty_log_prompt_answer(1), A::Replaced);
+        assert_eq!(engine_lock(&e).jtty_log_prompt_answer(2), A::Taken);
+        assert_eq!(engine_lock(&e).jtty_log_prompt_answer(2), A::Answered);
+        send_text(&e, "TU 73", "N0XX").unwrap();
+        drain(&e);
+        engine_lock(&e)
+            .jtty_tx
+            .log_prompt
+            .as_mut()
+            .unwrap()
+            .at_utc_ms -= JTTY_LOG_PROMPT_MS + 1_000;
+        assert_eq!(engine_lock(&e).jtty_log_prompt_answer(3), A::Expired);
+    }
+
+    /// A SECOND TU REPLACING AN UNANSWERED PROMPT SAYS SO: the new prompt names the station whose
+    /// question it replaced, for the operator to log from the strip. Not after an answer, not for
+    /// the same station, and not once the old one was too old to ask.
+    #[test]
+    fn a_tu_that_replaces_an_unanswered_prompt_names_it() {
+        let e = jtty_engine();
+        let replaced = || {
+            engine_lock(&e)
+                .jtty_tx_state()
+                .log_prompt
+                .and_then(|p| p.replaced)
+        };
+        send_text(&e, "TU 73", "W1AW").unwrap();
+        drain(&e);
+        assert_eq!(replaced(), None, "the first replaces nothing");
+        send_fkey(&e, 2, "K1ABC").unwrap();
+        drain(&e);
+        send_text(&e, "TU 73", "K1ABC").unwrap();
+        drain(&e);
+        assert_eq!(
+            replaced().as_deref(),
+            Some("W1AW"),
+            "W1AW was never answered"
+        );
+        send_text(&e, "TU 73", "K1ABC").unwrap();
+        drain(&e);
+        assert_eq!(replaced(), None, "the same station: nothing lost");
+        let id = engine_lock(&e).jtty_tx_state().log_prompt.unwrap().id;
+        engine_lock(&e).jtty_log_prompt_answer(id);
+        send_fkey(&e, 2, "N0XX").unwrap();
+        drain(&e);
+        send_text(&e, "TU 73", "N0XX").unwrap();
+        drain(&e);
+        assert_eq!(replaced(), None, "K1ABC was answered");
+        engine_lock(&e)
+            .jtty_tx
+            .log_prompt
+            .as_mut()
+            .unwrap()
+            .at_utc_ms -= JTTY_LOG_PROMPT_MS + 1_000;
+        send_fkey(&e, 2, "W2BB").unwrap();
+        drain(&e);
+        send_text(&e, "TU 73", "W2BB").unwrap();
+        drain(&e);
+        assert_eq!(replaced(), None, "N0XX's was too old to ask");
+    }
+
+    /// A PROMPT TAKEN BY A LOG QSO THAT LOGGED NOTHING IS GIVEN BACK. The strip can still refuse
+    /// after the claim (the logger window's entry moved on, the log refused): the prompt is asked
+    /// again for every screen, as it was. Given back only while nothing newer replaced it and the
+    /// contact is not in the log.
+    #[test]
+    fn a_taken_prompt_that_logged_nothing_is_asked_again() {
+        use crate::dto::JttyLogPromptAnswer as A;
+        let e = jtty_engine();
+        let shown = || engine_lock(&e).jtty_tx_state().log_prompt.map(|p| p.id);
+        send_text(&e, "TU 73", "W1AW").unwrap();
+        drain(&e);
+        assert_eq!(engine_lock(&e).jtty_log_prompt_answer(1), A::Taken);
+        assert_eq!(shown(), None);
+        engine_lock(&e).jtty_log_prompt_release(1);
+        assert_eq!(shown(), Some(1), "asked again");
+        assert_eq!(
+            engine_lock(&e).jtty_log_prompt_answer(1),
+            A::Taken,
+            "and can be answered"
+        );
+        // Replaced since: the newer one stays as it is.
+        send_fkey(&e, 2, "K1ABC").unwrap();
+        drain(&e);
+        send_text(&e, "TU 73", "K1ABC").unwrap();
+        drain(&e);
+        engine_lock(&e).jtty_log_prompt_release(1);
+        assert_eq!(shown(), Some(2));
+        assert_eq!(engine_lock(&e).jtty_log_prompt_answer(2), A::Taken);
+        engine_lock(&e).jtty_log_prompt_release(1);
+        assert_eq!(shown(), None, "an older id gives back nothing");
+        // Taken, then logged by another route: it is in the log, so it is not asked again.
+        engine_lock(&e).log_qso(
+            tempo_core::logbook::parse_adif(
+                "<CALL:5>K1ABC<BAND:3>20m<MODE:4>JTTY<FREQ:6>14.090<QSO_DATE:8>20261026\
+                 <TIME_ON:6>120000<EOR>",
+            )
+            .pop()
+            .expect("one record"),
+        );
+        engine_lock(&e).jtty_log_prompt_release(2);
+        assert_eq!(shown(), None, "logged: nothing to give back");
+        assert_eq!(engine_lock(&e).jtty_log_prompt_answer(2), A::Logged);
     }
 
     /// The JTTY screen in a contest session: `event` ("" is ARRL Field Day), class `class`,
@@ -2464,14 +3395,18 @@ mod tests {
     #[test]
     fn a_send_planned_before_a_stop_is_not_committed() {
         let e = jtty_engine();
-        let plan = engine_lock(&e).jtty_plan_send("CQ W9XYZ", "").unwrap();
+        let plan = engine_lock(&e)
+            .jtty_plan_send("CQ W9XYZ", "", None)
+            .unwrap();
         let rendered = render(&plan).unwrap();
         engine_lock(&e).jtty_stop();
         assert_eq!(
             engine_lock(&e).jtty_commit(plan, rendered),
             Err(STOPPED_FOR_PREP.to_string())
         );
-        let plan = engine_lock(&e).jtty_plan_send("CQ W9XYZ", "").unwrap();
+        let plan = engine_lock(&e)
+            .jtty_plan_send("CQ W9XYZ", "", None)
+            .unwrap();
         let rendered = render(&plan).unwrap();
         engine_lock(&e).set_jtty_tx(1600.0).unwrap();
         assert!(engine_lock(&e).jtty_commit(plan, rendered).is_err());

@@ -29,6 +29,7 @@ Beside them are the frequency controls WSJT-X has for JTTY:
 - **Tx** — where JTTY transmits: its lowest tone, the other three above it. As in WSJT-X, it
   goes back to 1500 Hz each time JTTY is opened from another mode. The license check judges the
   whole signal at this offset. It cannot move while anything is queued or on the air.
+- **Rx→Tx** and **Tx→Rx** — WSJT-X's two copy buttons: Tx to where Rx is, or Rx to where Tx is.
 - **F Tol** — how far either side of Rx the decoder always searches, from WSJT-X's list
   (2 to 500 Hz). It is kept between sessions, as in WSJT-X; a new install starts at 20 Hz.
 
@@ -37,7 +38,8 @@ they fall inside the waterfall's visible range, as WSJT-X searches them inside i
 Zooming the waterfall in narrows that range.
 
 **The waterfall.** A green **RX** cursor marks Rx and a red **TX** cursor marks Tx; a click on
-a signal moves Rx there, Shift+click (or a right-click) moves Tx, and Ctrl+click moves both.
+a signal moves Rx there, Shift+click (or a right-click) moves Tx, and Ctrl+click moves both. A
+double-click on a row decodes that stretch again (see **Decode** below).
 
 **The TX strip** under the waterfall carries **TX On / TX Off**, **Tune**, **ATU** and
 **Stop TX**, as on every cockpit. Stop TX, and Esc, stop whatever is on the air. Opening the JTTY
@@ -54,6 +56,11 @@ still arriving is dimmed until it ends. The head carries:
 - **Lower case** and **Include time** — WSJT-X's two display options: messages in lower case,
   and the UTC time each message started in front of it. Both are kept.
 - **Erase** — empties both panes. Stations already heard stay heard.
+- **Decode** — decodes again, as WSJT-X's Decode button does: the receive audio of the last
+  three minutes goes through a decoder of its own, and what it finds shows in both panes under a
+  **JTTY review** heading, after what was decoded live. A double-click on a waterfall row decodes
+  40 seconds from 5 seconds before that row. What a review finds is shown and nothing more: it
+  is not written to ALL.TXT, spotted, or counted toward the two-decode rule below.
 
 **QSO frequency** shows the messages first heard within F Tol of Rx: the station you are
 listening to.
@@ -74,17 +81,31 @@ The dock at the bottom of the screen is WSJT-X's JTTY transmitter.
   sends it: a line longer than 80 characters goes in pieces, and a line break ends a message.
   While a message is still going, Send shows how many pieces are left; another Send queues behind
   it and goes on the same transmission. `%M` is your call, `%H` the call in the Call box, `%E`
-  your exchange, `%N` the serial and `%G` your grid.
-- **F1 to F8** — WSJT-X's contest messages: `CQ %M CQ`, `%H %E`, `%H TU CQ %M CQ`, `%M`, `%H`,
-  `TU NOW %Q %E`, `%H AGN?` and `%E`. Click one or press its key. A call in them must be a
-  standard callsign, which JTTY sends in a compact form; a key whose call is not one is refused,
-  never sent as text.
+  your exchange, `%N` the serial, `%G` your grid and `%R` the SNR of the newest decode naming the
+  call you clicked, in the pane you clicked it in (-10 when you typed the call). A report goes only
+  with the call it was taken for: change the Call box and it goes.
+- **F1 to F8** — WSJT-X's two sets of messages, picked with **Messages**: **Contest** (`CQ %M CQ`,
+  `%H %E`, `%H TU CQ %M CQ`, `%M`, `%H`, `TU NOW %Q %E`, `%H AGN?` and `%E`) and **FT8 style**
+  for a chat-style contact (`%H %M %G`, `%H %M %R`, `%H %M R%R`, `%H %M RRR`, `%H %M 73` and
+  `CQ %M %G`, F7 and F8 empty). Click one or press its key. **Edit keys** turns the eight keys
+  into their messages to edit, as WSJT-X's message boxes; each set keeps its own, and
+  **Defaults** puts the set back to WSJT-X's. While you edit, F1 to F8 send nothing and say so;
+  they send again once you finish. A message in one of WSJT-X's contest forms (the
+  defaults, `%H %G`, `599 %G`, `%H 599 %N`, `TU NOW %Q 599 %N`, `599 %N`, `%G`, and a request
+  such as `AGN?`, `NR?` or `QSL TU`) goes in JTTY's compact form; a call in it must be a standard
+  callsign, and a key whose call is not one is refused, never sent as text. Any other message
+  goes as text, as typed text does.
 - **The Call box** — the other station. Clicking a confirmed call in a pane fills it.
 - **The serial number** — what `%E` and `%N` send outside a contest, `001` and up. It moves on
   by one when a message starting `TU` goes out, as in WSJT-X, and is kept between sessions.
 - **Live** — keeps the transmitter up while you type: your words go out as you finish them, and
   JTTY's filler holds the carrier between them. **Sign off** sends `DE <your call> K` and ends it.
   A live session ends at ten minutes whatever you are typing.
+- **Ctrl+H** in the compose bar types `%H %M ` (the other station's call and yours) where the
+  caret is, as WSJT-X's chat opener; **Ctrl+Shift+K** empties the box and stops whatever of JTTY
+  is still going, as in WSJT-X.
+- **Frames** — beside Send while a transmission runs: its frames on the air, of all it has
+  queued, as WSJT-X counts them (the filler is not counted).
 - **Esc/Stop** — cuts JTTY at once: what is on the air and everything queued.
 
 Every send needs **TX On** and your license class across the whole signal at the Tx offset; a
@@ -112,9 +133,28 @@ does not. So a call heard only once is plain text, and nothing looks it up.
 Clicking a confirmed call puts it in the log strip's call box, and the log strip looks it up
 in your callbook. The same rule keeps single decodes off PSK Reporter and off the
 [Needed](needed-dx.md) board: a JTTY station appears there, labelled JTTY, once it has been heard
-twice.
+twice. A spot of a message that carries the sender's grid (`CQ W1AW FN31`)
+includes the grid, as WSJT-X's does.
 
 ## Logging and LoTW
+
+When a message starting `TU` goes out (F6's `TU NOW`, or `TU` typed), WSJT-X opens its Log QSO
+window. Nexus asks instead, at the top of the log pane: "Log the contact with W1AW?", naming
+the station the TU thanked: the one your messages before it went to, even when they carried no
+call (F4's `%M` and F8's `%E` in search and pounce). F6 thanks one station while it calls the
+next, whose call is in the Call box by then, so the question names the station before it. A CQ
+goes to nobody, whatever the Call box holds. Asking changes nothing: the Call
+box and the log strip stay as you have them. **Log QSO** logs through the strip's own Log, with
+every check it makes, and only when the strip holds that call. With the strip empty, the press
+puts the call in it for you to check, and the next press logs it; with another call in it,
+nothing is logged and Nexus says so. **Not now** closes the question. The first answer, from
+this screen or a Remote one, closes it everywhere, so a contact cannot be logged twice from two
+screens. Logging that contact any other way (the strip's own Log, the logbook, a Remote screen)
+closes the question too. If the strip cannot log it after all, the question comes back. A TU to
+another station before you answer replaces the question and names the one it replaced, for you
+to log from the strip; a question nobody answered is dropped after two minutes. When Log QSO finds
+the question already closed, Nexus says why: answered elsewhere, already in the log, replaced or
+too old. Nothing is logged unless you press it.
 
 The log strip logs a JTTY contact as **JTTY**, and an ADIF export writes it as
 `MODE=MFSK SUBMODE=JTTY`, as ADIF 3.1.8 registers it. A log that holds a bare `MODE=JTTY`

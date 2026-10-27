@@ -11,10 +11,12 @@
 // The log strip here is the REAL one, so the lookup is the real `qrzLookup` call the strip makes.
 // The positive control is the confirmed call on the same screen, under the same wait.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, cleanup, act, fireEvent, waitFor, within } from '@testing-library/react'
+import { render, cleanup, act, fireEvent, waitFor, within, screen } from '@testing-library/react'
 import { JttyCockpit } from './JttyCockpit'
 import type { AppSnapshot, JttyLine, JttyState } from '../types'
 import * as api from '../api'
+import { pushToast } from '../toast'
+import { t } from '../i18n'
 
 vi.setConfig({ testTimeout: 15_000 })
 
@@ -114,6 +116,171 @@ describe('a JTTY call is looked up only once two separate messages confirmed it'
     await act(pastTheLookupWait)
     expect(qrz()).not.toHaveBeenCalled()
     expect(logCall().value, 'the log line was not filled').toBe('')
+  })
+
+  // THE LOG QSO PROMPT AGAINST THE REAL STRIP. It names the station the TU thanked; asking changes
+  // nothing on screen; Log QSO logs through the strip's own Log only the station it names, and
+  // only once the engine has handed it this screen (the first answer, for every screen).
+  const prompted = (id = 1, call = 'W1AW', lines = STATE.lines): JttyState => ({
+    ...STATE,
+    lines,
+    tx: { refusal: null, txHz: 1500, serial: 8, sending: false, live: false, left: 0, pending: '', notice: null, logPrompt: { id, call, serial: 7, atUtcMs: T0 } },
+  })
+  const ask = () => document.querySelector('.jtty-log-prompt') as HTMLElement | null
+  const pressLogQso = () => fireEvent.click(within(ask()!).getByRole('button', { name: t('jtty.logPrompt.log') }))
+  const callBox = () => screen.getByRole('textbox', { name: t('jtty.hisCall.aria') }) as HTMLInputElement
+
+  it('Log QSO logs the station the prompt names, through the strip’s own Log, once the engine hands it this screen', async () => {
+    vi.mocked(api.logQso).mockResolvedValue(snap)
+    vi.mocked(api.jttyLogPromptAnswer).mockResolvedValue('taken')
+    await mount()
+    fireEvent.click(within(allPane()).getByRole('button', { name: 'W1AW' }))
+    await waitFor(() => expect(logCall().value).toBe('W1AW'))
+    vi.mocked(api.getJttyState).mockResolvedValue(prompted())
+    await waitFor(() => expect(ask()?.textContent).toContain(t('jtty.logPrompt.text', { call: 'W1AW' })), { timeout: 3_000 })
+    await act(pastTheLookupWait)
+    expect(api.logQso, 'the question alone logs nothing').not.toHaveBeenCalled()
+    pressLogQso()
+    await waitFor(() => expect(api.logQso).toHaveBeenCalledTimes(1))
+    expect(api.jttyLogPromptAnswer).toHaveBeenCalledWith(1)
+    expect(vi.mocked(api.logQso).mock.calls[0][0]).toMatchObject({ call: 'W1AW', mode: 'JTTY' })
+    await waitFor(() => expect(ask(), 'answered').toBeNull())
+  })
+
+  it('H1: a strip holding ANOTHER call logs nothing and says so; the strip is left as the operator has it', async () => {
+    vi.mocked(api.logQso).mockResolvedValue(snap)
+    vi.mocked(api.jttyLogPromptAnswer).mockResolvedValue('taken')
+    await mount()
+    fireEvent.click(within(allPane()).getByRole('button', { name: 'W1AW' }))
+    await waitFor(() => expect(logCall().value).toBe('W1AW'))
+    fireEvent.change(logCall(), { target: { value: 'K1ABC' } })
+    vi.mocked(api.getJttyState).mockResolvedValue(prompted())
+    await waitFor(() => expect(ask()).not.toBeNull(), { timeout: 3_000 })
+    await act(pastTheLookupWait)
+    pressLogQso()
+    await act(pastTheLookupWait)
+    expect(api.logQso, 'K1ABC is not the station the prompt names').not.toHaveBeenCalled()
+    expect(api.jttyLogPromptAnswer, 'and the question is still open').not.toHaveBeenCalled()
+    expect(vi.mocked(pushToast)).toHaveBeenLastCalledWith(t('jtty.logPrompt.otherCall', { call: 'W1AW', held: 'K1ABC' }), 'info')
+    expect(logCall().value).toBe('K1ABC')
+    expect(ask()).not.toBeNull()
+  })
+
+  it('M2: the prompt moves neither the Call box nor the strip; an empty strip is filled only by the press, for a second press to log', async () => {
+    vi.mocked(api.logQso).mockResolvedValue(snap)
+    vi.mocked(api.jttyLogPromptAnswer).mockResolvedValue('taken')
+    vi.mocked(api.jttyFkey).mockResolvedValue(null as never)
+    const next = [...STATE.lines, line({ id: 3, startUtcMs: T0 + 6_000, snr: -3, text: 'K1ABC W1AW EN52', line: '1500 -3  K1ABC W1AW EN52', confirmedCalls: ['K1ABC'] })]
+    await mount()
+    fireEvent.click(within(allPane()).getByRole('button', { name: 'W1AW' }))
+    vi.mocked(api.getJttyState).mockResolvedValue({ ...STATE, lines: next })
+    await waitFor(() => expect(within(allPane()).queryByRole('button', { name: 'K1ABC' })).not.toBeNull(), { timeout: 3_000 })
+    fireEvent.click(within(allPane()).getByRole('button', { name: 'K1ABC' }))
+    await waitFor(() => expect(logCall().value).toBe('K1ABC'))
+    // The TU to W1AW starts on the air now, after the operator moved on to K1ABC.
+    vi.mocked(api.getJttyState).mockResolvedValue(prompted(1, 'W1AW', next))
+    await waitFor(() => expect(ask()).not.toBeNull(), { timeout: 3_000 })
+    await act(pastTheLookupWait)
+    expect([callBox().value, logCall().value], 'nothing moved').toEqual(['K1ABC', 'K1ABC'])
+    fireEvent.click(document.querySelectorAll('.jtty-macros .cw-macro')[1] as HTMLElement)
+    await waitFor(() => expect(api.jttyFkey).toHaveBeenCalled())
+    expect(vi.mocked(api.jttyFkey).mock.calls[0]).toEqual([2, 'K1ABC', -3])
+    cleanup()
+    // An empty strip: the prompt leaves it empty; the press fills it and logs nothing; the next logs.
+    await mount()
+    vi.mocked(api.getJttyState).mockResolvedValue(prompted(2))
+    await waitFor(() => expect(ask()).not.toBeNull(), { timeout: 3_000 })
+    await act(pastTheLookupWait)
+    expect(logCall().value, 'asking fills nothing').toBe('')
+    pressLogQso()
+    await waitFor(() => expect(logCall().value).toBe('W1AW'))
+    expect(vi.mocked(pushToast)).toHaveBeenLastCalledWith(t('jtty.logPrompt.filled', { call: 'W1AW' }), 'info')
+    await act(pastTheLookupWait)
+    expect(api.logQso, 'filled, not logged').not.toHaveBeenCalled()
+    pressLogQso()
+    await waitFor(() => expect(api.logQso).toHaveBeenCalledTimes(1))
+    expect(vi.mocked(api.logQso).mock.calls[0][0]).toMatchObject({ call: 'W1AW' })
+  })
+
+  it('M3: answered on another screen first: nothing is logged here and the question goes; Not now answers it for every screen', async () => {
+    vi.mocked(api.logQso).mockResolvedValue(snap)
+    vi.mocked(api.jttyLogPromptAnswer).mockResolvedValue('answered')
+    await mount()
+    fireEvent.click(within(allPane()).getByRole('button', { name: 'W1AW' }))
+    vi.mocked(api.getJttyState).mockResolvedValue(prompted(4))
+    await waitFor(() => expect(ask()).not.toBeNull(), { timeout: 3_000 })
+    await act(pastTheLookupWait)
+    pressLogQso()
+    await waitFor(() => expect(api.jttyLogPromptAnswer).toHaveBeenCalledWith(4))
+    await waitFor(() => expect(ask()).toBeNull())
+    expect(api.logQso, 'the other screen has it').not.toHaveBeenCalled()
+    expect(vi.mocked(pushToast)).toHaveBeenLastCalledWith(t('jtty.logPrompt.taken'), 'info')
+    cleanup()
+    vi.mocked(api.jttyLogPromptAnswer).mockClear()
+    await mount()
+    vi.mocked(api.getJttyState).mockResolvedValue(prompted(5))
+    await waitFor(() => expect(ask()).not.toBeNull(), { timeout: 3_000 })
+    fireEvent.click(within(ask()!).getByRole('button', { name: t('jtty.logPrompt.dismiss') }))
+    expect(ask()).toBeNull()
+    expect(api.jttyLogPromptAnswer).toHaveBeenCalledWith(5)
+    expect(api.logQso).not.toHaveBeenCalled()
+  })
+
+  it('N2: a contact logged with the strip’s own Log closes the prompt, and Log QSO cannot log it again', async () => {
+    // The engine as it answers: once W1AW is in the log, its prompt is no longer asked, and an
+    // answer of it says it is logged (`a_contact_logged_by_any_route_closes_its_prompt`).
+    let inLog = false
+    vi.mocked(api.logQso).mockImplementation(async () => {
+      inLog = true
+      return snap
+    })
+    vi.mocked(api.jttyLogPromptAnswer).mockImplementation(async () => (inLog ? 'logged' : 'taken'))
+    await mount()
+    fireEvent.click(within(allPane()).getByRole('button', { name: 'W1AW' }))
+    await waitFor(() => expect(logCall().value).toBe('W1AW'))
+    // The poll answers before the strip's Log here: the prompt is still shown after the log.
+    vi.mocked(api.getJttyState).mockResolvedValue(prompted())
+    await waitFor(() => expect(ask()).not.toBeNull(), { timeout: 3_000 })
+    await act(pastTheLookupWait)
+    fireEvent.click(document.querySelector('.le-actions > .le-log-btn') as HTMLElement)
+    await waitFor(() => expect(api.logQso).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(logCall().value).toBe(''))
+    // Log QSO pressed before the next poll: the first press fills the emptied strip, the second
+    // asks the engine, which says the contact is logged. Nothing more is logged.
+    pressLogQso()
+    await waitFor(() => expect(logCall().value).toBe('W1AW'))
+    await act(pastTheLookupWait)
+    pressLogQso()
+    await waitFor(() => expect(vi.mocked(pushToast)).toHaveBeenLastCalledWith(t('jtty.logPrompt.logged'), 'info'))
+    await act(pastTheLookupWait)
+    expect(vi.mocked(api.logQso).mock.calls.map((c) => (c[0] as { call: string }).call), 'one contact, logged once').toEqual(['W1AW'])
+    expect(ask()).toBeNull()
+    // The engine's next poll has no prompt: none is shown.
+    vi.mocked(api.getJttyState).mockResolvedValue({ ...STATE, tx: { ...prompted().tx!, logPrompt: null } })
+    await act(pastTheLookupWait)
+    expect(ask()).toBeNull()
+  })
+
+  it('a Log QSO the strip could not log gives the prompt back: it can still be answered', async () => {
+    // The log refuses (the strip's error toast says why): nothing landed.
+    vi.mocked(api.logQso).mockResolvedValueOnce(null as never).mockResolvedValue(snap)
+    vi.mocked(api.jttyLogPromptAnswer).mockResolvedValue('taken')
+    await mount()
+    fireEvent.click(within(allPane()).getByRole('button', { name: 'W1AW' }))
+    await waitFor(() => expect(logCall().value).toBe('W1AW'))
+    vi.mocked(api.getJttyState).mockResolvedValue(prompted(6))
+    await waitFor(() => expect(ask()).not.toBeNull(), { timeout: 3_000 })
+    await act(pastTheLookupWait)
+    pressLogQso()
+    await waitFor(() => expect(api.logQso).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(api.jttyLogPromptRelease).toHaveBeenCalledWith(6))
+    await waitFor(() => expect(ask(), 'asked again').not.toBeNull())
+    expect(logCall().value, 'the contact is still on the strip').toBe('W1AW')
+    // Answered again, and this time logged.
+    pressLogQso()
+    await waitFor(() => expect(api.logQso).toHaveBeenCalledTimes(2))
+    expect(api.jttyLogPromptRelease).toHaveBeenCalledTimes(1)
+    await waitFor(() => expect(ask()).toBeNull())
   })
 
   it('POSITIVE CONTROL: the confirmed call, clicked, fills the log line and is looked up once', async () => {

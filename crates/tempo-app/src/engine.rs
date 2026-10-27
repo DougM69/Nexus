@@ -14126,6 +14126,7 @@ impl Engine {
         };
         if logged {
             self.persist_fd_log(); // journal every contact — a crash loses nothing
+            self.jtty_contact_logged(call);
         }
         Ok(logged)
     }
@@ -14253,6 +14254,7 @@ impl Engine {
         station.log.session.logged(call);
         if logged.contains(&true) {
             self.persist_fd_log(); // journal every contact — a crash loses nothing
+            self.jtty_contact_logged(call);
         }
         Ok(logged)
     }
@@ -14374,6 +14376,7 @@ impl Engine {
         station.log.session.logged(call);
         if logged {
             self.persist_fd_log(); // journal every contact — a crash loses nothing
+            self.jtty_contact_logged(call);
         }
         Ok(logged)
     }
@@ -16966,6 +16969,8 @@ impl Engine {
         // This copy, which every queue below carries, carries the id the log gave it.
         let (mut appended, persisted) = self.station.append(vec![rec], sync);
         let rec = appended.pop().expect("one contact in, one out");
+        // In the log: JTTY's Log QSO prompt for this station is answered.
+        self.jtty_contact_logged(&rec.call);
         self.push_to_hrd(&rec);
         self.push_to_n1mm(&rec);
         // ...and to the WSJT-X UDP sink, which is the one a logger actually logs from. The

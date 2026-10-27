@@ -857,6 +857,52 @@ pub struct JttyTxState {
     pub pending: String,
     /// WSJT-X's queue notice: replaced characters, complete, cancelled, or why it stopped.
     pub notice: Option<String>,
+    /// WSJT-X's "Frames: sent/total" for this over: frames of what was sent that are on the air,
+    /// and those plus what is still queued (the filler in neither).
+    pub frames_sent: u32,
+    pub frames_total: u32,
+    /// The newest Log QSO prompt (a send starting "TU " went out), or `None`.
+    pub log_prompt: Option<JttyLogPrompt>,
+    /// WSJT-X's "Message style": which of the two F-key sets F1-F8 send.
+    pub style: crate::settings::JttyMessageStyle,
+    /// The eight templates F1-F8 send in that style (the keys' captions).
+    pub fkeys: Vec<String>,
+}
+
+/// WSJT-X's Log QSO prompt after a JTTY send starting "TU " goes out (`logQSOTimer`): whom the
+/// send named and the serial it sent. A prompt only: nothing is logged unless the operator logs it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JttyLogPrompt {
+    /// Numbered from 1 each session: the cockpit asks once per prompt.
+    pub id: u64,
+    /// The DX call the send was made with (the Call box); empty when there was none.
+    pub call: String,
+    /// The serial number the exchange sent (WSJT-X's `m_xSent`), before it moved on.
+    pub serial: u32,
+    /// When the send started on the air, UTC milliseconds.
+    pub at_utc_ms: i64,
+    /// The station whose prompt this one replaced while it was still unanswered (a second TU to
+    /// another station): that contact is logged from the log strip, not from here.
+    #[serde(default)]
+    pub replaced: Option<String>,
+}
+
+/// How an answer of a Log QSO prompt went (`jtty_log_prompt_answer`): `Taken` is the first answer
+/// of the prompt still asked, and the only one that lets a screen log; every other says why not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum JttyLogPromptAnswer {
+    /// This answer took it: Log QSO may log the contact.
+    Taken,
+    /// Another answer (Log QSO or Not now, on any screen) took it first.
+    Answered,
+    /// The contact is in the log already, logged by another route.
+    Logged,
+    /// A newer TU raised a prompt of its own in its place.
+    Replaced,
+    /// Too old to ask, or the screen was left.
+    Expired,
 }
 
 /// One message in the JTTY receive window.
@@ -890,6 +936,10 @@ pub struct JttyLine {
     /// A message this station SENT (WSJT-X shows each in the QSO Frequency pane as it starts on
     /// the air, its SNR column blank): `snr` is 0 and `line` has no SNR.
     pub tx: bool,
+    /// A message found by decoding again (WSJT-X's review), and which review: the panes show
+    /// each review's lines together under a heading. Absent for live reception.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<u64>,
 }
 
 /// A JTTY station decoded in two separate messages a short time apart, at its latest message

@@ -3863,7 +3863,7 @@ struct RadioLoop {
     /// [`PskTxStream`].
     psk_stream: Option<PskTxStream>,
     /// Unix-ms until which the JTTY audio already played is still going out — PSK's pacing role
-    /// for JTTY's frames (switched off in every build: see `jtty_tx`).
+    /// for JTTY's frames (see `tempo_app::engine::jtty_tx`, behind every transmit guard).
     jtty_busy_until: f64,
     /// The SSTV image currently streaming to the rig (pre-encoded 12 kHz PCM + a feed
     /// cursor + timing), fed to the output ring in chunked look-ahead slices so a
@@ -16043,7 +16043,8 @@ fn jtty_psk_reports(eng: &mut Engine, uploading: bool) -> Vec<Spot> {
             freq_hz: s.freq_hz,
             snr: s.snr,
             mode: "JTTY".to_string(),
-            grid: String::new(),
+            // WSJT-X sends the grid when the message carries one (`CQ W1AW FN31`).
+            grid: s.grid.unwrap_or_default(),
             time_secs: s.time_secs,
         })
         .collect()
@@ -43409,7 +43410,36 @@ mod tests {
             10,
             "each at its message's start"
         );
+        assert!(
+            got.iter().all(|s| s.grid.is_empty()),
+            "no grid in the message, none sent"
+        );
         assert!(jtty_psk_reports(&mut e, true).is_empty(), "taken once");
+        // With a grid in the message, the spot carries it, as WSJT-X's does.
+        let mut g = Engine::with_settings(tempo_app::settings::Settings {
+            mycall: "KD9TAW".into(),
+            dial_mhz: 14.090,
+            pskreporter: true,
+            ..tempo_app::settings::Settings::default()
+        });
+        g.set_jtty_armed(true);
+        g.feed_rx_audio(&[0.0; 1200]);
+        let session = g.take_jtty_audio()[0].session;
+        let cq = |id: i64, start_s: f64| JttyUpdate {
+            message_id: id,
+            text: "CQ W1AW FN31".into(),
+            freq_hz: 1500.0,
+            start_s,
+            latest_s: start_s,
+            terminal: JttyTerminal::Complete,
+            snr_db: -7,
+        };
+        g.apply_jtty_updates(session, &[cq(1, 2.0), cq(2, 12.0)]);
+        let grids: Vec<String> = jtty_psk_reports(&mut g, true)
+            .into_iter()
+            .map(|s| s.grid)
+            .collect();
+        assert_eq!(grids, ["FN31", "FN31"]);
         let mut off = queued();
         assert!(jtty_psk_reports(&mut off, false).is_empty());
         assert!(
