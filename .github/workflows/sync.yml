@@ -24,9 +24,9 @@ jobs:
             const latestTag = upstream.data.tag_name;
             console.log(`Latest upstream tag is: ${latestTag}`);
 
-            // 2. Check if this tag already exists in your fork
+            // 2. Check if this tag already exists in your fork using the correct git submodule
             try {
-              await github.rest.repos.getRef({
+              await github.rest.git.getRef({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 ref: `tags/${latestTag}`
