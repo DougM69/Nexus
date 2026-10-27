@@ -75291,7 +75291,43 @@ mod logged_frequency_tests {
                 word: "PKTUSB",
                 on_air_hz: 14_071_000,
             },
+            // Netted off 1000 Hz: the centre the operator netted on, the same number the PSK
+            // screen's log strip adds outside a contest — and QPSK31 the same.
+            Case {
+                name: "PSK31 at 14.070, netted on 1200 Hz",
+                section: "keyboard",
+                setup: psk_net_1200,
+                dial: 14.070,
+                band: "20m",
+                sideband: "USB",
+                class: "DIG",
+                submode: Some("PSK31"),
+                word: "PKTUSB",
+                on_air_hz: 14_071_200,
+            },
+            Case {
+                name: "QPSK31 at 14.070, netted on 1200 Hz",
+                section: "keyboard",
+                setup: qpsk_net_1200,
+                dial: 14.070,
+                band: "20m",
+                sideband: "USB",
+                class: "DIG",
+                submode: Some("QPSK31"),
+                word: "PKTUSB",
+                on_air_hz: 14_071_200,
+            },
         ]);
+    }
+
+    fn psk_net_1200(e: &mut Engine) {
+        e.psk_net(1200.0);
+    }
+
+    fn qpsk_net_1200(e: &mut Engine) {
+        e.set_psk_mode(tempo_core::psk::PskModeKind::Qpsk31, false)
+            .expect("PSK idle");
+        e.psk_net(1200.0);
     }
 
     fn jtty_tx_1800(e: &mut Engine) {

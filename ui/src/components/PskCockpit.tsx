@@ -948,6 +948,10 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
             // record says which waveform was actually on the air rather than folding QPSK
             // into its BPSK sibling — and a sub-mode added to `pskModes.ts` logs itself.
             mode={mode.name}
+            // The dial plus the centre the decoder is netted on, which is where PSK transmits
+            // (every sub-mode) and what the engine adds for a contest row, so both logs agree.
+            // A station that has not sent its PSK state yet logs the dial.
+            logOffsetHz={psk?.centerHz}
             defaultRst="599"
             // A PSK operator hunts parks like any other HF operator — the park/summit row is
             // part of this exchange (the satellite exchange is the only one it is not).
