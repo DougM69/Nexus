@@ -305,3 +305,296 @@ fn the_start_time_is_wsjtx_set_datetime_qso() {
     assert_eq!(wsjtx_qso_on(minute + 37, 2, 7.5), minute + 30);
     assert_eq!(wsjtx_qso_on(minute + 37, 3, 7.5), minute + 23);
 }
+
+// --- Four more places a click and the DX call follow WSJT-X ---------------------------------------
+//
+// (1) a click on a station whose latest message to us is its RR73 or RRR sends our 73;
+// (2) with Skip Tx1 on, a click on a CQ opens with the report;
+// (3) clearing the DX call, or changing it, ends the contact and resets the start time;
+// (4) a contact whose start time Tx2/Tx3 never set logs WSJT-X's estimate, not the time of logging.
+
+/// A fresh FT8 engine for `ME`.
+fn ft8() -> Engine {
+    let mut e = Engine::new(ME, "EM85", 0);
+    e.set_tier(Tier::Ft8);
+    e
+}
+
+/// (1) The station's latest message to us is its RR73 (or RRR): a click sends our 73, as a WSJT-X
+/// double-click on that line selects Tx5 (`rogerAck`, DecodedMessageReaction.cpp:590-598), and as
+/// a double-click on it does here.
+#[test]
+fn a_click_after_their_rr73_or_rrr_sends_73() {
+    for theirs in ["KR4FQG 7P8RU RR73", "KR4FQG 7P8RU RRR"] {
+        let mut e = ft8();
+        e.ingest_decodes_for_test(&[dec_snr(theirs, -9)], 21);
+        e.call_station(DX);
+        assert_eq!(tx_now(&e), "7P8RU KR4FQG 73", "a click after {theirs:?}");
+        assert_eq!(
+            key_once(&mut e, 22),
+            "7P8RU KR4FQG 73",
+            "{theirs:?}: it goes out"
+        );
+
+        let mut d = ft8();
+        d.ingest_decodes_for_test(&[dec_snr(theirs, -9)], 21);
+        d.work_station(DX, None, Some(theirs), Some(-9), None)
+            .expect("the double-click is taken");
+        assert_eq!(
+            tx_now(&d),
+            "7P8RU KR4FQG 73",
+            "{theirs:?}: the same as a double-click"
+        );
+    }
+}
+
+/// (1) CONTROL: a 73 to us is a station that has signed off with us; a click calls it again (Tx1).
+#[test]
+fn a_click_after_their_73_calls_them_again() {
+    let mut e = ft8();
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG 7P8RU 73", -9)], 21);
+    e.call_station(DX);
+    assert_eq!(tx_now(&e), TX1);
+}
+
+/// (2) Skip Tx1 on: a roster click on a CQ opens with the report heard on that CQ (Tx2), as a WSJT-X
+/// double-click on the CQ with Tx1 disabled does (DecodedMessageReaction.cpp:696-702, `SetReport`
+/// :400), and Tx2's selection sets the start time (:9168).
+#[test]
+fn skip_tx1_a_roster_click_on_a_cq_opens_with_the_report() {
+    let mut e = ft8();
+    e.set_skip_tx1(true);
+    e.ingest_decodes_for_test(&[dec_snr("CQ 7P8RU KG30", -8)], 11);
+    let before = now_unix_secs();
+    e.call_station(DX);
+    let after = now_unix_secs();
+    assert_eq!(tx_now(&e), "7P8RU KR4FQG -08");
+    let on = e.qso_start_unix.expect("Tx2 selected sets the start time");
+    assert!((wsjtx_qso_on(before, 2, 15.0)..=wsjtx_qso_on(after, 2, 15.0)).contains(&on));
+    assert_eq!(
+        e.qso_report_sent,
+        Some(-8),
+        "RST_SENT is the report going out"
+    );
+}
+
+/// A live search-and-pounce contact with TX on: our Tx1, their report, our roger queued.
+fn live_contact() -> Engine {
+    let mut e = ft8();
+    e.ingest_decodes_for_test(&[dec_snr("CQ 7P8RU KG30", -12)], 11);
+    e.call_station(DX);
+    key_once(&mut e, 12);
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG 7P8RU -15", -9)], 14);
+    assert_eq!(
+        tx_now(&e),
+        "7P8RU KR4FQG R-09",
+        "premise: our roger is queued"
+    );
+    assert!(e.tx_enabled, "premise: TX on");
+    assert!(
+        e.qso_start_unix.is_some(),
+        "premise: Tx3 set the start time"
+    );
+    e
+}
+
+/// Every over keyed in `slots`.
+fn keyed(e: &mut Engine, slots: std::ops::Range<u64>) -> Vec<String> {
+    let mut sent = Vec::new();
+    for slot in slots {
+        let text = tx_now(e);
+        if !e.poll_tx(slot).is_empty() {
+            sent.push(text);
+        }
+    }
+    sent
+}
+
+/// (3) Clear DX (F4, the Clear button) mid-contact ends it, as WSJT-X's `clearDX` does
+/// (mainwindow.cpp:10075-10104): the start time is reset, Enable Tx goes off, and the contact is
+/// gone. Nothing is sent to the station afterwards: not the queued roger, not with TX on again,
+/// and not an answer to its next report.
+#[test]
+fn clearing_the_dx_call_ends_the_contact_and_nothing_more_goes_to_the_station() {
+    let mut e = live_contact();
+    e.clear_dx_call();
+    assert_eq!(e.qso_start_unix, None, "start time reset (:10077)");
+    assert!(!e.tx_enabled, "Enable Tx off (:10079)");
+    assert_eq!(e.qso_dxcall(), None, "the contact is over");
+    assert_eq!(keyed(&mut e, 15..25), Vec::<String>::new(), "TX off");
+    e.set_tx_enabled(true);
+    assert_eq!(keyed(&mut e, 25..35), Vec::<String>::new(), "TX on again");
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG 7P8RU -15", -9)], 35);
+    assert_eq!(
+        keyed(&mut e, 36..40),
+        Vec::<String>::new(),
+        "their report again is not answered"
+    );
+    assert!(e.stored_log().is_empty(), "and nothing logged");
+}
+
+/// (3) A call typed into the DX Call box after the clear is worked as a click works it: a fresh
+/// contact, Tx1, the start time set by our roger, the log entry this exchange's.
+#[test]
+fn a_typed_call_after_the_clear_starts_fresh_like_a_click() {
+    let (mut e, backdated) = stale_attempt(false);
+    e.settings.double_click_sets_tx = true;
+    e.clear_dx_call();
+    e.override_next_tx(DX, None, TX1);
+    assert_fresh_contact(e, backdated, "20m", "typed call after Clear DX");
+}
+
+/// (3) In a CQ run, clearing the caller being worked ends that contact and goes back to the CQ,
+/// behind TX off, as WSJT-X selects Tx6 with Enable Tx off (:10079, :10098-10103). The report
+/// queued for the caller never goes out; Enable Tx calls CQ.
+#[test]
+fn clearing_a_cq_runs_caller_goes_back_to_cq_behind_tx_off() {
+    let mut e = ft8();
+    e.set_mode("qso-run").expect("CQ");
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG W1AW FN31", -7)], 3);
+    assert_eq!(tx_now(&e), "W1AW KR4FQG -07", "premise: our report queued");
+    e.clear_dx_call();
+    assert!(!e.tx_enabled);
+    assert_eq!(e.qso_start_unix, None);
+    assert_eq!(keyed(&mut e, 4..10), Vec::<String>::new());
+    e.set_tx_enabled(true);
+    assert_eq!(key_once(&mut e, 10), "CQ KR4FQG EM85");
+}
+
+/// (3) CONTROL: calling CQ with nobody in the contact, Clear DX ends nothing and TX stays on
+/// (`if (m_QSOProgress != CALLING) auto_tx_mode(false)`, :10078).
+#[test]
+fn clearing_while_calling_cq_leaves_tx_on() {
+    let mut e = ft8();
+    e.set_mode("qso-run").expect("CQ");
+    e.clear_dx_call();
+    assert!(e.tx_enabled);
+    assert_eq!(key_once(&mut e, 2), "CQ KR4FQG EM85");
+}
+
+/// (3) After a run has moved on, the late answer it still owes its last partner (WSJT-X's
+/// `m_hisCall`, which `clearDX` empties) is dropped by the clear: their late RR73 earns no 73.
+/// CONTROL: without the clear it does.
+#[test]
+fn clearing_drops_the_late_answer_owed_to_the_last_partner() {
+    for clear in [false, true] {
+        let mut e = ft8();
+        e.set_mode("qso-run").expect("CQ");
+        e.recent_partner = Some(RecentPartner {
+            call: "W1AW".into(),
+            answer: LateAnswer::Bye73,
+            confirm_with_rrr: false,
+            until_slot: 100,
+            owed: None,
+        });
+        if clear {
+            e.clear_dx_call();
+        }
+        e.ingest_decodes_for_test(&[dec_snr("KR4FQG W1AW RR73", -7)], 5);
+        let sent = key_once(&mut e, 6);
+        let late = e.own_tx.iter().any(|o| o.text == "W1AW KR4FQG 73");
+        assert_eq!(late, !clear, "clear {clear}: sent {sent:?}");
+    }
+}
+
+/// (4) A click on an R-report opens with Tx4; Tx2 and Tx3 are never selected, so WSJT-X sets the
+/// start time when it logs, as its RR73 starts (mainwindow.cpp:8237-8249): now - (4-2)*T/R - (now
+/// mod T/R) (mainwindow_slots.cpp:496-500). The contact logs that, not the time it was logged.
+#[test]
+fn a_contact_never_on_tx2_or_tx3_logs_wsjtx_start_estimate() {
+    let mut e = ft8();
+    e.settings.auto_log = true;
+    e.settings.prompt_to_log = false;
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG 7P8RU R-15", -9)], 21);
+    e.call_station(DX);
+    assert_eq!(tx_now(&e), "7P8RU KR4FQG RR73", "premise: Tx4");
+    assert_eq!(e.qso_start_unix, None, "Tx4 sets nothing (:9182)");
+    let before = now_unix_secs();
+    key_once(&mut e, 22);
+    let after = now_unix_secs();
+    let window = wsjtx_qso_on(before, 4, 15.0)..=wsjtx_qso_on(after, 4, 15.0);
+    assert!(
+        e.qso_start_unix.is_some_and(|on| window.contains(&on)),
+        "estimated as the RR73 leaves: {:?}",
+        e.qso_start_unix
+    );
+    e.ingest_decodes_for_test(&[], 25);
+    let log = e.stored_log();
+    assert_eq!(log.len(), 1, "the contact logged");
+    assert!(
+        window.contains(&log[0].when_unix),
+        "TIME_ON {} is WSJT-X's estimate {window:?}",
+        log[0].when_unix
+    );
+}
+
+/// (4) With auto-log off, the Log button at Tx4 logs the same estimate, taken when it is pressed.
+#[test]
+fn the_log_button_on_a_contact_never_on_tx2_or_tx3_logs_wsjtx_start_estimate() {
+    let mut e = ft8();
+    e.settings.auto_log = false;
+    e.ingest_decodes_for_test(&[dec_snr("KR4FQG 7P8RU R-15", -9)], 21);
+    e.call_station(DX);
+    key_once(&mut e, 22);
+    e.ingest_decodes_for_test(&[], 25);
+    assert_eq!(
+        e.qso_start_unix, None,
+        "auto-log off: nothing set as the RR73 left"
+    );
+    let before = now_unix_secs();
+    assert!(e.log_current_qso(), "the Log button logs it");
+    let after = now_unix_secs();
+    let log = e.stored_log();
+    assert_eq!(log.len(), 1);
+    assert!(
+        (wsjtx_qso_on(before, 4, 15.0)..=wsjtx_qso_on(after, 4, 15.0)).contains(&log[0].when_unix),
+        "TIME_ON {}",
+        log[0].when_unix
+    );
+}
+
+/// (3) Field Day: WSJT-X's `clearDX` is the same in its Field Day activity, so the clear ends the
+/// contact there too. The sequencer goes back to listening for its next station, as after a
+/// contact, Enable Tx goes off, and nothing more goes to the station.
+#[test]
+fn clearing_the_dx_call_ends_a_field_day_contact() {
+    let mut e = Engine::new("K1ABC", "FN42", 0);
+    let mut s = e.settings().clone();
+    s.fd_active = true;
+    s.fd_event = "arrlfd".into();
+    s.fd_class = "3A".into();
+    s.fd_section = "WI".into();
+    s.fd_position_id = "aaaa0001".into();
+    e.apply_settings(s);
+    e.set_tier(Tier::Ft8);
+    e.set_mode("fieldday-sp").expect("Field Day runs");
+    let cq = "CQ FD W9XYZ EN37";
+    e.ingest_decodes_for_test(&[dec_snr(cq, -12)], 1);
+    e.work_station("W9XYZ", Some("EN37"), Some(cq), Some(-12), None)
+        .expect("the double-click is taken");
+    let partner = |e: &Engine| e.snapshot().field_day.and_then(|f| f.dxcall);
+    assert_eq!(
+        partner(&e).as_deref(),
+        Some("W9XYZ"),
+        "premise: in the contact"
+    );
+    assert!(e.tx_enabled, "premise: TX on");
+    e.clear_dx_call();
+    assert_eq!(partner(&e), None, "the contact is over");
+    assert!(!e.tx_enabled, "Enable Tx off");
+    let before = e.own_tx.len();
+    e.set_tx_enabled(true);
+    for slot in 2..8 {
+        let _ = e.poll_tx(slot);
+    }
+    let sent: Vec<&str> = e
+        .own_tx
+        .iter()
+        .skip(before)
+        .map(|o| o.text.as_str())
+        .collect();
+    assert!(
+        !sent.iter().any(|t| t.contains("W9XYZ")),
+        "nothing to the station: {sent:?}"
+    );
+}

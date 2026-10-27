@@ -81,6 +81,7 @@ pub const CLASSES: &[(&str, Class, &str)] = &[
     ("clear_cloudlog_key",             RefusedHere, "Credentials are set at the shack only."),
     ("clear_clublog_password",         RefusedHere, "Credentials are set at the shack only."),
     ("clear_data_folder",              RefusedHere, "Moves the shack's data folder at its next launch."),
+    ("clear_dx_call",                  RunsAtShack, "Ends the FT contact in progress and turns TX off, as WSJT-X's Clear DX does; keys nothing."),
     ("clear_eqsl_password",            RefusedHere, "Credentials are set at the shack only."),
     ("clear_hamqth_password",          RefusedHere, "Credentials are set at the shack only."),
     ("clear_hrdlog_code",              RefusedHere, "Credentials are set at the shack only."),

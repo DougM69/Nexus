@@ -1,7 +1,7 @@
 //! Skip Tx1 is the station's own setting, and the snapshot says it, so a computer driving the
 //! station from afar draws the box from the station's value (as the shack's screen does) and never
-//! from a copy of its own. What the setting DOES is unchanged: the golden below pins the first over
-//! of a double-click and of a roster click, for a plain call and a nonstandard one, both ways.
+//! from a copy of its own. The golden below pins what the setting does to the first over of a
+//! double-click and of a roster click, for a plain call and a nonstandard one, both ways.
 
 use super::tests::dec_snr;
 use super::*;
@@ -55,10 +55,11 @@ fn first_over(mycall: &str, cq: &str, skip: bool, double_click: bool) -> Option<
     e.snapshot().qso.and_then(|q| q.tx_now)
 }
 
-/// ★ GOLDEN: the sequencing is the same text, by value, as before the setting reached the snapshot.
-/// Skip Tx1 on opens a double-clicked plain call's answer at the report; off, at the grid. A roster
-/// click carries no heard SNR for a CQ, and a nonstandard own call cannot send a bare report, so
-/// both open at the grid either way.
+/// ★ GOLDEN: the first over, by value. Skip Tx1 on opens a plain call's answer to a CQ at the
+/// report, by a double-click and by a roster click alike; off, at the grid. A roster click answers
+/// the station's latest transmission, here the CQ, with the SNR it was heard at, as a WSJT-X
+/// double-click on that CQ with Tx1 disabled does (DecodedMessageReaction.cpp:696-702); it opened at
+/// the grid until 2026-10-26. A nonstandard own call opens at the grid either way.
 #[test]
 fn golden_the_first_over_skip_tx1_queues_is_unchanged() {
     // (my call, heard CQ, skip, first over by a double-click, first over by a roster click)
@@ -75,7 +76,7 @@ fn golden_the_first_over_skip_tx1_queues_is_unchanged() {
             "CQ W9XYZ EM48",
             true,
             "W9XYZ K2DEF -07",
-            "W9XYZ K2DEF FN31",
+            "W9XYZ K2DEF -07",
         ),
         (
             "PJ4/K2DEF",
