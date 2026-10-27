@@ -5827,6 +5827,12 @@ impl RadioLoop {
                 .and_then(crate::tci::TciDaemon::receive)
             {
                 r.set_tap(None);
+            }
+            // ⛔ The monitor's handle goes from the session itself, wherever it lives now. It holds
+            // the feed strongly, and the next TCI radio's audio re-activates the same feed: a
+            // session a switch moved to the monitor pool would otherwise go on writing into the
+            // headphones beside it, a second producer on a single-producer ring.
+            if let Some(r) = rx.receive.upgrade() {
                 r.set_monitor(None);
             }
             // The sound card back on the tap, unless it already has another source.
@@ -7021,8 +7027,13 @@ impl RadioLoop {
         }
         // A TCI radio leaves the loop's transmit tee behind: no audio of Nexus's reaches its
         // session from the monitor, so its client keys none.
+        // Nor does any of its receive audio reach the headphone monitor: that is the next
+        // source's alone (`reconcile_tci_audio`).
         if let Some(daemon) = old_proc.as_ref().and_then(CatDaemon::tci) {
             daemon.set_tx_route(false);
+            if let Some(r) = daemon.receive() {
+                r.set_monitor(None);
+            }
         }
         let mut old_transport = std::mem::replace(&mut self.applied, conn.transport);
         // The demoted transport keeps the broker's port, which the monitor's own want carries
