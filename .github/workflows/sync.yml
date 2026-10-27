@@ -21,27 +21,29 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # 1. Establish upstream mapping tracking
-          git remote add upstream https://github.com
+          # Configure local tracking variables safely
+          git remote add upstream "https://github.com"
           git fetch upstream --tags
           
-          # 2. Identify the single absolute latest tag from the upstream source repo
+          # Identify the single absolute latest tag from the upstream source repo
           LATEST_UPSTREAM_TAG=$(git describe --tags $(git rev-list --tags --max-count=1 upstream/main))
           echo "Latest Upstream Tag is: $LATEST_UPSTREAM_TAG"
           
-          # 3. Check if this tag already exists in your fork execution memory
+          # Check if this tag already exists in your fork execution memory
           if git rev-parse "$LATEST_UPSTREAM_TAG" >/dev/null 2>&1; then
             echo "Your fork is already up-to-date with tag $LATEST_UPSTREAM_TAG. Skipping sync."
           else
             echo "New version detected ($LATEST_UPSTREAM_TAG). Proceeding with Sync..."
             
-            # Pull down the code matching that tag timeline smoothly
+            # Configure git author profile information
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            
+            # Merge down the changes cleanly from upstream main
             git merge upstream/main --no-edit || git merge upstream/main --strategy-option theirs --no-edit
             
-            # Push the updated code and copy the exact tag up to your fork timeline
+            # Push changes and anchor the new tag version straight into your fork
             git push origin main
-            git tag $LATEST_UPSTREAM_TAG
-            git push origin $LATEST_UPSTREAM_TAG
+            git tag "$LATEST_UPSTREAM_TAG"
+            git push origin "$LATEST_UPSTREAM_TAG"
           fi
