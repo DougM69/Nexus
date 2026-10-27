@@ -17856,9 +17856,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// immediate stop). A typed call is then worked as a click works it: a Tx button on it finds
     /// no contact with that station and starts one fresh ([`Self::override_next_tx`]).
     pub fn clear_dx_call(&mut self) {
-        self.qso_start_unix = None; // mainwindow.cpp:10077, :10563
-                                    // The partner a run has already left is still WSJT-X's DX call (`m_hisCall`), which the
-                                    // clear empties: the one late answer still owed to it goes too.
+        // mainwindow.cpp:10077, :10563
+        self.qso_start_unix = None;
+        // The partner a run has already left is still WSJT-X's DX call (`m_hisCall`), which the
+        // clear empties: the one late answer still owed to it goes too.
         self.recent_partner = None;
         let in_contact = match &self.mode {
             Mode::Qso { station, .. } => station.dxcall.is_some(),
