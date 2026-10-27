@@ -869,7 +869,10 @@ fn tci_audio_on_the_monitor() -> TciScene {
 /// played again (the next TCI radio's audio becoming the source re-activates the same feed): the
 /// samples it queued in a second, with the control that it kept streaming all the while.
 fn queued_by_a_session_that_left(s: &TciScene, left: &TciDaemon) -> usize {
-    assert!(s.state.tci_rx.is_none(), "premise: TCI audio is not the source");
+    assert!(
+        s.state.tci_rx.is_none(),
+        "premise: TCI audio is not the source"
+    );
     let _ = drain(&s.card.monitor);
     s.card.monitor.set_active(true);
     let since = Instant::now();

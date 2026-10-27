@@ -91,10 +91,15 @@ impl MonoResampler {
     /// The next output-rate mono sample, consuming from `ring` as needed. On
     /// underrun (a needed sample is missing) it yields `0.0` (silence).
     pub fn next(&mut self, ring: &SpscRing) -> f32 {
+        self.next_from(|| ring.pop())
+    }
+
+    /// [`Self::next`], consuming from `pop` (`None` = nothing to play: silence).
+    fn next_from(&mut self, mut pop: impl FnMut() -> Option<f32>) -> f32 {
         self.acc += self.in_rate;
         while self.acc >= self.out_rate {
             self.acc -= self.out_rate;
-            self.last = ring.pop().unwrap_or(0.0);
+            self.last = pop().unwrap_or(0.0);
         }
         self.last
     }
@@ -108,7 +113,7 @@ impl MonoResampler {
 /// It is a second [`SpscRing`] of the monitor's, at the monitor's own rate, with the session's
 /// thread as its one producer and the monitor's output callback as its one consumer, so neither
 /// ring ever has two producers. The output plays this ring while the feed is active and the
-/// card's otherwise ([`playing`]). It shares the card path's two gates: nothing is written unless
+/// card's otherwise ([`Playout`]). It shares the card path's two gates: nothing is written unless
 /// the operator's monitor is on (the TX-device guard has already refused a collision before the
 /// monitor turns on) and the monitor is not muted for a transmission.
 #[derive(Clone)]
@@ -185,16 +190,86 @@ impl MonitorFeed {
     }
 }
 
-/// The ring the monitor's output plays this callback: the feed's while it is active, the sound
-/// card's otherwise. The output callback is both rings' one consumer, so it empties the other one
-/// here: nothing a source queued before a switch plays after it.
-pub fn playing<'a>(card: &'a SpscRing, feed: &'a MonitorFeed) -> &'a SpscRing {
-    if feed.is_active() {
+/// How much of a [`MonitorFeed`]'s audio the monitor holds before it plays it, and again after it
+/// ran dry. The feed's audio arrives over the network in bursts (a TCI block is about 43 ms, and
+/// LAN or Wi-Fi timing wanders by tens of milliseconds more) while the output takes it at the
+/// device's steady pace, so playing from an empty start turns every late burst into a gap of hard
+/// zeros: clicks and dropouts. The sound card's own capture needs none of this: its producer and
+/// the output are both device-clocked.
+pub const FEED_PREROLL_MS: usize = 100;
+/// The most of a feed's audio the monitor lets queue. Past it (a burst after a stall, or a source
+/// whose clock runs a little fast) the oldest goes, down to the pre-roll, so the headphones never
+/// fall further and further behind the band.
+pub const FEED_MAX_MS: usize = 300;
+
+/// The monitor output's consumer side: which ring it plays each callback, and the feed's jitter
+/// buffer. The output callback owns it and is both rings' one consumer.
+///
+/// While the feed is not active it plays the sound card's ring exactly as it always did (the feed's
+/// is emptied). While the feed is active it empties the card's, holds silence until
+/// [`FEED_PREROLL_MS`] of the feed's audio is queued, plays it, and when the feed runs dry goes
+/// back to holding silence until the pre-roll is queued again, rather than stuttering through every
+/// burst that arrives late. Nothing a source queued before a switch plays after it.
+pub struct Playout {
+    rs: MonoResampler,
+    /// Whether the feed's pre-roll is queued and its audio is playing.
+    primed: bool,
+    preroll: usize,
+    max: usize,
+}
+
+impl Playout {
+    /// The consumer for rings at `in_rate`, played at `out_rate`.
+    pub fn new(in_rate: u32, out_rate: u32) -> Playout {
+        let ms = |n: usize| (in_rate as usize * n / 1_000).max(1);
+        Playout {
+            rs: MonoResampler::new(in_rate, out_rate),
+            primed: false,
+            preroll: ms(FEED_PREROLL_MS),
+            max: ms(FEED_MAX_MS),
+        }
+    }
+
+    /// One output callback: `frames` mono samples at the output rate, handed to `out` in order.
+    /// Wait-free and allocation-free: the rings' atomics and the resampler's phase only.
+    pub fn fill(
+        &mut self,
+        card: &SpscRing,
+        feed: &MonitorFeed,
+        frames: usize,
+        mut out: impl FnMut(f32),
+    ) {
+        if !feed.is_active() {
+            feed.ring.clear();
+            self.primed = false;
+            for _ in 0..frames {
+                out(self.rs.next(card));
+            }
+            return;
+        }
         card.clear();
-        &feed.ring
-    } else {
-        feed.ring.clear();
-        card
+        let ring = &*feed.ring;
+        let queued = ring.len();
+        if queued > self.max {
+            for _ in 0..queued - self.preroll {
+                ring.pop();
+            }
+        }
+        if !self.primed && ring.len() >= self.preroll {
+            self.primed = true;
+        }
+        let Playout { rs, primed, .. } = self;
+        for _ in 0..frames {
+            out(rs.next_from(|| {
+                if !*primed {
+                    return None;
+                }
+                let s = ring.pop();
+                // Dry: silence until the pre-roll is queued again.
+                *primed = s.is_some();
+                s
+            }));
+        }
     }
 }
 
@@ -203,7 +278,7 @@ pub use device_monitor::Monitor;
 
 #[cfg(feature = "device")]
 mod device_monitor {
-    use super::{playing, MonitorFeed, MonoResampler, SpscRing};
+    use super::{MonitorFeed, Playout, SpscRing};
     use crate::device::{dispatch_format, AUDIO_HOST_LOCK};
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
     use cpal::{SampleFormat, Stream};
@@ -401,23 +476,26 @@ mod device_monitor {
         let ring_cb = ring.clone();
         let feed_cb = feed.clone();
         let level_cb = level_bits.clone();
-        let mut rs = MonoResampler::new(in_rate, out_rate);
+        let mut playout = Playout::new(in_rate, out_rate);
         dev.build_output_stream(
             // `StreamConfig` is `Copy` in 0.18 and taken BY VALUE.
             *config,
             move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
                 let level = f32::from_bits(level_cb.load(Ordering::Relaxed));
-                // The capture's ring, or another source's while it is the station's (TCI audio).
-                let source = playing(&ring_cb, &feed_cb);
-                for frame in data.chunks_mut(out_ch) {
+                let n = data.len().div_ceil(out_ch);
+                let mut frames = data.chunks_mut(out_ch);
+                // The capture's ring, or another source's while it is the station's (TCI audio,
+                // native Flex audio), through its jitter buffer.
+                playout.fill(&ring_cb, &feed_cb, n, |s| {
                     // Clamped HERE, on every format including f32: unlike the TX path this is a
                     // product of two operator-set gains and can genuinely exceed unity.
-                    let s = (rs.next(source) * level).clamp(-1.0, 1.0);
-                    let v = T::from_unit(s);
-                    for x in frame.iter_mut() {
-                        *x = v;
+                    let v = T::from_unit((s * level).clamp(-1.0, 1.0));
+                    if let Some(frame) = frames.next() {
+                        for x in frame.iter_mut() {
+                            *x = v;
+                        }
                     }
-                }
+                });
             },
             err_fn,
             None,
@@ -716,33 +794,158 @@ mod tests {
         assert!(feed.open(), "reopened after the over");
     }
 
-    /// ⭐ THE OUTPUT PLAYS THE SOURCE THE STATION HEARS. With no other source active it plays the
-    /// capture's ring as it always did (the card path unchanged); while one is active it plays that
-    /// one's, and each switch empties the ring it leaves, so nothing from before a switch plays
-    /// after it.
-    #[test]
-    fn the_monitor_plays_the_active_source_and_the_card_otherwise() {
-        let card = SpscRing::new(16);
+    /// A feed at 1 kHz (so a millisecond is a sample), on and unmuted, and the output's consumer
+    /// at the same rate: a pre-roll of 100 samples, at most 300 queued.
+    fn feed_and_playout() -> (MonitorFeed, Playout) {
         let feed = MonitorFeed::new(
-            48_000,
+            1_000,
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         );
+        (feed, Playout::new(1_000, 1_000))
+    }
+
+    /// One output callback of `frames`: what it played.
+    fn callback(p: &mut Playout, card: &SpscRing, feed: &MonitorFeed, frames: usize) -> Vec<f32> {
+        let mut out = Vec::new();
+        p.fill(card, feed, frames, |s| out.push(s));
+        out
+    }
+
+    /// ⭐ THE OUTPUT PLAYS THE SOURCE THE STATION HEARS. With no other source active it plays the
+    /// capture's ring as it always did (the card path unchanged: no pre-roll, sample for sample);
+    /// while one is active it plays that one's, and each switch empties the ring it leaves, so
+    /// nothing from before a switch plays after it.
+    #[test]
+    fn the_monitor_plays_the_active_source_and_the_card_otherwise() {
+        let card = SpscRing::new(16);
+        let (feed, mut p) = feed_and_playout();
         card.push_slice(&[0.1, 0.2]);
         feed.push(&[0.9]);
-        let src = playing(&card, &feed);
-        assert!(std::ptr::eq(src, &card), "inactive: the card's ring");
-        assert_eq!(src.pop(), Some(0.1), "the card's audio, in order");
+        assert_eq!(
+            callback(&mut p, &card, &feed, 1),
+            [0.1],
+            "inactive: the card's audio at once, in order"
+        );
         assert_eq!(feed.queued(), 0, "the inactive source's audio was dropped");
         feed.set_active(true);
-        feed.push(&[0.7, 0.8]);
-        let src = playing(&card, &feed);
-        assert_eq!(src.pop(), Some(0.7), "active: the other source's audio");
+        feed.push(&[0.7; 100]);
+        assert_eq!(
+            callback(&mut p, &card, &feed, 1),
+            [0.7],
+            "active: the other source's audio"
+        );
         assert!(card.is_empty(), "the card's leftover went at the switch");
         feed.set_active(false);
         card.push(0.3);
-        assert_eq!(playing(&card, &feed).pop(), Some(0.3), "the card again");
+        assert_eq!(callback(&mut p, &card, &feed, 1), [0.3], "the card again");
         assert_eq!(feed.queued(), 0);
+    }
+
+    /// ⭐ NETWORK JITTER IS NOT A GAP IN THE HEADPHONES. A source's audio arrives in 43 ms blocks
+    /// whose arrival wanders by up to 70 ms (each one on time on average), while the output takes
+    /// 10 ms a callback at the device's steady pace. Once the pre-roll is queued, every sample
+    /// played is the band's: no hole of silence anywhere. The control: the same feed played from an
+    /// empty start with no pre-roll (what the monitor did before) is full of holes.
+    #[test]
+    fn a_feed_arriving_irregularly_plays_without_gaps() {
+        let run = |preroll: bool| {
+            let card = SpscRing::new(16);
+            let (feed, mut p) = feed_and_playout();
+            if !preroll {
+                p.preroll = 1;
+            }
+            feed.set_active(true);
+            // Block k is due at 43k ms and arrives up to 70 ms late, in order.
+            let jitter = [0, 70, 10, 65, 0, 40, 70, 5, 55, 20, 70, 0, 30, 60];
+            let mut arrive: Vec<usize> = Vec::new();
+            for k in 0..140 {
+                let at = 43 * k + jitter[k % jitter.len()];
+                arrive.push(at.max(arrive.last().copied().unwrap_or(0)));
+            }
+            let mut played = Vec::new();
+            let mut next = 0;
+            for now in (0..43 * 140).step_by(10) {
+                while next < arrive.len() && arrive[next] <= now {
+                    feed.push(&[0.5; 43]);
+                    next += 1;
+                }
+                played.extend(callback(&mut p, &card, &feed, 10));
+            }
+            let first = played.iter().position(|&s| s != 0.0).expect("audio played");
+            played[first..played.len() - 200]
+                .iter()
+                .filter(|&&s| s == 0.0)
+                .count()
+        };
+        assert!(
+            run(false) > 0,
+            "control: with no pre-roll the jitter is heard as holes"
+        );
+        assert_eq!(
+            run(true),
+            0,
+            "holes in the monitor's audio after the pre-roll"
+        );
+    }
+
+    /// A feed that runs dry (the source stalled) holds silence until the pre-roll is queued again,
+    /// rather than playing each scrap the moment it arrives; then it plays on.
+    #[test]
+    fn a_feed_that_ran_dry_waits_for_the_pre_roll_again() {
+        let card = SpscRing::new(16);
+        let (feed, mut p) = feed_and_playout();
+        feed.set_active(true);
+        feed.push(&[0.5; 99]);
+        assert!(
+            callback(&mut p, &card, &feed, 10).iter().all(|&s| s == 0.0),
+            "short of the pre-roll: silence"
+        );
+        feed.push(&[0.5]);
+        assert!(
+            callback(&mut p, &card, &feed, 100)
+                .iter()
+                .all(|&s| s == 0.5),
+            "the pre-roll queued: it plays, all of it"
+        );
+        assert_eq!(callback(&mut p, &card, &feed, 1), [0.0], "dry");
+        feed.push(&[0.5; 50]);
+        assert!(
+            callback(&mut p, &card, &feed, 10).iter().all(|&s| s == 0.0),
+            "a scrap after running dry waits for the rest of the pre-roll"
+        );
+        feed.push(&[0.5; 50]);
+        assert_eq!(
+            callback(&mut p, &card, &feed, 10),
+            [0.5; 10],
+            "and plays on"
+        );
+    }
+
+    /// ⛔ THE HEADPHONES NEVER FALL FURTHER AND FURTHER BEHIND. A source whose clock runs 2% fast
+    /// for ten minutes, and a 600 ms burst after a stall, never leave more than the jitter buffer's
+    /// ceiling queued after a callback: the oldest goes, down to the pre-roll.
+    #[test]
+    fn the_jitter_buffer_is_bounded() {
+        let card = SpscRing::new(16);
+        let (feed, mut p) = feed_and_playout();
+        feed.set_active(true);
+        let mut most = 0;
+        for i in 0..60_000 {
+            feed.push(&[0.5; 10]);
+            if i % 50 == 0 {
+                feed.push(&[0.5]);
+            }
+            let _ = callback(&mut p, &card, &feed, 10);
+            most = most.max(feed.queued());
+        }
+        assert!(most <= FEED_MAX_MS, "{most} ms queued from a fast clock");
+        feed.push(&[0.5; 600]);
+        let _ = callback(&mut p, &card, &feed, 10);
+        assert!(
+            feed.queued() <= FEED_PREROLL_MS,
+            "a burst caught up to the pre-roll"
+        );
     }
     use super::*;
 
