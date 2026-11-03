@@ -49,58 +49,28 @@ jobs:
                 throw error;
               }
             }
-      # Step C: Sync upstream changes by cherry-picking commits, skipping workflow changes
-      - name: Sync and Strip Workflows
+      # Step C: Snapshot the upstream release into main as one commit, keeping this fork's own
+      # workflows. Replaying upstream commits one by one broke on merge commits and conflicts;
+      # a tree snapshot cannot conflict and never touches .github/workflows (which GITHUB_TOKEN
+      # is not allowed to modify anyway).
+      - name: Sync Upstream Release Snapshot
         if: steps.check-tag.outputs.sync_needed == 'true'
+        env:
+          TAG: ${{ steps.check-tag.outputs.latest_tag }}
         run: |
-          # 1. Configure local git profile
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "41898282+github-actions[bot]@://github.com"
-          
-          # 2. Add the upstream parent repository and fetch its history
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
           git remote add upstream https://github.com/kd9taw/Nexus
-          git fetch upstream main
-          
-          # 3. Create a temporary tracking branch starting at our current branch location
-          git checkout -b temp-sync-branch
-          
-          # 4. Forcefully overwrite the runner's workspace index for workflows back to HEAD.
-          # This guarantees local files are matching your remote perfectly before calculations.
-          git checkout HEAD -- .github/workflows/
-          
-          # 5. Bring in upstream updates via cherry-picking rather than merging.
-          # We fetch the merge-base commit to identify exactly where your fork diverged from the parent.
-          MERGE_BASE=$(git merge-base HEAD upstream/main)
-          echo "Divergence base commit is: $MERGE_BASE"
-          
-          # 6. Apply all the new upstream commits one by one onto our current branch structure.
-          # If an upstream commit touches a workflow file, we forcefully skip changes to that file.
-          git log --reverse --format="%H" ${MERGE_BASE}..upstream/main | while read commit_sha; do
-            if git show --name-only "$commit_sha" | grep -q "\.github/workflows/"; then
-              echo "Commit $commit_sha modifies workflows. Applying with workflow exclusion..."
-              # Attempt to cherry-pick without committing automatically
-              if git cherry-pick -n "$commit_sha" 2>/dev/null; then
-                # Reset any staged changes targeting the protected workflows directory
-                git checkout HEAD -- .github/workflows/
-                git commit -C "$commit_sha" --allow-empty
-              else
-                # Clean up if a conflict occurred on workflows or other files
-                git checkout HEAD -- .github/workflows/
-                git add -A
-                git commit -C "$commit_sha" --allow-empty || git cherry-pick --skip
-              fi
-            else
-              echo "Commit $commit_sha is clean. Cherry-picking normally..."
-              git cherry-pick "$commit_sha" || git cherry-pick --skip
-            fi
-          done
-          
-          # 7. Fast-forward your main local branch tracking index to match our clean temp branch
-          git checkout main
-          git merge temp-sync-branch
-          
-          # 8. Push the clean, workflow-safe history back to your repository fork
-          git push origin main
+          git fetch --no-tags upstream "refs/tags/${TAG}:refs/upstream-tags/${TAG}"
+
+          # Working tree and index become the upstream release, then the fork's workflows return.
+          git read-tree -u --reset "refs/upstream-tags/${TAG}"
+          git rm -rq --ignore-unmatch .github/workflows
+          git checkout HEAD -- .github/workflows
+
+          git commit --allow-empty -m "Sync upstream ${TAG}"
+          git push origin HEAD:main
 
       # Step D: Resume your original tagging and dispatch logic using github-script
       - name: Complete Tagging and Dispatch
@@ -127,12 +97,12 @@ jobs:
             });
             console.log(`Successfully created tag ${latestTag} on your fork!`);
 
-            // Explicitly trigger build-intel.yml
-            console.log("Dispatching build-intel.yml workflow...");
+            // Explicitly trigger build-intel-mac.yml
+            console.log("Dispatching build-intel-mac.yml workflow...");
             await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              workflow_id: 'build-intel.yml',
+              workflow_id: 'build-intel-mac.yml',
               ref: 'main'
             });
             console.log("Build workflow dispatched successfully!");
