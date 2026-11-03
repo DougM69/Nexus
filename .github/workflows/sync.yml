@@ -49,8 +49,7 @@ jobs:
                 throw error;
               }
             }
-
-      # Step C: Merge upstream commits but drop all modifications targeting workflows
+      # Step C: Sync upstream changes by cherry-picking commits, skipping workflow changes
       - name: Sync and Strip Workflows
         if: steps.check-tag.outputs.sync_needed == 'true'
         run: |
@@ -58,23 +57,49 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@://github.com"
           
-          # 2. Add the original parent repository
+          # 2. Add the upstream parent repository and fetch its history
           git remote add upstream https://github.com/kd9taw/Nexus
           git fetch upstream main
           
-          # 3. Create a custom merge driver named "keepours" that always keeps your local version of a file
-          git config merge.keepours.driver "true"
+          # 3. Create a temporary tracking branch starting at our current branch location
+          git checkout -b temp-sync-branch
           
-          # 4. Enforce that any file in the .github/workflows directory uses our custom driver
-          echo ".github/workflows/* merge=keepours" > .git/info/attributes
-          
-          # 5. Execute the merge. The custom driver will silently intercept and drop incoming workflow updates.
-          git merge upstream/main -m "Merge upstream changes (ignoring workflows)" --allow-unrelated-histories || true
-          
-          # 6. Safety check: Hard-reset the workflows directory to what it is on your remote right now
+          # 4. Forcefully overwrite the runner's workspace index for workflows back to HEAD.
+          # This guarantees local files are matching your remote perfectly before calculations.
           git checkout HEAD -- .github/workflows/
           
-          # 7. Push the clean merge back to your fork's main branch
+          # 5. Bring in upstream updates via cherry-picking rather than merging.
+          # We fetch the merge-base commit to identify exactly where your fork diverged from the parent.
+          MERGE_BASE=$(git merge-base HEAD upstream/main)
+          echo "Divergence base commit is: $MERGE_BASE"
+          
+          # 6. Apply all the new upstream commits one by one onto our current branch structure.
+          # If an upstream commit touches a workflow file, we forcefully skip changes to that file.
+          git log --reverse --format="%H" ${MERGE_BASE}..upstream/main | while read commit_sha; do
+            if git show --name-only "$commit_sha" | grep -q "\.github/workflows/"; then
+              echo "Commit $commit_sha modifies workflows. Applying with workflow exclusion..."
+              # Attempt to cherry-pick without committing automatically
+              if git cherry-pick -n "$commit_sha" 2>/dev/null; then
+                # Reset any staged changes targeting the protected workflows directory
+                git checkout HEAD -- .github/workflows/
+                git commit -C "$commit_sha" --allow-empty
+              else
+                # Clean up if a conflict occurred on workflows or other files
+                git checkout HEAD -- .github/workflows/
+                git add -A
+                git commit -C "$commit_sha" --allow-empty || git cherry-pick --skip
+              fi
+            else
+              echo "Commit $commit_sha is clean. Cherry-picking normally..."
+              git cherry-pick "$commit_sha" || git cherry-pick --skip
+            fi
+          done
+          
+          # 7. Fast-forward your main local branch tracking index to match our clean temp branch
+          git checkout main
+          git merge temp-sync-branch
+          
+          # 8. Push the clean, workflow-safe history back to your repository fork
           git push origin main
 
       # Step D: Resume your original tagging and dispatch logic using github-script
