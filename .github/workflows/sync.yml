@@ -5,10 +5,6 @@ on:
     - cron: '0 0 * * *' # Runs every day at midnight
   workflow_dispatch: # Allows manual verification via button click
 
-permissions:
-  contents: write    # Needed to sync/merge branches
-  workflows: write   # Required to update files under .github/workflows/
-
 jobs:
   sync-tags:
     runs-on: ubuntu-latest
