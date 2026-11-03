@@ -50,29 +50,29 @@ jobs:
               }
             }
 
-      # Step C: Pull upstream changes using sparse checkout to completely isolate and drop their workflows
+      # Step C: Pull upstream changes using standard sparse-checkout matching patterns
       - name: Sync and Strip Workflows
         if: steps.check-tag.outputs.sync_needed == 'true'
         run: |
           # 1. Configure local git profile
           git config --global user.name "github-actions[bot]"
-          git config --global user.email "41898282+github-actions[bot]@://github.com"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
           
           # 2. Add the original parent repository
           git remote add upstream https://github.com
           
-          # 3. Enable sparse checkout to isolate tracked folders
-          git sparse-checkout init --cone
+          # 3. Enable sparse checkout in standard pattern-matching mode (no --cone)
+          git sparse-checkout init
           
-          # 4. Explicitly block the .github/workflows directory from syncing.
-          # We tell git to sync everything (*) EXCEPT files inside the workflows folder.
-          git sparse-checkout set "/*" "!/.github/workflows/"
+          # 4. Define the exclusion rules. 
+          # This tells git to match everything recursively, but completely exclude the workflows folder.
+          git sparse-checkout set "*" "!/.github/workflows/*"
           
           # 5. Fetch the code commits from upstream
           git fetch upstream main
           
           # 6. Merge the upstream updates into your main branch.
-          # Because of sparse checkout, incoming workflow files are ignored on merge.
+          # The tracking filter forces git to drop incoming workflow modifications.
           git merge upstream/main -m "Merge upstream changes (ignoring workflows)" -X ours --allow-unrelated-histories || true
           
           # 7. Push the clean merge back to your fork's main branch
