@@ -59,7 +59,7 @@ jobs:
           git config --global user.email "41898282+github-actions[bot]@://github.com"
           
           # 2. Add the original parent repository
-          git remote add upstream https://github.com
+          git remote add upstream https://github.com/kd9taw/Nexus
           git fetch upstream main
           
           # 3. Create a custom merge driver named "keepours" that always keeps your local version of a file
