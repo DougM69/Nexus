@@ -59,7 +59,7 @@ jobs:
           git config --global user.email "41898282+github-actions[bot]@://github.com"
           
           # 2. Add and fetch the original parent repository
-          git remote add upstream https://github.com
+          git remote add upstream https://github.com/kd9taw/Nexus
           git fetch upstream main
           
           # 3. Merge the upstream updates into your main branch. 
