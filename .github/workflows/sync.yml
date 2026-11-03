@@ -50,7 +50,7 @@ jobs:
               }
             }
 
-      # Step C: If a new tag is found, pull upstream changes and clear their workflows locally
+      # Step C: Pull upstream changes using sparse checkout to completely isolate and drop their workflows
       - name: Sync and Strip Workflows
         if: steps.check-tag.outputs.sync_needed == 'true'
         run: |
@@ -58,19 +58,24 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "41898282+github-actions[bot]@://github.com"
           
-          # 2. Add and fetch the original parent repository
-          git remote add upstream https://github.com/kd9taw/Nexus
+          # 2. Add the original parent repository
+          git remote add upstream https://github.com
+          
+          # 3. Enable sparse checkout to isolate tracked folders
+          git sparse-checkout init --cone
+          
+          # 4. Explicitly block the .github/workflows directory from syncing.
+          # We tell git to sync everything (*) EXCEPT files inside the workflows folder.
+          git sparse-checkout set "/*" "!/.github/workflows/"
+          
+          # 5. Fetch the code commits from upstream
           git fetch upstream main
           
-          # 3. Merge the upstream updates into your main branch. 
-          # We use '-X ours' to automatically favor your local files if there's a direct conflict.
-          git merge upstream/main -m "Merge upstream changes (skipping workflows)" -X ours || true
+          # 6. Merge the upstream updates into your main branch.
+          # Because of sparse checkout, incoming workflow files are ignored on merge.
+          git merge upstream/main -m "Merge upstream changes (ignoring workflows)" -X ours --allow-unrelated-histories || true
           
-          # 4. Completely clear out or revert any incoming upstream workflow updates
-          # This ensures the GITHUB_TOKEN never pushes changes to .github/workflows/
-          git checkout HEAD -- .github/workflows/
-          
-          # 5. Push the clean merge back to your fork's main branch
+          # 7. Push the clean merge back to your fork's main branch
           git push origin main
 
       # Step D: Resume your original tagging and dispatch logic using github-script
