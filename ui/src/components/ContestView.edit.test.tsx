@@ -12,6 +12,8 @@ import { StreamInputDispatcher } from '../remote-native/stream-input'
 
 vi.mock('../api', () => ({
   getSettings: vi.fn(async () => ({ ...defaultSettings, fdOperator: '' })),
+  // A joined laptop's club block lists the club log the host sent: none here.
+  fdClubLogNewest: vi.fn(async () => null),
   setSettings: vi.fn(async () => ({})),
   setFdOperator: vi.fn(async () => ({})),
   exportLog: vi.fn(async () => ''),
@@ -27,6 +29,7 @@ vi.mock('../api', () => ({
   fdClubGivePosition: vi.fn(),
   fdClubRemovePosition: vi.fn(async () => ({ outcome: 'done' })),
   fdClubAllowBack: vi.fn(async () => ({ outcome: 'done' })),
+  fdClubImport: vi.fn(async () => ({})),
   fdClubExport: vi.fn(),
 }))
 const api = (await import('../api')) as unknown as Record<string, ReturnType<typeof vi.fn>>

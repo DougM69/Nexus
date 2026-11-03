@@ -66,7 +66,8 @@ export interface RegionBest {
   bearingDeg: number
   band: string
   tier: ActivityTier
-  modeled: BandModeled
+  /** Absent when the station advised without the model (its solar flux was not measured). */
+  modeled?: BandModeled
   stations: number
   bidirectional: boolean
   score: number
@@ -93,12 +94,14 @@ export interface MufStation {
 }
 
 /** NOAA SWPC R/S/G scales (0..5): radio blackout / solar radiation / geomagnetic, now,
- *  plus tomorrow's forecast G. */
+ *  plus a forecast G with the UTC day it is for — null when NOAA's file has no block dated
+ *  tomorrow (unknown; today's forecast never stands in). The date travels with the level
+ *  because a kept copy outlives midnight: it is "tomorrow" only while `date` is UTC today + 1. */
 export interface NoaaScalesView {
   r: number
   s: number
   g: number
-  gTomorrow: number
+  gTomorrow: { level: number; date: string } | null
   /** Stamped only on a real fetch — null/absent = never loaded (an all-zero
    * default must not render as a genuinely quiet sun). */
   asOf?: number | null
@@ -266,6 +269,132 @@ export interface BandOutlook {
   /** Per-mode workability right now (P.533 engine only — real SNR statistics vs
    * each mode's required SNR). Empty/absent on the heuristic → the UI hides it. */
   modeNow?: { mode: string; score: number }[]
+  /** Per-UTC-hour path detail (24 entries; null = no mode carries this band that hour):
+   * the P.533 model's layer, hops and take-off angle. P.533 engine only — a monthly
+   * median, not today's measurement. Absent on the heuristic. */
+  detail?: (PathHour | null)[]
+}
+/** How one hour's signal travels on a path, per the P.533 model. */
+export interface PathHour {
+  layer: 'E' | 'F2'
+  hops: number
+  takeoffDeg: number
+  /** The hour's median SNR (dB in the model's 1 Hz bandwidth): only meaningful as a difference
+   * between two routes. Absent from an older shack. */
+  snrDb?: number
+  /** Beyond 7000 km: the hop geometry the long-path method assumes from distance alone (the
+   * same every hour and band) — an estimate, not a modelled ray. */
+  estimated: boolean
+}
+/** One UTC hour of model-free path geometry (propagation::pathgeo). */
+export interface PathGeoHour {
+  /** Start of the hour described: the NEXT occurrence of that UTC hour (unix s). */
+  unix: number
+  /** null exactly when `kpSource` is `unknown`, and so are `capLatDeg` and `polarFrac`. */
+  kp: number | null
+  /** `forecast` = SWPC's prediction; `measured` = observed; `current` = no outlook sample
+   * covers the hour, so SWPC's latest reading is carried forward; `unknown` = no space-weather
+   * data held at all. Word a forecast as a forecast, and an unknown Kp as unknown. */
+  kpSource: 'measured' | 'forecast' | 'current' | 'unknown'
+  capLatDeg: number | null
+  /** Shares of the path (0..1): poleward of the cap, on the grey line, sunlit. */
+  polarFrac: number | null
+  greylineFrac: number
+  sunlitFrac: number
+  greyMe: boolean
+  greyDx: boolean
+  /** The stretches of the arc inside the polar cap or on the grey line in this hour (fractions
+   * from the operator, 0, to the far end, 1) — what the map draws when the day is scrubbed to it.
+   * Absent when none, and from an older shack. */
+  segments?: { from: number; to: number; kind: 'polar' | 'grey' }[]
+}
+/** One route's geometry over the next 24 h (polar cap, auroral oval, grey line, Kp). */
+export interface PathGeometry {
+  distKm: number
+  bearingDeg: number
+  maxGmlatDeg: number
+  nowHour: number
+  /** Crosses the live auroral oval now; absent when no oval is held (unknown, not "no"). */
+  ovalNow?: boolean
+  /** 24 entries, UTC hour 0..23. */
+  hours: PathGeoHour[]
+  /** The stretches of the arc inside the polar cap or on the grey line in the request's hour, as
+   * fractions of its length from the operator (0) to the far end (1). Absent from an older shack. */
+  segmentsNow?: { from: number; to: number; kind: 'polar' | 'grey' }[]
+}
+/** Which way round the great circle the model favours for one band at the request's hour
+ * (propagation::route). The model's opinion only: never "confirmed". */
+export interface RouteCall {
+  band: string
+  verdict: 'short' | 'long' | 'either' | 'unknown'
+  confidence?: 'likely' | 'possible'
+  /** Long-path minus short-path median SNR (dB), when the model gives both. */
+  marginDb?: number
+  shortBcr: number
+  longBcr: number
+  reasons: (
+    | { kind: 'oneClosed'; open: 'short' | 'long' }
+    | { kind: 'margin'; better: 'short' | 'long' }
+    | { kind: 'withinMargin' }
+    | { kind: 'bothClosed' }
+    | { kind: 'greyLine'; route: 'short' | 'long' }
+  )[]
+}
+/** What a logged contact's path grade is asked from: the fields the grade reads. */
+export interface PathGradeAsk {
+  whenUnix: number
+  band: string
+  grid?: string | null
+  myGrid?: string | null
+  /** ADIF PROP_MODE: a contact not by the ionosphere (satellite, EME …) is never graded. */
+  propMode?: string | null
+  /** The passthrough fields the grade reads (SFI, K_INDEX, ANT_AZ, the stamp's). */
+  extra: [string, string][]
+}
+/** A logged contact's path grade as the Logbook shows it. `why` holds reason tokens
+ * (`MARGIN_S`, `HEARD_L:3`, `LATEDT:60/12` …), put into words by features/pathGrade. */
+export interface PathGrade {
+  verdict: 'short' | 'long' | 'either' | 'unknown'
+  confidence?: 'likely' | 'possible'
+  why: string[]
+  /** `logged`: stamped on the contact when it was logged. `modelled`: graded later, model only. */
+  tier: 'logged' | 'modelled'
+  /** The route named (the short path when none is) crosses the polar cap. */
+  polar: boolean
+  /** Where the sunspot number came from: the flux the contact logged, or today's (recent). */
+  ssnSource?: 'logged' | 'recent'
+  /** The contact's own stamp was made for another grid or band (edited since). */
+  stampStale?: boolean
+}
+/** One contact's path over the day it was made (the contact card). */
+export interface ContactPathDay {
+  pred: PathPrediction
+  ssnSource: 'logged' | 'recent'
+  grade?: PathGrade
+}
+export interface PathCoverage {
+  graded: number
+  open: number
+  outside: number
+}
+/** The success measures over graded contacts (the expert's check on the grading). */
+export interface PathValidation {
+  all: PathCoverage
+  polar: PathCoverage
+  nonPolar: PathCoverage
+  byBand: [string, PathCoverage][]
+  headingJudged: number
+  headingAgree: number
+}
+export interface PathGradingStatus {
+  running: boolean
+  contacts: number
+  graded: number
+  ungradable: number
+  cellsDone: number
+  cellsTotal: number
+  finishedUnix?: number
+  last30Days?: PathValidation
 }
 /** Per-path HF prediction (the PathPredictor seam): operator↔DX, best-first. */
 export interface PathPrediction {
@@ -276,6 +405,64 @@ export interface PathPrediction {
   mufNow: number
   /** Per-UTC-hour MUF (24 values) — the ceiling line above the heatmap. */
   mufHourly: number[]
+  /** Path geometry, on a per-path outlook only (never the DX ring). */
+  geometry?: PathGeometry
+  /** The same request along the long path, with its own geometry — P.533 only, and
+   * unvalidated for the long path (the reference implementation is short-path only). */
+  longPath?: PathPrediction
+  /** Per band, the route the model favours now; present only beside `longPath`. */
+  routes?: RouteCall[]
+  /** The request's day as the path-over-the-day strip draws it; per-path outlook only. */
+  day?: PathDay
+}
+/** One band at one UTC hour of a path's day (propagation::pathday). Modelled, never measured. */
+export interface PathDayCell {
+  /** Short-path modelled reliability, whole percent. */
+  shortPct: number
+  /** Long-path modelled reliability, when the engine models the long path (unvalidated). */
+  longPct?: number
+  /** The route the model favours that hour; absent without a long path to compare. */
+  verdict?: RouteCall['verdict']
+  confidence?: RouteCall['confidence']
+}
+/** One UTC hour's band-independent geometry in a path's day. */
+export interface PathDayHour {
+  unix: number
+  /** null exactly when `kpSource` is `unknown` (no space-weather data held). */
+  kp: number | null
+  /** Where the hour's Kp came from (see PathGeoHour.kpSource). */
+  kpSource: PathGeoHour['kpSource']
+  polarShort: boolean
+  polarLong?: boolean
+  greyMe: boolean
+  greyDx: boolean
+}
+/** A path over the day: band rows (highest first) × 24 UTC hours, both routes, plus the hours. */
+export interface PathDay {
+  nowHour: number
+  mufShort: number[]
+  mufLong?: number[]
+  /** Each route's highest geomagnetic latitude (degrees): the polar cap proper from 70°, below
+   * that only the auroral zone. Absent from an older shack. */
+  maxGmlatShort?: number
+  maxGmlatLong?: number
+  bands: { band: string; cells: PathDayCell[] }[]
+  hours: PathDayHour[]
+}
+/** One of the ten fixed DX regions with its path over the day (`get_path_regions`). */
+export interface RegionPathDay {
+  id: string
+  lat: number
+  lon: number
+  /** CQ zones the region counts (for ordering by the operator's needs and contacts). */
+  zones: number[]
+  day: PathDay
+}
+export interface PathRegions {
+  engine: string
+  /** When the model part was computed (unix s); the hours are current at every ask. */
+  computedUnix: number
+  regions: RegionPathDay[]
 }
 /** One receiver who decoded the operator ("getting out"). */
 export interface HeardMe {
@@ -299,6 +486,15 @@ export interface AuroraPoint {
   lat: number
   lon: number
   prob: number
+}
+/** The OVATION oval (get_aurora) and what it is: a FORECAST for `forecastAt`, made from the
+ *  solar wind observed at `observedAt` (both NOAA's own stamps, Unix seconds UTC, null when the
+ *  file carried none), in the copy fetched at `fetchedAt`. */
+export interface AuroraOval {
+  points: AuroraPoint[]
+  observedAt: number | null
+  forecastAt: number | null
+  fetchedAt?: number | null
 }
 /** A forward-calendar entry — an announced DXpedition to plan for. */
 export interface CalendarEntry {
@@ -358,9 +554,12 @@ export interface PcaView {
   /** Day/night 30 MHz polar-cap absorption (dB). */
   a30Day: number
   a30Night: number
-  /** Polar-cap cutoff (geomagnetic latitude, °) at the current Kp. */
-  cutoffDeg: number
+  /** Polar-cap cutoff (geomagnetic latitude, °) at the measured Kp; null without a measured Kp
+   *  (the edge is unknown, and `points` is drawn at the quiet-field cap). */
+  cutoffDeg: number | null
   points: { lat: number; lon: number; db30: number }[]
+  /** The GOES proton sample's own time (Unix seconds); absent from an older station. */
+  protonsAt?: number | null
 }
 
 /** Satellites view (get_satellites): amateur-bird subpoints now + next-24h passes
@@ -815,6 +1014,18 @@ export interface SpaceWxView {
   xrayLong?: number
   /** Real-time solar wind; absent when the DSCOVR feed is unavailable. */
   solarWind?: SolarWind | null
+  /** Whether any number above is a reading NOAA answered rather than the model's stand-in.
+   *  Absent from an older station, whose numbers read as they always did. */
+  fetched?: boolean
+  /** When each number was measured, NOAA's own sample time (Unix seconds UTC). null = that
+   *  number is a stand-in, never a reading: it is drawn as "no data". `aDay` is 00:00 UT of the
+   *  day the daily planetary A (`aIndex`) belongs to. See propViz `wxReading`. */
+  sfiAt?: number | null
+  kpAt?: number | null
+  xrayAt?: number | null
+  aDay?: number | null
+  /** The instantaneous ap estimated from the measured Kp — an estimate, shown on hover only. */
+  apNow?: number | null
 }
 
 /** The 60 s X-ray fast lane (`get_xray_now`) — fresher than the 5-min prop
@@ -822,8 +1033,46 @@ export interface SpaceWxView {
 export interface XrayNow {
   /** GOES long-band X-ray flux, W/m². */
   flux: number
-  /** When the reading was fetched (Unix seconds, UTC). */
+  /** The GOES sample's own time (Unix seconds, UTC), not the fetch time — a feed gap shows
+   *  as an old sample (propViz `xrayFastFresh`). */
   asOf: number
+  /** The six-hour trace, `[unix, flux]` per five minutes (each bucket's peak), oldest first: the
+   *  sparkline. Absent from an older station. */
+  series?: [number, number][]
+  /** The raw GOES minutes of the last 70 minutes, `[unix, flux]`, oldest first: the direction word.
+   *  Absent from an older station, which then gets no direction word (never one from the peaks). */
+  recent?: [number, number][]
+  /** NOAA's newest flare event, when its list answered. */
+  event?: FlareEvent | null
+  /** NOAA's D-RAP grid — sent only while the flux is M1 or above. */
+  drap?: DrapGrid | null
+}
+
+/** One flare as NOAA's event list reports it (Unix seconds, UTC). A time NOAA has not called
+ *  yet is null, never a guess. */
+export interface FlareEvent {
+  /** When NOAA last updated the entry. */
+  at: number
+  beginAt: number
+  beginClass: string | null
+  maxAt: number | null
+  maxClass: string | null
+  maxFlux: number | null
+  endAt: number | null
+  currentClass: string | null
+}
+
+/** NOAA's D-RAP global grid of Highest Affected Frequency (MHz). Rows north first, columns west
+ *  first, regular spacing, columns round the whole globe. */
+export interface DrapGrid {
+  /** NOAA's `Product Valid At`. */
+  validAt: number
+  /** NOAA's `Estimated Recovery Time`, when it gives one. */
+  recoveryAt: number | null
+  lats: number[]
+  lons: number[]
+  /** `lats.length × lons.length`, row-major. */
+  haf: number[]
 }
 export interface PropagationSnapshot {
   advisory: PropAdvisory
@@ -862,6 +1111,9 @@ export interface MapSpot {
   band: string
   heardMe: boolean
   ageSecs: number
+  /** When the report was made (Unix secs). Not `asOf - ageSecs`: a cached snapshot keeps its
+   *  `asOf` while its spots are rebuilt on every poll. */
+  time: number
   approx: boolean
   /** Exact spot frequency (MHz) when the source carried one (cluster/RBN, PSKR
    * HTTP) — what map click-to-work tunes to. Null = band-level only. */
@@ -1014,6 +1266,60 @@ export interface KpPoint {
 /** The NOAA planetary-K outlook: about a week back and three days forward. */
 export interface KpForecast {
   points: KpPoint[]
+  /** When the station fetched this copy (Unix seconds); absent from an older station. */
+  fetchedAt?: number | null
+}
+
+/** "Coming" (`get_arrival_outlook`): what NOAA expects to reach Earth, three ways of knowing
+ *  kept apart — the watch (NOAA's call), the model run (WSA-Enlil) and the measurement at L1 —
+ *  each with its own time. Every part is absent when it is not known; nothing is filled in.
+ *  Times are Unix seconds UTC. */
+export interface ArrivalWatch {
+  serial: number
+  code: string
+  issued: number
+  days: { day: number; g: number }[]
+  comment: string | null
+  /** First G1+ day's 00Z … the last one's end. */
+  window: [number, number] | null
+  maxG: number
+}
+export interface ArrivalModelPoint {
+  at: number
+  speed: number
+  density: number
+  cloud: boolean
+}
+export interface ArrivalModel {
+  /** The model file's own publication time, when the server sent one. */
+  runAt: number | null
+  fetchedAt: number
+  peak: ArrivalModelPoint | null
+  arrival: { riseAt: number; start: number; end: number; speedFrom: number; speedTo: number; cloud: boolean } | null
+}
+export interface ArrivalL1Sample {
+  at: number
+  arrives: number
+  speed: number | null
+  bt: number | null
+}
+export interface ArrivalL1 {
+  latest: ArrivalL1Sample | null
+  jump: {
+    at: number
+    arrives: number
+    speedBefore: number | null
+    speedAfter: number | null
+    btBefore: number | null
+    btAfter: number | null
+  } | null
+}
+export interface ArrivalOutlook {
+  watch: ArrivalWatch | null
+  model: ArrivalModel | null
+  l1: ArrivalL1 | null
+  /** The 3-day forecast's geomagnetic rationale: NOAA's own words, untranslated. */
+  rationale: { issued: number; text: string } | null
 }
 
 /** One day of NOAA SWPC's daily solar indices. `null` = SWPC published no value for that day —
@@ -1658,6 +1964,9 @@ export interface RadioStatus {
    *  its mic, so Nexus's own Flex client kept the key off the air. Cleared by the next press that
    *  keys or fails for another reason; absent otherwise, and from a station older than it. */
   pttRefused?: PttRefused | null
+  /** The last computer-microphone over that ended, or never keyed, for a reason the operator did not
+   *  choose (crates/tempo-app/src/engine/pc_mic.rs). Absent until it happens. */
+  pcMicEnded?: PcMicEnded | null
   /** The last voice-keyer message Nexus's own Flex client dropped without keying the radio (Phone
    *  at the shack with native audio on, where a message waits for the radio to take DAX). Cleared by
    *  the next message the keyer accepts; absent otherwise, and from a station older than it. */
@@ -3060,6 +3369,9 @@ export type NeedTag =
   | 'NewMode'
   | 'NewGrid'
   | 'NewState'
+  /** An IOTA island group never worked, on any band. Set only when the station's group is known:
+   * a spot comment that names it, or a callbook answer for exactly that call (needalert.rs). */
+  | 'NewIota'
   /** A POTA/SOTA reference not yet worked in the activation running right now — a genuine
    * need, unlike the Pota/Sota labels below. See HuntedActivations (needalert.rs). */
   | 'NewPark'
@@ -3121,6 +3433,9 @@ export interface NeedAlert {
   /** The WAE country this station would be new in on this band in this mode class. Sent only
    *  while "Show WAE country needs" is on (off as it ships); the board shows a WAE chip for it. */
   waeNeed?: string | null
+  /** The IOTA island group the station is on, when its spot's comment or a callbook answer named
+   * one — present on a NewIota row, and on a Confirm row the group raised. */
+  iota?: string | null
 }
 
 /** One raw cluster/RBN spot for the Spots panel (the firehose).
@@ -3152,6 +3467,8 @@ export interface SpotRow {
   /** Seconds since received; -1 if unknown. */
   ageSecs: number
   comment: string
+  /** The IOTA island group the comment names, when it names exactly one (`iota::in_comment`). */
+  iota?: string
   /** Operator may transmit at this freq+mode (license privileges; Open class ⇒ true). */
   licensed: boolean
   /** At least one voice for this spot — the spotter or a corroborator — is on the operator's
@@ -3636,10 +3953,23 @@ export interface CustomAwardsView {
  * (basic IOTA = 100 confirmed). */
 export interface IotaProgress {
   worked: number
-  /** Confirmed in the log sense (LoTW or card). */
+  /** Confirmed by LoTW or card (never eQSL) — what the IOTA programme credits. */
   confirmed: number
-  /** Card-confirmed — the only channel the IOTA program accepts (never LoTW). */
+  /** Confirmed by card alone, shown beside it. */
   cardConfirmed: number
+}
+
+/** The US Counties award (CQ's USA-CA): the 3,077 counties, by the contact's CNTY. Confirmed by
+ * the award's rule: a card, or an eQSL from an Authenticity-Guaranteed member. */
+export interface UsacaProgress {
+  worked: number
+  confirmed: number
+  total: number
+  /** The highest level reached (500, 1000 … 3077) and the next one. */
+  level: number | null
+  nextLevel: number | null
+  /** Contacts whose CNTY names no county of the award: left uncounted. */
+  unplaced: number
 }
 
 /** DXCC Honor Roll standing — current-entity, confirmed. (ARRL: confirmed ≥
@@ -3771,6 +4101,8 @@ export interface AwardSummary {
   ffma?: FfmaProgress
   /** IOTA — island groups worked / confirmed. */
   iota: IotaProgress
+  /** The US Counties award. Absent from an older station. */
+  usaca?: UsacaProgress
   /** Worked All Provinces (Canada). Absent from an older station. */
   wap?: WapProgress
   /** CQ WPX, DARC WAE and WWFF. Absent from a station older than them. */
@@ -4481,9 +4813,10 @@ export interface FdClubStatus {
   clubCode?: string
 }
 
-/** The host's club log, as its own screen lists it (`fdClubLogNewest`, Rust `FdClubLogDto`): how
- *  many contacts the club holds, and the newest of them, newest first. The HOST's alone, and its
- *  own screens': nothing of it rides the snapshot, so Remote is sent none of it. */
+/** The club log, as the host's own screen lists it (`fdClubLogNewest`, Rust `FdClubLogDto`): how
+ *  many contacts the club holds, and the newest of them, newest first. A joined laptop answers the
+ *  same list, as the host sent it over club sync. Nothing of it rides the snapshot, so Remote is sent
+ *  none of it. */
 export interface FdClubLog {
   /** Every contact in the club's log, duplicates included: the count the club line says. */
   total: number
@@ -4624,6 +4957,9 @@ export interface Settings {
   aprsComment?: string
   /** The digipeater path, e.g. ['WIDE1-1','WIDE2-1']. Empty is a real value: direct, no hops. */
   aprsPath?: string[]
+  /** Doppler correction on the APRS cockpit's ISS channel (default on; no other channel is
+   * corrected). */
+  aprsIssDoppler?: boolean
   /** The SSID every APRS frame we originate carries (-9 mobile, -10 iGate, -7 HT …), or
    * null/undefined to FOLLOW MY CALLSIGN — whatever `mycall` already spells out. Applied in
    * Rust only; the UI never sends a source address. */
@@ -4838,6 +5174,23 @@ export interface Settings {
   /** The JS8 events that play a sound (JS8Call's notifications, all off by default): cq, hb, ack,
    *  directed, inbox, callNew, callOld. */
   js8Sounds: string[]
+  /** JS8Call's "Reset the Band Activity, Call Activity, and RX history at startup" (off by
+   *  default): the cockpit starts each run with its three lists empty. Display only. */
+  js8ResetActivity: boolean
+  /** JS8Call's colours and fonts for the RX pane, the two lists and the compose box (empty by
+   *  default: every pane follows the theme). Colours by theme, then by element, each `#rrggbb`;
+   *  fonts by pane. Read through features/js8PaneStyle, which checks every entry. */
+  js8PaneStyle: {
+    light: Record<string, string>
+    dark: Record<string, string>
+    fonts: Record<string, { family: string; sizePt: number }>
+  }
+  /** The WAV file each of those plays, by event (JS8Call's notification paths). None, the default,
+   *  plays the built-in tone. Paths on this computer: the Remote page never has them. */
+  js8SoundFiles?: Record<string, string>
+  /** The output the JS8 sounds play on, by device name; empty or absent is the system default. A
+   *  device the station transmits from is refused at every play (VOX safety). */
+  js8SoundDevice?: string
   /** JS8Call's TCP API for programs on this computer: read-only, on 127.0.0.1 only. Off by
    * default, as in JS8Call. */
   js8ApiTcp?: boolean
@@ -4934,6 +5287,10 @@ export interface Settings {
   icomNativeCat: boolean
   /** Which Icom DATA mode to select for digital (1|2|3). 1 = today's behaviour. */
   icomDataMode: number
+  /** This radio's waterfall source where Nexus streams an Icom's own scope: 'auto' (the default,
+   * the radio's scope) or 'audio' (the sound card's audio waterfall; the scope stream stops and
+   * CI-V keeps serving CAT). Per radio (flat mirror of `RadioProfile.nativeScope`); absent = 'auto'. */
+  nativeScope?: string
   /** "Transmit audio source (CAT PTT)" (#381): 'front' keys as every release has (`T 1`, the MIC
    * input on most radios), 'rear' keys the DATA input (`T 3`). Offered only for CAT PTT on a radio
    * whose Hamlib driver has mic/data PTT (`getPttMicDataRigModels`). Per radio; absent = 'front'. */
@@ -4954,6 +5311,15 @@ export interface Settings {
   /** APRS in this radio's DATA-FM mode instead of plain FM (#393). Per radio, off by default;
    * obeyed only on a radio that has one (`APRS_DATA_FM_MODELS`). */
   aprsDataFm: boolean
+  /** Phone's PTT feeds THIS computer's microphone to the radio (its transmit audio route), instead
+   * of keying the radio's own microphone. Per radio (flat mirror of the active radio), off by
+   * default; Phone only. */
+  pcMic?: boolean
+  /** The input device the computer's microphone is captured from; empty = none chosen (never the
+   * system default). Per radio. */
+  pcMicDevice?: string
+  /** The computer microphone's gain in dB, -20 to +20. Per radio. */
+  pcMicGainDb?: number
   /** Antenna rotator: rotctld daemon `host:port` (empty = no rotator). */
   /** Integrated rotator: Hamlib rotator model # (0 = none) + serial port +
    * baud — Nexus launches the bundled rotctld itself, like the rig. */
@@ -5712,7 +6078,18 @@ export interface Settings {
    *  a new install's default) or `act` (silent, what an existing settings file keeps). Not written
    *  by a settings save: write it with `setRadioSwitchPolicy` (api.ts), its one writer. */
   radioSwitchPolicy?: RadioSwitchPolicy
+  /** The first-run wizard's answer to "How much have you done?". Absent = never asked (an
+   *  existing station, or a skipped wizard), which behaves as every earlier build did. Not
+   *  written by a settings save: write it with `setExperienceLevel` (api.ts), its one writer. */
+  experienceLevel?: ExperienceLevel
+  /** Whether the first-run setup wizard was done (finished or skipped). `false` only on a new
+   *  install (there was no settings file); absent or `true` = an existing station, which the
+   *  wizard never opens for by itself. Write it with `markSetupWizardSeen` (api.ts), its one writer. */
+  setupWizardSeen?: boolean
 }
+
+/** Mirrors the Rust `ExperienceLevel`. */
+export type ExperienceLevel = 'newToHobby' | 'newToDigital' | 'experienced'
 
 /** The mode granularity radio routing decides on — a refinement of the app's CW/Phone/Digital
  * classes (FM and SSB are both Phone; digital and RTTY are both Digital). The refinement is what
@@ -5800,6 +6177,10 @@ export interface RadioProfile {
   /** APRS in this radio's DATA-FM mode instead of plain FM (#393). Per radio, off by default;
    * obeyed only on a radio that has one (`APRS_DATA_FM_MODELS`). */
   aprsDataFm: boolean
+  /** Phone's PTT feeds this computer's microphone to this radio. Off by default. */
+  pcMic: boolean
+  pcMicDevice: string
+  pcMicGainDb: number
   audioIn: string
   audioOut: string
   txLevel: number
@@ -5819,7 +6200,7 @@ export interface RadioProfile {
   lastDialMhz: number
   lastBand: string
   lastSideband: string
-  /** Native panadapter: "auto" | "none" | "flex" | "civ". */
+  /** Waterfall source where Nexus streams an Icom scope: "auto" (the radio's scope, default) or "audio". */
   nativeScope: string
   /** This radio's FlexRadio LAN IP (SmartSDR API :4992) — per-radio since 2026-08-18. */
   flexRadioIp?: string
@@ -5947,7 +6328,8 @@ export interface AppSnapshot {
    * retransmissions). Drives the HARQ stats readout. */
   harqRescues: number
   /** A completed QSO awaiting confirm-before-log (WSJT-X "Prompt me to log
-   * QSO"). Present only with promptToLog on; drives the confirm popup. */
+   * QSO"). Present with promptToLog on, and whatever it says for a contact that may only be
+   * offered (our 73 after a click on the station's RR73 or RRR); drives the confirm popup. */
   pendingLog?: LoggedQso | null
   /** How many contacts have been logged WITHOUT the operator's confirmation since they last
    * answered the popup, because the confirm-before-log queue was full (the cap logs the
@@ -5967,6 +6349,9 @@ export interface AppSnapshot {
   /** How many MORE completed contacts are queued behind the one the popup shows (operator
    *  ruling 2026-09-19: queue them, never replace). 0 or absent = this is the only one. */
   pendingLogsWaiting?: number
+  /** How many finished contacts wait for Log QSO with Auto-log and the popup both off (ones a
+   *  click, Call CQ or a mode change replaced): the Log button shows the count. Absent/0 = none. */
+  logQsoWaiting?: number
   /** Last connector auto-upload outcome (QRZ/ClubLog/eQSL) from the backend
    * upload funnel; uploadTick bumps per outcome so the UI toasts it. */
   uploadNote?: string | null
@@ -6041,6 +6426,7 @@ export type AudioErrorKind =
   | 'soundCard'
   | 'noReceiveAudio'
   | 'ptt'
+  | 'pttUnconfirmed'
   | 'flexAudio'
   | 'flexAddress'
   | 'monitor'
@@ -6105,6 +6491,13 @@ export interface SlotKeyRefused {
    *  would not open (`why` is then the sound card's own error): the lane says that in its own
    *  words. Absent otherwise. */
   txAudioFailed?: boolean
+  /** Set when Nexus kept the key off the air itself because the radio did not take Split
+   *  Operation's TX frequency (`why` is then the rig link's answer to that write): the lane says
+   *  that in its own words. Absent otherwise. */
+  splitFailed?: boolean
+  /** With splitFailed: Nexus could not confirm the radio's SPLIT is off after letting go of its
+   *  own split, so the lane says how to clear it. Absent otherwise. */
+  splitOffUnconfirmed?: boolean
 }
 
 /** Why Nexus's own Flex client kept a slot over's key off the air (mirror of the Rust
@@ -6429,4 +6822,29 @@ export interface RadioProgProject {
   origin: ProgOrigin
   radiusKm: number
   channels: ProgChannel[]
+}
+
+/** Why a computer-microphone over ended or never keyed (`PcMicCause`, crates/tempo-app/src/dto.rs).
+ *  The operator's words are in features/pcMic.ts. */
+export type PcMicCause =
+  | 'noDevice'
+  | 'sameAsReceive'
+  | 'openFailed'
+  | 'deviceLost'
+  | 'noAudio'
+  | 'ceiling'
+  | 'watchdog'
+  | 'busy'
+  | 'flexMic'
+  | 'radioReceive'
+  | 'loopback'
+  | 'gateDown'
+  | 'interrupted'
+  | 'keyRefused'
+  | 'unsure'
+
+export interface PcMicEnded {
+  /** When, in Unix seconds. */
+  at: number
+  cause: PcMicCause
 }

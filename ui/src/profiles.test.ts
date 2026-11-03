@@ -132,6 +132,18 @@ describe('mergeProfile — the profile-load contract', () => {
     expect(merged.band).toBe('40m') // control: the profile's real settings still apply
   })
 
+  it('the experience answer and the setup wizard record are the operator\'s, never a profile\'s', () => {
+    // Who the operator is (how much they have done) and whether this station's setup wizard was
+    // done: the licence class's family. A profile from a "new to the hobby" station must not fold
+    // this one's Settings, nor bring the first-run wizard back.
+    const mine = { ...current, experienceLevel: 'experienced', setupWizardSeen: true } as unknown as Settings
+    const foreign = { experienceLevel: 'newToHobby', setupWizardSeen: false, band: '40m' } as unknown as Settings
+    const merged = mergeProfile(mine, foreign) as unknown as Record<string, unknown>
+    expect(merged.experienceLevel).toBe('experienced')
+    expect(merged.setupWizardSeen).toBe(true)
+    expect(merged.band).toBe('40m') // control: the profile's real settings still apply
+  })
+
   it('nor does the mark that says a LoTW download of every call made the cursor', () => {
     // The mark belongs to the cursor beside it. Imported onto an older build's cursor (a download
     // of the Settings call alone made it), it would let the next sync ask from that cursor, and
@@ -225,7 +237,7 @@ describe('mergeProfile — the logbook upload switches never import', () => {
     expect(merged.band).toBe('40m') // control: the profile's real settings still apply
   })
 
-  // Every upload switch under Settings ▸ Logging & Connectors ▸ Confirmations, both ways round.
+  // Every upload switch under Settings ▸ Services ▸ Confirmations, both ways round.
   it.each([
     'qrzLogbookUpload',
     'clublogUpload',
@@ -396,5 +408,14 @@ describe('a profile saved from a read without the stored keys keeps the station�
   it('CONTROL: a profile read with its key keeps that key', () => {
     saveProfile('Home', settings({ clublogApiKey: 'FAKE-KEY-0002' }))
     expect(loadProfiles()[0].settings.clublogApiKey).toBe('FAKE-KEY-0002')
+  })
+})
+
+describe('mergeProfile — the JS8 sounds’ WAV files travel with a profile', () => {
+  it('a profile’s files replace the current ones, and a profile from before them keeps them', () => {
+    const current = { js8Sounds: ['cq'], js8SoundFiles: { cq: '/home/op/sounds/cq.wav' } } as unknown as Settings
+    const club = { js8Sounds: ['cq', 'inbox'], js8SoundFiles: { inbox: 'D:\\Club\\mail.wav' } } as unknown as Settings
+    expect(mergeProfile(current, club).js8SoundFiles).toEqual({ inbox: 'D:\\Club\\mail.wav' })
+    expect(mergeProfile(current, { band: '40m' } as unknown as Settings).js8SoundFiles).toEqual({ cq: '/home/op/sounds/cq.wav' })
   })
 })

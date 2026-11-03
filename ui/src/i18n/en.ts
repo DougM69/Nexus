@@ -754,6 +754,17 @@ export const EN = {
   "client.bench.normal": "Normal",
   "client.bench.blockLink": "Block the command link",
   "client.bench.blockStopRoad": "Block the Stop road",
+  "keyConfirm.label": "Saved keys to confirm",
+  "keyConfirm.cloudlog": "Use your saved Cloudlog key with {{address}}?",
+  "keyConfirm.icomLan": "Use your saved password for {{radio}} with {{address}}?",
+  "keyConfirm.why": "A settings restore set this address, and the saved key may be for another. Nothing is sent with it until you choose.",
+  "keyConfirm.use": "Use",
+  "keyConfirm.remove": "Remove",
+  "keyConfirm.notRemoved.cloudlog": "Nexus could not remove your saved Cloudlog key. It is never sent. Try Remove again.",
+  "keyConfirm.notRemoved.icomLan": "Nexus could not remove the saved password for {{radio}}. It is never sent. Try Remove again.",
+  "keyConfirm.refused.addressChanged": "That address changed since the notice asked, so nothing was let go. Check the notice again, then choose.",
+  "keyConfirm.refused.noRadio": "That radio is no longer on the roster, so its saved network password can only be removed: choose Remove.",
+  "keyConfirm.refused.notRemoved": "Removing this saved key failed, and it was saved for another address, so it can only be removed: choose Remove.",
   "client.bench.blocked.link": "Test build: this computer is blocking its command link to the station.",
   "client.bench.blocked.stopRoad": "Test build: this computer is blocking its Stop road to the station.",
   "settings.thisComputer.legend": "This computer",
@@ -939,7 +950,7 @@ export const EN = {
   'gettingStarted.station.callout.body':
     'Four characters pins you to the middle of a ~100-mile square, and every distance and bearing you will ever read is measured from that point. <code>{{full}}</code> beats <code>{{short}}</code>. A malformed locator is refused outright — the wizard will not let you past it.',
   'gettingStarted.station.shot.caption':
-    'Setup wizard ▸ step 1 · re-run any time from Settings ▸ Appearance ▸ Features',
+    'Setup wizard ▸ step 1 · re-run any time from Settings ▸ App ▸ Features',
   'gettingStarted.station.shot.title': 'Who’s on the air?',
   'gettingStarted.station.shot.sub':
     'Your grid square is the anchor for everything location-based — satellite passes, propagation, the map, and DXpedition windows are all computed from it.',
@@ -1089,7 +1100,7 @@ export const EN = {
   // `<a>` is the labels THIS language's Settings shows (the Settings view, the tab, the section
   // legend), and the `<a>` span becomes a link that opens that section.
   'gettingStarted.wsjtx.body':
-    'Your muscle memory transfers — double-click semantics, <code>Esc</code> / <code>F4</code> / <code>F6</code> / <code>Alt+1–6</code>, Band Activity bottom-pinned, early decodes at 11.8\u00a0s, Fake-It split, Hound auto-move. So do your settings: point step 2 at the same rig and audio devices WSJT-X uses, and hand step 4 your <code>wsjtx_log.adi</code>. JTAlert and GridTracker keep working once you turn on <b>WSJT-X UDP API</b> (off by default) in Settings ▸ Logging & Connectors ▸ <a>Integrations & Feeds</a>. Its address already matches WSJT-X’s default, so nothing else needs setting, and they see Nexus as a WSJT-X.',
+    'Your muscle memory transfers — double-click semantics, <code>Esc</code> / <code>F4</code> / <code>F6</code> / <code>Alt+1–6</code>, Band Activity bottom-pinned, early decodes at 11.8\u00a0s, Fake-It split, Hound auto-move. So do your settings: point step 2 at the same rig and audio devices WSJT-X uses, and hand step 4 your <code>wsjtx_log.adi</code>. JTAlert and GridTracker keep working once you turn on <b>WSJT-X UDP API</b> (off by default) in Settings ▸ Services ▸ <a>Integrations & Feeds</a>. Its address already matches WSJT-X’s default, so nothing else needs setting, and they see Nexus as a WSJT-X.',
   // A whole extra sentence, not a tail glued onto the one above — a translator may place it
   // wherever their language wants it.
   'gettingStarted.wsjtx.mac':
@@ -1348,6 +1359,53 @@ export const EN = {
     other: '{{count}} contacts now hold their park’s state',
   },
   'logbook.parkStates.failed': 'Could not check park states',
+  // "Cards to send" (QslCardsToSend): the contacts queued for a paper QSL card, printed as labels and
+  // marked sent only once the operator says the labels printed. The label stocks' names are
+  // product names and stay as they are.
+  'logbook.qslCards.button': 'Cards to send',
+  'logbook.qslCards.buttonTitle':
+    'Print QSL labels for the contacts queued for a paper card, then mark them sent',
+  'logbook.qslCards.title': 'Cards to send',
+  'logbook.qslCards.intro':
+    'The contacts queued for a paper QSL card. Tick the ones to print and print their labels. Nexus then asks whether the labels printed, and marks the cards sent only when you say they did.',
+  'logbook.qslCards.reading': 'Reading your log…',
+  'logbook.qslCards.none':
+    'No cards are queued. Queue one from a contact’s QSL menu in the Logbook.',
+  'logbook.qslCards.failed': 'Could not read the cards to send',
+  'logbook.qslCards.format': 'Label stock',
+  'logbook.qslCards.start': 'Start at label',
+  'logbook.qslCards.startTitle':
+    'On a part-used sheet: the first label still on it, counted across, then down',
+  'logbook.qslCards.combine': 'Put several contacts with the same station on one label',
+  'logbook.qslCards.summary': 'Labels: {{labels}} · Sheets: {{pages}}',
+  'logbook.qslCards.close': 'Close',
+  'logbook.qslCards.print': {
+    one: 'Print {{count}} label',
+    other: 'Print {{count}} labels',
+  },
+  'logbook.qslCards.printFailed': 'Could not open the label sheet',
+  'logbook.qslCards.question':
+    'Did the labels print correctly? Only then are these cards marked sent.',
+  'logbook.qslCards.via': 'Sent via',
+  'logbook.qslCards.yes': {
+    one: 'Yes, mark {{count}} card sent',
+    other: 'Yes, mark {{count}} cards sent',
+  },
+  'logbook.qslCards.no': 'No, keep them queued',
+  'logbook.qslCards.done': {
+    one: '{{count}} card marked sent',
+    other: '{{count}} cards marked sent',
+  },
+  'logbook.qslCards.partial':
+    'Marked {{done}} of {{count}} cards sent. The rest changed meanwhile and stay queued.',
+  'logbook.qslCards.sheet.title': 'QSL labels',
+  'logbook.qslCards.sheet.help':
+    'Print at 100 % (actual size) with no margins, on the label stock chosen in Nexus. The dashed outlines show on screen only.',
+  'logbook.qslCards.sheet.print': 'Print',
+  'logbook.row.qslQueue.add': 'Queue a paper card',
+  'logbook.row.qslQueue.remove': 'Remove from cards to send',
+  'logbook.qsl.queued': 'Card queued for {{call}}',
+  'logbook.qsl.unqueued': 'Card no longer queued for {{call}}',
   // "Check confirmations" (ConfirmationReview): contacts holding a LoTW, eQSL or QRZ confirmation,
   // or LoTW's upload mark, that the service's own records give another contact, or none. LoTW,
   // eQSL, QRZ, calls, bands and modes are invariant tokens; `{{service}}` is one of the three.
@@ -1737,8 +1795,11 @@ export const EN = {
   'contactCard.callFix.title': 'Correct {{old}} to {{call}}?',
   'contactCard.callFix.body': 'Saving takes off what belonged to {{old}}: {{fields}}. Undo puts it back.',
   'contactCard.callFix.confirm': 'Save the correction',
+  'contactCard.callFix.card': 'the paper card marked received',
+  'contactCard.callFix.cardDated': 'the paper card marked received, with its date',
   'contactCard.callFix.lotw': 'the LoTW confirmation',
   'contactCard.callFix.eqsl': 'the eQSL confirmation',
+  'contactCard.callFix.qrz': 'the QRZ confirmation',
   'contactCard.lotwNotResent': 'Already uploaded to LoTW — not sent again: {{fields}}',
   'contactCard.cancel': 'Cancel',
   'logbook.confirmations.all.label': 'Download confirmations',
@@ -1840,6 +1901,82 @@ export const EN = {
   'logbook.column.ituz': 'ITU zone',
   'logbook.column.cont': 'Continent',
   'logbook.column.distance': 'Distance (km)',
+  // Your contacts' paths (features/pathGrade.ts, the Logbook's Path column and filter, the contact
+  // card): which way round each logged contact most likely went. A grade stamped when the contact
+  // was logged is the station's own (beam heading, receivers, decodes) over the model; one made
+  // afterwards is the model's monthly median alone, never a measurement. `{{n}}`, `{{pct}}`,
+  // `{{open}}`, `{{outside}}`, `{{polar}}`, `{{other}}`, `{{ms}}`, `{{done}}` and `{{total}}` are
+  // numbers; ▸ ◂ ▸◂ ? ⊕ are invariant marks; ANT_PATH and ADIF are field names, kept verbatim.
+  'logbook.column.path': 'Path',
+  'logbook.column.path.title':
+    'The path each contact most likely took: ▸ short, ◂ long, ▸◂ either, ? outside the model, ⊕ across the polar cap. Bright: graded when it was logged. Dim: modelled afterwards.',
+  'logbook.filters.path': 'Path',
+  'logbook.filters.pathTitle':
+    'The path each contact most likely took, as the Path column grades it',
+  'logbook.filters.pathLong': 'Long path',
+  'logbook.filters.pathPolar': 'Across the polar cap',
+  'pathGrade.verdict.short': 'Short path',
+  'pathGrade.verdict.long': 'Long path',
+  'pathGrade.verdict.either': 'Either path',
+  'pathGrade.verdict.unknown': 'Outside the model',
+  'pathGrade.cell.either': 'either',
+  'pathGrade.cell.outside': 'outside',
+  'pathGrade.none': 'No path grade yet',
+  'pathGrade.sentence': '{{verdict}}, {{conf}}.',
+  'pathGrade.sentence.polar': '{{verdict}}, {{conf}} — across the polar cap.',
+  'pathGrade.sentence.bare': '{{verdict}}.',
+  'pathGrade.sentence.barePolar': '{{verdict}} — across the polar cap.',
+  'pathGrade.sentence.either': 'Either path: the two were modelled within 6 dB of each other.',
+  'pathGrade.sentence.eitherPolar':
+    'Either path: the two were modelled within 6 dB of each other; the short path crosses the polar cap.',
+  'pathGrade.sentence.outside': 'Outside the model: both paths were modelled closed at that hour.',
+  'pathGrade.why.lead': 'Why: {{text}}.',
+  'pathGrade.why.openS': 'only the short path was modelled open',
+  'pathGrade.why.openL': 'only the long path was modelled open',
+  'pathGrade.why.marginS': 'the short path was modelled at least 6 dB better',
+  'pathGrade.why.marginL': 'the long path was modelled at least 6 dB better',
+  'pathGrade.why.reliabS':
+    'the short path was modelled much more reliable (the model gave no signal-to-noise figure)',
+  'pathGrade.why.reliabL':
+    'the long path was modelled much more reliable (the model gave no signal-to-noise figure)',
+  'pathGrade.why.within': 'the two paths were modelled within 6 dB of each other',
+  'pathGrade.why.closed': 'both paths were modelled closed',
+  'pathGrade.why.greyS': 'grey line along the short path',
+  'pathGrade.why.greyL': 'grey line along the long path',
+  'pathGrade.why.heardS': 'other receivers along the short path heard the same signal: {{n}}',
+  'pathGrade.why.heardL': 'other receivers along the long path heard the same signal: {{n}}',
+  'pathGrade.why.lateDt':
+    'their decodes ran {{ms}} ms late (decodes: {{n}}), which is not evidence on its own',
+  'pathGrade.tier.logged': 'Graded when it was logged, from the path card for that station.',
+  'pathGrade.tier.modelled':
+    'Modelled afterwards from the propagation model alone (a monthly median, not a measurement).',
+  'pathGrade.ssn.logged': 'Solar activity from the flux logged with the contact.',
+  'pathGrade.ssn.recent': 'Solar activity: today’s, as no flux was logged with the contact.',
+  'pathGrade.stale':
+    'The grade stamped when it was logged was made for another grid or band, so this one is the model’s.',
+  'pathGrade.measure.progress': 'Grading the log: {{done}} of {{total}}',
+  'pathGrade.measure.coverage':
+    'Last 30 days, graded contacts: {{n}}. In hours the model calls open on some path: {{open}}%. Outside the model: {{outside}}%.',
+  'pathGrade.measure.polar':
+    'Open on some path — polar paths: {{polar}}%, other paths: {{other}}%.',
+  'pathGrade.measure.heading':
+    'A beam heading logged with the contact (ANT_AZ) agrees with the model’s better path: {{pct}}% (contacts judged: {{n}}).',
+  'pathGrade.measure.noHeading':
+    'No contact yet with a logged beam heading and a clear model margin.',
+  'pathGrade.measure.none': 'No graded contacts in the last 30 days yet.',
+  'pathGrade.measure.ungradable':
+    'Not graded: {{n}} (no grid square, a VHF band, a prop mode logged other than F2 reflection or ionoscatter — satellite, EME, a repeater, sporadic E, TEP and the like — or no solar flux for their part of the cycle).',
+  'contactCard.path': 'Path',
+  'contactCard.path.loading': 'Working out the path…',
+  'contactCard.path.none':
+    'No path for this contact: it needs both grid squares, and solar flux logged with it if it is more than three months old.',
+  'contactCard.path.details': 'Why, and how sure',
+  'contactCard.path.day': 'The path over that day, modelled. The marked hour is the contact’s.',
+  'contactCard.path.pick': 'Your antenna path',
+  'contactCard.path.pickTitle':
+    'Adds the ADIF field ANT_PATH, written when you save the contact. Nexus never fills it by itself.',
+  'contactCard.path.pickShort': 'Short path',
+  'contactCard.path.pickLong': 'Long path',
   'logbook.column.qslSentDate': 'Card sent',
   'logbook.column.qslRcvdDate': 'Card received',
   'logbook.column.lotwRcvdDate': 'LoTW received',
@@ -1853,6 +1990,11 @@ export const EN = {
   'logbook.columns.title': 'Choose the columns the log shows',
   'logbook.columns.hint':
     'Drag the right edge of a column’s header to change its width, or press Alt+← or Alt+→ on the header. Double-click the edge to put it back.',
+  'logbook.columns.moveHint':
+    'Drag a column’s header to move the column, or press Alt+Shift+← or Alt+Shift+→ on the header.',
+  'logbook.columns.moved': '{{column}} moved to place {{place}} of {{count}}',
+  'logbook.columns.atFirst': '{{column}} is already the first column',
+  'logbook.columns.atLast': '{{column}} is already as far right as it can go',
   'logbook.columns.group.contact': 'Contact',
   'logbook.columns.group.location': 'Location',
   'logbook.columns.group.qsl': 'QSL',
@@ -1917,13 +2059,10 @@ export const EN = {
   'logbook.row.qsl.none': 'Not confirmed',
   'logbook.row.spot.title':
     "Spot {{call}} to the DX cluster (pre-fills this QSO's call + frequency)",
-  'logbook.row.spot.aria': 'Spot {{call}} to the DX cluster',
   'logbook.row.pushQrz.title':
     'Push {{call}} to your QRZ logbook (re-push is safe — duplicates are detected)',
-  'logbook.row.pushQrz.aria': 'Push {{call}} to QRZ',
   'logbook.row.qrzCorrect.title':
     'Correct {{call}} in your QRZ logbook — overwrites the copy QRZ already holds. One contact at a time; you confirm what changes first.',
-  'logbook.row.qrzCorrect.aria': 'Correct {{call}} at QRZ',
   'logbook.qrzCorrect.aria': 'Correct a contact at QRZ',
   'logbook.qrzCorrect.heading': 'Correct {{call}} at QRZ',
   'logbook.qrzCorrect.reading': 'Reading QRZ’s copy of {{call}}…',
@@ -1935,10 +2074,10 @@ export const EN = {
   'logbook.qrzCorrect.recovering': 'Deleting…',
   'logbook.row.pushClublog.title':
     'Push {{call}} to ClubLog (re-push is safe — duplicates are detected)',
-  'logbook.row.pushClublog.aria': 'Push {{call}} to ClubLog',
   // World Radio League per-row push (the manual verification / bounce-recovery path).
   'logbook.row.pushWrl.title': 'Send this QSO with {{call}} to World Radio League',
-  'logbook.row.pushWrl.aria': 'Push the QSO with {{call}} to World Radio League',
+  // LoTW per-row upload: the bulk upload's TQSL path, one contact at a time.
+  'logbook.row.pushLotw.title': 'Sign the QSO with {{call}} with TQSL and upload it to LoTW (uses your Station Location in Settings)',
   'logbook.push.wrl.ok': '{{call}} sent to World Radio League',
   'logbook.push.wrl.duplicate': 'World Radio League already has {{call}}',
   'logbook.push.wrl.unavailable': 'World Radio League is busy — {{call}} will go on the next try',
@@ -1946,13 +2085,11 @@ export const EN = {
   'logbook.push.wrl.failed': 'World Radio League push failed: {{detail}}',
   'logbook.row.pushHrdlog.title':
     'Push {{call}} to HRDLog.net (live-logging/awards site — not an ARRL confirmation source; re-push is safe)',
-  'logbook.row.pushHrdlog.aria': 'Push {{call}} to HRDLog.net',
   // The <select>'s VALUES are the ADIF QSL_SENT_VIA letters B/D/E and stay in the code; only
   // these labels are prose. They are capitalised menu items, which is why they are not the
   // same entries as the lower-case words that appear inside the sentences below.
   'logbook.row.qslSent.title':
     "Mark a QSL request sent to {{call}} (bureau/direct/electronic). A request is not a confirmation — the row stays here until it's confirmed.",
-  'logbook.row.qslSent.aria': 'Mark QSL sent to {{call}}',
   'logbook.qsl.cardMarked': 'QSL card recorded for {{call}}',
   'logbook.qsl.cardCleared': 'QSL card cleared for {{call}}',
   'logbook.row.qslRcvd.card': 'Card received',
@@ -1963,6 +2100,17 @@ export const EN = {
   'logbook.row.qslSent.electronic': 'Electronic',
   'logbook.row.edit': 'Edit {{call}}',
   'logbook.row.delete': 'Delete {{call}}',
+  'logbook.row.more': 'More actions for {{call}}',
+  'logbook.row.menu.spot': 'Spot to the DX cluster',
+  'logbook.row.menu.qrz': 'Upload to QRZ Logbook',
+  'logbook.row.menu.qrzCorrect': 'Correct on QRZ Logbook',
+  'logbook.row.menu.clublog': 'Upload to Club Log',
+  'logbook.row.menu.hrdlog': 'Upload to HRDLog',
+  'logbook.row.menu.wrl': 'Upload to World Radio League',
+  'logbook.row.menu.lotw': 'Upload to LoTW',
+  'logbook.row.menu.lotwBusy': 'Not now: a LoTW upload is already running',
+  'logbook.row.menu.sat': 'Satellite',
+  'logbook.row.menu.delete': 'Delete',
 
   // The satellite tag. The <select>'s VALUES are LoTW's own satellite names and stay in the
   // code — only these labels are prose. "Clear" is a separate entry and not a blank box on
@@ -1970,7 +2118,6 @@ export const EN = {
   // something the operator chooses rather than something a form submits by omission.
   'logbook.row.sat.title':
     'Record which satellite {{call}} was worked through, or clear a tag added by mistake. Only satellites LoTW accepts are offered.',
-  'logbook.row.sat.aria': 'Set satellite for {{call}}',
   'logbook.row.sat.clear': 'Not via satellite',
   'logbook.sat.tagged': '{{call}} tagged as worked via {{sat}}',
   'logbook.sat.cleared': 'Satellite tag cleared for {{call}}',
@@ -2028,6 +2175,13 @@ export const EN = {
     'HRDLog.net unavailable — {{call}} not confirmed uploaded; try again later',
   'logbook.push.hrdlog.rejected': '✗ HRDLog.net rejected {{call}}: {{reason}}',
   'logbook.push.hrdlog.failed': '✗ HRDLog.net push failed: {{detail}}',
+  // LoTW per-row upload results. Failures reuse the bulk upload's logbook.lotw.upload.* words.
+  'logbook.push.lotw.ok': '✓ {{call}} signed and uploaded to LoTW — it confirms when the other station uploads',
+  'logbook.push.lotw.duplicate': '✓ {{call}} was already on LoTW',
+  'logbook.push.lotw.already': '{{call}} is already uploaded to LoTW',
+  'logbook.push.lotw.confirmed': '{{call}} is already confirmed, so it is not uploaded to LoTW',
+  'logbook.push.lotw.timeless': '{{call}} has no time of day, so LoTW can never match it — not sent',
+  'logbook.push.lotw.none': '{{call}} was not sent to LoTW',
 
   // Deleting one contact. `{{band}}` is a band name — never translated.
   'logbook.delete.heading': 'Delete the QSO with {{call}} on {{band}}?',
@@ -2120,6 +2274,7 @@ export const EN = {
   'logbook.tools.tab.dupes': 'Duplicates',
   'logbook.tools.tab.bulk': 'Bulk edit',
   'logbook.tools.tab.check': 'Check',
+  'logbook.tools.tab.grids': 'Blank grids',
   'logbook.tools.tab.callbook': 'Update from callbook',
   'logbook.tools.callbook.button': 'Update from callbook',
   'logbook.tools.callbook.intro': 'Fills the empty fields of many contacts from your callbook lookups (QRZ, then HamQTH and callook.info where set up), one call at a time, at the station.',
@@ -2134,7 +2289,7 @@ export const EN = {
   'logbook.tools.callbook.service.qrz': 'QRZ',
   'logbook.tools.callbook.service.hamqth': 'HamQTH',
   'logbook.tools.callbook.service.callook': 'callook.info (US calls)',
-  'logbook.tools.callbook.location': 'Location (grid, QTH, state, county, IOTA, CQ and ITU zones, latitude/longitude, UTC offset) is filled only on contacts from the last 12 months: a callbook says where a station is now. Older contacts get only the name, e-mail, web page, QSL route and LoTW/eQSL/card habits.',
+  'logbook.tools.callbook.location': 'Location (grid, QTH, state, county, CQ and ITU zones, latitude/longitude, UTC offset) is filled only on contacts from the last 12 months: a callbook says where a station is now. Older contacts get only the name, e-mail, web page, QSL route and LoTW/eQSL/card habits.',
   'logbook.tools.callbook.locationTooOld': { one: '{{count}} contact is older than 12 months: its location stays blank.', other: '{{count}} contacts are older than 12 months: their location stays blank.' },
   'logbook.tools.callbook.apply': { one: 'Update {{count}} contact', other: 'Update {{count}} contacts' },
   'logbook.tools.callbook.ask': { one: 'Look up {{count}} call now? It runs in the background, and you can stop it at any time.', other: 'Look up {{count}} calls now? It runs in the background, and you can stop it at any time.' },
@@ -2152,6 +2307,7 @@ export const EN = {
   'logbook.tools.callbook.applyUpTo': { one: 'Update up to {{count}} contact', other: 'Update up to {{count}} contacts' },
   'logbook.tools.callbook.stroked': { one: 'A call with a stroke is asked again for its base call: up to {{count}} lookup in all.', other: 'A call with a stroke is asked again for its base call: up to {{count}} lookups in all.' },
   'logbook.tools.callbook.qrzCount': { one: 'QRZ counted {{count}} lookup on your account in the last day.', other: 'QRZ counted {{count}} lookups on your account in the last day.' },
+  'logbook.tools.callbook.qrzCountNote': 'That counts every program that uses your QRZ login; only Nexus’s own lookups count toward the limit above.',
   'logbook.tools.callbook.waitingForTx': 'Waiting for the transmission to end before the contacts are changed…',
   'logbook.tools.callbook.end.refused': 'Stopped: QRZ answered 3 calls in a row with no record, which is how it refuses lookups (a daily limit, a lapsed subscription or a suspended account). What was found is filled in. Check your QRZ account before running it again.',
   'logbook.tools.callbook.resume': { one: '{{count}} call not looked up yet: run the update again to continue.', other: '{{count}} calls not looked up yet: run the update again to continue.' },
@@ -2333,6 +2489,21 @@ export const EN = {
     one: '{{count}} more not shown; ticking all of the kind includes them',
     other: '{{count}} more not shown; ticking all of the kind includes them',
   },
+  // Blank grids (LogGridFill.tsx): calls, grids and bands are tokens; ALL.TXT and GRID are names.
+  'logbook.tools.grids.intro': 'Contacts logged with no grid, where Nexus knows the station’s grid: the one it sent on the air, heard by Nexus within 24 hours of the contact (ALL.TXT, or this session), else its home QTH from a callbook lookup already made (a call with no stroke and no park, from the last 12 months). Only the contacts you tick are filled. A heard grid counts like any logged grid. A callbook grid is kept for the distance and the map only: it counts toward no grid award, fills no GRID need and is sent to no logging service. A contact already uploaded keeps its upload marks, as with every change here: nothing is sent again, and each service keeps what it was sent.',
+  'logbook.tools.grids.run': 'Find blank grids',
+  'logbook.tools.grids.failed': 'The blank grids could not be found',
+  'logbook.tools.grids.found': 'With a grid known: {{count}} (of {{blank}} contacts with no grid)',
+  'logbook.tools.grids.heard': 'heard on the air',
+  'logbook.tools.grids.callbook': 'home QTH (callbook)',
+  'logbook.tools.grids.uploaded': 'already uploaded: nothing is sent again',
+  'logbook.tools.grids.tickAll': 'Tick all: {{count}}',
+  'logbook.tools.grids.apply': 'Fill the ticked: {{count}}',
+  'logbook.tools.grids.ask': 'Fill the grids of the ticked contacts ({{count}})? Heard on the air, counted like any logged grid: {{heard}}. Home QTH (callbook), for the distance and the map only: {{callbook}}. It is one change you can undo.',
+  'logbook.tools.grids.confirm': 'Yes, fill them',
+  'logbook.tools.grids.applyFailed': 'The grids could not be filled',
+  'logbook.tools.grids.done': 'Grids filled: {{count}}',
+  'logbook.tools.grids.more': 'Not shown: {{count}} more. Tick all ticks only the contacts shown: fill those, then find blank grids again for the rest.',
   // A contact's history, in the QSO detail view: each change, who made it, and its undo.
   'qso.history.title': 'History',
   'qso.history.empty': 'No changes recorded.',
@@ -2839,9 +3010,9 @@ export const EN = {
   'awards.satVucc.note.tagging':
     'Pass contacts are tagged automatically when logged on the bird’s downlink (ISS excepted — no LoTW designator to derive)',
   'awards.iota.note.achieved':
-    'IOTA ✓ (card-confirmed) · {{cards}} on cards — IOTA credits cards / Club Log, not LoTW',
+    'IOTA ✓ (LoTW or card) · {{cards}} on cards — IOTA credits LoTW and cards, not eQSL',
   'awards.iota.note.worked':
-    '{{worked}} worked · {{cards}} on cards — IOTA credits cards / Club Log, not LoTW',
+    '{{worked}} worked · {{cards}} on cards — IOTA credits LoTW and cards, not eQSL',
 
   // The breakdown panels. Every band and mode name under these headings is data.
   'awards.bands.head': 'DXCC by band',
@@ -2930,6 +3101,63 @@ export const EN = {
   'awards.qsl.via': "via {{route}}",
   'awards.qsl.noRoute': "no route logged",
   'awards.qsl.showAll': "Show all {{count}}",
+  'awards.status.head': "Award status",
+  'awards.status.award': "Award",
+  'awards.status.pick': "Contact to submit for each",
+  'awards.status.oldest': "Oldest confirmed",
+  'awards.status.newest': "Newest confirmed",
+  'awards.status.rule.arrl': "Confirmed by LoTW or a QSL card; the ARRL takes no eQSL.",
+  'awards.status.rule.waz': "Confirmed by LoTW, a QSL card, or an eQSL from an Authenticity-Guaranteed member.",
+  'awards.status.rule.iota': "Confirmed by a QSL card or LoTW; eQSL does not count.",
+  'awards.status.rule.usaca': "Counted from each contact’s county (CNTY). Confirmed by a QSL card or an eQSL from an Authenticity-Guaranteed member; CQ names no LoTW credit for this award.",
+  'awards.status.error': "The award status could not be read.",
+  'awards.status.counts': "{{worked}} worked · {{confirmed}} confirmed · {{submitted}} submitted · {{granted}} granted",
+  'awards.status.readyHead': "Ready to submit ({{count}})",
+  'awards.status.empty': "Nothing ready to submit: every confirmed one is submitted or granted.",
+  'awards.status.showAll': "Show all {{count}}",
+  'awards.status.csv': "Export CSV",
+  'awards.status.printButton': "Save a page to print",
+  'awards.status.markButton': {
+    one: "Mark {{count}} submitted…",
+    other: "Mark {{count}} submitted…",
+  },
+  'awards.status.saved': "Saved to {{path}}",
+  'awards.status.mark.title': {
+    one: "Mark {{count}} contact submitted for {{award}}?",
+    other: "Mark {{count}} contacts submitted for {{award}}?",
+  },
+  'awards.status.mark.body': "Each contact’s {{award}} status becomes Submitted (CREDIT_SUBMITTED). Nothing else on the contact changes and nothing is sent. Undo takes it back.",
+  'awards.status.mark.confirm': "Mark submitted",
+  'awards.status.mark.done': {
+    one: "{{count}} contact marked for {{award}}",
+    other: "{{count}} contacts marked for {{award}}",
+  },
+  'awards.status.mark.failed': "The award status could not be changed",
+  'awards.status.print.title': "{{award}} — ready to submit",
+  'awards.status.print.summary': {
+    one: "{{count}} contact, one for each, listed {{date}} (UTC)",
+    other: "{{count}} contacts, one for each, listed {{date}} (UTC)",
+  },
+  'awards.status.col.entity': "For",
+  'awards.status.col.call': "Call",
+  'awards.status.col.date': "Date and time",
+  'awards.status.col.band': "Band",
+  'awards.status.col.mode': "Mode",
+  'awards.status.col.confirmedBy': "Confirmed by",
+  'awards.usaca.note.level': "Level {{level}} of {{total}} reached · {{worked}} worked",
+  'awards.usaca.note.toGo': "{{worked}} of {{total}} counties worked · card or AG eQSL confirms",
+  'awards.usaca.note.unplaced': {
+    one: "{{count}} contact names a county the award does not list",
+    other: "{{count}} contacts name a county the award does not list",
+  },
+  'contactCard.award.head': "Award status",
+  'contactCard.award.none': "Not submitted",
+  'contactCard.award.submitted': "Submitted",
+  'contactCard.award.granted': "Granted",
+  'contactCard.award.ask': "{{call}}: {{award}} {{status}}?",
+  'contactCard.award.body': "Only this contact’s {{award}} status changes (CREDIT_SUBMITTED / CREDIT_GRANTED). Nothing is sent. Undo it from the History below.",
+  'contactCard.award.confirm': "Change status",
+  'logbook.tools.bulk.awardStatus': "{{award}} award status",
   'awards.custom.head': "Custom awards ({{count}})",
   'awards.pota.head': "POTA activator",
   'awards.pota.error': "The activations could not be read from the log.",
@@ -3099,6 +3327,7 @@ export const EN = {
   'needed.filter.newBand': 'New band',
   'needed.filter.newMode': 'New mode',
   'needed.filter.newZone': 'New zone',
+  'needed.filter.newIota': 'New IOTA',
   'needed.filter.newGrid': 'New grid',
   'needed.filter.newState': 'New state',
   'needed.filter.newPark': 'New park',
@@ -3200,6 +3429,8 @@ export const EN = {
   'need.badge.entity.title': 'New DXCC entity — an all-time new one',
   'need.badge.zone.label': 'ZONE',
   'need.badge.zone.title': 'New CQ zone on this band (5BWAZ)',
+  'need.badge.iota.label': 'IOTA',
+  'need.badge.iota.title': 'New IOTA island group (any band)',
   'need.badge.band.label': 'BAND',
   'need.badge.band.title': 'New band-slot for this entity',
   'need.badge.mode.label': 'MODE',
@@ -3229,6 +3460,9 @@ export const EN = {
   'need.chip.newZone.label': 'ZONE',
   'need.chip.newZone.short': 'ZONE',
   'need.chip.newZone.title': 'New CQ zone on this band',
+  'need.chip.newIota.label': 'IOTA',
+  'need.chip.newIota.short': 'IOTA',
+  'need.chip.newIota.title': 'New IOTA island group (any band)',
   'need.chip.newBand.label': 'BAND',
   'need.chip.newBand.short': 'BAND',
   'need.chip.newBand.title': 'New band-slot for this entity',
@@ -3594,15 +3828,67 @@ export const EN = {
   'map.pca.chip':
     '☢ Proton event · S{{scale}} · polar caps absorbing ~{{db}} dB @30 MHz (day) — high-lat paths degraded',
 
+  // ---- The "coming" chip (map): NOAA's geomagnetic watch, the WSA-Enlil model run and the solar
+  // wind measured at L1, three sources kept apart — only the L1 line may say "arrived". {{g}} is
+  // the NOAA G level digit; {{days}} a UT day or day range ("31 Oct–1 Nov"); {{in}} one of the
+  // `map.arrival.in.*` countdowns; times are "31 Oct 04:13Z". WSA-Enlil and L1 are names, kept.
+  'map.arrival.watch.ahead': '🧲 G{{g}} watch · NOAA expects {{days}} ({{in}})',
+  'map.arrival.watch.now': '🧲 G{{g}} watch in force · NOAA expects it through {{last}}',
+  'map.arrival.in.mins': 'in {{n}} min',
+  'map.arrival.in.hours': 'in {{n}} h',
+  'map.arrival.in.days': 'in {{d}} d {{h}} h',
+  'map.arrival.model.peak': 'Model (WSA-Enlil): wind up to {{speed}} km/s around {{when}}',
+  'map.arrival.model.arrival': 'Model (WSA-Enlil): arrival between {{from}} and {{to}}, {{speed}} km/s',
+  'map.arrival.l1.jump': 'Arrived at L1 {{at}} · reaching Earth ~{{earth}} (measured)',
+  'map.arrival.title.watch': 'NOAA geomagnetic storm watch {{code}}, serial {{serial}}, issued {{issued}} — a forecast, by the UT day.',
+  // {{comment}} is NOAA's own English text, shown as NOAA wrote it.
+  'map.arrival.title.comment': 'NOAA comment: {{comment}}',
+  'map.arrival.title.model':
+    'Model line: the WSA-Enlil run published {{run}} — a model, not a measurement; its arrival times are typically off by up to 6 hours.',
+  'map.arrival.title.modelNoRun':
+    'Model line: the latest WSA-Enlil run — a model, not a measurement; its arrival times are typically off by up to 6 hours.',
+  'map.arrival.title.l1':
+    'Arrived: a jump in the solar wind measured at L1, 1.5 million km sunward, with NOAA\'s time for it to reach Earth.',
+  'map.arrival.title.l1Now': 'Solar wind at L1 now {{speed}} km/s (measured {{at}}, reaches Earth ~{{earth}}).',
+  'map.arrival.title.why':
+    'Solar wind takes one to three days from the sun. A flare is never "coming": its X-rays arrive at light speed, so it is here the instant it is seen.',
+
   // The flare chip and its tail. Each phase is its OWN statement appended to the chip — see
   // the `logbook.import.dupes` note — because where "recovering" belongs in the sentence is
   // a decision for each language. `{{cls}}` is the GOES class (M2.1) and `{{r}}` the R-scale.
   'map.flare.chip': '☀️ {{cls}} flare · R{{r}} · HF ≤{{haf}} MHz absorbed on dayside',
-  'map.flare.phase.rising': ' · rising',
-  'map.flare.phase.recovering': ' · recovering',
-  'map.flare.phase.recoveringIn': ' · recovering (~{{mins}} min)',
-  'map.flare.phase.fade': ' · fade (~{{mins}} min)',
   'map.flare.phase.preview': ' · PREVIEW',
+  // The flare chip's lines (components/prop/FlareChip.tsx). Each is a whole statement. NOAA's
+  // event words carry NOAA's own UTC times ({{begin}}, {{peak}}, {{end}} such as 12:38Z); the
+  // "estimated" lines are Nexus's trend word when NOAA's list is silent. {{out}} and {{weak}} are
+  // band names such as 40m: the highest band out (≥ 10 dB) and the highest weakened (≥ 1 dB).
+  'map.flare.noaa.rising': 'NOAA: began {{begin}}, still rising',
+  'map.flare.noaa.peaked': 'NOAA: began {{begin}}, peaked {{peak}}',
+  'map.flare.noaa.peakedClass': 'NOAA: began {{begin}}, peaked {{peak}} at {{cls}}',
+  'map.flare.noaa.ended': 'NOAA: ended {{end}} (began {{begin}})',
+  'map.flare.est.rising': 'Rising (estimated from the GOES trend)',
+  'map.flare.est.falling': 'Falling (estimated from the GOES trend)',
+  'map.flare.src.noaa': 'NOAA D-RAP {{time}} · GOES {{xtime}}',
+  'map.flare.src.goes': 'Estimated from GOES {{xtime}} (no current NOAA grid)',
+  'map.flare.src.goesOnly': 'Estimated from GOES (no current NOAA grid)',
+  'map.flare.src.noaa.title': "Footprint and rings: NOAA's D-RAP absorption grid, valid {{time}}.",
+  'map.flare.src.goes.title': "Footprint and rings: estimated from the GOES X-ray flux with NOAA's D-RAP formula. NOAA's own grid is not current.",
+  'map.flare.src.gap.title': "NOAA's grid differs from the GOES estimate by {{mhz}} MHz under the sun. The map draws NOAA's.",
+  'map.flare.lightspeed': "A flare's X-rays travel at the speed of light: a flare is here the moment it is seen, never on its way.",
+  'map.flare.toggle.aria': 'Flare details',
+  'map.flare.sun.out': 'Under the sun: {{out}} and below out, weakened up to {{weak}}',
+  'map.flare.sun.weak': 'Under the sun: weakened up to {{weak}}',
+  'map.flare.sun.none': 'Under the sun: no HF band affected',
+  'map.flare.here.night': 'Your QTH: night side, no flare effect',
+  'map.flare.here.out': 'Your QTH: {{out}} and below out, weakened up to {{weak}}',
+  'map.flare.here.weak': 'Your QTH: weakened up to {{weak}}',
+  'map.flare.here.none': 'Your QTH: no HF band affected',
+  'map.flare.recovery.noaa': "HF recovery in ~{{mins}} min (NOAA's own estimate)",
+  'map.flare.recovery.fit': "HF recovery in ~{{mins}} min (NOAA's rule of thumb from the X-ray level)",
+  'map.flare.rings.legend': 'Rings: dashed = band weakened (1 dB), solid = band out (10 dB)',
+  'map.flare.spark.aria': 'GOES X-ray flux {{from}}–{{to}}, with the M1 and X1 lines',
+  'map.hover.sun': 'Sun · GOES X-ray {{cls}} at {{time}}',
+  'map.hover.sun.none': 'Sun · no current X-ray reading',
   'map.flare.preview.title':
     'Simulate an X2 flare on the map for 60 s — visual preview only (no alerts). The layer otherwise draws nothing until a real M-class flare.',
   'map.flare.preview.stop': '■ stop',
@@ -3622,6 +3908,12 @@ export const EN = {
   'map.layer.relief.label': 'Relief (World view)',
   'map.layer.muf.label': 'Ionosonde MUF',
   'map.layer.aurora.label': 'Aurora oval',
+  // The aurora row's second line: NOAA's OVATION oval is a forecast, for {{time}} (a UTC stamp,
+  // "30 Oct 04:04Z"). {{ago}} is prop.opening.ago.* ("2h ago").
+  'map.layer.aurora.forecast': 'forecast for {{time}}',
+  'map.layer.aurora.forecast.past': 'forecast for {{time}} ({{ago}})',
+  'map.layer.aurora.forecast.title': 'NOAA OVATION aurora forecast for {{time}}',
+  'map.layer.aurora.observed': 'from the solar wind observed {{time}}',
   'map.layer.flare.label': 'Flare blackout (D-RAP)',
   'map.layer.pca.label': 'Proton polar cap (PCA)',
   'map.layer.coast.label': 'Coastlines',
@@ -3732,7 +4024,7 @@ export const EN = {
   'globe.layer.heat': 'Band heat',
   'globe.layer.openings': 'Opening sectors',
   'globe.layer.flare': 'Flare blackout',
-  'globe.layer.aurora': 'Aurora',
+  'globe.layer.aurora': 'Aurora (forecast)',
   // The MUF layer's whole name is the acronym — a token, and a constant in the component.
   'globe.layer.pca': 'Polar cap (PCA)',
   'globe.layer.greyline': 'Greyline',
@@ -3806,6 +4098,18 @@ export const EN = {
   // The Bz gauge when its reading is old or missing ({{ago}} is prop.opening.ago.*: "45m ago").
   'prop.spaceWx.bz.stale': 'last reading {{ago}}',
   'prop.spaceWx.bz.none': 'no solar-wind reading',
+  // Every other index under the same rule: a number NOAA did not give is drawn as "—" with this
+  // line (never the model's stand-in), and a reading past its product's cadence with its age.
+  'prop.spaceWx.none': 'no reading from NOAA',
+  'prop.spaceWx.stale': 'last reading {{ago}}',
+  // Each gauge's hover: where the number came from and when it was measured. {{time}} is a UTC
+  // stamp ("29 Oct 20:00Z"), {{day}} a date ("29 Oct"), {{ap}} a whole number.
+  'prop.spaceWx.src.sfi': 'NOAA · Penticton 10.7 cm solar flux, measured {{time}}',
+  'prop.spaceWx.src.kp': 'NOAA · estimated planetary Kp (1-minute), {{time}}',
+  'prop.spaceWx.src.xray': 'NOAA · GOES X-ray flux, {{time}}',
+  'prop.spaceWx.src.a': 'NOAA · daily planetary A for {{day}}',
+  'prop.spaceWx.src.apNow': 'ap now ≈{{ap}} (estimated from Kp)',
+  'prop.spaceWx.src.standIn': 'NOAA gave no reading of this, so none is shown',
   'prop.impact.a.storm': 'stormy day — HF rough, polar paths out',
   'prop.impact.a.active': 'active day — paths up and down',
   'prop.impact.a.unsettled': 'unsettled day — minor fading spells',
@@ -3903,6 +4207,8 @@ export const EN = {
 
   // SWPC R/S/G scales. The letters R, S and G are the scale names and stay in the code.
   'prop.scales.none': 'No live space-weather scales right now.',
+  // The scales chips' age once the station's copy is old ({{ago}} is prop.opening.ago.*).
+  'prop.scales.asOf': 'as of {{ago}}',
   'prop.scales.r.title': 'Radio blackout — HF absorption on sunlit paths',
   'prop.scales.s.title': 'Solar radiation storm — polar HF',
   'prop.scales.g.title': 'Geomagnetic storm — high-lat paths + aurora',
@@ -3978,8 +4284,21 @@ export const EN = {
   // Geomagnetic storm heads-up (stormAlert.ts). A storm is hours-to-days of degraded
   // HF, unlike a flare's minutes — the copy says what it means for operating, and the
   // forecast line is explicitly a forecast.
+  // The flare heads-up toast. {{cls}} is the flare class ("M2.0"), {{r}} the NOAA R level digit,
+  // {{mhz}} and {{mins}} whole numbers (the D-RAP ceiling and how long until HF recovers). Each
+  // figure says where it comes from, as the map's flare chip does: the ceiling from NOAA's D-RAP
+  // grid while it is current, else estimated from the GOES X-ray flux; the fade from NOAA's own
+  // recovery time on that grid, else NOAA's rule of thumb from the X-ray level.
+  'prop.flareAlert.fade':
+    "☀️ {{cls}} solar flare (R{{r}}) — dayside HF below ~{{mhz}} MHz degraded (estimated from GOES) · fade ~{{mins}} min (NOAA's rule of thumb from the X-ray level)",
+  'prop.flareAlert.noaa.fade':
+    "☀️ {{cls}} solar flare (R{{r}}) — dayside HF below ~{{mhz}} MHz degraded (NOAA D-RAP) · fade ~{{mins}} min (NOAA's rule of thumb from the X-ray level)",
+  'prop.flareAlert.noaa.fadeOwn':
+    "☀️ {{cls}} solar flare (R{{r}}) — dayside HF below ~{{mhz}} MHz degraded (NOAA D-RAP) · fade ~{{mins}} min (NOAA's own estimate)",
   'prop.stormAlert.now': '🧲 Geomagnetic storm G{{g}} (Kp {{kp}}) — HF degraded, worst on polar paths; aurora possible on VHF',
   'prop.stormAlert.forecast': '🧲 NOAA expects G{{g}} (Kp {{kp}}) from {{when}} — HF likely degraded then',
+  // The watch heads-up, once per NOAA watch. {{days}} is a UT day or range ("31 Oct–1 Nov").
+  'prop.arrivalAlert.watch': '🧲 NOAA storm watch: G{{g}} expected {{days}} — HF likely degraded then',
   'prop.openingAlert.thin':
     '📻 {{band}} possible {{mode}} — thin evidence: {{stations}} stns to ~{{dist}} {{octant}}; may not be audible by ear',
 
@@ -4525,7 +4844,7 @@ export const EN = {
   'settings.pounce.threshold.off': 'Off (default)',
   'settings.pounce.threshold.atno': 'New DXCC entity only',
   'settings.pounce.threshold.atnoOrZone': 'New entity or CQ zone',
-  'settings.pounce.threshold.atnoZoneOrState': 'New entity, zone, or US state',
+  'settings.pounce.threshold.atnoZoneOrState': 'New entity, zone, US state, or IOTA group',
 
   'settings.alerts.legend': 'Alerts',
   'settings.alerts.popups.label': 'Pop-up notifications',
@@ -4693,6 +5012,10 @@ export const EN = {
   'logbook.filters.activation.title': 'Show only the contacts of the activation running now ({{reference}}): its park on each UTC day it has run. Click again to show every contact.',
   'connect.pane.activation.title': 'Activation',
   'connect.pane.activation.basic': 'Your POTA or SOTA activation: each park’s count today, park to park, the rate and its contacts.',
+  'connect.pane.pathDay.title': 'Path over the day',
+  'connect.pane.pathDay.basic': 'Select a station to see when its path opens today, and which way round.',
+  'connect.pane.pathRegions.title': 'Paths to the regions',
+  'connect.pane.pathRegions.basic': 'When and which way round each DX region opens today, modelled from your grid.',
   'activation.pane.none': 'No activation running. Start one on the POTA / SOTA view.',
   'activation.pane.running': 'Running {{span}}',
   'activation.pane.midnight': '0000Z in {{span}}',
@@ -5218,7 +5541,7 @@ export const EN = {
   'spotMe.cooling': 'Wait {{secs}} s',
   'spotMe.posted': 'Spotted to the DX cluster: {{line}}',
   'spotMe.refused.noCall': 'Not spotted: set your callsign in Settings first.',
-  'spotMe.refused.noCluster': 'Not spotted: no DX cluster is connected. Set a cluster in Settings ▸ Logging & Connectors ▸ Integrations & Feeds ▸ Spot Sources.',
+  'spotMe.refused.noCluster': 'Not spotted: no DX cluster is connected. Set a cluster in Settings ▸ Services ▸ Integrations & Feeds ▸ Spot Sources.',
   'spotMe.refused.cooldown': 'Not spotted again yet: one spot a minute. {{secs}} s to go.',
   'spotMe.refused.offBand': 'Not spotted: the dial is outside the amateur bands.',
   'spotMe.refused.noContest': 'Not spotted: Contest mode is off.',
@@ -5446,6 +5769,24 @@ export const EN = {
   'fieldDay.club.export.cabrillo.title': 'Export the merged club log as Cabrillo (deduped — the earliest contact wins)',
   'fieldDay.club.export.cabrillo.titleKept': 'Export the merged club log as Cabrillo (every contact stays in: this contest wants repeats reported, and a repeat scores zero)',
   'fieldDay.club.export.adif.label': 'Club ADIF',
+  'fieldDay.club.import.label': "Import a laptop's file…",
+  'fieldDay.club.import.title':
+    "Merge a laptop's contest journal into the club's log, as its sync would have: for a host that died or a laptop that never synced. The journal is fieldday_backup_ and 8 characters, .adi, in that laptop's Nexus settings folder. Importing the same file again adds nothing, and nothing is taken out of the club's log.",
+  'fieldDay.club.import.ask.aria': "Import a laptop's file",
+  'fieldDay.club.import.ask.head': 'Whose contacts are in {{file}}?',
+  'fieldDay.club.import.ask.fromFile': 'The laptop this file came from',
+  'fieldDay.club.import.ask.yes': 'Import',
+  'fieldDay.club.import.ask.no': 'Cancel',
+  'fieldDay.club.import.done': 'Imported {{file}}: added {{added}}, duplicates {{dupes}}, already in the club log {{alreadyIn}}.',
+  'fieldDay.club.import.keptOut': 'Kept out: {{list}}. Nothing was taken out of the club log.',
+  'fieldDay.club.import.otherContest': 'another contest {{n}}',
+  'fieldDay.club.import.otherRunning': 'another running of this contest {{n}}',
+  'fieldDay.club.import.otherCall': "logged on another call than the club's {{n}}",
+  'fieldDay.club.import.takenBack': 'taken back on that laptop {{n}}',
+  'fieldDay.club.import.unreadable': 'unreadable {{n}}',
+  'fieldDay.club.import.refused': '{{call}}: {{reason}}',
+  'fieldDay.club.import.failed': 'Nothing imported: {{msg}}',
+  'fieldDay.club.import.refusedRemote': "A laptop's file is imported on the host's own screen, not through Remote.",
   'fieldDay.club.export.adif.title': 'Export the merged club log as ADIF (deduped — the earliest contact wins)',
   'fieldDay.club.export.adif.titleKept': 'Export the merged club log as ADIF (every contact stays in: this contest wants repeats reported, and a repeat scores zero)',
   'fieldDay.club.export.remote': 'Only at the station: a press through Remote exports no club log.',
@@ -5592,11 +5933,14 @@ export const EN = {
   'fieldDay.club.board.link.removed': 'Removed',
   'fieldDay.club.board.heard': '(heard {{ago}})',
   'fieldDay.club.board.heard.never': '(not heard since this Nexus started)',
-  // The host's club log on its own screen (ContestView's ClubLogList): every position's contacts
-  // as the host merged them, newest first, with the position that logged each.
+  // The club log on the host's own screen and every joined laptop's (ContestView's ClubLogList): every
+  // position's contacts as the host merged them, newest first, with the position that logged each.
+  // `.title.joined` is the laptop's tooltip: the same list, sent by the host, view only.
   'fieldDay.club.log.head': 'Club log',
   'fieldDay.club.log.title':
     "Every position's contacts as this host merged them, newest first, with the position that logged each: the club's log, which Club ADIF and Club Cabrillo are written from. A duplicate is marked as in your own log. A long contest lists its newest contacts only, so this screen never slows; every contact is in the club's files.",
+  'fieldDay.club.log.title.joined':
+    "Every position's contacts as the club's host merged them, newest first, with the position that logged each: the club's log, which the host writes Club ADIF and Club Cabrillo from. The host sends this list to every laptop, so it changes here as contacts reach the host. A duplicate is marked as in your own log. View only: you take back only your own contacts, from your own log. A long contest lists its newest contacts only; every contact is in the club's files on the host.",
   'fieldDay.club.log.count': {
     one: '{{count}} contact',
     other: '{{count}} contacts',
@@ -6098,13 +6442,13 @@ export const EN = {
     'Celestrak refused direct element fetches (HTTP 403/404) — direct attempts are stopped for 24 h. The hamradiotools.io mirror keeps retrying; elements may age until it lands.',
   'sat.lane.unusable.message': 'Sat: elements unusable',
   'sat.lane.unusable.detail':
-    'Every cached element set is over 30 days old — satellite surfaces refuse to point or tune on them. Refresh in Settings ▸ Radio ▸ Orbital elements, or import a fresh file.',
+    'Every cached element set is over 30 days old — satellite surfaces refuse to point or tune on them. Refresh in Settings ▸ Satellites ▸ Orbital elements, or import a fresh file.',
   'sat.lane.stale.message': 'Sat: elements {{days}} d old',
   'sat.lane.stale.detail':
-    'Orbital elements are past the 14-day stale line — pass times, pointing and Doppler drift with age. Refresh from the Satellites section or Settings ▸ Radio ▸ Orbital elements.',
+    'Orbital elements are past the 14-day stale line — pass times, pointing and Doppler drift with age. Refresh from the Satellites section or Settings ▸ Satellites ▸ Orbital elements.',
   'sat.lane.mostlyStale.message': 'Sat: {{label}}',
   'sat.lane.mostlyStale.detail':
-    "Most of the element sets you hold are past the 14-day stale line — {{label}}. The typical bird is still current, so the age reads calm; the rest of the catalog's pass times, pointing and Doppler are drifting. Refresh from the Satellites section or Settings ▸ Radio ▸ Orbital elements.",
+    "Most of the element sets you hold are past the 14-day stale line — {{label}}. The typical bird is still current, so the age reads calm; the rest of the catalog's pass times, pointing and Doppler are drifting. Refresh from the Satellites section or Settings ▸ Satellites ▸ Orbital elements.",
 
   // The satellite VFO-mapping enumeration (features/satVfo.ts) — LABELS ONLY. Every `value`
   // ('off', 'a-down-b-up', …) is a persisted token and stays in the code, and so do the VFO
@@ -6209,7 +6553,7 @@ export const EN = {
   'sat.head.quiet.title':
     'Orbital elements are {{days}} days old (the median of the {{sets}} sets in use). They refresh automatically every 6 h when the network allows; click to refresh now.',
   'sat.head.quiet.titleEmpty':
-    'No usable orbital elements are cached. Click to fetch them now; you can also import a file under Settings ▸ Radio ▸ Orbital elements.',
+    'No usable orbital elements are cached. Click to fetch them now; you can also import a file under Settings ▸ Satellites ▸ Orbital elements.',
   'sat.head.quiet.refreshing': '⟳ refreshing…',
   'sat.head.quiet.refresh': '⟳ refresh elements',
   'sat.head.popOut.title': 'Open in its own window',
@@ -6296,7 +6640,7 @@ export const EN = {
   // the operator would have to change.
   'sat.doppler.head': 'Doppler',
   'sat.doppler.none.off':
-    'Doppler is off — nothing is being tuned (Settings ▸ Radio ▸ Satellite Doppler).',
+    'Doppler is off — nothing is being tuned (Settings ▸ Satellites ▸ Satellite Doppler).',
   'sat.doppler.none.pickConfirm':
     'No transponder selected — pick one beside this; once your mapping is confirmed for this radio, Doppler tunes your uplink and the dial stays yours.',
   'sat.doppler.none.pickUplink':
@@ -6395,7 +6739,7 @@ export const EN = {
   'sat.rail.uplink.yours': 'The transmit VFO stays yours.',
   'sat.rail.doppler.turnOn': 'turn on',
   'sat.rail.doppler.turnOn.title':
-    'Turn Doppler correction back on (the same switch as Settings ▸ Radio ▸ Satellite Doppler)',
+    'Turn Doppler correction back on (the same switch as Settings ▸ Satellites ▸ Satellite Doppler)',
   'sat.rail.uplink.switch.label': 'switch mapping',
   'sat.rail.uplink.confirm.label': 'confirm uplink',
   'sat.rail.uplink.switch.title':
@@ -6590,7 +6934,7 @@ export const EN = {
   'sat.transponder.txMode.forecastCw':
     "TX mode: this bird runs {{up}} up / {{down}} down (SatNOGS). Once your uplink mapping is confirmed for the radio in use, a tracked pass sets the TX (split) VFO to CW when you work it from Phone or with the radio's own CW keyer; a soundcard CW keyer gets the data mode its keyed tone needs.",
   'sat.transponder.state.dopplerOff':
-    'Doppler correction is off, so nothing is being tuned. Turn it on in Settings ▸ Radio ▸ Satellite Doppler.',
+    'Doppler correction is off, so nothing is being tuned. Turn it on in Settings ▸ Satellites ▸ Satellite Doppler.',
   'sat.transponder.state.uplinkOnly.driving':
     'Your uplink-only mapping keeps the dial yours — only the transmit VFO is tuned.',
   'sat.transponder.state.uplinkOnly.unconfirmed':
@@ -6968,7 +7312,7 @@ export const EN = {
   'program.age.days': '{{days}}d ago',
   // `{{source}}` is the directory's own name and `{{band}}` a band name — both tokens.
   'program.coverageGap':
-    '{{source}} lists no <b>{{band}}</b> repeaters here, which is unusual for an area that has any — its rural coverage is patchy, so this list is probably missing machines. Adding a RepeaterBook API token in <link>Settings ▸ Logging & Connectors ▸ Confirmations</link> fills the gap.',
+    '{{source}} lists no <b>{{band}}</b> repeaters here, which is unusual for an area that has any — its rural coverage is patchy, so this list is probably missing machines. Adding a RepeaterBook API token in <link>Settings ▸ Services ▸ Confirmations</link> fills the gap.',
 
   // `{{states}}` is a list of 2-letter state codes — tokens, never translated.
   'program.missingStates':
@@ -7453,21 +7797,22 @@ export const EN = {
   // `SETTINGS_TABS` in `components/SettingsPanel.tsx` says so at the array.
   'settings.tabs.station': 'Station',
   'settings.tabs.radio': 'Radio',
+  'settings.tabs.satellites': 'Satellites',
   'settings.tabs.remote': 'Remote',
   'settings.tabs.spots': 'Spots & Alerts',
-  'settings.tabs.logging': 'Logging & Connectors',
+  'settings.tabs.services': 'Services',
   'settings.tabs.logbook': 'Logbook',
   'settings.tabs.contesting': 'Contesting',
   'settings.tabs.appearance': 'Appearance',
-  'settings.tabs.configurations': 'Config',
+  'settings.tabs.app': 'App',
 
-  // The Config tab. `<em>` marks the OLD location in the note — an operator who knew where these
+  // Backup & reset, on the App tab. `<em>` marks the OLD location in the note — an operator who knew where these
   // used to be needs to be told they moved, once, rather than left to hunt.
   'settings.configurations.legend': 'Backup & reset',
   'settings.configurations.note':
     'Your whole setup in one file — for a new computer, before a rebuild, or to get back to a known-good state. These used to live under <em>Radio → Transmit limits & sharing</em>, where nobody found them.',
 
-  // Reset sits beside Backup in the Config tab because its confirm points AT the backup: the
+  // Reset sits beside Backup on the App tab because its confirm points AT the backup: the
   // machinery that makes this reversible is one control away, so the wording names it rather
   // than just warning. Keyed under `configurations`, not `transmit` — a translator reads the key
   // for context, and this is not a transmit setting.
@@ -7475,7 +7820,7 @@ export const EN = {
   'settings.configurations.reset.action': 'Reset all settings…',
   'settings.configurations.reset.title': 'Erase all settings and return to factory defaults',
   'settings.configurations.reset.hint':
-    'Erases your radios, audio devices, callsign and preferences. Your <b>logbook is not touched</b>, and stored passwords stay in your keychain (clear those individually under Logging & Connectors). Back up first — this cannot be undone.',
+    'Erases your radios, audio devices, callsign and preferences. Your <b>logbook is not touched</b>, and stored passwords stay in your keychain (clear those individually under Services). Back up first — this cannot be undone.',
   // What Save says when the form is refused. The rig checks' own wording lives above, in
   // `settings.radio.check.*` — this is only the panel's fallback when one carries no message.
   'settings.save.callsignFirst': 'Enter your callsign on the Station tab before saving.',
@@ -7503,6 +7848,7 @@ export const EN = {
   'settings.backup.restore.confirm.action': 'Restore',
   'settings.backup.restore.done': 'Settings restored — check your radio and Test CAT',
   'settings.backup.restore.failed': 'Restore failed',
+  'settings.backup.restore.onAir': 'Finish or stop the transmission first, then restore.',
   // Reset's dialog says what SURVIVES as well as what goes: "reset" reads as total, and the two
   // things operators fear for — the log and their stored passwords — are exactly the two this
   // does not touch. Saying so in the dialog is what makes the confirm answerable.
@@ -7620,6 +7966,17 @@ export const EN = {
   'settings.connections.qrz.key.saved': 'QRZ Logbook key saved — auto-upload to QRZ is ON',
   'settings.connections.qrz.key.clearFailed': 'Could not clear the QRZ Logbook key',
   'settings.connections.qrz.key.cleared': 'QRZ Logbook key cleared — auto-upload to QRZ is off',
+  // The first login saved for QRZ Logbook, ClubLog or eQSL asks before it sends the contacts never
+  // sent there (an imported log included). {{service}} is the service's own name. The cancel
+  // button, "fromNow", is the default: it has the focus, and Escape answers it.
+  'settings.connections.backlog.title': {
+    one: 'Send {{count}} contact not yet sent to {{service}}?',
+    other: 'Send {{count}} contacts not yet sent to {{service}}?',
+  },
+  'settings.connections.backlog.body':
+    'Saving this login turns uploads to {{service}} on. Contacts you make from now on are sent as you log them either way. Older contacts can still be sent from the Logbook whenever you choose.',
+  'settings.connections.backlog.send': 'Send them',
+  'settings.connections.backlog.fromNow': 'Only contacts made from now on',
   'settings.connections.qrz.sync.failed': 'QRZ sync failed',
   // ⚠️ QSO is the hobby's own word for a contact — it does not inflect into another language.
   'settings.connections.qrz.sync.done': {
@@ -8067,9 +8424,16 @@ export const EN = {
   'settings.rigControl.aprsDataFm.label': 'APRS uses DATA-FM',
   'settings.rigControl.aprsDataFm.hint':
     "Set the radio's menu 077 FM PKT PORT SELECT to USB, or beacons go out silent. With this on, APRS puts this radio in DATA-FM instead of plain FM; repeater voice stays plain FM. Off, APRS uses plain FM, as it always has.",
+  'settings.rigControl.aprsDataFm.hintIcom':
+    "Set the radio's DATA MOD input to USB (SET ▸ Connectors ▸ MOD Input ▸ DATA MOD), or beacons go out silent. With this on, APRS puts this radio in FM-D (FM with DATA on) instead of plain FM; repeater voice stays plain FM. Off, APRS uses plain FM, as it always has.",
   'settings.rigControl.icomNative.label': 'Native Icom CI-V (early access)',
   'settings.rigControl.icomNative.hint':
     'Nexus drives this Icom\'s CI-V directly instead of launching rigctld — unlocking the rig\'s real spectrum scope in the waterfall ("CI-V RF") and instant dial tracking. The scope needs <b>115200 baud, set the same on BOTH the radio and Nexus</b>: (1) on the rig, Menu ▸ SET ▸ Connectors ▸ CI-V ▸ "CI-V USB Baud Rate" = <b>115200</b>; (2) on the rig, same menu, "CI-V USB Port" = "Unlink from [REMOTE]"; (3) the <b>Baud</b> field above = <b>115200</b> to match. Below that the rig refuses to stream the scope (CAT still works; the panadapter just stays off). Save to apply; turn off any time to return to the classic Hamlib path.',
+  "settings.rigControl.waterfallSource.label": "Waterfall source",
+  "settings.rigControl.waterfallSource.radio": "Radio's scope",
+  "settings.rigControl.waterfallSource.audio": "Audio (sound card)",
+  "settings.rigControl.waterfallSource.hint": "Which waterfall this radio draws. Radio's scope is the radio's own spectrum scope, as before. Audio is the sound card's waterfall, as on the Hamlib path: finer close to the dial than a radio scope at a wide span. With Audio the radio stops sending its scope, and native CI-V stays connected for CAT. Save to apply.",
+  "settings.rigControl.waterfallSource.needsNative": "Needs the native CI-V connection above: through Hamlib the waterfall is already the audio one.",
   'settings.rigControl.flexPan.label': 'Flex native panadapter (Beta)',
   'settings.rigControl.flexPan.hint':
     "Stream this FlexRadio's real SmartSDR panadapter (VITA-49 FFT) into the cockpit scope — the RF spectrum around your dial, with the Flex-pan span/ref controls. Beta and <b>unverified on hardware</b>, so it's opt-in: needs the Flex IP set (from Find Radios) and SmartSDR reachable on this network. If the scope stays blank or the app hitches, turn it back off. Save to apply.",
@@ -8154,6 +8518,19 @@ export const EN = {
   'settings.audio.rxGain.aria': 'RX capture gain',
   'settings.audio.rxGain.hint':
     'Boost a quiet interface until RX Level reads around 30 dB — the meter responds as you release the slider. Leave at ×1.0 unless the meter reads low (under ~15 dB) — FT8 decodes on a small signal, so you rarely need much.',
+  // The computer microphone for Phone, per radio (crates/tempo-app/src/engine/pc_mic.rs).
+  'settings.audio.pcMic.title': 'Computer microphone (Phone)',
+  'settings.audio.pcMic.label': 'Use this computer\'s microphone',
+  'settings.audio.pcMic.hint':
+    'On: while you hold PTT in Phone, Nexus sends this computer\'s microphone to this radio through its transmit audio (the output device above, or TCI audio on a TCI radio) and keys the radio for computer audio. Off (the default): PTT keys the radio\'s own microphone, as before. Phone only; the digital modes never use it. Stop TX or TX Off cuts it at once; releasing PTT lets the end of your last word finish (at most 0.2 s), then unkeys.',
+  'settings.audio.pcMic.device.label': 'Microphone',
+  'settings.audio.pcMic.device.none': 'Choose a microphone…',
+  'settings.audio.pcMic.device.hint':
+    'Never the system default, and never this radio\'s receive input. If the microphone goes away during an over, the radio unkeys.',
+  'settings.audio.pcMic.gain.label': 'Microphone gain',
+  'settings.audio.pcMic.gain.value': '{{db}} dB',
+  'settings.audio.pcMic.gain.hint':
+    'Set it so your voice drives the radio without ALC on the peaks. Your voice is not played back to you.',
   // Under BOTH sliders above, in place of their own hints, while the form edits a radio that is not
   // the one in use: the sliders then set that radio's stored levels and act on nothing live, so
   // "the SAME control as the cockpit Pwr" and "the meter responds" are not true there. `{{radio}}`
@@ -8181,6 +8558,8 @@ export const EN = {
   'settings.headphoneMonitor.device.label': 'Headphones or speakers',
   'settings.headphoneMonitor.device.hint':
     "Your headphones or speakers — must NOT be the rig's TX output device.",
+  'settings.headphoneMonitor.device.linuxHint':
+    'On Linux, pick it by its card name (hw: or plughw:): receive audio does not play on the system default, pulse or pipewire, which may be the radio’s card.',
   'settings.headphoneMonitor.level.label': 'Listening level',
   'settings.headphoneMonitor.level.aria': 'Receive listening level',
   'settings.headphoneMonitor.level.hint':
@@ -8220,7 +8599,7 @@ export const EN = {
   'settings.scopeSource.rfSafety':
     "Feed the receiver from the rig's RX OUT, or from a splitter with transmit protection, never from a plain T-piece on the transmit line: an RSP takes at most 0 dBm, and 100 W is +50 dBm.",
 
-  // ── Settings ▸ Radio ▸ Satellite Doppler ────────────────────────────────────────────
+  // ── Settings ▸ Satellites ▸ Satellite Doppler ────────────────────────────────────────────
   // ⚠️ The MAPPING LABELS are not here — they live in `features/satVfo.ts` beside the wire
   // value each one stores, because the Satellites readiness rail shows the same list and two
   // copies of a list that decides WHERE THE RADIO TRANSMITS would be a wrong-uplink generator.
@@ -8236,7 +8615,7 @@ export const EN = {
   'settings.satelliteDoppler.vfoMap.label': 'VFO mapping',
   'settings.satelliteDoppler.vfoMap.aria': 'Satellite VFO mapping',
   'settings.satelliteDoppler.vfoMap.otherRadio':
-    'The uplink mapping is confirmed per radio, for the radio you are operating. Confirm it for this radio on the pass rail during a pass, or make it the active radio first.',
+    'You are editing {{name}}, not the radio you are operating. The uplink mapping is confirmed per radio, for the radio you are operating: confirm it for {{name}} on the pass rail during a pass, or make it the active radio first.',
   'settings.satelliteDoppler.vfoMap.hint':
     "Which VFO carries your uplink. Match this to how your radio is wired. <b>A wrong mapping transmits on your own downlink</b> — into the satellite's output passband, on top of everyone else working the bird. Picking one applies immediately and confirms it for the radio you are operating; a second radio gets its own confirmation on the pass rail. Every mapping except Uplink only keeps the downlink corrected.",
   'settings.satelliteDoppler.minShift.label': 'Minimum shift (Hz)',
@@ -8252,7 +8631,7 @@ export const EN = {
   'settings.satelliteDoppler.passSounds.hint':
     'A rising tone the moment an armed pass starts and a falling one when it ends, alongside the popup — hear AOS with your hands on the rotor. On by default; clearing this silences only the tones, never the popups.',
 
-  // ── Settings ▸ Radio ▸ Orbital elements ─────────────────────────────────────────────
+  // ── Settings ▸ Satellites ▸ Orbital elements ─────────────────────────────────────────────
   // ⚠️ TLE, Keplerian elements, SupGP, the epoch, CelesTrak, SatNOGS, AMSAT and the CC BY-SA
   // 4.0 licence name are all invariant — they name a data format, its sources and the terms
   // they ship under. So is `{{source}}`, which is the backend's own one-word provenance
@@ -8439,6 +8818,47 @@ export const EN = {
   // is the live control) — reword them together.
   'setup.title': 'Set up Nexus',
   'setup.steps.station': 'Your station',
+  'setup.steps.about': 'About you',
+  'setup.about.title': 'How much have you done?',
+  'setup.about.sub': 'Your answer sets which screens start on, how much of Settings opens at first and what the last step offers. Change it any time in Settings ▸ Station. Every feature stays in Settings and its search, whatever you pick.',
+  'setup.about.newToHobby': 'New to the hobby',
+  'setup.about.newToHobby.blurb': 'A new licence, or one on the way. Nexus starts with FT8, the log and the maps, and walks you through your first contact.',
+  'setup.about.newToDigital': 'New to digital',
+  'setup.about.newToDigital.blurb': 'You work phone or CW and are new to FT8 and the other digital modes. The Phone and CW screens stay on.',
+  'setup.about.experienced': 'Experienced',
+  'setup.about.experienced.blurb': 'Every screen on and all of Settings open, as you would expect.',
+  // The first step's second question: how many radios. Never stored; "Two or more" opens the radio
+  // setup once the rig step has saved the second radio.
+  'setup.about.radios.title': 'How many radios will Nexus run?',
+  'setup.about.radios.one': 'One radio',
+  'setup.about.radios.one.blurb': 'Set it up on the “Your rig” step.',
+  'setup.about.radios.several': 'Two or more',
+  'setup.about.radios.several.blurb': 'Set up the first on the “Your rig” step and add the next there. Nexus then asks which radio does which bands and modes.',
+  'setup.rig.several.hint': 'Set up your first radio here. Then “{{button}}” below adds the next, and the radio setup opens to say which radio does which bands and modes. A radio on the network is added in Settings ▸ Radio ▸ Radios.',
+  // The log step's logbook services, for an operator switching from another program. Nothing is
+  // typed or sent here; logins stay in Settings ▸ Confirmations.
+  'setup.services.title': 'Where your contacts go',
+  'setup.services.sub': 'Nothing is sent from this setup. Logins go in Settings ▸ Confirmations, beside each service. Saving a QRZ, ClubLog or eQSL login there turns its upload on, and Nexus then sends that service the contacts in your log it has no record of sending there, imported ones included.',
+  'setup.services.openAfter.label': 'Open Settings ▸ Confirmations when I finish',
+  'setup.services.openAfter.blurb': 'Where you enter your logins and choose what uploads.',
+  'setup.finish.walk.label': 'Walk me through my first FT8 contact',
+  'setup.finish.walk.blurb': 'Four short lines after Finish. It changes nothing and sends nothing.',
+  'firstContact.title': 'Your first FT8 contact',
+  'firstContact.sub': 'Reading this changes no setting and transmits nothing.',
+  'firstContact.step.listen': 'Listen first. With the radio connected and on an FT8 frequency, the stations Nexus hears appear in Band Activity every 15 seconds.',
+  'firstContact.step.cq': 'A line with CQ is a station calling anyone. A higher dB number is a stronger signal.',
+  'firstContact.step.answer': 'Double-click that line to answer it. That turns TX on: Nexus starts calling the station right away, or on the next period, and sends each message of the contact for you.',
+  'firstContact.step.answer.manual': 'Double-click that line to answer it. TX stays off, because {{setting}} is off in Settings: press {{txOff}} to turn TX on, then Nexus calls the station and sends each message of the contact for you.',
+  'firstContact.step.tx': 'TX starts off each time Nexus opens ({{txOff}}). {{stop}} ends a transmission at once; {{txOn}} turns TX off once the current period ends.',
+  'firstContact.close': 'Got it',
+  'settings.station.experience.label': 'Your experience',
+  'settings.station.experience.notSet': 'Not set',
+  'settings.station.experience.hint': 'Picks which screens are on and how much of Settings opens at first. Changing it replaces the set in Settings ▸ App ▸ Features. Every setting stays reachable by search.',
+  'settings.station.experience.failed': 'Could not save your experience',
+  'settings.station.experience.confirm.body': 'These screens turn off: {{screens}}. You can turn any of them back on in Settings ▸ App ▸ Features.',
+  'settings.fold.note': 'Showing the settings you need first. The rest of this tab is folded to its headings.',
+  'setup.nav.finishPlain': 'Finish',
+  'settings.fold.showAll': 'Show all',
   'setup.steps.rig': 'Your rig',
   'setup.steps.log': 'Your log',
   'setup.steps.finish': 'Finish',
@@ -8788,10 +9208,11 @@ export const EN = {
   // from that program's interface; RRR / RR73 / 73 are the messages themselves.
   'settings.digital.logging.title': 'Logging Behavior',
   'settings.digital.autoLog.label': 'Auto-log QSOs',
-  'settings.digital.autoLog.hint': 'Automatically log completed contacts to the ADIF logbook.',
+  'settings.digital.autoLog.hint':
+    'Log each completed contact to the ADIF logbook by itself. A contact you opened by clicking their RR73 or RRR exchanges no reports and is never logged by itself: it waits for your confirm in the popup.',
   'settings.digital.promptToLog.label': 'Prompt before logging',
   'settings.digital.promptToLog.hint':
-    'Show a confirm-and-edit popup when a QSO completes instead of logging silently (WSJT-X “Prompt me to log QSO”). No effect unless Auto-log is on.',
+    'Open a popup to check and edit each completed contact (WSJT-X “Prompt me to log QSO”). It opens by itself with Auto-log on or off and holds each contact until you log or discard it; if 64 are left waiting, the oldest is logged, never one you opened by clicking their RR73 or RRR. With both off, nothing is logged until you press Log.',
   // WSJT-X's "dB reports to comments" (Settings ▸ Reporting there), quoted so an operator
   // migrating recognises it; the format is WSJT-X's own, byte for byte.
   'settings.digital.reportsToComments.label': 'dB reports to comments',
@@ -8872,6 +9293,7 @@ export const EN = {
   // ⚠️ `60\u00a0s` is a NON-BREAKING SPACE, written as an escape so it cannot be lost to a
   // careless edit: the period and its unit must not be split across a line. A translation
   // keeps it. A, B and C are the submode names both stations have to agree on.
+  'settings.weakSignal.legend': 'Weak-signal and beacons',
   'settings.jt65.legend': 'JT65 — classic EME',
   'settings.jt65.submode.label': 'Submode (tone spacing)',
   'settings.jt65.submode.a': 'A — HF standard, narrowest',
@@ -9364,7 +9786,9 @@ export const EN = {
   'settings.js8.mfi.hint': 'Printed where the next frame of a message did not come within one and a half periods. …… by default, as in JS8Call.',
   'settings.js8.sounds.title': 'Sounds',
   'settings.js8.sounds.hint':
-    'A short tone when one of these is heard while the JS8 screen is open, each its own. All off by default, as JS8Call’s notifications are. Test plays it once.',
+    'A sound when one of these is heard, whichever screen is showing: its own tone, or a WAV file you choose. All off by default, as JS8Call’s notifications are. Test plays it once.',
+  'settings.js8.sounds.thisComputer':
+    'On this computer the sounds play their built-in tones, where you hear the station; a file chosen at the station is not used here.',
   'settings.js8.sound.cq': 'A CQ',
   'settings.js8.sound.hb': 'A heartbeat',
   'settings.js8.sound.ack': 'An ACK for you',
@@ -9375,6 +9799,29 @@ export const EN = {
   'settings.js8.sound.test.label': 'Test',
   'settings.js8.sound.test.title': 'Play this sound once',
   'settings.js8.sound.test.aria': 'Test the sound for {{event}}',
+  'settings.js8.sound.file.builtIn': 'Built-in tone',
+  'settings.js8.sound.file.choose.label': 'Choose…',
+  'settings.js8.sound.file.choose.title': 'Choose a WAV file to play for this sound',
+  'settings.js8.sound.file.choose.aria': 'Choose a WAV file for {{event}}',
+  'settings.js8.sound.file.reset.label': 'Reset to built-in',
+  'settings.js8.sound.file.reset.aria': 'Play the built-in tone for {{event}}',
+  'js8.sound.file.failed': '{{file}} could not be played ({{reason}}), so the built-in tone played instead.',
+  'js8.sound.file.missing': 'it is not there',
+  'js8.sound.file.unreadable': 'this computer would not let Nexus read it',
+  'js8.sound.file.tooLarge': 'it is larger than 10 MB',
+  'js8.sound.file.notAFile': 'it is not a file',
+  'js8.sound.file.badFormat': 'its format is not one Nexus can play, or it is cut short',
+  'js8.sound.file.notPicked': 'it was not chosen for this sound in Settings',
+  'js8.sound.file.network': 'it is on another computer: Nexus does not open sound files on a network share, which can send your Windows sign-in to that computer; copy it to this computer',
+  'js8.sound.txDevice': 'A JS8 sound did not play: its output is a device your radio transmits from, and a sound there could key the radio on VOX. Choose another output in Settings ▸ Digital ▸ JS8 ▸ Sounds.',
+  'js8.sound.txDefault': 'A JS8 sound did not play: a TX audio device (the station’s, or a radio profile’s that has none) is set to the system default output, so a sound there could key a radio on VOX. Choose a specific output in Settings ▸ Digital ▸ JS8 ▸ Sounds.',
+  'js8.sound.txUnsure': 'A JS8 sound did not play: Nexus cannot tell its output apart from a device your radio transmits from. The sound server’s default output may be the radio’s sound card, and Nexus cannot see where a device set up in ~/.asoundrc, or another custom ALSA device, sends its sound. Choose the sound card to play on by its card name in Settings ▸ Digital ▸ JS8 ▸ Sounds, and set the radio’s TX audio to its own, different card by its card name too.',
+  'js8.sound.noDevice': 'A JS8 sound did not play: its output is not on this computer now. Choose another in Settings ▸ Digital ▸ JS8 ▸ Sounds.',
+  'js8.sound.failed': 'A JS8 sound did not play: its output would not open.',
+  'settings.js8.sound.device.label': 'Play the sounds on',
+  'settings.js8.sound.device.hint': 'Never a device your radio transmits from: a sound there could key a rig on VOX, so Nexus will not play one there, even if the radio’s TX audio device is changed to it later.',
+  'settings.js8.sound.device.tx': '{{device}} (radio TX audio, not used for sounds)',
+  'js8.sound.file.notWav': 'it is not a WAV file',
   'settings.js8.api.title': 'JS8Call API',
   'settings.js8.api.hint': 'For programs written for JS8Call, such as loggers, maps and message tools, on this computer. They can read what Nexus hears, the inbox and the station details. They cannot transmit, tune or change anything. Programs on other computers cannot connect.',
   'settings.js8.api.tcp.label': 'TCP API',
@@ -9527,7 +9974,7 @@ export const EN = {
   'settings.workingFrequencies.overrides.hint':
     'MHz is the dial (suppressed-carrier) frequency. Save to apply — band switches then use your value for that band + mode.',
 
-  // ── Settings ▸ Logging & Connectors ▸ Connections ───────────────────────────────────
+  // ── Settings ▸ Services ▸ Connections ───────────────────────────────────
   // The connector health grid and its event log. ⚠️ NOT here, and deliberately: the state
   // word beside each dot and the "failed 10m ago …" line come from `settings/connHealth.ts`,
   // the connector NAME and identity are data, and every event message in the log is written
@@ -9545,6 +9992,13 @@ export const EN = {
   'settings.connections.qrz.test.ok': '✓ QRZ Logbook reachable: {{detail}}',
   'settings.connections.qrz.test.fail':
     '✗ QRZ test failed: {{detail}} (Uploads need the per-logbook <b>API key</b> from logbook.qrz.com ▸ Settings ▸ API — not your QRZ password.)',
+  // LoTW / eQSL / ClubLog Tests. `{{service}}` is the connector's name (data, never translated);
+  // `{{detail}}` is the Test's own answer — the service's words or Nexus's — inserted verbatim.
+  'settings.connections.service.test.action': 'Test',
+  'settings.connections.service.test.title':
+    'Signs in to {{service}} with the saved login and reads — uploads nothing and changes nothing there',
+  'settings.connections.service.test.ok': '✓ {{service}}: {{detail}}',
+  'settings.connections.service.test.fail': '✗ {{service}} test failed: {{detail}}',
   'settings.connections.log.title': 'Connection log',
   'settings.connections.log.hint': 'every save, sync, push, and failure lands here',
   'settings.connections.log.empty':
@@ -9572,7 +10026,7 @@ export const EN = {
   'settings.b4.matchMode.hint':
     'Off (the default, and WSJT-X’s): working a station on 40m marks them B4-on-band for 40m in every mode, and the log strip’s Dupe badge counts any mode on the band. On: 40m FT8 and 40m phone are separate contacts — the solid B4 chip and the Dupe badge require the mode to match as well. The hollow B4 chip (worked anywhere) is unaffected either way.',
 
-  // ── Settings ▸ Logging & Connectors ▸ Integrations & Feeds ─────────────────────────
+  // ── Settings ▸ Services ▸ Integrations & Feeds ─────────────────────────
   // ⚠️ Everything this section names on the wire is invariant and stays in the panel: the
   // UDP addresses and ports it offers as field examples, the file names (ALL.TXT, .wav) and
   // the program names (WSJT-X, JTDX, JTAlert, GridTracker, HRD) inside these
@@ -9690,7 +10144,7 @@ export const EN = {
   'settings.antennaGain.hint':
     'Used by the P.533 link budget only. 0 = a simple wire/vertical (isotropic); a 3-element yagi ≈ 6–8. Honest v1: a plain dB shift — no pattern or takeoff-angle modelling, and the fast heuristic ignores it.',
 
-  // ── Settings ▸ Logging & Connectors ▸ DXKeeper ─────────────────────────────────────
+  // ── Settings ▸ Services ▸ DXKeeper ─────────────────────────────────────
   // ⚠️ The legend (`DXKeeper (DXLab Suite)`) and the `DXLab Base Port` label are still in the
   // panel, and for two different reasons. The legend is nothing but product names. The label
   // NAMES A CONTROL IN ANOTHER APPLICATION'S ENGLISH INTERFACE — the hint below it sends the
@@ -9710,7 +10164,7 @@ export const EN = {
   'settings.dxkeeper.uploads.hint':
     'Off by default: Nexus already uploads to LoTW / eQSL / ClubLog / QRZ, so turning this on would upload every QSO twice. Note DXKeeper ignores this for Club Log and QRZ if <em>Auto upload</em> is ticked on its own QSL Configuration tab — untick it there.',
 
-  // ── Settings ▸ Logging & Connectors ▸ N3FJP ────────────────────────────────────────
+  // ── Settings ▸ Services ▸ N3FJP ────────────────────────────────────────
   // ⚠️ `N3FJP`, `ACLog`, `Field Day Contest Log` and `Network Status Display` are the club
   // logger's own names; `ENTER` is the key its scoring path is named after and `ADDDIRECT` is
   // the API command that replaces it. All of them are wire-level or product names and stay as
@@ -9739,7 +10193,7 @@ export const EN = {
   'settings.n3fjp.test.hint':
     'Run this at the club site before the event starts to confirm the API link works.',
 
-  // ── Settings ▸ Logging & Connectors ▸ N1MM+ ────────────────────────────────────────
+  // ── Settings ▸ Services ▸ N1MM+ ────────────────────────────────────────
   // ⚠️ The port number 12060 is the contest logger's own broadcast port and stays in the
   // sentence that names it. The address the toggle fills in for a blank field is a VALUE that
   // is written to settings, not an example, and never came near this file.
@@ -9795,6 +10249,30 @@ export const EN = {
   // ⚠️ `AD1C` (the file's maintainer), `cty.dat` and `DXCC` are invariant tokens in every
   // catalog. `{{ver}}` is an AD1C release date the panel formats as YYYY-MM-DD; the resolver
   // is set once at launch, so every "applies at next launch" is literal, not caution.
+  'iota.credit': '© IOTA Ltd',
+  'iota.credit.title': 'Island group names: © Islands On The Air (IOTA) Ltd and RSGB — iota-world.org',
+  'iota.list.failed': 'The IOTA island list could not be downloaded',
+  'iota.notOnList': '{{ref}} is not on the IOTA island list.',
+  'iota.offer.chip': 'IOTA {{ref}}',
+  'iota.offer.aria': 'IOTA reference offered: {{ref}}',
+  'iota.offer.fromSpot': 'from the spot',
+  'iota.offer.fromCallbook': 'from the callbook',
+  'iota.offer.spotHeld': 'Kept in your log, but sent to no service until you confirm it on the contact card.',
+  'iota.offer.use': 'Use',
+  'iota.offer.dismiss': 'Leave IOTA empty',
+  'iota.card.spotHeld': 'Filled from a spot: kept in your log, sent to no service until you confirm it.',
+  'iota.card.callbookHeld': 'Filled from the callbook: kept in your log, sent to no service until you confirm it.',
+  'iota.card.confirm': 'Confirm',
+  'spots.row.iota.title': 'IOTA {{ref}}, from the spot comment',
+  'spots.row.iota.needed': 'New IOTA: {{ref}}, from the spot comment',
+  'settings.iotaList.legend': 'IOTA island list',
+  'settings.iotaList.label': 'Show IOTA island names',
+  'settings.iotaList.hint': "IOTA Ltd's island-group list (© RSGB and IOTA Ltd) ships with Nexus by IOTA Ltd's permission and is checked at iota-world.org for a newer copy at most monthly. It names island groups and flags a reference that is not one. Off shows no names, stops the check and deletes any downloaded copy.",
+  'settings.iotaList.status': '{{count}} island groups · updated {{date}}',
+  'settings.iotaList.statusShipped': '{{count}} island groups · the copy shipped with Nexus ({{date}})',
+  'settings.iotaList.empty': 'Off: references are checked by their shape (EU-131) only.',
+  'settings.iotaList.none': 'On, no list yet: references are checked by their shape (EU-131) until the first download.',
+  'settings.iotaList.failed': 'Last download failed: {{detail}}',
   'settings.countryFile.legend': 'Country file (DXCC)',
   'settings.countryFile.update.action': 'Update country file',
   'settings.countryFile.update.busy': 'Updating…',
@@ -9810,7 +10288,7 @@ export const EN = {
   'settings.countryFile.hint':
     'The AD1C cty.dat country file maps callsigns to DXCC entities — the country on decode rows, the Needed board and the log. Checked weekly; a downloaded update applies at the next launch.',
 
-  // ── Settings ▸ Logging & Connectors ▸ Confirmations ────────────────────────────────
+  // ── Settings ▸ Services ▸ Confirmations ────────────────────────────────
   // The QSL services, one featgroup each. Everything below is a LABEL or a HINT: no key,
   // password, token or upload code is read, written or interpolated by any entry here, and the
   // Set/Forget buttons these words sit on call the same handlers they always did.
@@ -9918,7 +10396,7 @@ export const EN = {
   'settings.confirmations.qrz.password.label': 'QRZ password',
   'settings.confirmations.qrz.password.placeholder': 'QRZ.com account password',
   'settings.confirmations.qrz.password.hint':
-    'Your QRZ.com login password — <b>this is what powers callbook lookups</b> (name, QTH, grid), and it is separate from the QRZ Logbook API key under Logging & Connectors (that key only uploads QSOs). Stored in the OS keychain, never on disk. Grid & state need a QRZ XML subscription; free accounts return only name/address/country.',
+    'Your QRZ.com login password — <b>this is what powers callbook lookups</b> (name, QTH, grid), and it is separate from the QRZ Logbook API key under Services (that key only uploads QSOs). Stored in the OS keychain, never on disk. Grid & state need a QRZ XML subscription; free accounts return only name/address/country.',
   'settings.confirmations.qrz.apiKey.label': 'QRZ Logbook API key',
   'settings.confirmations.qrz.apiKey.placeholder': 'from your QRZ logbook settings page',
   'settings.confirmations.qrz.apiKey.forget.title':
@@ -10019,7 +10497,7 @@ export const EN = {
   'settings.confirmations.hrdlog.code.forget.title':
     'Remove the stored HRDLog.net code from the system keychain',
   'settings.confirmations.hrdlog.code.hint':
-    'The upload code from your HRDLog.net account (Options → your code). Uploads log under your station callsign. Stored in the OS keychain. This is the online HRDLog.net service — separate from the HRD Logbook UDP push under Logging.',
+    'The upload code from your HRDLog.net account (Options → your code). Uploads log under your station callsign. Stored in the OS keychain. This is the online HRDLog.net service — separate from the HRD Logbook UDP push in Settings ▸ Services ▸ Integrations & Feeds.',
   'settings.confirmations.hrdlog.upload.label': 'Auto-upload QSOs to HRDLog.net',
   'settings.confirmations.hrdlog.upload.hint':
     'Push each logged QSO to HRDLog.net (needs the upload code above). HRDLog.net is a live-logging and awards site — it is <b>not</b> an ARRL confirmation source, so an upload here never earns DXCC/WAS credit.',
@@ -10248,7 +10726,7 @@ export const EN = {
   'settings.workspace.panes.reset': 'Reset pane sizes',
   'settings.workspace.panes.hint': 'Restore the default left/right pane widths.',
 
-  // ── Settings ▸ Appearance ▸ Features ────────────────────────────────────────────────
+  // ── Settings ▸ App ▸ Features ────────────────────────────────────────────────
   // ⚠️ Each feature's NAME and one-line description, and the category headings they are
   // grouped under, come from `features/registry.ts` and are interpolated or rendered as
   // values — they are not in this file, and they move with that registry. What is here is
@@ -10431,6 +10909,8 @@ export const EN = {
   'connect.kp.peak': 'Worst ahead: Kp {{kp}} at {{when}}',
   'connect.kp.onset': 'Storm level (Kp {{kp}}) expected from {{when}}',
   'connect.kp.relief': 'Settling below storm level around {{when}}',
+  // The pane's hover: the 3-day forecast's geomagnetic rationale. {{text}} is NOAA's own English.
+  'connect.kp.rationale.title': 'NOAA forecaster, issued {{issued}}: {{text}}',
   'connect.kp.chart.aria': 'Planetary K index, measured hours then forecast',
   'connect.kp.bar.title': '{{when}} · Kp {{kp}} · {{kind}}{{scale}}',
   'connect.kp.kind.observed': 'measured',
@@ -10531,6 +11011,148 @@ export const EN = {
   'connect.path.greyline.title': 'Greyline (terminator) opening',
   'connect.path.modeChip.title':
     '{{mode}}: ~{{pct}}% of days this circuit works right now (P.533)',
+  // The path "why" line (features/pathWhy.ts) — one sentence under the Path card's ceiling and
+  // on the selected station card. Clauses are joined with `pathWhy.sep`, a storm warning with
+  // `pathWhy.sepWarn`, and the whole is wrapped by `pathWhy.sentence`, so each language sets its
+  // own punctuation. `{{band}}` (20m), `{{layer}}` (E / F2), `{{mode}}` (2F2), `{{time}}` (1800Z)
+  // and Kp are invariant tokens. The hops and take-off angle are the P.533 model's monthly
+  // median (beyond 7000 km an estimate, `hopsEstimate` / `detail.modeEstimate`); the auroral
+  // zone, the polar cap and the aurora are space weather laid over it — the storm clauses say
+  // "may", never "will", and an unknown Kp is said to be unknown. The auroral zone is the band
+  // a quiet-time cap edge (~64° geomagnetic) sits in; the polar cap proper lies poleward of it.
+  'pathWhy.lead.band': '{{band}} short path',
+  'pathWhy.lead': 'Short path',
+  'pathWhy.hops': {
+    one: '{{count}} {{layer}} hop',
+    other: '{{count}} {{layer}} hops',
+  },
+  'pathWhy.hopsEstimate': {
+    one: 'about {{count}} {{layer}} hop',
+    other: 'about {{count}} {{layer}} hops',
+  },
+  'pathWhy.polar': 'crosses the polar cap',
+  'pathWhy.auroralZone': 'crosses the auroral zone',
+  'pathWhy.kpUnknown': 'Kp unknown (no Kp reading)',
+  'pathWhy.oval': 'crosses the auroral oval right now',
+  'pathWhy.grey.both': 'grey line at both ends',
+  'pathWhy.grey.me': 'grey line at your end',
+  'pathWhy.grey.dx': 'grey line at their end',
+  'pathWhy.storm.aurora': 'an aurora (Kp {{kp}} forecast at {{time}}) may weaken it',
+  'pathWhy.storm.cap': 'a storm (Kp {{kp}} forecast at {{time}}) may push the auroral zone over it',
+  'pathWhy.sep': ', ',
+  'pathWhy.sepWarn': ' — ',
+  'pathWhy.sentence': '{{text}}.',
+  'pathWhy.detail.summary': 'Details',
+  'pathWhy.detail.mode': 'Mode {{mode}}, take-off {{deg}}° (P.533 monthly median)',
+  'pathWhy.detail.modeEstimate':
+    'Mode {{mode}}, take-off {{deg}}° (an estimate: beyond 7000 km P.533 assumes this hop geometry from the distance alone, so it is the same every hour)',
+  'pathWhy.detail.polar':
+    'Auroral zone and polar cap: {{pct}}% of the path (poleward of {{lat}}° geomagnetic at Kp {{kp}}, {{source}})',
+  'pathWhy.detail.polarUnknown': 'Auroral zone and polar cap: unknown, because Kp is unknown',
+  'pathWhy.detail.polarNever':
+    'Auroral zone and polar cap: 0% of the path (it never reaches {{floor}}° geomagnetic, the edge at Kp 9)',
+  'pathWhy.detail.maxLat': 'Highest geomagnetic latitude on the path: {{lat}}°',
+  'pathWhy.detail.grey': 'Grey line: {{pct}}% of the path · in daylight: {{sun}}%',
+  'pathWhy.detail.oval': 'The live auroral oval lies across the path.',
+  'pathWhy.detail.note':
+    'The model is a monthly median and does not include storms; the auroral zone, the polar cap and the aurora are laid over it from space weather. Kp this hour: {{source}}.',
+  'pathWhy.kpSource.measured': 'measured',
+  'pathWhy.kpSource.forecast': 'forecast',
+  'pathWhy.kpSource.current': 'latest reading, no forecast for this hour',
+  'pathWhy.kpSource.unknown': 'unknown (no Kp reading)',
+  // Short path or long path (features/pathRoute.ts): the heading hint on the Path card and the
+  // selected station card, the polar chip, and the map's long-path button. The route call is the
+  // P.533 model's opinion (a monthly median), so the confidence words are "likely" / "possible",
+  // never "confirmed"; the long path has no reference fixture, so wherever it is shown it is
+  // labelled modelled and unvalidated, and the engine never calls it more than "possible". The hint is advice: nothing turns the rotator. `{{brg}}`,
+  // `{{sp}}` and `{{lp}}` are degrees (true), `{{band}}` (20m) and `{{time}}` (1800Z) invariant.
+  // The hint is wrapped by `pathWhy.sentence`. The chip names the polar cap or the auroral zone as
+  // the why line does; its title's `{{source}}` is a `pathWhy.kpSource.*` phrase.
+  'pathRoute.conf.likely': 'likely',
+  'pathRoute.conf.possible': 'possible',
+  'pathRoute.hint.short': 'Beam {{brg}}° for {{band}}: short path ({{conf}})',
+  'pathRoute.hint.long': 'Beam {{brg}}° for {{band}}: long path ({{conf}})',
+  'pathRoute.hint.either':
+    '{{band}} works either way: short path {{sp}}° or long path {{lp}}°, modelled within 6 dB',
+  'pathRoute.hint.eitherGreyLong':
+    '{{band}} could go either way: the short path {{sp}}° is modelled stronger, the long path {{lp}}° lies along the grey line',
+  'pathRoute.hint.eitherGreyShort':
+    '{{band}} could go either way: the long path {{lp}}° is modelled stronger, the short path {{sp}}° lies along the grey line',
+  'pathRoute.antipode': 'Near the antipode: every heading is about the same distance',
+  'pathRoute.why.shortClosed': ' — the short path is modelled closed now',
+  'pathRoute.why.margin': ', modelled about {{db}} dB better now',
+  'pathRoute.why.grey': ', the grey line lies along it',
+  'pathRoute.detail.now':
+    'Now on {{band}}: short path {{sp}}°, reliability {{spPct}}% · long path {{lp}}°, reliability {{lpPct}}% (P.533 monthly median)',
+  'pathRoute.detail.margin': 'Long path minus short path: {{db}} dB median SNR',
+  'pathRoute.lpCaveat':
+    'Modelled, unvalidated for long path: the reference model is checked for the short path only.',
+  'pathRoute.lpBadge': 'modelled, unvalidated for long path',
+  'pathRoute.chip.polar': 'Polar path',
+  'pathRoute.chip.storm': 'Polar path · Kp {{kp}} forecast from {{time}}',
+  'pathRoute.chip.zone': 'Auroral zone',
+  'pathRoute.chip.zoneStorm': 'Auroral zone · Kp {{kp}} forecast from {{time}}',
+  'pathRoute.chip.stormIf': 'Auroral zone if Kp {{kp}} (forecast from {{time}})',
+  'pathRoute.chip.title.cap':
+    'This route crosses the polar cap, where an aurora brings fading and flutter. The model has no storms; this comes from space weather. Kp this hour: {{source}}.',
+  'pathRoute.chip.title.zone':
+    'This route crosses the auroral zone, where an aurora brings fading and flutter. The model has no storms; this comes from space weather. Kp this hour: {{source}}.',
+  'pathRoute.chip.title.stormIf':
+    'The space-weather forecast puts the auroral zone over this route from {{time}} (Kp {{kp}}, forecast). The model has no storms.',
+  'map.path.long.suggested':
+    'The model favours the long path now (modelled, unvalidated for long path). Advice only: the rotator does not move.',
+  // Path over the day (components/prop/PathDayStrip.tsx, features/pathDay.ts): the selected
+  // station's band x UTC-hour strip and the ten DX regions' strips. Every figure is the model's
+  // monthly median, never a measurement; the long path is unvalidated (pathRoute.lpBadge shows
+  // beside it). Kp is labelled with its source (pathWhy.kpSource.*). `{{time}}`, `{{from}}` and
+  // `{{to}}` are UTC hours (14Z), `{{band}}` (20m), `{{pct}}` a whole percent, `{{kp}}` a number;
+  // Kp and MUF are invariant tokens. `pathDay.best.*` items are joined by `pathDay.best.sep` and
+  // wrapped by `pathDay.best.lead`.
+  'pathDay.mode.best': 'Best',
+  'pathDay.mode.aria': 'Which route the strip shows',
+  'pathDay.mode.title.best': 'Colour each hour by the route the model favours',
+  'pathDay.mode.title.short': 'Colour each hour by the short path',
+  'pathDay.mode.title.long': 'Colour each hour by the long path (modelled, unvalidated)',
+  'pathDay.aria': 'Path over the day: modelled reliability per band and UTC hour',
+  'pathDay.hour.title': 'Show {{time}} on the map',
+  'pathDay.cell.title': '{{band}} {{time}}, modelled: {{text}}',
+  'pathDay.cell.short': 'short path {{pct}}%',
+  'pathDay.cell.long': 'long path {{pct}}%',
+  'pathDay.cell.favours.short': 'the model favours the short path ({{conf}})',
+  'pathDay.cell.favours.long': 'the model favours the long path ({{conf}})',
+  'pathDay.cell.either': 'either way',
+  'pathDay.cell.closed': 'both ways modelled closed',
+  'pathDay.cell.aboveMuf': 'above the MUF',
+  'pathDay.grey.title': '{{time}}: {{text}}',
+  'pathDay.kp.title': '{{time}}: Kp {{kp}}, {{source}}',
+  'pathDay.legend.short': 'short path',
+  'pathDay.legend.long': 'long path',
+  'pathDay.legend.polar': 'auroral zone / polar cap',
+  'pathDay.legend.muf': 'MUF ceiling',
+  'pathDay.legend.kp': 'Kp: solid measured, hollow forecast, dashed the latest reading carried forward, dotted unknown',
+  'pathDay.legend.modelled': 'Modelled monthly median, not a measurement',
+  'pathDay.best.lead': 'Best: {{text}}.',
+  'pathDay.best.sep': '; ',
+  'pathDay.best.short': '{{band}} {{from}}–{{to}} by the short path',
+  'pathDay.best.long': '{{band}} {{from}}–{{to}} by the long path',
+  'pathDay.best.either': '{{band}} {{from}}–{{to}} either way',
+  'pathDay.best.plain': '{{band}} {{from}}–{{to}}',
+  'pathDay.best.none': 'No band is modelled open on this path today.',
+  'pathDay.scrub.map': 'Map at {{time}}',
+  'pathDay.scrub.back': 'Now',
+  'pathDay.region.eu': 'Europe',
+  'pathDay.region.ja': 'Japan & East Asia',
+  'pathDay.region.vk': 'Australia & New Zealand',
+  'pathDay.region.pacific': 'Pacific',
+  'pathDay.region.sa': 'South America',
+  'pathDay.region.af': 'Africa',
+  'pathDay.region.carib': 'Caribbean',
+  'pathDay.region.me': 'Middle East',
+  'pathDay.region.sas': 'South Asia',
+  'pathDay.region.polar': 'Antarctica',
+  'pathDay.region.expand': 'Show every band for {{region}}',
+  'pathDay.region.collapse': 'Show only the best band for {{region}}',
+  'pathDay.region.order': 'Ordered by the needed stations heard, then your logged contacts, in each region',
   'connect.outlook.heading': 'Band outlook',
   'connect.outlook.muf.title':
     'Maximum Usable Frequency — the modeled ceiling to long-haul DX right now. Bands below it are open; above it, closed.',
@@ -10540,6 +11162,12 @@ export const EN = {
   'connect.getout.none': 'No reception reports yet — call CQ, then watch who hears you.',
   'connect.getout.summary': '<b>{{count}}</b> hearing you · furthest <b>{{dist}}</b>',
   'connect.getout.select.title': 'Select {{call}} on the map',
+  'connect.getout.fresh': 'Start fresh',
+  'connect.getout.fresh.title': 'Count only the reception reports that arrive from now on, for trying an antenna. Nothing is deleted.',
+  'connect.getout.since': 'since {{time}}',
+  'connect.getout.showAll': 'Show all',
+  'connect.getout.showAll.title': 'Count every reception report again',
+  'connect.getout.none.since': 'No reception reports since {{time}} yet — call CQ, then watch who hears you.',
 
   // ── The Basic projections — one whole sentence per pane, per state ──────────────────
   // Every one of these was assembled from fragments. They are whole sentences now, with
@@ -10549,6 +11177,7 @@ export const EN = {
   'connect.basic.offline': 'No live propagation data right now.',
   'connect.basic.bandAdvisor.offline': 'No live band data yet.',
   'connect.basic.bandAdvisor.none': 'No bands modelled open right now.',
+  'connect.basic.bandAdvisor.unknown': 'No band heard yet, and with no current NOAA reading there is no model to say which bands are open.',
   'connect.basic.bandAdvisor.best': 'Best band now: {{band}} ({{word}}).',
   'connect.basic.bandAdvisor.bestRegion': 'Best band now: {{band}} to {{region}} ({{word}}).',
   'connect.basic.selection.none': 'Tap a station, spot, or DXpedition on the map.',
@@ -10578,8 +11207,11 @@ export const EN = {
     'SFI {{sfi}}, Kp {{kp}}: {{impact}}; {{xray}} flare in progress; R{{scale}} radio blackout.',
   'connect.basic.getout.dir': '{{count}} hearing you — {{dir}}.',
   'connect.basic.getout.furthest': '{{count}} hearing you — furthest {{dist}}.',
+  'connect.basic.getout.dir.since': '{{count}} hearing you since {{time}} — {{dir}}.',
+  'connect.basic.getout.furthest.since': '{{count}} hearing you since {{time}} — furthest {{dist}}.',
   'connect.basic.bestband.none': 'No region reachable on any band yet.',
   'connect.basic.bestband': 'To {{region}}: try {{band}} ({{word}}).',
+  'connect.basic.bestband.noWord': 'To {{region}}: try {{band}}.',
   'connect.basic.activity.offline': 'No live activity data right now.',
   'connect.basic.activity.none': 'Quiet on all bands — no activity around you yet.',
   'connect.basic.activity.top': {
@@ -10691,6 +11323,8 @@ export const EN = {
   'aprs.head.packets': '{{count}} pkts',
   'aprs.channel.title':
     'APRS frequency by region — selecting one tunes the rig (2 m FM, AFSK-1200)',
+  'aprs.channel.iss': 'ISS (space station)',
+  'aprs.channel.title.iss': 'The ISS APRS digipeater (2 m FM, AFSK-1200), heard only while the station passes overhead. A pass shifts the frequency a few kHz (Doppler); while the ISS is overhead Nexus corrects it, unless you turn that off — selecting it tunes the rig',
   'aprs.retune.label': 'Re-tune',
   'aprs.retune.title.loading': 'Reading your APRS channel…',
   'aprs.retune.title':
@@ -10849,6 +11483,25 @@ export const EN = {
   'aprs.beacon.symbol.label': 'Symbol',
   'aprs.beacon.comment.label': 'Comment',
   'aprs.beacon.path.label': 'Path',
+  'aprs.beacon.path.pick.label': 'Pick a digipeater path (fills the Path box)',
+  'aprs.beacon.path.pick.own': 'Your own',
+  'aprs.beacon.path.pick.direct': 'Direct (no path)',
+  'aprs.iss.hint': 'The ISS digipeater answers to the path {{path}}. A pass shifts the frequency a few kHz (Doppler); Nexus corrects it while the ISS is overhead.',
+  'aprs.iss.useAriss': 'Use {{path}}',
+  'aprs.iss.doppler.label': 'Correct the ISS Doppler shift',
+  'aprs.iss.doppler.title': 'While the ISS is overhead, Nexus keeps the radio on the corrected frequency: the receive frequency between packets, and the transmit frequency for each packet it sends. It never retunes while transmitting. Off, the radio stays on {{freq}} MHz.',
+  'aprs.iss.doppler.on': 'Doppler corrected: listening on {{rx}} MHz, sending on {{tx}} MHz.',
+  'aprs.iss.doppler.off.switchedOff': 'Doppler correction is off. The radio stays on {{freq}} MHz.',
+  'aprs.iss.doppler.off.belowHorizon': 'The ISS is below the horizon, so the radio stays on {{freq}} MHz.',
+  'aprs.iss.doppler.off.noElements': 'Nexus has no orbital elements for the ISS, so the radio stays on {{freq}} MHz. Refresh them under Satellites.',
+  'aprs.iss.doppler.off.staleElements': 'The ISS orbital elements are too old to tune by, so the radio stays on {{freq}} MHz. Refresh them under Satellites.',
+  'aprs.iss.doppler.off.noGrid': 'Set your grid square in Settings to correct the Doppler shift. Until then the radio stays on {{freq}} MHz.',
+  'aprs.iss.doppler.off.noCat': 'Doppler correction needs CAT control of the radio. Without it the radio stays on {{freq}} MHz.',
+  'aprs.iss.doppler.off.satTracker': 'The Satellites tracker is steering the radio for a pass, so this correction stands aside.',
+  'aprs.iss.doppler.off.starting': 'Finding the ISS…',
+  'aprs.iss.doppler.off.tunedAway': 'The radio was tuned off the ISS channel, so the Doppler correction has stopped and Nexus will not move the radio back. Pick the ISS channel again to restart it.',
+  'aprs.iss.doppler.off.radioRounds': 'This radio did not hold the corrected frequency it was sent (it rounds to its own tuning step), so the Doppler correction is off for this pass and the radio stays on {{freq}} MHz.',
+  'aprs.iss.doppler.off.stopped': 'The Doppler correction stopped working, so the radio stays on {{freq}} MHz. Restart Nexus to bring it back.',
   'aprs.beacon.send': 'Send beacon',
   'aprs.msg.title': 'Message',
   'aprs.msg.to.label': 'To',
@@ -10881,6 +11534,33 @@ export const EN = {
   'aprs.row.title.highlight': 'Highlight {{call}} on the map',
   'aprs.row.title.noPosition': '{{call}} reported no position — nothing to highlight',
   'aprs.map.noPositions': 'No positions heard yet — status and message packets carry none.',
+  'map.centre.label': 'Centre',
+  'map.centre.title': 'Centre the map on your station (and stop following)',
+  'aprs.map.age.title': 'Show stations heard within this time',
+  'aprs.map.age.all': 'Any age',
+  'aprs.map.age.mins': 'Last {{mins}} min',
+  'aprs.map.age.hours': 'Last {{hours}} h',
+  'aprs.map.type.title': 'Show one kind of station',
+  'aprs.map.type.all': 'All kinds',
+  'aprs.map.type.mobile': 'Vehicles',
+  'aprs.map.type.fixed': 'Fixed stations',
+  'aprs.map.type.wx': 'Weather',
+  'aprs.map.type.infra': 'Digis and iGates',
+  'aprs.map.type.object': 'Objects',
+  'aprs.map.type.air': 'Aircraft and balloons',
+  'aprs.map.type.marine': 'Boats',
+  'aprs.map.type.other': 'Other',
+  'aprs.map.tracks.label': 'Tracks',
+  'aprs.map.tracks.title': 'Draw where each moving station has been',
+  'aprs.map.labels.label': 'Labels',
+  'aprs.map.labels.title': 'Name every station on the map; a name with no room beside its symbol is left out. Off: only the selected and moving stations.',
+  'aprs.map.follow.label': 'Following {{call}}',
+  'aprs.map.follow.title': 'Stop following this station',
+  'aprs.card.track.label': 'Track',
+  'aprs.card.track.value': '{{dist}} in {{age}}',
+  'aprs.card.follow': 'Follow',
+  'aprs.card.unfollow': 'Stop following',
+  'aprs.card.follow.title': 'Keep this station in the middle of the map as it moves',
 
   // ── The station card ────────────────────────────────────────────────────────────────
   // ⭐ The per-source honesty line: "your receiver heard it" and "a server reported it" are
@@ -11152,6 +11832,9 @@ export const EN = {
   'operate.strip.send.title': 'Send on the next over',
   'operate.strip.log.label': 'Log',
   'operate.strip.log.title': 'Log this QSO now',
+  'operate.strip.log.waiting': '{{count}} waiting for Log',
+  'operate.strip.log.titleWaiting': 'Log this QSO now. Waiting for Log: {{count}}',
+  'operate.strip.log.ariaWaiting': 'Log, {{count}} waiting',
 
   // The transmit-cycle button: four WHOLE labels, never a stem plus a period token.
   'operate.strip.period.title':
@@ -11177,6 +11860,9 @@ export const EN = {
   // The filter chips. `CQ`, `CQ+73` and `B4` are Q-code/log tokens and stay in the code;
   // these four are words. Every chip's EXPLANATION is a word.
   'operate.decodes.filters.aria': 'Filter decodes',
+  'operate.decodes.fold.label': 'Filters',
+  'operate.decodes.fold.labelLit': 'Filters · {{count}}',
+  'operate.decodes.fold.title': "Show or hide this pane's filter and sort controls. They fold away when the pane is short, so the list keeps its rows. Lit while a filter is on.",
   'operate.decodes.filter.all': 'All',
   'operate.decodes.filter.me': 'To me',
   'operate.decodes.filter.rx': 'On RX',
@@ -11218,6 +11904,20 @@ export const EN = {
   'operate.decodes.sort.label': 'sort',
   'operate.decodes.sort.time': 'Time',
   'operate.decodes.sort.freq': 'Freq',
+
+  // The Band Activity search box (in the pane's title row). It narrows the list to the lines that
+  // contain every word typed; `*` and `?` are wildcards. `{{shown}}` is how many rows are on screen,
+  // `{{total}}` how many the chips would show with the box empty.
+  'operate.decodes.search.placeholder': 'Search',
+  'operate.decodes.search.aria': 'Search Band Activity',
+  'operate.decodes.search.title':
+    'Show only the lines that contain what you type: a call, grid, report, CQ DX or POTA, or a country. Every word must match; * and ? are wildcards. Only this list changes: decoding, alerts and transmitting do not. ✕ or Esc clears it (Esc also stops transmitting, as everywhere).',
+  'operate.decodes.search.clear': 'Clear the search',
+  'operate.decodes.search.count': '{{shown}} of {{total}} match',
+  'operate.decodes.search.count.title':
+    'The search box is hiding the lines that do not match. Clear it to see the whole list.',
+  'operate.decodes.emptySearch.detail':
+    '{{count}} decodes are hidden by the search — clear it to see them.',
 
   // `{{count}}` is how many rows the pane is showing.
   'operate.decodes.heard': '{{count}} heard',
@@ -12104,7 +12804,7 @@ export const EN = {
   'js8.lists.clearAll': 'Clear all lists…',
   'js8.lists.clearAll.confirm.title': 'Clear all JS8 activity?',
   'js8.lists.clearAll.confirm.body':
-    'The RX pane, Band activity and the call list start empty and fill again as stations are heard. Your Inbox, your settings and the station’s own record of who it heard are kept.',
+    'The RX pane, Band activity and the call list start empty and fill again as stations are heard, and the compose box is emptied, as in JS8Call. Your Inbox, your settings and the station’s own record of who it heard are kept.',
   'js8.lists.clearAll.confirm.label': 'Clear all lists',
   'js8.lists.jumpOffset': 'Jump to {{offset}} Hz',
   'js8.lists.jumpSpeed': 'Jump to {{speed}} speed',
@@ -12136,6 +12836,56 @@ export const EN = {
   'js8.inbox.col.to': 'To',
   'js8.inbox.col.text': 'Message',
   'js8.inbox.pick.aria': 'Pick the message from {{from}} at {{time}}',
+
+  // ── JS8 ▸ the screen options, as JS8Call 3.0.3 has them ──────────────────────────────────
+  // Minimal column labels (the lists' Show columns): JS8Call's short headings.
+  'js8.view.minimal': 'Minimal column labels',
+  'js8.col.offset.minimal': 'Off',
+  'js8.col.snr.minimal': 'SN',
+  'js8.col.tdrift.minimal': 'TD',
+  'js8.col.speed.minimal': 'Sp',
+  'js8.calls.col.callsign.minimal': 'Call({{count}})',
+  'js8.calls.col.distance.minimal': 'Dist',
+
+  // Reset the lists at startup (Settings ▸ JS8 ▸ Lists and marks): JS8Call's General-tab option.
+  'settings.js8.resetActivity.label': 'Reset Band activity, the call list and the RX pane at startup',
+  'settings.js8.resetActivity.hint':
+    'Off by default, as in JS8Call. On, each time Nexus starts, the three JS8 lists start empty, as Clear all lists leaves them. Your Inbox and the station’s own record of who it heard are kept.',
+
+  // Colours and fonts (Settings ▸ JS8): JS8Call's UI tab, a colour picker for each of its colours.
+  'settings.js8.style.title': 'Colours and fonts',
+  'settings.js8.style.hint':
+    'JS8Call’s colours and fonts for the RX pane, the two lists and the compose box. Each colour starts as the theme’s; what you pick here is kept for the {{theme}} theme, the one in use now, and the other theme keeps its own. A font serves both.',
+  'settings.js8.style.pane.rx': 'RX pane',
+  'settings.js8.style.pane.lists': 'Band activity and the call list',
+  'settings.js8.style.pane.compose': 'Compose box',
+  'settings.js8.style.color.rxBg': 'Background',
+  'settings.js8.style.color.rxFg': 'Received text',
+  'settings.js8.style.color.txFg': 'Transmitted text',
+  'settings.js8.style.color.tableBg': 'Background',
+  'settings.js8.style.color.tableFg': 'Text',
+  'settings.js8.style.color.tableSelected': 'Selected row',
+  'settings.js8.style.color.directed': 'Traffic to you',
+  'settings.js8.style.color.cq': 'CQ messages',
+  'settings.js8.style.color.primary': 'Primary highlight',
+  'settings.js8.style.color.secondary': 'Secondary highlight',
+  'settings.js8.style.color.composeBg': 'Background',
+  'settings.js8.style.color.composeFg': 'Text',
+  'settings.js8.style.color.aria': '{{pane}}: {{color}}',
+  'settings.js8.style.font.rx': 'Received text font',
+  'settings.js8.style.font.tx': 'Transmitted text font',
+  'settings.js8.style.font.table': 'Font',
+  'settings.js8.style.font.compose': 'Font',
+  'settings.js8.style.family.aria': '{{pane}}, {{font}}: family',
+  'settings.js8.style.family.placeholder': 'The theme’s font',
+  'settings.js8.style.size.aria': '{{pane}}, {{font}}: size in points',
+  'settings.js8.style.size.placeholder': 'pt',
+  'settings.js8.style.reset.label': 'Reset',
+  'settings.js8.style.reset.title':
+    'Give this pane back to the theme: its colours for the {{theme}} theme, and its fonts',
+  'settings.js8.style.reset.aria': 'Reset {{pane}}',
+  'settings.js8.style.lowContrast':
+    'Hard to read: “{{text}}” on “{{background}}” is {{ratio}}:1, where 4.5:1 or more reads well.',
 
   // ── SSTV ▸ what the file picker refuses, and why ────────────────────────────────────
   // Positive identification only: an unrecognised header falls through to the decoder, so
@@ -12369,6 +13119,25 @@ export const EN = {
   'sstv.gallery.delete.confirm.body': 'The image file is removed and cannot be recovered.',
   'sstv.gallery.delete.confirm.label': 'Delete image',
   'sstv.gallery.delete.failed': 'Could not delete the image',
+  'sstv.gallery.select.toolbar': 'Select pictures',
+  'sstv.gallery.select.all': 'Select all',
+  'sstv.gallery.select.clear': 'Clear selection',
+  'sstv.gallery.select.one.aria': 'Select the {{mode}} image received {{when}}',
+  'sstv.gallery.deleteSelected.label': 'Delete selected ({{count}})',
+  'sstv.gallery.deleteSelected.confirm.title': {
+    one: "Delete {{count}} picture?",
+    other: "Delete {{count}} pictures?",
+  },
+  'sstv.gallery.deleteSelected.confirm.body': 'The picture files are removed and cannot be recovered.',
+  'sstv.gallery.deleteSelected.confirm.label': {
+    one: "Delete {{count}} picture",
+    other: "Delete {{count}} pictures",
+  },
+  'sstv.gallery.deleteSelected.failed': 'Could not delete the selected pictures',
+  'sstv.gallery.deleteSelected.partial': {
+    one: "{{count}} picture was not deleted: {{reasons}}",
+    other: "{{count}} pictures were not deleted: {{reasons}}",
+  },
   'sstv.gallery.edit.aria': 'Edit and resend the {{mode}} image received {{when}}',
   'sstv.gallery.edit.title': 'Load this image into the composer',
   'sstv.gallery.edit.loaded': 'Loaded {{mode}} image into the composer',
@@ -12491,6 +13260,13 @@ export const EN = {
   'cw.scope.audio.title':
     'Receiver AUDIO centered on your CW pitch ({{lo}}–{{hi}} Hz) — tune a signal onto the dashed hairline, mid-screen, to zero-beat it.',
   'cw.scope.audio.sub': 'zero-beat',
+  'cw.scope.span.aria': 'Audio scope span',
+  'cw.scope.span.filter.label': 'Filter',
+  'cw.scope.span.filter.title': "Your radio's filter, centered on your CW pitch — the view for zero-beating",
+  'cw.scope.span.std.label': 'Std',
+  'cw.scope.span.std.title': 'The usual waterfall view: {{lo}}–{{hi}} Hz of receive audio',
+  'cw.scope.span.full.label': 'Full',
+  'cw.scope.span.full.title': 'All the receive audio: {{lo}}–{{hi}} Hz',
   'cw.scope.colors.label': 'Colors',
   'cw.scope.splitter.label': 'scope height',
   'cw.seam.columns.label': 'Decode column / Rig controls column',
@@ -12500,6 +13276,9 @@ export const EN = {
   'cw.rfZoom.full.label': 'Full',
   'cw.rfZoom.full.title': "The rig's whole scope sweep (set the width on the radio)",
   'cw.rfZoom.span.title': '±{{khz}} kHz around your dial',
+  'cw.rfZoom.band.label': 'Band',
+  'cw.rfZoom.band.title': "The band you're tuned to, edge to edge with a little margin, at the finest resolution your scope can give it",
+  'cw.rfZoom.band.partial': 'Your scope sweeps only part of this band',
 
   // ── CW ▸ the rig-control strip (scope controls, DSP toggles, RX DSP levels) ──────────
   // ⚠️ `Rig\u00a0scope` and `Flex\u00a0pan` carry a NON-BREAKING SPACE, written as an
@@ -12946,6 +13725,9 @@ export const EN = {
   'phone.rfZoom.full.label': 'Full',
   'phone.rfZoom.full.title': "The rig's whole scope sweep (set the width on the radio)",
   'phone.rfZoom.span.title': '±{{khz}} kHz around your dial',
+  'phone.rfZoom.band.label': 'Band',
+  'phone.rfZoom.band.title': "The band you're tuned to, edge to edge with a little margin, at the finest resolution your scope can give it",
+  'phone.rfZoom.band.partial': 'Your scope sweeps only part of this band',
 
   // ── Phone ▸ the rig-control strip (scope controls, DSP toggles, RX DSP levels) ───────
   // ⚠️ `Rig\u00a0scope` and `Flex\u00a0pan` carry a NON-BREAKING SPACE, written as an escape
@@ -13100,6 +13882,7 @@ export const EN = {
   'shell.lane.audio.soundCard': 'SOUND CARD FAILED',
   'shell.lane.audio.noReceiveAudio': 'NO RECEIVE AUDIO',
   'shell.lane.audio.ptt': 'PTT NOT ACCEPTED',
+  'shell.lane.audio.pttUnconfirmed': 'PTT NOT CONFIRMED',
   'shell.lane.audio.flexAudio': 'NO FLEX AUDIO',
   'shell.lane.audio.flexAddress': 'NO FLEX RADIO IP',
   'shell.lane.audio.monitor': 'HEADPHONE MONITOR OFF',
@@ -13143,6 +13926,17 @@ export const EN = {
   // sound card's own error, as data.
   'shell.lane.slotKeyRefused.txAudio':
     'Nexus did not key the radio at {{time}} UTC because the transmit audio output would not open ({{why}}). Nothing was sent and TX was turned off. Check Output Device (TX) in Settings (another program may be holding it, or it is unplugged), then turn TX on again.',
+  // Nexus kept the key off the air itself because the radio did not take Split Operation's TX
+  // frequency (Rig split's VFO B, or Fake It's dial): the over's audio was already moved for that
+  // frequency. `{{why}}` is the rig link's own answer to that write, as data.
+  'shell.lane.slotKeyRefused.split':
+    'Nexus did not key the radio at {{time}} UTC: the radio did not take the split frequency ({{why}}), so nothing was sent and TX was turned off. Try Fake It, or None, for Split operation in Settings, then turn TX on again.',
+  // Nexus kept the key off the air itself because it let go of its own split and could not confirm
+  // the radio's SPLIT is off (the radio did not take the release, and its split read did not say
+  // off): any over could go out of the split's TX frequency, so every over is refused, whatever
+  // Split operation is set to, until the radio says SPLIT is off or the operator disconnects it.
+  'shell.lane.slotKeyRefused.splitOff':
+    'Nexus did not key the radio at {{time}} UTC: Nexus could not confirm the radio\'s SPLIT is off, so nothing was sent and TX was turned off. Turn SPLIT off on the radio, then disconnect and reconnect the radio in Nexus (Settings ▸ Radio ▸ Rig & CAT: set Rig Model to None and Save, then choose your radio again and Save), then turn TX on again.',
   // The radio did not accept the unkey that ended a slot over: the station halted TX the same way,
   // keeps sending the unkey until the radio takes it, and the lane keeps this until TX is turned on
   // again. `{{why}}` is the radio's own answer, as data.
@@ -13171,6 +13965,38 @@ export const EN = {
   'shell.lane.pttRefused.message': 'PTT REFUSED',
   'shell.lane.pttRefused.detail':
     'Nexus did not key the {{mode}} over at {{time}} UTC: the radio was still taking its transmit audio from DAX, as Nexus had set it, not from its mic, so your voice would not have gone out. Nothing was sent. Let go of PTT and Nexus puts the radio back on its mic input within a moment; then press PTT again.',
+  // A computer-microphone over that ended, or never keyed, for a reason the operator did not
+  // choose (features/pcMic.ts). `{{why}}` is one of the sentences after it.
+  'shell.lane.pcMic.message': 'COMPUTER MIC',
+  'shell.lane.pcMic.detail': 'At {{time}} UTC: {{why}}',
+  'shell.lane.pcMic.noDevice':
+    'no microphone is chosen for this radio, so nothing was sent. Choose one in Settings ▸ Radio ▸ Audio.',
+  'shell.lane.pcMic.sameAsReceive':
+    'the chosen microphone is this radio\'s receive input, so nothing was sent: that would put the band back on the air. Choose your microphone in Settings ▸ Radio ▸ Audio.',
+  'shell.lane.pcMic.openFailed':
+    'the microphone would not open, so nothing was sent. Check that it is plugged in and not held by another program.',
+  'shell.lane.pcMic.deviceLost':
+    'the microphone went away during the over, so Nexus unkeyed the radio.',
+  'shell.lane.pcMic.noAudio': 'no audio came from the microphone, so Nexus unkeyed the radio.',
+  'shell.lane.pcMic.ceiling': 'the over reached its 10-minute limit, so Nexus unkeyed the radio.',
+  'shell.lane.pcMic.watchdog':
+    'the TX watchdog tripped, so Nexus unkeyed the radio and turned TX off.',
+  'shell.lane.pcMic.busy':
+    'something else was transmitting (a voice-keyer message, among others), so nothing was sent. Press PTT again when it ends.',
+  'shell.lane.pcMic.flexMic':
+    'the radio stayed on its own mic: Nexus\'s Flex client asked it to take this computer\'s audio over DAX, and it had not switched within 2 seconds, so nothing was sent. Press PTT again.',
+  'shell.lane.pcMic.radioReceive':
+    'the chosen microphone carries a radio\'s receive audio (another radio\'s receive input, or a Flex DAX receive channel), so nothing was sent: that would put the band on the air. Choose your microphone in Settings ▸ Radio ▸ Audio.',
+  'shell.lane.pcMic.loopback':
+    'the chosen microphone is a loopback or a virtual cable, which carries what this computer plays, Nexus\'s own transmit audio included, so nothing was sent. Choose your microphone in Settings ▸ Radio ▸ Audio.',
+  'shell.lane.pcMic.gateDown':
+    'transmit stopped being allowed during the over (TX off, outside your licence, a tune, leaving Phone, or another radio, microphone or audio route), so Nexus unkeyed the radio.',
+  'shell.lane.pcMic.interrupted':
+    'the radio was unkeyed or taken over during the over (a radio switch, a CAT hold, or an unkey from elsewhere), so Nexus ended it. Press PTT again.',
+  'shell.lane.pcMic.keyRefused':
+    'the radio did not accept the key, so nothing was sent.',
+  'shell.lane.pcMic.unsure':
+    'the chosen microphone cannot be told apart from an input that may carry the band (a sound server\'s default input such as default, pulse or pipewire, receive set to the system default, or an input named in a sound configuration file), so nothing was sent: that could put the band on the air. Pick the microphone by its own sound card, and give this radio\'s receive input its own card, in Settings ▸ Radio ▸ Audio.',
   // A voice-keyer message Nexus's own Flex client dropped without keying the radio (Phone at the
   // shack, native audio on): the radio did not switch its transmit audio to DAX within 2 seconds,
   // or something else keyed it first. Never played later; the next message the keyer accepts
@@ -13219,6 +14045,8 @@ export const EN = {
   'shell.work.failed': 'Could not work {{call}}',
   'shell.work.started': '▶ Working {{call}} — transmitting your call',
   'shell.work.failed.cat': 'Could not work {{call}} — check CAT',
+  'shell.work.unresolvedCq': 'This CQ\'s call shows as <...>: Nexus has not decoded it in full yet. Click the station\'s next CQ once its call shows.',
+  'shell.work.unresolvedCall': 'This call shows as <...>: Nexus has not decoded it in full yet. Click the station\'s next message once its call shows.',
   'shell.work.ready': '▶ {{call}} — {{mode}} {{band}}, ready to log',
   'shell.work.here': '▶ {{call}} — {{band}} {{freq}} MHz',
   'shell.pounce.qsy.failed': 'Could not QSY to {{call}}',
@@ -13229,6 +14057,12 @@ export const EN = {
   'shell.log.movedOn':
     'That contact had already been logged or discarded — nothing was logged, and the one waiting is shown now.',
   'shell.toast.logged': 'Logged QSO',
+  // The station the Log button logged or held: with Auto-log and the popup off, the press can
+  // log a contact set aside behind the station now shown.
+  'shell.toast.loggedCall': 'Logged QSO with {{call}}',
+  // Log pressed on a contact whose offer for that station, band and mode already waits in the
+  // log popup: nothing new was held.
+  'shell.toast.logWaiting': '{{call}} is already waiting in the log popup',
   'shell.toast.nothingToLog':
     'Nothing to log — the QSO already closed or no report was exchanged',
   // The logbook database could not be opened at launch, so this session keeps the log in
@@ -13238,9 +14072,9 @@ export const EN = {
   // paths name the tab and section as this language labels them ("Diagnostic log" is labelled
   // in English in every language today).
   'shell.logStore.network':
-    'Nexus did not open the logbook database because your data folder is on a network drive, where a database can be damaged by the way file locking works across a network. Nothing is lost: this session keeps your log in log.adi, as before. To use the database, move the data folder to a drive inside this computer in Settings ▸ Config ▸ Data & log folder.',
+    'Nexus did not open the logbook database because your data folder is on a network drive, where a database can be damaged by the way file locking works across a network. Nothing is lost: this session keeps your log in log.adi, as before. To use the database, move the data folder to a drive inside this computer in Settings ▸ App ▸ Data & log folder.',
   'shell.logStore.failed':
-    'Nexus could not open the logbook database. Reason: {{reason}}. Nothing is lost: this session keeps your log in log.adi, as before. The diagnostic log has the details, in Settings ▸ Logging & Connectors ▸ Integrations & Feeds ▸ Diagnostic log.',
+    'Nexus could not open the logbook database. Reason: {{reason}}. Nothing is lost: this session keeps your log in log.adi, as before. The diagnostic log has the details, in Settings ▸ Services ▸ Integrations & Feeds ▸ Diagnostic log.',
   // A file Nexus could not read at launch and KEPT rather than save over (features/keptFiles.ts):
   // a torn journal, or one a newer Nexus wrote. `{{path}}` is the file's full path on the
   // operator's computer, a token. One sentence per store says what the file held; `other` is a
@@ -13829,6 +14663,13 @@ export const EN = {
     "Smooth scroll — the waterfall moves at a steady rate. When the radio's scope sweeps slower than that, the newest sweep is repeated until the next one arrives, and each repeat is recorded as one. Click for one row per sweep.",
   'scope.rows.sweep.title':
     'One row per sweep — the waterfall moves only when the radio sends a new sweep, so a slow scope scrolls slowly, in steps, and every row is new. Click for smooth scroll.',
+  // The CW scope's HiDef/Fast switch (`PhoneScope.tsx`). "HiDef" is the mode's name.
+  'scope.hidef.label': 'HiDef',
+  'scope.fast.label': 'Fast',
+  'scope.hidef.on.title':
+    'HiDef — the CW passband is analysed on its own: a steady carrier draws about 4–5 Hz wide, two signals 10 Hz apart stay apart, and keying keeps its gaps. The picture runs about a quarter of a second behind the audio. Click for Fast.',
+  'scope.hidef.off.title':
+    'Fast — the scope is analysed like every other display: the picture follows the audio closely and carriers draw wider (the resolution is under ⚙). Click for HiDef.',
 
   // ── The MSK144 Fast Graph ───────────────────────────────────────────────────────────
   // The callsigns and the second ticks drawn on it are data and a scale.
@@ -14244,6 +15085,83 @@ export const EN = {
   'radioSwitch.why': 'Why?',
   'radioSwitch.undo.onAir': 'Not while transmitting: press Undo again after the over',
   'radioSwitch.undo.unavailable': '{{radio}} is not available, so the radio did not change',
+
+  // ── The radio setup (RadioSetupWizard.tsx): Settings ▸ Radio ▸ Radios ▸ Set up radios…, and the
+  // first-run setup once a second radio is added. `{{radio}}`, `{{band}}`, `{{bands}}`, `{{model}}`,
+  // `{{port}}` and `{{mhz}}` are data; `{{mode}}` is a routing mode name, an invariant token. ──
+  'settings.radios.setup.action': 'Set up radios…',
+  'settings.radios.setup.title': 'Walk through which radio does what: bands, modes on a shared band, switching, audio and a check. Nothing is saved until Finish.',
+  'setup.rig.second.radioSetup': 'Set up which radio does what…',
+  'setup.rig.second.radioSetup.title': 'Which radio for which band and mode, and what happens when Nexus needs the other one. Nothing is saved until you press Finish there.',
+  'radioSetup.title': 'Set up radios',
+  'radioSetup.steps.aria': 'Step {{n}} of {{total}}: {{title}}',
+  'radioSetup.step.radios': 'Your radios',
+  'radioSetup.step.bands': 'Bands',
+  'radioSetup.step.shared': 'Shared bands',
+  'radioSetup.step.rest': 'Everything else',
+  'radioSetup.step.switching': 'Switching',
+  'radioSetup.step.audio': 'Audio and keying',
+  'radioSetup.step.check': 'Check',
+  'radioSetup.radios.title': 'Your radios',
+  'radioSetup.radios.sub': 'Name each radio as you know it, and turn off one you are not using. Nothing is saved until Finish.',
+  'radioSetup.radios.name': 'Name',
+  'radioSetup.radios.on': 'On',
+  'radioSetup.radios.inUse': 'On (the radio in use)',
+  'radioSetup.radios.meta': '{{model}} on {{port}} · {{cat}}',
+  'radioSetup.bands.title': 'Which radio for which band',
+  'radioSetup.bands.sub': 'Tick the bands each radio is for. A radio with no bands ticked takes any band no other radio lists.',
+  'radioSetup.bands.band': 'Band',
+  'radioSetup.bands.any': 'Any band',
+  'radioSetup.bands.any.aria': '{{radio}}: any band no other radio lists',
+  'radioSetup.bands.cell.aria': '{{radio}} on {{band}}',
+  'radioSetup.bands.shared': 'Two radios list {{bands}}. The next step decides by mode there.',
+  'radioSetup.bands.noShared': 'No band is listed by two radios, so the band alone decides.',
+  'radioSetup.shared.title': 'Where two radios share a band',
+  'radioSetup.shared.sub': 'For each mode, pick the radio. “No rule” leaves it to your other rules, or to the radio in use.',
+  'radioSetup.shared.cell.aria': '{{band}} {{mode}}',
+  'radioSetup.shared.noRule': 'No rule',
+  'radioSetup.rest.title': 'Everything else',
+  'radioSetup.rest.sub': 'A band no radio lists goes to this radio.',
+  'radioSetup.switching.title': 'When Nexus needs the other radio',
+  'radioSetup.switching.sub': 'When you pick a band or mode your setup gives to another radio, Nexus switches to it.',
+  'radioSetup.switching.stopsTx': 'A switch stops transmitting first.',
+  'radioSetup.switching.contact': 'A contact in progress ends, and its log line is set aside: Restore brings it back.',
+  'radioSetup.switching.pin': 'Peg-lock in the radio switcher keeps the radio in use and stops the switching until you release it.',
+  'radioSetup.audio.title': 'Audio and keying',
+  'radioSetup.audio.sub': 'What each radio receives and transmits audio through, and how it is keyed. Finish saves a change here to that radio, as its Edit button in Settings ▸ Radio ▸ Radios does. Test CAT on a radio that is not in use only reads it: it does not switch to it.',
+  'radioSetup.audio.sameName': 'Two sound devices share this name. If you move a USB cable, check this again.',
+  'radioSetup.cat.test': 'Test CAT',
+  'radioSetup.cat.testing': 'Testing…',
+  'radioSetup.cat.test.inUse.title': 'Asks the radio in use for its frequency, as Test CAT in Rig control does',
+  'radioSetup.cat.test.other.title': 'Reads this radio through the connection Nexus already keeps to it. It does not switch radios or key anything',
+  'radioSetup.cat.answered': 'Answering: {{mhz}} MHz',
+  'radioSetup.cat.answeredNoDial': 'Answering',
+  'radioSetup.cat.notAnswering': 'Not answering',
+  'radioSetup.cat.stale.ok': 'No new reading in 10 s. Last reading: {{mhz}} MHz',
+  'radioSetup.cat.stale.bad': 'No new reading in 10 s. Last report: not answering',
+  'radioSetup.cat.stale.none': 'No reading from this radio yet',
+  'radioSetup.cat.disabled': 'Turned off',
+  'radioSetup.cat.noCat': 'No CAT model set',
+  'radioSetup.cat.notMonitored': 'Nexus does not watch this radio while another is in use (its model is set in OmniRig), so it cannot test it from here. Test it while it is the radio in use.',
+  'radioSetup.cat.unknown': 'This radio is not in the station',
+  'radioSetup.cat.notConnected': 'Not connected',
+  'radioSetup.cat.live': 'Answering: {{mhz}} MHz',
+  'radioSetup.check.title': 'Where would this go?',
+  'radioSetup.check.sub': 'Pick a band and mode to see which radio Nexus would use, from the radio in use now. The answer comes from the same routing Nexus uses on the air.',
+  'radioSetup.check.answer': '{{band}} {{mode}} → {{radio}}',
+  'radioSetup.check.radios': 'Each radio',
+  'radioSetup.check.rules': 'The rules Finish saves, first match wins',
+  'radioSetup.check.noRules': 'No rules: the bands decide.',
+  'radioSetup.check.else': 'A band no radio lists: {{radio}}',
+  'radioSetup.route.rule': 'rule {{n}}, {{bands}} · {{mode}}',
+  'radioSetup.nav.back': 'Back',
+  'radioSetup.nav.cancel': 'Cancel',
+  'radioSetup.nav.next': 'Next',
+  'radioSetup.finish': 'Finish',
+  'radioSetup.finish.busy': 'Saving…',
+  'radioSetup.finish.failed': 'Could not save the radio setup: {{error}}',
+  'radioSetup.finish.changed': 'Your radios or their routing changed while this was open (in another window, from a computer driving the station, or by a radio switch). Nothing was saved. Close this and open Set up radios… again to start from what is saved now.',
+  'radioSetup.load.failed': 'Could not read the radio settings',
 
   // ── The link pill ───────────────────────────────────────────────────────────────────
   // `dB` is a unit and `RV` the report's own field name; the verdict words are prose.

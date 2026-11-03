@@ -295,7 +295,7 @@ their FD behavior too. Winter Field Day reports none, since WSJT-X has no mode
 for it.
 
 Configure [N3FJP](settings-reference.md#n3fjp-integration-club-master-log) and
-[N1MM+](settings-reference.md#n1mm-integration) in Settings ▸ Logging & Connectors.
+[N1MM+](settings-reference.md#n1mm-integration) in Settings ▸ Services.
 
 ### When the contest is over
 
@@ -381,6 +381,11 @@ a club sync worked.*
 
 - Each logged contact streams to the host the moment it lands; the host merges
   everything into one club log and pushes the club totals back.
+- Every laptop shows the **club log**: the club's contacts, newest first, with
+  the position that logged each and another position's repeat marked as a dupe,
+  the same list the host shows, updated as contacts reach the host. A laptop
+  back from a dropout catches up as it rejoins. It is view only: each laptop
+  takes back only its own contacts.
 - Every position gets a **club dupe warning while typing** — if another tent
   already worked that call on this band and mode (and, at a QSO party, from
   the county you have typed), you're told before you call. It's a warning, not
@@ -410,7 +415,12 @@ a club sync worked.*
 - The sync chip tells the truth: **Synced**, **Behind n**, or **Offline** —
   contacts logged offline are journaled and re-sent automatically on
   reconnect, Contest mode on or off. If the host PC dies, enable hosting on
-  any other position; everyone re-joins and nothing is lost.
+  any other position; everyone re-joins and sends their contacts again. The
+  dead host's own contacts, and a laptop's that never synced, go in with
+  **Import a laptop's file…** on the new host: choose that laptop's contest
+  journal (`fieldday_backup_` and 8 characters, `.adi`, in its Nexus settings
+  folder). It merges them as sync would, says what it added and what it kept
+  out, and adds nothing the second time.
 - The host exports the merged **club Cabrillo / ADIF**, deduplicated the way
   the rules score it (earliest contact wins). A contest that wants repeats
   reported, such as the New York QSO Party, keeps them in the file, scoring

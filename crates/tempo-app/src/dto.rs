@@ -1499,8 +1499,10 @@ pub enum AudioErrorKind {
     /// No receive audio is arriving: a reopened card that has not delivered yet, or a capture
     /// that delivers nothing but digital zero.
     NoReceiveAudio,
-    /// The rig did not accept a PTT key (or did not answer it in time).
+    /// The rig did not accept a PTT key: it answered no.
     Ptt,
+    /// The rig did not answer a PTT key in time: not a refusal, but the key is not confirmed.
+    PttUnconfirmed,
     /// Flex native audio was selected and none arrived, so receive went back to the sound card.
     FlexAudio,
     /// The Flex native panadapter is switched on with no radio address to start it on.
@@ -1534,6 +1536,15 @@ pub struct SlotKeyRefused {
     /// nothing, so the UI says so in its own words. Absent for every other refusal.
     #[serde(default, skip_serializing_if = "is_false")]
     pub tx_audio_failed: bool,
+    /// Set when Nexus kept the key off the air itself because the radio did not take Split
+    /// Operation's TX frequency (`why` is then the rig link's answer to that write): the PTT was
+    /// never asked for, so the UI says so in its own words. Absent for every other refusal.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub split_failed: bool,
+    /// With `split_failed`: the over was refused because Nexus could not confirm the radio's SPLIT
+    /// is off after letting go of its own split. The UI says how to clear it. Absent otherwise.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub split_off_unconfirmed: bool,
 }
 
 /// What a FlexRadio reports about its own tune carrier, while Nexus's Flex client tunes with it
@@ -1608,6 +1619,60 @@ pub struct PttRefused {
     pub at: u64,
     /// The transmit slice's mode, in the radio's own word (`USB`). Data, never translated.
     pub mode: String,
+}
+
+/// A computer-microphone over that ended, or never keyed, for a reason the operator did not choose
+/// ([`RadioStatus::pc_mic_ended`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PcMicEnded {
+    /// When, in Unix seconds.
+    pub at: u64,
+    pub cause: PcMicCause,
+}
+
+/// Why a computer-microphone over ended or never keyed ([`PcMicEnded`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PcMicCause {
+    /// No microphone is chosen for this radio.
+    NoDevice,
+    /// The chosen microphone is the radio's own receive input: its audio would be the band.
+    SameAsReceive,
+    /// The microphone would not open.
+    OpenFailed,
+    /// The microphone went away (or the system stopped it) during the over.
+    DeviceLost,
+    /// No audio came from the microphone for longer than the over's gap.
+    NoAudio,
+    /// The over reached its 10-minute ceiling.
+    Ceiling,
+    /// The TX watchdog tripped.
+    Watchdog,
+    /// Something else held the transmitter at the press (a voice-keyer message, among others).
+    Busy,
+    /// Nexus's own Flex client had given the radio its own mic, which audio Nexus plays does not
+    /// reach, and the radio did not switch to DAX for the over within the client's confirm window:
+    /// nothing was keyed.
+    FlexMic,
+    /// The chosen microphone carries another radio's receive audio (its receive input, or a Flex
+    /// DAX receive channel).
+    RadioReceive,
+    /// The chosen microphone is a loopback or a virtual cable: what this computer plays, Nexus's
+    /// transmit audio among it, would come back in.
+    Loopback,
+    /// A transmit condition went down during the over (TX off, the licence, a tune, leaving Phone,
+    /// the switch, the radio, the microphone or the transmit audio route).
+    GateDown,
+    /// The radio was unkeyed under the over, or was not Nexus's to key (a handoff, a CAT hold, a
+    /// radio switch).
+    Interrupted,
+    /// The radio did not accept the key.
+    KeyRefused,
+    /// The chosen microphone cannot be told apart from an input that may carry the band (a sound
+    /// server's default input, receive on the system default, an input routed by a sound
+    /// configuration file, or a card by a number this computer cannot resolve).
+    Unsure,
 }
 
 /// A voice-keyer message Nexus's own Flex client dropped without keying the radio
@@ -2051,6 +2116,13 @@ pub struct RadioStatus {
     /// every snapshot before one is byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ptt_refused: Option<PttRefused>,
+    /// The last computer-microphone over (Phone, with this radio set to take the computer's
+    /// microphone) that ended or never keyed for a reason the operator did not choose: no
+    /// microphone set, it would not open, it went away mid-over, no audio came from it, or the
+    /// ceiling or the watchdog. Cleared by the next over that keys. ABSENT until it happens, so
+    /// every snapshot before one is byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pc_mic_ended: Option<PcMicEnded>,
     /// The last voice-keyer message Nexus's own Flex client dropped without keying the radio (Phone
     /// at the shack with native audio on, where a message waits for the radio to take DAX): the
     /// radio did not take DAX within 2 seconds, or something else keyed it first. Cleared by the
@@ -3723,12 +3795,45 @@ pub struct FdClubOtherLocationDto {
     pub club: String,
 }
 
-/// ⭐ **The host's club log, as its own screen lists it** (`Engine::fd_club_log_newest`): how many
-/// contacts the club holds, and the newest of them, newest first.
+/// ⭐ **What the host's "Import a laptop's file…" did** (`Engine::fd_club_import`): how many of
+/// the file's contacts it added, how many were duplicates or already in, and how many it kept out
+/// and why. Nothing is ever taken out of the club's log.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FdClubImportDto {
+    /// New contacts in the club's log.
+    pub added: usize,
+    /// Duplicates of a contact the club holds: merged as sync merges one, and the club's files
+    /// keep the earliest.
+    pub dupes: usize,
+    /// Contacts the club already held, from that position.
+    pub already_in: usize,
+    /// Kept out: of another contest, of another running of this one, logged on another call than
+    /// the club's, taken back on that laptop, and records that cannot be read.
+    pub other_contest: usize,
+    pub other_running: usize,
+    pub other_call: usize,
+    pub taken_back: usize,
+    pub unreadable: usize,
+    /// Kept out where every contact enters the club's log, each with the host screen's sentence.
+    pub refused: Vec<FdImportRefusedDto>,
+}
+
+/// One contact the club's intake kept out of an import ([`FdClubImportDto::refused`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FdImportRefusedDto {
+    pub call: String,
+    pub reason: String,
+}
+
+/// ⭐ **The club log, as the host's own screen lists it** (`Engine::fd_club_log_newest`): how many
+/// contacts the club holds, and the newest of them, newest first. A joined laptop answers the same
+/// list, as the host sent it on its `rows` lines (`tempo_net::fdsync::ClubRows`).
 ///
-/// ⛔ The host's own screens only, as the answer to a command of its own. It rides nothing else:
-/// not the snapshot (so not Remote's, whose Field Day check refuses a key it does not know), not
-/// the club line every position is sent, not the TV board.
+/// ⛔ The station's own screens only, as the answer to a command of its own. It rides nothing
+/// else: not the snapshot (so not Remote's, whose Field Day check refuses a key it does not know),
+/// not the TV board.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FdClubLogDto {
@@ -5161,6 +5266,12 @@ pub struct AppSnapshot {
     /// own turn in the popup. `0` when the one shown is the only one.
     #[serde(default)]
     pub pending_logs_waiting: u32,
+    /// How many finished contacts wait for Log QSO with Auto-log and the popup both off: ones a
+    /// click on another station, Call CQ or a mode change replaced before they were logged. Each
+    /// press logs one, oldest first; the cockpit shows the count beside Log. The contact on screen
+    /// is not counted.
+    #[serde(default)]
+    pub log_qso_waiting: u32,
     /// ⭐ R3 — how many contacts have been logged WITHOUT the operator's confirmation since
     /// they last answered the popup, because the confirm-before-log queue was full. The popup
     /// shows it; the Connections log carries the same event with the call, band, mode and time.
@@ -5655,6 +5766,7 @@ mod tests {
             SoundCard,
             NoReceiveAudio,
             Ptt,
+            PttUnconfirmed,
             FlexAudio,
             FlexAddress,
             Monitor,
@@ -5678,6 +5790,7 @@ mod tests {
                 "soundCard",
                 "noReceiveAudio",
                 "ptt",
+                "pttUnconfirmed",
                 "flexAudio",
                 "flexAddress",
                 "monitor",

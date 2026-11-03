@@ -840,6 +840,15 @@ static NEXT_REFUSED_HANDLE: std::sync::atomic::AtomicU64 = std::sync::atomic::At
 /// Nexus, so a connection still closing after the club restarted closes nothing of the new one.
 static NEXT_LINK: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
+/// The club list's stamps ([`ClubLog::list_stamp`]): one counter for the whole process, so a stamp
+/// names one state of one club log and a club log started afresh never repeats an earlier one's.
+static NEXT_LIST_STAMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// A stamp no club list has had.
+pub fn next_list_stamp() -> u64 {
+    NEXT_LIST_STAMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Why the host's Give button changed nothing ([`ClubLog::give`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GiveRefusal {
@@ -910,6 +919,20 @@ pub struct KeptOut {
     pub at: u64,
 }
 
+/// What [`ClubLog::import`] did with one contact of a laptop's file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Imported {
+    /// A new contact in the club's log.
+    Added,
+    /// Merged as sync merges a duplicate of a contact the club already holds: kept, and the
+    /// club's files keep the earliest.
+    Dupe,
+    /// The club already holds it, by its position and sequence number.
+    AlreadyIn,
+    /// Kept out where every contact enters, with the host screen's sentence ([`admit`]'s).
+    KeptOut(String),
+}
+
 /// ⭐ **A position sending another county than the club** ([`ClubLog::other_location`]): named as
 /// its line on the host's board names it, with what its newest contact sent and what the club
 /// sends there.
@@ -943,6 +966,9 @@ pub const CLUB_LOG_SHOWN: usize = 100;
 pub struct ClubLogEntry<'a> {
     /// The merged row: the position that logged it, when, and what.
     pub row: &'a MergedRow,
+    /// Its merge order, which breaks a tie between two contacts made in one second as this list
+    /// breaks it: what a laptop sorts the list it is sent by.
+    pub ord: u64,
     /// What it received, read under the club's exchange as the club's files read it.
     pub rx: Vec<FieldValue>,
     /// A later contact of a key the club already holds: the files' own verdict.
@@ -1127,6 +1153,10 @@ pub struct ClubLog {
     /// row this host holds, or a give): every connection is sent a fresh snap
     /// (`fdsync::ClubBackend::counts`).
     generation: u64,
+    /// ⭐ A new stamp each time anything [`newest`](Self::newest) lists, or the names it is shown
+    /// under, may have changed ([`list_stamp`](Self::list_stamp)): what tells a connection that
+    /// the club list it was sent stands.
+    list_stamp: u64,
 }
 
 /// A taken-back row as the club log keeps it ([`ClubLog::take_back`]).
@@ -1267,13 +1297,17 @@ impl ClubLog {
     pub fn version_refusal(&self, v: u32) -> Option<String> {
         let need = tempo_net::fdsync::PROTO_VERSION;
         // What the joiner's build cannot do that this club needs from every laptop: a v2 one
-        // proves no position (v3), and neither takes a contact back nor drops one another
-        // laptop took back (v4).
+        // proves no position (v3), a v3 one neither takes a contact back nor drops one another
+        // laptop took back (v4), and none of them lists the club's contacts (v5).
         let lacks = if v < 3 {
-            "each laptop proves which club position it is and a contact taken back on one \
-             laptop leaves the club log on every laptop"
+            "each laptop proves which club position it is, a contact taken back on one \
+             laptop leaves the club log on every laptop, and every laptop lists the club's \
+             contacts"
+        } else if v < 4 {
+            "a contact taken back on one laptop leaves the club log on every laptop, and every \
+             laptop lists the club's contacts"
         } else {
-            "a contact taken back on one laptop leaves the club log on every laptop"
+            "every laptop lists the club's contacts"
         };
         (v < need).then(|| {
             format!(
@@ -1931,6 +1965,37 @@ impl ClubLog {
         p.acked
     }
 
+    /// ⭐ **One contact of a laptop's file, merged as its position's sync would merge it**
+    /// ([`merge`](Self::merge), the one path in), and what that did: the host's "Import a laptop's
+    /// file" (`Engine::fd_club_import`). A contact the club already holds under the same
+    /// `(position, seq)` adds nothing, so a file imported twice, or after its laptop synced, adds
+    /// nothing the second time. A duplicate of another contact the club holds merges as sync
+    /// merges one (kept in the log, no new key, the files keep the earliest), and is said to be one.
+    pub fn import(&mut self, q: &WireQso, now: u64) -> Imported {
+        if q.seq == 0 || self.ids.contains(&(q.pos.clone(), q.seq)) {
+            return Imported::AlreadyIn;
+        }
+        let dupe = match admit(q) {
+            Err(reason) => {
+                self.merge(q, now);
+                return Imported::KeptOut(reason);
+            }
+            Ok(row) => {
+                let counts = row.sat.is_empty() || self.ruleset().satellite_credit;
+                counts
+                    && self
+                        .dkeys_set
+                        .contains(&row.dkey(&self.dupe_rule(), self.exchange()))
+            }
+        };
+        self.merge(q, now);
+        if dupe {
+            Imported::Dupe
+        } else {
+            Imported::Added
+        }
+    }
+
     /// [`merge`](Self::merge) minus the wire type; `now == 0` = a journal
     /// replay (no arrival stamped, nothing re-journaled).
     fn merge_row(&mut self, mut row: MergedRow, now: u64) -> bool {
@@ -1969,6 +2034,7 @@ impl ClubLog {
         }
         self.ords.push(ord);
         self.rows.push(row);
+        self.list_stamp = next_list_stamp();
         true
     }
 
@@ -2049,6 +2115,7 @@ impl ClubLog {
         }
         self.rows = rows;
         self.generation += 1;
+        self.list_stamp = next_list_stamp();
     }
 
     fn prune_arrivals(&mut self, now: u64) {
@@ -2083,13 +2150,19 @@ impl ClubLog {
             .retain(|(id, _), r| id != posid || r.held_out());
         let pos = self.position(posid);
         let label = club_label(label);
-        if !label.is_empty() {
+        // A new name is a change to the club list's names (`list_stamp`).
+        let renamed = !label.is_empty() && pos.label != label;
+        if renamed {
             pos.label = label;
         }
         pos.call = club_call(call).unwrap_or_default();
         pos.last_seen_unix = now;
         pos.heard_unix = now;
-        pos.acked
+        let acked = pos.acked;
+        if renamed {
+            self.list_stamp = next_list_stamp();
+        }
+        acked
     }
 
     /// A JOIN this host refused, and the sentence it sent — kept for the host's own screen
@@ -2164,7 +2237,9 @@ impl ClubLog {
     pub fn position_status(&mut self, posid: &str, r: &PosReport, now: u64) {
         let pos = self.position(posid);
         let name = club_label(&r.name);
-        if !name.is_empty() {
+        // A new name is a change to the club list's names (`list_stamp`).
+        let renamed = !name.is_empty() && pos.label != name;
+        if renamed {
             pos.label = name;
         }
         pos.band = if inert(&r.band) {
@@ -2187,6 +2262,9 @@ impl ClubLog {
         }
         pos.last_seen_unix = now;
         pos.heard_unix = now;
+        if renamed {
+            self.list_stamp = next_list_stamp();
+        }
     }
 
     /// A position's clock minus this host's, in ms, as its last measured report said —
@@ -2228,6 +2306,14 @@ impl ClubLog {
     /// [`give`](Self::give)).
     pub fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// ⭐ **The club list's stamp**: it moves whenever a row comes in, a contact is taken back or
+    /// put back, a position is given away, or a position's name changes — everything
+    /// [`newest`](Self::newest) lists, and the names [`shown_names`](Self::shown_names) shows it
+    /// under. Unique across the process ([`next_list_stamp`]), never repeated.
+    pub fn list_stamp(&self) -> u64 {
+        self.list_stamp
     }
 
     /// ⭐ **Take back `posid`'s row `seq`** — the tombstone its own laptop asked for. The row
@@ -2467,6 +2553,7 @@ impl ClubLog {
                 let row = &self.rows[i];
                 ClubLogEntry {
                     row,
+                    ord: self.ords[i],
                     rx: from_wire_fields(&row.ex, spec),
                     dupe: !first[i] && (credit || row.sat.is_empty()),
                 }
@@ -2848,6 +2935,11 @@ pub struct ClubMirror {
     /// ack, a take-back's answer, a club line (the host sends one every heartbeat) or a pong
     /// ([`Self::heard`]). `0` before any, and again after the join address changes.
     pub heard_unix: u64,
+    /// ⭐ **The club list as the host's own screen lists it**, as the host sent it
+    /// (`fdsync::ClubRows`, [`Self::on_rows`]): `None` until the first line, and again after the
+    /// join address changes. Never more than [`CLUB_LOG_SHOWN`] rows, at a club's ten-thousandth
+    /// contact as at its first.
+    pub list: Option<tempo_net::fdsync::ClubList>,
 }
 
 impl ClubMirror {
@@ -2877,6 +2969,13 @@ impl ClubMirror {
         if !st.board.is_empty() || st.reset {
             self.board = st.board.clone();
         }
+    }
+
+    /// A `rows` line: what changed in the club list the host's screen shows.
+    pub fn on_rows(&mut self, rows: &tempo_net::fdsync::ClubRows) {
+        self.list
+            .get_or_insert_with(Default::default)
+            .apply(rows, CLUB_LOG_SHOWN);
     }
 
     /// A `retracted` (`gone`) or `restored` line: the host holds own row `seq` so.
@@ -2940,6 +3039,8 @@ impl ClubMirror {
         self.welcomed = false;
         self.joined_before = false;
         self.heard_unix = 0;
+        // The list was the other host's club's.
+        self.list = None;
     }
 
     /// A line from the host in the event came in at `now` ([`Self::heard_unix`]).
@@ -4519,8 +4620,9 @@ mod tests {
     /// ⭐ §18.2 — since v3, **every older position is refused at JOIN, at every club**, and
     /// the message names both versions, what the older one lacks, and what to do: a v2 Nexus
     /// has no club key to prove its position with (a host that served one would let any peer
-    /// take another laptop's position by claiming to be older), and a v3 Nexus cannot take a
-    /// contact back, nor drop one another laptop took back.
+    /// take another laptop's position by claiming to be older), a v3 Nexus cannot take a
+    /// contact back, nor drop one another laptop took back, and a v4 Nexus cannot list the club's
+    /// contacts.
     #[test]
     fn every_older_position_is_refused_by_name_at_every_club() {
         let need = tempo_net::fdsync::PROTO_VERSION;
@@ -4536,10 +4638,14 @@ mod tests {
             for v in 1..need {
                 let msg = club.version_refusal(v).expect("an older tent is refused");
                 let lacks = if v < 3 {
-                    "each laptop proves which club position it is and a contact taken back on \
-                     one laptop leaves the club log on every laptop"
+                    "each laptop proves which club position it is, a contact taken back on one \
+                     laptop leaves the club log on every laptop, and every laptop lists the \
+                     club's contacts"
+                } else if v < 4 {
+                    "a contact taken back on one laptop leaves the club log on every laptop, and \
+                     every laptop lists the club's contacts"
                 } else {
-                    "a contact taken back on one laptop leaves the club log on every laptop"
+                    "every laptop lists the club's contacts"
                 };
                 assert_eq!(
                     msg,
@@ -4558,7 +4664,7 @@ mod tests {
             // the version is fine would lock every tent out.
             assert_eq!(club.version_refusal(need), None, "{}", club.contest_id);
         }
-        assert_eq!(need, 4, "the version this rule was written for");
+        assert_eq!(need, 5, "the version this rule was written for");
     }
 
     /// The legacy triple ships only for Field Day; the generalised key always

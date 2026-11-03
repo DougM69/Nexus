@@ -64,6 +64,19 @@ impl GridSource {
 pub(crate) struct HeldQso {
     pub(crate) record: QsoRecord,
     pub(crate) grid_source: GridSource,
+    /// This contact may only be OFFERED, in the popup, whatever the confirm setting says: our
+    /// 73 to a roger the operator clicked, with no report exchanged (`roger_click_73_sent`).
+    /// Nothing logs it but the operator's confirm, not even the queue cap
+    /// ([`Engine::hold_pending_log`]), and the journal keeps the mark, so a restart does not
+    /// lose it (operator ruling, 2026-10-27).
+    pub(crate) confirm_only: bool,
+    /// An FT8/FT4 contact the station gave no grid in: none in the exchange, none sent this
+    /// session, none logged before ([`Engine::qso_record`] resolved none). A callbook's grid filled
+    /// at log time is then for the distance and the map only
+    /// ([`tempo_core::logbook::callbook::fill_gridless_from_callbook`]; operator decision,
+    /// 2026-10-27). Kept here and in the journal, never on the record, so no build that logs the
+    /// record can carry the note into the log or an upload.
+    pub(crate) gridless: bool,
 }
 
 impl HeldQso {
@@ -71,6 +84,17 @@ impl HeldQso {
         Self {
             record,
             grid_source,
+            confirm_only: false,
+            gridless: false,
+        }
+    }
+
+    /// A contact the FT8/FT4 engine built ([`Engine::qso_record`]): with no grid it is
+    /// [`Self::gridless`], since the engine resolved none from any source.
+    pub(crate) fn built(record: QsoRecord, grid_source: GridSource) -> Self {
+        Self {
+            gridless: record.grid.is_none(),
+            ..Self::new(record, grid_source)
         }
     }
 }
@@ -98,6 +122,20 @@ struct PendingRecord {
     /// which is the safe answer for a grid whose provenance nobody recorded.
     #[serde(default)]
     grid_source: GridSource,
+    /// [`HeldQso::confirm_only`]. Written only when set, so a journal of ordinary contacts is
+    /// what it was before the mark existed, and one written before reads back unmarked.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    confirm_only: bool,
+    /// A finished contact waiting for Log QSO with Auto-log and the popup both off
+    /// ([`Engine::set_aside_qsos`]), not one held in the popup: a restart puts it back there.
+    /// Written only when set, so a journal without one is what it was before, and one written
+    /// before reads back as popup contacts, as it was.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    waits_for_log_qso: bool,
+    /// [`HeldQso::gridless`]. Written only when set, as the two above; a build that does not know
+    /// it reads past it, and logs the contact as one with a grid source of its own.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    gridless: bool,
 }
 
 /// The journal's contacts: this build's queue, or the single record older builds wrote.
@@ -113,6 +151,9 @@ fn pending_record(held: &HeldQso) -> PendingRecord {
     PendingRecord {
         record: held.record.clone().into(),
         grid_source: held.grid_source,
+        confirm_only: held.confirm_only,
+        waits_for_log_qso: false,
+        gridless: held.gridless,
     }
 }
 
@@ -126,24 +167,41 @@ impl PendingRecord {
         let freq_rx_mhz = self.record.freq_rx_mhz;
         let mut record: QsoRecord = self.record.into();
         record.freq_rx_mhz = freq_rx_mhz;
-        HeldQso::new(record, grid_source)
+        HeldQso {
+            confirm_only: self.confirm_only,
+            gridless: self.gridless,
+            ..HeldQso::new(record, grid_source)
+        }
     }
 }
 
 pub(super) fn pending_qso_json(
     record: &QsoRecord,
     grid_source: GridSource,
+    confirm_only: bool,
 ) -> serde_json::Result<String> {
-    serde_json::to_string(&pending_record(&HeldQso::new(record.clone(), grid_source)))
+    serde_json::to_string(&pending_record(&HeldQso {
+        confirm_only,
+        ..HeldQso::new(record.clone(), grid_source)
+    }))
 }
 
-/// The WHOLE confirm-before-log queue, oldest first — what the desktop journals on every hold
-/// change. A journal written by an older build holds one record and not an array;
+/// The WHOLE confirm-before-log queue, oldest first, then the contacts waiting for Log QSO,
+/// oldest first ([`PendingRecord::waits_for_log_qso`]) — what the desktop journals on every
+/// change to either. A journal written by an older build holds one record and not an array;
 /// [`Engine::load_pending_qso_json`] reads both.
 pub(super) fn pending_qso_queue_json(
     held: &std::collections::VecDeque<HeldQso>,
+    waiting: &[HeldQso],
 ) -> serde_json::Result<String> {
-    let queue: Vec<PendingRecord> = held.iter().map(pending_record).collect();
+    let queue: Vec<PendingRecord> = held
+        .iter()
+        .map(pending_record)
+        .chain(waiting.iter().map(|w| PendingRecord {
+            waits_for_log_qso: true,
+            ..pending_record(w)
+        }))
+        .collect();
     serde_json::to_string(&queue)
 }
 
@@ -154,6 +212,8 @@ pub struct PendingLogIdentity {
     identity: Arc<()>,
     record: Arc<QsoRecord>,
     grid_source: GridSource,
+    confirm_only: bool,
+    gridless: bool,
     path: Option<PathBuf>,
     epoch: u64,
 }
@@ -267,7 +327,11 @@ impl PendingJournalWrite {
     /// Call without holding Engine. No rename or change to the live journal yet.
     pub fn prepare(self) -> io::Result<PreparedPendingJournal> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        let text = pending_qso_json(self.pending.record(), self.pending.grid_source)?;
+        let text = pending_qso_json(
+            self.pending.record(),
+            self.pending.grid_source,
+            self.pending.confirm_only,
+        )?;
         let path = self
             .pending
             .path
@@ -361,6 +425,8 @@ impl Engine {
     pub(super) fn reset_qso_log_identity(&mut self) {
         self.qso_logged = false;
         self.qso_log_epoch = next_identity();
+        self.roger_click = None;
+        self.queued_73_click = None;
     }
 
     pub fn current_qso_log_key(&self) -> Option<String> {
@@ -389,6 +455,8 @@ impl Engine {
             identity: self.pending_log_identity.clone(),
             record: Arc::new(held.record.clone()),
             grid_source: held.grid_source,
+            confirm_only: held.confirm_only,
+            gridless: held.gridless,
             path: self.station.pending_qso_path.clone(),
             epoch: self.pending_log_epoch,
         })
@@ -405,9 +473,19 @@ impl Engine {
     /// an older build records none, and those restore as [`GridSource::LookedUp`].
     pub fn load_pending_qso_json(&mut self, text: &str) {
         if let Ok(queue) = pending_qso_journal(text) {
-            for pending in queue {
-                self.hold_pending_log(pending.into_held());
-            }
+            self.restore_journaled(queue);
+        }
+    }
+
+    /// The journal's contacts back where they were: those waiting for Log QSO first, so that
+    /// each hold's journal write below already carries them, then the popup's, in order.
+    fn restore_journaled(&mut self, queue: Vec<PendingRecord>) {
+        let (waiting, held): (Vec<_>, Vec<_>) =
+            queue.into_iter().partition(|p| p.waits_for_log_qso);
+        self.set_aside_qsos
+            .extend(waiting.into_iter().map(PendingRecord::into_held));
+        for pending in held {
+            self.hold_pending_log(pending.into_held());
         }
     }
 
@@ -423,8 +501,8 @@ impl Engine {
         let queue = tempo_core::keep_aside::read_or_keep("pendingQso", &path, now_unix, |text| {
             pending_qso_journal(text).map_err(|e| e.to_string())
         });
-        for pending in queue.into_iter().flatten() {
-            self.hold_pending_log(pending.into_held());
+        if let Some(queue) = queue {
+            self.restore_journaled(queue);
         }
     }
 
@@ -435,18 +513,33 @@ impl Engine {
         if self.pending_log().is_some() {
             return CurrentQsoLogOutcome::PendingExists;
         }
+        let waiting = self.set_aside_qsos.len();
         let Some(mut held) = self.take_current_qso_record() else {
             return CurrentQsoLogOutcome::NoEligibleContact;
         };
-        if self.settings.prompt_to_log {
+        if self.settings.prompt_to_log || held.confirm_only {
             // Stamped as the desktop's hold stamps it: the confirm logs the park it was made from.
             self.stamp_hold(&mut held.record);
             self.replace_pending_log(Some(held));
+            // The journal still lists it as waiting for Log QSO until the publication rewrites
+            // it ([`Self::publish_pending_qso_journal`]), so a crash between keeps it.
             CurrentQsoLogOutcome::Pending(PendingJournalWrite {
                 pending: self.pending_log_identity().expect("hold just installed"),
             })
         } else {
-            CurrentQsoLogOutcome::Append(self.log_qso_for_sync(held.record))
+            let outcome = self.log_qso_inner(
+                held.record,
+                true,
+                crate::engine::StateSource::Operator,
+                Vec::new(),
+                false,
+                held.gridless,
+            );
+            // One taken from those waiting for Log QSO leaves the journal once it is appended.
+            if self.set_aside_qsos.len() != waiting {
+                self.persist_pending_qso();
+            }
+            CurrentQsoLogOutcome::Append(outcome)
         }
     }
 
@@ -482,7 +575,8 @@ impl Engine {
         // whole queue when it started (`log_current_qso_for_sync` refuses while a hold exists).
         // A local completion can have joined the queue since — the rename would then leave those
         // out of the journal — so rewrite it from the live queue.
-        if self.pending_logs_waiting() > 0 {
+        // So can the contacts waiting for Log QSO, which this one contact leaves out too.
+        if self.pending_logs_waiting() > 0 || !self.set_aside_qsos.is_empty() {
             self.persist_pending_qso();
         }
         Ok(JournalSync {
@@ -511,7 +605,7 @@ impl Engine {
         // The same R2 re-derivation the desktop confirm runs: a corrected call must not carry
         // the busted call's COUNTRY, NAME or looked-up GRID into the log, whichever client the
         // operator confirmed from.
-        self.rederive_after_edits(&mut record, pending.record(), pending.grid_source);
+        let dropped = self.rederive_after_edits(&mut record, pending.record(), pending.grid_source);
         // Its park was decided when it was held.
         let outcome = self.log_qso_inner(
             record,
@@ -519,6 +613,7 @@ impl Engine {
             crate::engine::StateSource::Operator,
             Vec::new(),
             true,
+            pending.gridless || dropped,
         );
         Ok(PendingLogConfirmation { pending, outcome })
     }
@@ -555,6 +650,11 @@ impl Engine {
             }
         }
         self.replace_pending_log(None);
+        // The file held everything waiting, not only this hold: the contacts behind it in the
+        // popup and those waiting for Log QSO are journaled again.
+        if !self.pending_logs.is_empty() || !self.set_aside_qsos.is_empty() {
+            self.persist_pending_qso();
+        }
         Ok(JournalSync { parent })
     }
 }
@@ -572,6 +672,10 @@ mod tests {
     }
     impl Fixture {
         fn new(tier: Tier, prompt: bool) -> Self {
+            Self::with_grid(tier, prompt, Some("EN37"))
+        }
+        /// [`Self::new`], the station giving `grid` in the exchange (or none).
+        fn with_grid(tier: Tier, prompt: bool, grid: Option<&str>) -> Self {
             static NEXT: AtomicU64 = AtomicU64::new(0);
             let dir = std::env::temp_dir().join(format!(
                 "nexus-remote-qso-log-{}-{}",
@@ -584,7 +688,7 @@ mod tests {
             engine.settings.prompt_to_log = prompt;
             engine.set_log_path(dir.join("log.adi"));
             engine.set_pending_qso_path(dir.join("pending.json"));
-            engine.call_station_with_grid("W9XYZ", Some("EN37"));
+            engine.call_station_with_grid("W9XYZ", grid);
             engine.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ -10", -7)], 1);
             engine.qso_start_unix = Some(1_700_000_000);
             Self { dir, engine }
@@ -615,6 +719,44 @@ mod tests {
             rst_sent: pending.record().rst_sent.clone(),
             rst_rcvd: pending.record().rst_rcvd.clone(),
         }
+    }
+
+    /// A contact the station gave no grid in is the same from a computer driving the station: logged
+    /// at once, or held and confirmed there, a callbook grid fills it for the distance and the map
+    /// only (operator decision, 2026-10-27).
+    #[test]
+    fn a_gridless_contact_logged_from_afar_takes_a_callbook_grid_for_the_map_only() {
+        use tempo_core::logbook::callbook::{is_map_only_grid, CallbookAnswer};
+        let answer = CallbookAnswer {
+            call: "W9XYZ".into(),
+            grid: Some("EN52ab".into()),
+            ..CallbookAnswer::default()
+        };
+        let mut at_once = Fixture::with_grid(Tier::Ft8, false, None);
+        at_once.engine.note_callbook_answer("W9XYZ", answer.clone());
+        let CurrentQsoLogOutcome::Append(LogWriteOutcome::PendingSync(receipts)) =
+            at_once.engine.log_current_qso_for_sync()
+        else {
+            panic!("expected append receipts")
+        };
+        for receipt in receipts {
+            receipt.sync().unwrap();
+        }
+        let logged = at_once.engine.stored_log()[0].clone();
+        assert_eq!(logged.grid.as_deref(), Some("EN52ab"), "premise: filled");
+        assert!(is_map_only_grid(&logged), "logged at once: map only");
+
+        let mut held = Fixture::with_grid(Tier::Ft8, true, None);
+        held.engine.note_callbook_answer("W9XYZ", answer);
+        let identity = held.hold();
+        assert!(identity.record().grid.is_none(), "premise: no grid");
+        held.engine
+            .confirm_pending_log_for_sync(identity.clone(), edits(&identity))
+            .unwrap()
+            .sync()
+            .unwrap();
+        let logged = held.engine.stored_log()[0].clone();
+        assert!(is_map_only_grid(&logged), "confirmed from afar: map only");
     }
 
     #[test]
@@ -683,6 +825,38 @@ mod tests {
         assert!(!engine.qso_logged);
         assert!(engine.stored_log().is_empty());
         assert!(engine.station.pending_uploads.is_empty());
+    }
+
+    /// A contact waiting for Log QSO (both settings off) shares the journal with Remote's hold:
+    /// publishing the hold and then discarding it both leave it journaled.
+    #[test]
+    fn remotes_hold_and_discard_keep_a_contact_waiting_for_log_qso_in_the_journal() {
+        let mut fixture = Fixture::new(Tier::Ft8, true);
+        let waiting = HeldQso::new(
+            fixture.engine.qso_record("K2ABC".into(), None, Some(-12)),
+            GridSource::LookedUp,
+        );
+        fixture.engine.set_aside_qsos.push(waiting);
+        fixture.engine.persist_pending_qso();
+        let path = fixture.dir.join("pending.json");
+        let restored = |path: &PathBuf| {
+            let mut r = Engine::new("K2DEF", "FN31", 0);
+            r.load_pending_qso_json(&std::fs::read_to_string(path).unwrap_or_default());
+            (r.set_aside_qsos.len(), r.pending_logs.len())
+        };
+        let identity = fixture.hold();
+        assert_eq!(restored(&path), (1, 1), "the hold and the waiting contact");
+        fixture
+            .engine
+            .discard_pending_log_for_sync(&identity)
+            .unwrap()
+            .sync()
+            .unwrap();
+        assert_eq!(
+            restored(&path),
+            (1, 0),
+            "the waiting contact is still journaled"
+        );
     }
 
     #[test]
@@ -757,7 +931,7 @@ mod tests {
         .pop()
         .expect("one contact");
         assert!(held.contest.is_some(), "premise: a contest contact");
-        let text = pending_qso_json(&held, GridSource::LookedUp).expect("serializes");
+        let text = pending_qso_json(&held, GridSource::LookedUp, false).expect("serializes");
         assert_eq!(text.matches("\"contest\"").count(), 1, "{text}");
         let mut restored = Engine::new("K2DEF", "FN31", 0);
         restored.load_pending_qso_json(&text);

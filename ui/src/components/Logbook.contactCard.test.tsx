@@ -397,6 +397,7 @@ describe('the recent contacts with the call', () => {
     for (const cid of ['cqz', 'ituz', 'county']) expect(said).toContain(columnName(logColumn(cid)!))
     expect(said).toContain(t('contactCard.callFix.lotw'))
     expect(said, 'eQSL never confirmed it').not.toContain(t('contactCard.callFix.eqsl'))
+    expect(said, 'no paper card was marked').not.toContain(t('contactCard.callFix.card'))
     fireEvent.click(within(dialog).getByRole('button', { name: t('contactCard.discard.keep') }))
     await new Promise((r) => setTimeout(r, 30))
     expect(api.editQsoById, 'Keep editing saves nothing').not.toHaveBeenCalled()
@@ -404,6 +405,27 @@ describe('the recent contacts with the call', () => {
     fireEvent.click(await screen.findByRole('button', { name: t('contactCard.callFix.confirm') }))
     await waitFor(() => expect(api.editQsoById).toHaveBeenCalledTimes(1))
     expect(vi.mocked(api.editQsoById).mock.calls[0][1].call).toBe('DL1ABD')
+  })
+
+  it('a corrected call names a dated paper card with its date, and an undated one without', async () => {
+    const cases: [LoggedQso['extra'], 'contactCard.callFix.cardDated' | 'contactCard.callFix.card'][] = [
+      [[['QSLRDATE', '20231114']], 'contactCard.callFix.cardDated'],
+      [[], 'contactCard.callFix.card'],
+    ]
+    for (const [extra, label] of cases) {
+      engine.log = [{ ...DL, qslRcvd: { card: true, lotw: false, eqsl: false, qrz: false }, extra }]
+      engine.revision += 1
+      const r = await mounted()
+      const card = await openCard()
+      fireEvent.change(box(card, t('logbook.field.call.label')), { target: { value: 'DL1ABD' } })
+      save(card)
+      const title = await screen.findByText(t('contactCard.callFix.title', { old: 'DL1ABC', call: 'DL1ABD' }))
+      const said = (title.closest('[role="dialog"], [role="alertdialog"]') as HTMLElement).textContent ?? ''
+      expect(said, label).toContain(t(label))
+      if (label === 'contactCard.callFix.card') expect(said, 'no date to take').not.toContain(t('contactCard.callFix.cardDated'))
+      r.unmount()
+      cleanup()
+    }
   })
 
   it('a save that leaves the call alone asks nothing', async () => {
@@ -493,5 +515,62 @@ describe('Download confirmations (#348)', () => {
     await act(async () => fireEvent.click(button()))
     await waitFor(() => expect(pushToast).toHaveBeenCalledWith(t('logbook.confirmations.all.none'), 'info', 8000))
     expect(api.downloadLotwReport).not.toHaveBeenCalled()
+  })
+})
+
+describe('an IOTA reference taken from an offer (operator rulings, 2026-10-27)', () => {
+  it('says it is held back from every service, and Confirm takes the mark off and nothing else', async () => {
+    const spotted: LoggedQso = {
+      ...DL,
+      ota: { ...DL.ota!, iota: 'EU-028' },
+      extra: [...(DL.extra ?? []), ['APP_NEXUS_OFFER_HELD', 'IOTA']],
+    }
+    engine.log = [OTHER, spotted, ...Array.from({ length: 12 }, (_, n) => earlier(n))]
+    await mounted()
+    const card = await openCard()
+    expect(within(card).getByText(t('iota.card.spotHeld'))).toBeTruthy()
+    fireEvent.click(within(card).getByRole('button', { name: t('iota.card.confirm') }))
+    await waitFor(() => expect(api.editQsoById).toHaveBeenCalledTimes(1))
+    const [ref, edit, fields] = vi.mocked(api.editQsoById).mock.calls[0]
+    expect(ref.id).toBe('id-dl')
+    expect(fields).toEqual([{ tag: 'APP_NEXUS_OFFER_HELD', old: 'IOTA', new: null }])
+    expect(edit.ota.iota, 'the reference itself is as stored').toBe('EU-028')
+    expect(edit.name, 'and every box is as stored').toBeNull()
+  })
+
+  it('one taken from the callbook says so, and is held back the same way', async () => {
+    const looked: LoggedQso = {
+      ...DL,
+      ota: { ...DL.ota!, iota: 'EU-028' },
+      extra: [...(DL.extra ?? []), ['APP_NEXUS_OFFER_HELD', 'IOTA'], ['APP_NEXUS_CALLBOOK_FILLED', 'IOTA,NAME']],
+    }
+    engine.log = [OTHER, looked, ...Array.from({ length: 12 }, (_, n) => earlier(n))]
+    await mounted()
+    const card = await openCard()
+    expect(within(card).getByText(t('iota.card.callbookHeld'))).toBeTruthy()
+    expect(within(card).queryByText(t('iota.card.spotHeld'))).toBeNull()
+    expect(within(card).getByRole('button', { name: t('iota.card.confirm') })).toBeTruthy()
+  })
+
+  it('an older contact whose IOTA the callbook filled shows no such note: it was never held', async () => {
+    const old: LoggedQso = {
+      ...DL,
+      ota: { ...DL.ota!, iota: 'EU-028' },
+      extra: [...(DL.extra ?? []), ['APP_NEXUS_CALLBOOK_FILLED', 'IOTA']],
+    }
+    engine.log = [OTHER, old, ...Array.from({ length: 12 }, (_, n) => earlier(n))]
+    await mounted()
+    const card = await openCard()
+    expect(within(card).queryByText(t('iota.card.callbookHeld'))).toBeNull()
+    expect(within(card).queryByRole('button', { name: t('iota.card.confirm') })).toBeNull()
+  })
+
+  it('a reference the operator typed shows no such note', async () => {
+    const typed: LoggedQso = { ...DL, ota: { ...DL.ota!, iota: 'EU-028' } }
+    engine.log = [OTHER, typed, ...Array.from({ length: 12 }, (_, n) => earlier(n))]
+    await mounted()
+    const card = await openCard()
+    expect(within(card).queryByText(t('iota.card.spotHeld'))).toBeNull()
+    expect(within(card).queryByRole('button', { name: t('iota.card.confirm') })).toBeNull()
   })
 })

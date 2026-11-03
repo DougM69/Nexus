@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useEscStop } from './useEscStop'
 import { publishBandConditions } from './bandConditions'
-import type { AppSnapshot, BandChannel, LoggedQso, ModeRequest, Settings, SourceKind, Tier } from './types'
+import type { AppSnapshot, BandChannel, ExperienceLevel, LoggedQso, ModeRequest, Settings, SourceKind, Tier } from './types'
 import { isOnAir } from './types'
 import { rigModeTransition, RIG_MODE_BY_VIEW, type RigMode } from './rigModeForView'
 import {
@@ -90,7 +90,7 @@ import { resolveBootView, coerceArea } from './features/bootView'
 import { visibleNeeds, boardNeeds, workTarget, modeClassOf, topNeedByCall, alertsByCall, activityTypeByCall, ownScreen, workTier, pskSubmode, workHintView, WORK_SECTION, spotNeed, type OwnScreen } from './features/needs'
 import { OPERATE_PANELS, CW_PANELS, PHONE_PANELS, PSK_PANELS, JTTY_PANELS, RTTY_PANELS, SSTV_PANELS, JS8_PANELS, boxEntries, ownShown, usePanelLayout, type PanelLayoutApi, type PanelVocabulary } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
-import { DXPED_WINDOWS, KP_FORECAST, XRAY_NOW, watchFeed } from './features/connectFeeds'
+import { ARRIVAL_OUTLOOK, DXPED_WINDOWS, KP_FORECAST, XRAY_NOW, watchFeed } from './features/connectFeeds'
 import { DASH_RAIL_FOLDS, DASH_SLOT_IDS, isDashRailSection, railOnScreen, useDashRailSections, type DashRailSection, type DashSlotId } from './features/dashRail'
 import { sharedPaneById, sharedPaneOf } from './features/sharedPanes'
 import type { PaneId } from './features/connectConfig'
@@ -112,18 +112,20 @@ import { markerWidthHz } from './waterfall'
 import { LinkPill } from './components/LinkPill'
 import { ModeNav, type View, type DigitalMode } from './components/ModeNav'
 import { contestName } from './fdEvent'
-import { OperateCockpit } from './components/OperateCockpit'
+import { OperateCockpit as OperateCockpitView } from './components/OperateCockpit'
 import { NowBar } from './components/NowBar'
 import { AwardsJourney } from './components/AwardsJourney'
 import { CwCockpit } from './components/CwCockpit'
 import { PhoneCockpit } from './components/PhoneCockpit'
-import { RttyCockpit } from './components/RttyCockpit'
-import { PskCockpit } from './components/PskCockpit'
-import { Js8Cockpit, type Js8ListSettings } from './components/Js8Cockpit'
-import { JttyCockpit } from './components/JttyCockpit'
+import { RttyCockpit as RttyCockpitView } from './components/RttyCockpit'
+import { PskCockpit as PskCockpitView } from './components/PskCockpit'
+import { Js8Cockpit as Js8CockpitView, type Js8ListSettings } from './components/Js8Cockpit'
+import { JttyCockpit as JttyCockpitView } from './components/JttyCockpit'
+import { Js8SoundPlayer } from './components/Js8SoundPlayer'
 import { js8ComposeConfig } from './js8Compose'
-import { SstvView } from './components/SstvView'
-import { AprsCockpit } from './components/AprsCockpit'
+import { SstvView as SstvViewScreen } from './components/SstvView'
+import { AprsCockpit as AprsCockpitView } from './components/AprsCockpit'
+import { keepAlivePropsEqual, operatePropsEqual } from './keepAliveProps'
 import { PotaSotaView, type OtaSpotClickArg } from './components/PotaSotaView'
 import { StatsView } from './components/StatsView'
 import { DxpeditionsView } from './components/DxpeditionsView'
@@ -145,6 +147,12 @@ import {
   getTleStatus,
   sstvArm,
   sstvAutoDisarm,
+  leaveDecoderScreen,
+  rttyAutoArm,
+  pskAutoArm,
+  jttyAutoArm,
+  sstvAutoArm,
+  aprsAutoArm,
   setSettings as apiSetSettings,
   setContestEsm,
   setCwSpeedMatch,
@@ -158,6 +166,8 @@ import {
   pskSetMode,
   setHuntTarget,
   setLicenseClass,
+  setExperienceLevel as apiSetExperienceLevel,
+  markSetupWizardSeen,
   stopQsoRecording,
   pointRotatorAtCall,
   qsySetEnabled as apiQsySetEnabled,
@@ -166,6 +176,7 @@ import {
   useSingleRadio,
   resendChat,
   type RadioLaunchInfo,
+  type IotaOfferData,
   focusWindow,
 } from './api'
 import {
@@ -178,14 +189,17 @@ import {
 import { dueNetReminders, reminderKey, untilPhrase } from './features/nets'
 import { bandLabelForMhz } from './band'
 import { sameCall } from './callsign'
-import { processFlare, effectiveXray } from './flareAlert'
+import { processFlare, effectiveXray, flareToastGrid } from './flareAlert'
+import { snapXray, wxUsable, xrayFastFresh } from './propViz'
 import { processStorm, processStormForecast } from './stormAlert'
+import { processArrivalWatch } from './arrivalAlert'
 import { processDxpedAlerts } from './features/dxpedChase'
 import { checkDxpedAlarms } from './features/dxpedAlarm'
 import { checkSatAlarms, satAlarmMap } from './features/satAlarm'
 import { tickSatPassAlert } from './features/satPassAlert'
 import type { EsmSetting } from './features/esmHost'
 import { tickIssAutoArm } from './features/issAutoArm'
+import { enterView, isDecoderScreen, type DecoderScreen } from './features/decoderScreens'
 import { satElementsLane } from './features/satLane'
 import { parsecStopLane } from './features/parsecPresence'
 import { slotKeyRefusedLane } from './features/slotKeyRefused'
@@ -193,6 +207,7 @@ import { slotUnkeyFailedLane } from './features/slotUnkeyFailed'
 import { slotAudioLostLane } from './features/slotAudioLost'
 import { slotOverDroppedLane } from './features/slotOverDropped'
 import { pttRefusedLane } from './features/pttRefused'
+import { pcMicLane } from './features/pcMic'
 import { voiceDroppedLane } from './features/voiceDropped'
 import { clockRepairHoldLane } from './features/clockRepairHold'
 import { heldLine, txOnHeldLane } from './features/txOnHeld'
@@ -202,7 +217,7 @@ import { askAgainWhileSaving } from './features/notAnswered'
 import { useTciSpots } from './features/tciSpots'
 import { dxpedWorkMode } from './components/connect/paneFormat'
 import { setStatus } from './status'
-import type { PropagationSnapshot, FeedHealth, NeedAlert, SpotRow, DxpedWindow, WorkableCard, CatTestResult, PointedAt } from './types'
+import type { PropagationSnapshot, FeedHealth, NeedAlert, SpotRow, DxpedWindow, WorkableCard, CatTestResult, PointedAt, XrayNow } from './types'
 import { pointedTo } from './components/rotorPointAt'
 import { NeededPanel } from './components/NeededPanel'
 import { SpotsPanel } from './components/SpotsPanel'
@@ -227,12 +242,14 @@ import { OnboardingBanner } from './components/OnboardingBanner'
 import { PounceBanner } from './components/PounceBanner'
 import { UpdateBanner } from './components/UpdateBanner'
 import { ClientBanner } from './components/ClientBanner'
+import { KeyConfirmBanner } from './components/KeyConfirmBanner'
 import { useSelfUpdate } from './useSelfUpdate'
 import { usePounce, type PounceAlert } from './usePounce'
 import { useStationAlerts } from './useStationAlerts'
 import { RevealNudge } from './components/RevealNudge'
 import { SetupWizard, type WizardDraft } from './components/SetupWizard'
 import { GettingStartedGuide } from './components/GettingStartedGuide'
+import { FirstContactWalk } from './components/FirstContactWalk'
 import { RadioPicker } from './components/RadioPicker'
 import { PROFILES, type ProfileId } from './features/profiles'
 import { CallCardHost } from './components/CallCard'
@@ -320,6 +337,30 @@ const SCREEN_BY_SECTION: Partial<Record<string, View>> = {
   keyboard: 'psk',
   jtty: 'jtty',
 }
+/** The seven keep-alive cockpits, each memoised so that while hidden it sits out a snapshot poll that
+ *  changed nothing it shows (`keepAliveProps.ts`). On screen each renders exactly as before. FT also
+ *  renders, hidden, on the poll after a decode-pane Clear: that poll refills the panes. */
+const OperateCockpit = memo(OperateCockpitView, operatePropsEqual)
+const RttyCockpit = memo(RttyCockpitView, keepAlivePropsEqual)
+const PskCockpit = memo(PskCockpitView, keepAlivePropsEqual)
+const JttyCockpit = memo(JttyCockpitView, keepAlivePropsEqual)
+const SstvView = memo(SstvViewScreen, keepAlivePropsEqual)
+const AprsCockpit = memo(AprsCockpitView, keepAlivePropsEqual)
+const Js8Cockpit = memo(Js8CockpitView, keepAlivePropsEqual)
+/** The block list before settings load: one array, so the FT cockpit's `blockedCalls` (and the decode
+ *  panes' ignore set built from it) keeps its identity from one render to the next. */
+const NO_CALLS: string[] = []
+/** Each cockpit's ENTER SENDS MESSAGE setting: the one map both the switch's save and its reading use. */
+const ESM_FIELD = { cw: 'contestEsmCw', rtty: 'contestEsmRtty', phone: 'contestEsmPhone' } as const
+
+/** Each decoder screen's entry arm — what its cockpit calls on the rising edge of `active`. */
+const ENTRY_ARM: Record<DecoderScreen, () => Promise<unknown>> = {
+  rtty: rttyAutoArm,
+  psk: pskAutoArm,
+  jtty: jttyAutoArm,
+  sstv: sstvAutoArm,
+  aprs: aprsAutoArm,
+}
 function App() {
   const [theme, setTheme, themeChoice] = useTheme()
   // The built-in themes (Settings ▸ Appearance ▸ Theme): App is the one writer of `data-skin`,
@@ -365,6 +406,9 @@ function App() {
   // First-run setup wizard (goal-driven). Only on a genuinely fresh install, and never by itself on a
   // computer driving another station: it sets up a station, and there every setting it edits is the
   // station's, while "fresh" is read from this computer's own storage. Settings still offers it.
+  // "Fresh" is decided by the settings file as well (`setupWizardSeen`, below): this computer's
+  // storage only says the wizard MAY be due; it opens only where there was no settings file and it
+  // was never done, so a WebView data reset or a reinstall never shows it to an existing station.
   const [showWizard, setShowWizard] = useState<boolean>(
     () => !drivesAnotherStation() && features.firstRun && storageWritable() && !wizardSeen(),
   )
@@ -372,6 +416,12 @@ function App() {
   // walkthrough offer. Pure documentation: it writes nothing and is never
   // shown unasked, so there is no "seen" flag to persist.
   const [showGuide, setShowGuide] = useState(false)
+  // The first-run question ("How much have you done?") is asked only when the wizard opens by
+  // itself on a fresh install; re-opened from Settings it does not ask again.
+  const [wizardAsks, setWizardAsks] = useState(showWizard)
+  // The first-contact walk-through (Help ▸ Your first FT8 contact, and the wizard's offer). Like
+  // the guide it writes nothing; asked for together with the guide, it opens once the guide closes.
+  const [showWalk, setShowWalk] = useState(false)
   // `scale` so the rail clamps re-run on zoom change (ceilings are zoom-relative).
   const { leftW, rightW, leftMax, rightMax, commitLeft, commitRight, resetLeft, resetRight, resetWidths } =
     usePaneWidths(scale)
@@ -557,6 +607,31 @@ function App() {
         afarEntryRef.current = from
         setView(from)
       })
+  }, [view])
+  // The receive decoders a screen started stop when the operator enters ANOTHER SECTION — by any
+  // path that changes the view, so the Remote picture and a computer driving this station too
+  // (`features/decoderScreens.ts`). The engine stops only a decoder its screen started and nothing
+  // else needs; one it keeps comes back onto the list, to be asked about at the next section.
+  //
+  // A leave and the return's entry arm are separate calls: on a quick way back (or a slow link) the
+  // leave can land AFTER the entry arm, which then found the decoder still running and did nothing,
+  // and stop the decoder under the screen the operator is on. So a leave that lands with its screen
+  // in front again asks for that screen's entry arm once more (only ever an upgrade from off, and
+  // refused after the operator's own Stop, as on entry).
+  const decoderScreensRef = useRef<DecoderScreen[]>(isDecoderScreen(view) ? [view] : [])
+  useEffect(() => {
+    const { left, held } = enterView(decoderScreensRef.current, view)
+    decoderScreensRef.current = held
+    for (const screen of left) {
+      void leaveDecoderScreen(screen)
+        .then((kept) => {
+          if (kept === true && !decoderScreensRef.current.includes(screen)) {
+            decoderScreensRef.current = [...decoderScreensRef.current, screen]
+          }
+          if (kept !== true && viewRef.current === screen) return ENTRY_ARM[screen]()
+        })
+        .catch(() => {})
+    }
   }, [view])
   const [prop, setProp] = useState<PropagationSnapshot | null>(null)
   // DXpeditions ON THE AIR NOW that announced SuperFox — a format this version of Nexus has no
@@ -811,6 +886,12 @@ function App() {
     setStatus('pttRefused', pttRefusedLane(snap?.radio.pttRefused))
   }, [snap?.radio.pttRefused?.at, snap?.radio.pttRefused?.mode])
 
+  // A computer-microphone over (Phone, the radio set to take this computer's microphone) that ended
+  // or never keyed for a reason the operator did not choose: the lane says why, until an over keys.
+  useEffect(() => {
+    setStatus('pcMic', pcMicLane(snap?.radio.pcMicEnded))
+  }, [snap?.radio.pcMicEnded?.at, snap?.radio.pcMicEnded?.cause])
+
   // A voice-keyer message Nexus's own Flex client dropped before the radio took DAX for it (Phone at
   // the shack, native audio on): the lane says why, since the keyer's toast answered the press
   // before the drop, until the next message the keyer accepts; not on the Remote page either.
@@ -919,6 +1000,9 @@ function App() {
   // Freshest fast-lane X-ray reading (60 s poller below) — merged with each prop
   // snapshot so the flare heads-up fires app-wide, whatever view is open.
   const xrayFastRef = useRef<number | null>(null)
+  // The fast lane's last answer: its D-RAP grid gives the flare toast the map's ceiling, through
+  // flareToastGrid (none beside a stale sample or the dev override's simulated flux).
+  const xrayLaneRef = useRef<XrayNow | null>(null)
   // Chased-DXpedition alert inputs: the latest windows sweep (10-min poller
   // below), the current QSO partner (kept fresh by the decode-alert effect),
   // and the work action (assigned once handleWorkMapSpot exists).
@@ -937,14 +1021,21 @@ function App() {
           setProp(p)
           // The band dropdowns' opening dots read this same snapshot (bandConditions.ts).
           publishBandConditions(p)
-          // Solar-flare heads-up (edge-triggered; flareAlert.ts owns the dedup).
-          processFlare(effectiveXray(xrayFastRef.current, p.spaceWx.xrayLong))
+          // Solar-flare heads-up (edge-triggered; flareAlert.ts owns the dedup). Only a
+          // measured, fresh flux may alert: a stand-in or an old sample is no flux (propViz).
+          const nowMs = Date.now()
+          processFlare(
+            effectiveXray(xrayFastRef.current, snapXray(p.spaceWx, nowMs)),
+            flareToastGrid(xrayLaneRef.current, nowMs),
+          )
           // Geomagnetic storm heads-up, same edge-triggered shape over the MEASURED
           // Kp already in this snapshot — no extra fetch. Until this existed a storm
           // reached the operator only if they had the Space Weather pane in front of
-          // them, which is backwards: a flare is minutes, a storm is days.
-          processStorm(p.spaceWx.kp)
-          kpNowRef.current = p.spaceWx.kp
+          // them, which is backwards: a flare is minutes, a storm is days. A stand-in Kp
+          // or one past its cadence raises nothing and is not "the Kp now".
+          const kpNow = wxUsable(p.spaceWx, 'kp', nowMs) ? p.spaceWx.kp : null
+          processStorm(kpNow)
+          kpNowRef.current = kpNow
           // Chased-expedition window alerts (dxpedChase.ts owns the dedup).
           processDxpedAlerts(
             p.dxpeditions.workableNow,
@@ -1130,14 +1221,20 @@ function App() {
   // be an alert. stormAlert.ts dedups by the predicted onset time, so this announces once per
   // forecast event however often it is asked.
   useEffect(() => watchFeed(KP_FORECAST, (f) => processStormForecast(f, kpNowRef.current)), [])
+  // NOAA storm WATCH heads-up, app-wide, once per watch serial (arrivalAlert.ts keeps the serials
+  // across restarts); the map's countdown chip reads the same feed.
+  useEffect(() => watchFeed(ARRIVAL_OUTLOOK, (o) => processArrivalWatch(o)), [])
   // X-ray fast lane (60 s): flare ONSET reaches the operator in ~1 min instead of
   // the 5-min prop-snapshot cadence. Best-effort — a failed fetch just leaves the
   // snapshot's slower value driving the watcher.
   useEffect(
     () =>
       watchFeed(XRAY_NOW, (x) => {
-        xrayFastRef.current = x.flux
-        processFlare(effectiveXray(x.flux, null))
+        // The GOES sample's own time gates it: a feed gap is an old sample, not a flare now.
+        const nowMs = Date.now()
+        xrayFastRef.current = xrayFastFresh(x, nowMs)
+        xrayLaneRef.current = x
+        processFlare(effectiveXray(xrayFastRef.current, null), flareToastGrid(x, nowMs))
       }),
     [],
   )
@@ -1708,8 +1805,8 @@ function App() {
   }, [])
 
   const handleConfirmLog = useCallback(
-    (record: LoggedQso) => {
-      void apiConfirmPendingLog(record, snap?.pendingQsoLogKey)
+    (record: LoggedQso, iotaOffer?: IotaOfferData | null) => {
+      void apiConfirmPendingLog(record, snap?.pendingQsoLogKey, iotaOffer)
         .then((s) => {
           setSnap(s)
           refreshNeeds() // drop the just-worked station from the roster/needs immediately
@@ -1851,16 +1948,16 @@ function App() {
   // THE JS8 LISTS' SETTINGS (Settings ▸ JS8) for the cockpit, and its call list's three writes: each
   // one field through its own verb, never the settings form, and the mirror patched with what was
   // saved. The hosted page writes neither.
-  const js8Lists: Js8ListSettings | undefined = settings
+  const js8Lists: Js8ListSettings | undefined = useMemo(() => settings
     ? {
         rxBlocklist: settings.js8RxBlocklist ?? [],
         highlightPrimary: settings.js8HighlightPrimary ?? [],
         highlightSecondary: settings.js8HighlightSecondary ?? [],
         eot: settings.js8Eot ?? '\u2662',
         mfi: settings.js8Mfi ?? '\u2026\u2026',
-        sounds: settings.js8Sounds ?? [],
         groups: settings.js8Groups ?? [],
         avoidAllcall: settings.js8AvoidAllcall ?? false,
+        resetActivity: settings.js8ResetActivity === true,
         setRxBlocklist: async (calls: string[]) => {
           const saved = await withErrorToast(() => js8SetRxBlocklist(calls), t('js8.lists.saveFailed'))
           if (saved) setSettings((prev) => (prev ? { ...prev, js8RxBlocklist: saved } : prev))
@@ -1874,7 +1971,7 @@ function App() {
           if (saved !== null) setSettings((prev) => (prev ? { ...prev, js8AvoidAllcall: saved } : prev))
         },
       }
-    : undefined
+    : undefined, [settings])
 
   const handleSstvTune = useCallback(
     (dialMhz: number, band: string, mode: string) => {
@@ -2544,8 +2641,11 @@ function App() {
         // The engine's verdict, not the call returning (#100): every false is a deliberate
         // logbook-integrity refusal (already logged, no active QSO, no report exchanged),
         // and a green "Logged QSO" over one claimed a write that never happened.
-        if (r.logged) {
-          pushToast(t('shell.toast.logged'), 'success', 2500)
+        if (r.logged && r.alreadyWaiting && r.call) {
+          // Nothing new was held: that station's offer already waits in the popup.
+          pushToast(t('shell.toast.logWaiting', { call: r.call }), 'info', 4000)
+        } else if (r.logged) {
+          pushToast(r.call ? t('shell.toast.loggedCall', { call: r.call }) : t('shell.toast.logged'), 'success', 2500)
           refreshNeeds() // drop the just-worked station from the roster/needs immediately
           // QRZ/ClubLog/eQSL auto-upload happens in the BACKEND log funnel now
           // (every log path, auto-log included); outcomes toast via uploadTick.
@@ -2571,6 +2671,10 @@ function App() {
   // The contest re-entry an opened screen asked for, until the engine answers. Until then the snapshot
   // still shows the station out of the contest, and the CW and Phone log lines must not call it stopped.
   const [contestReentering, setContestReentering] = useState(false)
+
+  // The JS8 new-message notice's "Show" (Js8SoundPlayer, from any screen): the station whose Inbox the
+  // JS8 screen opens on, a new `seq` for each ask.
+  const [js8InboxAsk, setJs8InboxAsk] = useState<{ call: string; seq: number } | null>(null)
 
   const handleView = useCallback(
     (next: View) => {
@@ -2804,16 +2908,53 @@ function App() {
     [applyWizardDraft],
   )
 
+  // The durable half of "the wizard was done": its one writer, in the settings file. Failure is
+  // not toasted: the wizard is closed either way, and the browser copy above still holds for
+  // this computer.
+  const recordWizardSeen = useCallback(() => {
+    void markSetupWizardSeen()
+      .then(() => setSettings((prev) => (prev ? { ...prev, setupWizardSeen: true } : prev)))
+      .catch(() => {})
+  }, [])
+  // A wizard that would open by itself waits for the settings file's word: an existing station
+  // (no `setupWizardSeen: false`) is never shown it, nor asked the question.
+  useEffect(() => {
+    if (!settings || !wizardAsks || settings.setupWizardSeen === false) return
+    setShowWizard(false)
+    setWizardAsks(false)
+  }, [settings, wizardAsks])
+
   const handleWizardApply = useCallback(
-    (ids: ProfileId[], landing: View, modes: FeatureId[], license: string, draft: WizardDraft) => {
+    (
+      ids: ProfileId[],
+      landing: View,
+      modes: FeatureId[],
+      license: string | null,
+      draft: WizardDraft,
+      experience: ExperienceLevel | null,
+    ) => {
       // SEQUENCED, not concurrent: set_settings writes the WHOLE struct
       // (licenseClass included), so a concurrent set_license_class would be
       // reverted by the stale class riding in the merge (review catch — the
       // wizard's own TX-lockout promise silently undone). Draft first, class
-      // second; failures surface instead of a false-success close.
+      // second; failures surface instead of a false-success close. The class only when the wizard
+      // changed it (null = the class the station holds), and App's copy follows it so the next
+      // run opens on it, as the experience answer's does.
       void applyWizardDraft(draft)
-        .then(() => setLicenseClass(license))
-        .then((s) => s && setSnap(s))
+        .then(() => (license ? setLicenseClass(license) : null))
+        .then((s) => {
+          if (!s || !license) return
+          setSnap(s)
+          setSettings((prev) => (prev ? { ...prev, licenseClass: license } : prev))
+        })
+        // The experience answer has its own writer; a later form save keeps it. Only an answer
+        // given in this run is written: none leaves the station's (absent = never asked).
+        .then(() => (experience ? apiSetExperienceLevel(experience) : null))
+        .then((s) => {
+          if (!s || !experience) return
+          setSnap(s)
+          setSettings((prev) => (prev ? { ...prev, experienceLevel: experience } : prev))
+        })
         .catch((e) =>
           pushToast(
             t('shell.wizard.saveFailed', { error: `${e instanceof Error ? e.message : e}` }),
@@ -2821,21 +2962,27 @@ function App() {
             0,
           ),
         )
-      // Goal profiles + the chosen operating modes (CW/Phone) force-enabled on top.
-      features.applyProfiles(ids, modes)
+      // Goal profiles + the chosen operating modes (CW/Phone) force-enabled on top, on the
+      // first run only. Re-run from Settings, the wizard edits station, rig and log and keeps the
+      // screens the operator has on now: it never changes the feature set.
+      if (wizardAsks) features.applyProfiles(ids, modes)
       setView(landing)
       markWizardSeen()
+      // The first run is recorded as done in the settings file; a re-run from Settings already is,
+      // and writes nothing it did not change.
+      if (wizardAsks) recordWizardSeen()
       setShowWizard(false)
       setWizardGen((g) => g + 1)
     },
-    [features.applyProfiles, applyWizardDraft],
+    [features.applyProfiles, applyWizardDraft, wizardAsks, recordWizardSeen],
   )
 
   const handleWizardSkip = useCallback(() => {
     markWizardSeen()
+    if (wizardAsks) recordWizardSeen()
     setShowWizard(false)
     setWizardGen((g) => g + 1)
-  }, [])
+  }, [recordWizardSeen, wizardAsks])
 
   // NOTE: everything from here down to the `!snap` early return is snap-INDEPENDENT
   // and — critically for the hooks below — must run on EVERY render (rules of hooks:
@@ -2857,12 +3004,11 @@ function App() {
   // navigation that would go nowhere. Every cockpit that mounts a recall card gets it. Given a
   // contact's id (a recall row, a recent contact, an Awards row) the Logbook also opens its editor on
   // that contact: the one editor, and the one write path.
-  const openLogbookFor = isViewEnabled('logbook')
-    ? (call: string, id?: string | null) => {
-        setLogFocus({ call, ts: Date.now(), editId: id ?? null })
-        setView('logbook')
-      }
-    : undefined
+  const openLogbook = useCallback((call: string, id?: string | null) => {
+    setLogFocus({ call, ts: Date.now(), editId: id ?? null })
+    setView('logbook')
+  }, [])
+  const openLogbookFor = isViewEnabled('logbook') ? openLogbook : undefined
 
   // Defense in depth: if the current view's feature got disabled (e.g. toggled
   // off in Settings while viewing it), fall back to the profile's landing view.
@@ -2904,6 +3050,38 @@ function App() {
     const report = (section: DashRailSection) => (call: string) =>
       setEntryCalls((m) => (m[section] === call ? m : { ...m, [section]: call }))
     return { phone: report('phone'), cw: report('cw'), rtty: report('rtty'), psk: report('psk'), js8: report('js8') }
+  }, [])
+  // The handlers the keep-alive cockpits are given, made once rather than per render: a hidden
+  // cockpit keeps the props of its last render (`keepAliveProps.ts`), so each must stay the one App
+  // would pass now. Each reads only state setters and stable callbacks.
+  const clearOperateSelection = useCallback(() => handleMapSelect(null), [handleMapSelect])
+  const popOutOperate = useCallback(() => void openPanelWindow('operate'), [])
+  const saveMacrosMirror = useCallback(
+    (macros: Settings['macros']) => setSettings((prev) => (prev ? { ...prev, macros } : prev)),
+    [],
+  )
+  const saveJs8MessagesMirror = useCallback(
+    (js8SavedMessages: string[]) => setSettings((prev) => (prev ? { ...prev, js8SavedMessages } : prev)),
+    [],
+  )
+  const removeOperateStations = useCallback(
+    () => operatePanels.setPanelState('stations', 'removed'),
+    [operatePanels.setPanelState],
+  )
+  const selectBand = useCallback(() => handleSelect('*'), [handleSelect])
+  const qsyToNeed = useCallback((a: NeedAlert) => handleQsy(a.band, a.freqMhz ?? undefined), [handleQsy])
+  const showAllSpots = useCallback(() => setView('spots'), [])
+  // ENTER SENDS MESSAGE's switch save, one per cockpit (`esmSettingFor` below lends it).
+  const esmSwitch = useMemo(() => {
+    const make = (cockpit: 'cw' | 'rtty' | 'phone') => (on: boolean) => {
+      const field = ESM_FIELD[cockpit]
+      setSettings((prev) => (prev ? { ...prev, [field]: on } : prev))
+      setContestEsm(cockpit, on).catch(() => {
+        setSettings((prev) => (prev ? { ...prev, [field]: !on } : prev))
+        pushToast(t('contest.esm.switch.failed'), 'error')
+      })
+    }
+    return { cw: make('cw'), rtty: make('rtty'), phone: make('phone') }
   }, [])
 
   // ── Eyes-free operating (a11y Phase A) — hooks BEFORE the `!snap` return ──
@@ -2979,6 +3157,8 @@ function App() {
         {/* On a computer driving another station, what it waits for: connecting, control held
             elsewhere, or why the station did not take it. Nothing on a station's own screen. */}
         <ClientBanner />
+        {/* The saved keys held back until the operator confirms them (a restore set their address). */}
+        <KeyConfirmBanner />
         <span>{t('shell.loading')}</span>
       </div>
     )
@@ -3049,7 +3229,7 @@ function App() {
       // entry's tick — the same setPanelState, the same record. The node is built here
       // rather than in the cockpit (it is passed down as `roster`), so the wiring is here
       // too; nothing else renders a StationList with a ⊞ entry, so nothing else passes it.
-      onRemove={() => operatePanels.setPanelState('stations', 'removed')}
+      onRemove={removeOperateStations}
       paneTitle={t('operate.panel.stations')}
       // Its head is the grip FT's ⊞ Arrange drags it by (panes/PaneDrag).
       grip="stations"
@@ -3068,7 +3248,7 @@ function App() {
       onArchive={handleArchive}
       bandActive={activePeer === '*'}
       bandUnread={bandUnread}
-      onSelectBand={() => handleSelect('*')}
+      onSelectBand={selectBand}
       dropAfterCycles={3}
       filter={operateStationsFilter}
       onFilter={setOperateStationsFilter}
@@ -3093,6 +3273,7 @@ function App() {
         band={snap.radio.band}
         tier={snap.link.tier}
         periodSecs={snap.link.periodSecs}
+        clockOffsetMs={snap.radio.clockOffsetMs}
         harqRescues={snap.harqRescues}
         onCall={handleCall}
         needAlertsByCall={needAlertsByCall}
@@ -3117,6 +3298,7 @@ function App() {
       {header && <div className="grid-header">{header}</div>}
       <Waterfall
         stripRef={tempoWfRef}
+        zoomKey="nexus.waterfall.tempo.zoom"
         transmitting={snap.radio.transmitting}
         rxOffsetHz={snap.radio.rxOffsetHz}
         txOffsetHz={snap.radio.txOffsetHz}
@@ -3194,7 +3376,7 @@ function App() {
     bandPlan,
     selectedCall: activePeer,
     myGrid: snap.mygrid,
-    onQsy: (a: NeedAlert) => handleQsy(a.band, a.freqMhz ?? undefined),
+    onQsy: qsyToNeed,
     onSelect: handleSelect,
     onWork: handleWorkNeeded,
     onPoint:
@@ -3213,7 +3395,7 @@ function App() {
     // board offers one click to the un-gated Spots view. `fieldDay.running` is the one
     // contest-active signal (the same one the contest spot marks and ESM plate read).
     contestActive: snap.fieldDay?.running ?? false,
-    onShowAllSpots: () => setView('spots'),
+    onShowAllSpots: showAllSpots,
   }
   // WHAT THE BOXES ARE LENT, once: the dashboard rail beside the cockpits, and the boxes inside FT,
   // Phone, CW and JS8 (any pane in any area, 2026-10-07), get this one object, so a box can never be wired
@@ -3221,8 +3403,12 @@ function App() {
   // polls, as on Connect; the Spots, POTA/SOTA and Needed boxes are the boards themselves, lent as they
   // are to Connect. Neither the rail nor a box stands on the hosted Remote page (the desktop first), so
   // this wiring is always the native one.
+  // What the shack's modelled sweeps are computed from beside the grid: a change asks for them again.
+  const antGainDbi = (settings?.antTxGainDbi ?? 0) + (settings?.antRxGainDbi ?? 0)
   const boxSource: BoxSource = {
     myGrid: settings?.mygrid ?? '',
+    stationPowerW: settings?.stationPowerW ?? null,
+    antGainDbi,
     theme,
     stations: snap.stations ?? [],
     prop,
@@ -3313,18 +3499,12 @@ function App() {
    *  save: that one field (`set_contest_esm`), never a settings-form save, which would clear the
    *  transmit queues mid-contest. Shown at once and put back if the save fails. */
   const esmSettingFor = (cockpit: 'cw' | 'rtty' | 'phone'): EsmSetting | undefined => {
-    const field = cockpit === 'cw' ? 'contestEsmCw' : cockpit === 'rtty' ? 'contestEsmRtty' : 'contestEsmPhone'
+    const field = ESM_FIELD[cockpit]
     return {
       on: settings?.[field] === true,
       callOnce: settings?.contestEsmCallOnce === true,
       voiceRoles: cockpit === 'phone' ? settings?.voiceEsmRoles : undefined,
-      onSwitch: (on) => {
-        setSettings((prev) => (prev ? { ...prev, [field]: on } : prev))
-        setContestEsm(cockpit, on).catch(() => {
-          setSettings((prev) => (prev ? { ...prev, [field]: !on } : prev))
-          pushToast(t('contest.esm.switch.failed'), 'error')
-        })
-      },
+      onSwitch: esmSwitch[cockpit],
     }
   }
   // CW speed match's switch in the CW contest strip: saved alone, as ESM's is.
@@ -3632,7 +3812,10 @@ function App() {
             onLocalClockChange={setLocalClock}
             onResetLayout={resetWidths}
             features={features}
-            onRerunWizard={() => setShowWizard(true)}
+            onRerunWizard={() => {
+              setWizardAsks(false)
+              setShowWizard(true)
+            }}
             theme={themeChoice}
             onThemeChange={setTheme}
             skin={skin}
@@ -3684,6 +3867,8 @@ function App() {
       workspace = (
         <ConnectView
           myGrid={settings?.mygrid ?? ''}
+          stationPowerW={settings?.stationPowerW ?? null}
+          antGainDbi={antGainDbi}
           theme={theme}
           stations={snap?.stations ?? []}
           prop={prop}
@@ -3914,6 +4099,7 @@ function App() {
   return (
     <div className="app">
       <ClientBanner />
+      <KeyConfirmBanner />
       {/* The window's one station card: a call clicked anywhere on screen opens it (CallCard.tsx). */}
       <CallCardHost snap={snap} spots={allSpots} needAlertsByCall={needAlertsByCall} />
       {/* ⚠️ NOT ON CONNECT, by the operator's ruling (2026-10-01): "at very top, its the frequency, the
@@ -3991,6 +4177,7 @@ function App() {
         tier={tier}
         onTierChange={handleTier}
         onOpenGuide={() => setShowGuide(true)}
+        onOpenWalk={() => setShowWalk(true)}
         field={fieldMode}
         onFieldChange={setFieldMode}
         // Who is at the key (#25). Absent/empty renders nothing — the single-op case —
@@ -4118,7 +4305,7 @@ function App() {
               fdActive={settings?.fdActive ?? false}
               fdRuleset={fdRuleset}
               superFoxCalls={superFoxCalls}
-              blockedCalls={settings?.blockedCalls ?? []}
+              blockedCalls={settings?.blockedCalls ?? NO_CALLS}
               onToggleBlocked={handleToggleBlocked}
               snap={snap}
               theme={theme}
@@ -4157,11 +4344,11 @@ function App() {
               // #204: F4 / Clear has to reach the callsign card, and half of what the card
               // reads is BACKEND state. `handleMapSelect` already round-trips a null through
               // `select_peer` — reuse it rather than adding a second deselect path.
-              onClearSelection={() => handleMapSelect(null)}
+              onClearSelection={clearOperateSelection}
               layoutMode={operateLayout}
               onLayoutMode={handleOperateLayout}
               panels={operatePanels}
-              onPopOut={() => void openPanelWindow('operate')}
+              onPopOut={popOutOperate}
               active={effectiveView === 'operate'}
               boxes={boxesFor('operate')}
             />
@@ -4186,7 +4373,7 @@ function App() {
                 wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
                 panels={rttyPanels}
                 macros={settings?.macros}
-                onMacrosSaved={(macros) => setSettings((prev) => (prev ? { ...prev, macros } : prev))}
+                onMacrosSaved={saveMacrosMirror}
                 onOpenSettings={openSettingsAt}
               />
             </div>
@@ -4205,7 +4392,7 @@ function App() {
                 wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
                 panels={pskPanels}
                 macros={settings?.macros}
-                onMacrosSaved={(macros) => setSettings((prev) => (prev ? { ...prev, macros } : prev))}
+                onMacrosSaved={saveMacrosMirror}
                 onOpenSettings={openSettingsAt}
               />
             </div>
@@ -4300,10 +4487,29 @@ function App() {
                 onOpenSettings={openSettingsAt}
                 boxes={boxesFor('js8')}
                 compose={js8ComposeConfig(settings)}
-                onSavedMessages={(js8SavedMessages) => setSettings((prev) => (prev ? { ...prev, js8SavedMessages } : prev))}
+                onSavedMessages={saveJs8MessagesMirror}
                 lists={js8Lists}
+                paneStyle={settings?.js8PaneStyle}
+                inboxRequest={js8InboxAsk}
               />
             </div>
+          )}
+          {/* JS8Call's sounds from whichever screen is showing (Js8SoundPlayer): beside the JS8 host,
+              not inside it, and handed nothing about the view, so the screen shown never decides
+              whether a sound plays. */}
+          {isViewEnabled('js8') && (
+            <Js8SoundPlayer
+              tier={snap?.link.tier}
+              sounds={settings?.js8Sounds ?? []}
+              files={settings?.js8SoundFiles ?? {}}
+              myCall={snap?.mycall ?? ''}
+              groups={settings?.js8Groups ?? []}
+              logTick={snap?.logTick}
+              onShowMessage={(call) => {
+                handleView('js8')
+                setJs8InboxAsk((was) => ({ call, seq: (was?.seq ?? 0) + 1 }))
+              }}
+            />
           )}
           {workspace}
         </ErrorBoundary>
@@ -4354,7 +4560,7 @@ function App() {
         />
       )}
 
-      {showWizard && settings && (
+      {showWizard && settings && (!wizardAsks || settings.setupWizardSeen === false) && (
         // Gated on settings: the prefills are one-shot useState initializers,
         // and mounting against null would turn the whole real config into
         // "fields the operator cleared" at draft time (review catch).
@@ -4366,6 +4572,10 @@ function App() {
           onProveTx={handleProveTx}
           onSkip={handleWizardSkip}
           onOpenGuide={() => setShowGuide(true)}
+          onOpenWalk={() => setShowWalk(true)}
+          onOpenServices={() => openSettingsAt('confirmations')}
+          askExperience={wizardAsks}
+          rerun={!wizardAsks}
         />
       )}
 
@@ -4373,6 +4583,13 @@ function App() {
         <GettingStartedGuide
           onClose={() => setShowGuide(false)}
           onOpenSettings={openSettingsAt}
+        />
+      )}
+
+      {showWalk && !showGuide && (
+        <FirstContactWalk
+          onClose={() => setShowWalk(false)}
+          doubleClickSetsTx={settings?.doubleClickSetsTx !== false}
         />
       )}
 

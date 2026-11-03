@@ -165,7 +165,11 @@ fn same_contact(a: &QsoRecord, b: &QsoRecord) -> bool {
         r.country = None;
         r.dxcc = None;
         r.extra.retain(|(k, _)| {
-            k != "CQZ" && k != crate::logbook::LOTW_DXCC_FIELD && k != crate::logbook::EQSL_AG_FIELD
+            k != "CQZ"
+                && k != crate::logbook::LOTW_DXCC_FIELD
+                && k != crate::logbook::EQSL_AG_FIELD
+                && k != "LOTW_QSLRDATE"
+                && k != "EQSL_QSLRDATE"
         });
         // ...plus the two that do not survive our own round-trip intact.
         r.mode.clear();
@@ -483,6 +487,24 @@ pub(crate) fn apply_match(rec: &mut QsoRecord, inc: &QsoRecord, sum: &mut Reconc
     {
         crate::logbook::set_extra(rec, crate::logbook::EQSL_AG_FIELD, Some("Y".into()));
     }
+    // And the day each service confirmed it, with its confirmation: LoTW's and eQSL's received
+    // dates, the Logbook's "LoTW received" and "eQSL received" columns. Monotonic too — a date the
+    // log holds is never replaced here. A paper card's (`QSLRDATE`) is the operator's
+    // (`qsl_card_marked`), never a report's. eQSL's DownloadInBox spec: `EQSL_QSLRDATE` is the day
+    // the record was added to eQSL's database, sent only "if we have stored the date"; a row
+    // without it leaves the contact's date empty, never filled from the QSO date.
+    for (confirms, tag) in [
+        (inc.qsl_rcvd.lotw, "LOTW_QSLRDATE"),
+        (inc.qsl_rcvd.eqsl, "EQSL_QSLRDATE"),
+    ] {
+        if let Some(date) =
+            crate::logbook::extra_field(inc, tag).filter(|d| confirms && !d.is_empty())
+        {
+            if crate::logbook::extra_field(rec, tag).is_none_or(str::is_empty) {
+                crate::logbook::set_extra(rec, tag, Some(date.to_string()));
+            }
+        }
+    }
     // Outbound state — merged so a two-instance shared log doesn't lose an upload stamp or a
     // QSL-sent mark one instance wrote when the other rewrites the whole file. (A LoTW report
     // carries neither, so this is inert for the report path; it matters for recover-from-disk.)
@@ -540,7 +562,9 @@ pub fn reconcile_lotw<R: StoredRecord>(
 fn keep_lotw_detail(rec: &mut QsoRecord, inc: &QsoRecord) {
     use crate::logbook::callbook::{is_callbook_filled, unmark_callbook_filled};
     let take = |rec: &QsoRecord, tag: &str, held: Option<&str>| {
-        held.is_none_or(|v| v.trim().is_empty()) || is_callbook_filled(rec, tag)
+        held.is_none_or(|v| v.trim().is_empty())
+            || is_callbook_filled(rec, tag)
+            || crate::logbook::offer::is_offer_held(rec, tag)
     };
     let given = |v: &Option<String>| {
         v.as_deref()
@@ -568,6 +592,7 @@ fn keep_lotw_detail(rec: &mut QsoRecord, inc: &QsoRecord) {
         if take(rec, "IOTA", rec.ota.iota.as_deref()) {
             rec.ota.iota = Some(iota);
             unmark_callbook_filled(rec, "IOTA");
+            crate::logbook::offer::unmark_offer_held(rec, "IOTA");
         }
     }
     for tag in ["CNTY", "CQZ", "ITUZ", "PFX"] {
@@ -1846,6 +1871,47 @@ mod tests {
         assert!(!ag(&mem[1]), "and nothing landed on its twin");
     }
 
+    /// Own-disk copy of the `-05` contact that a sync confirmed (`confirm`) and dated in
+    /// `date_tag`, merged against `-05` and its date-only `-12` twin. `same_contact` must
+    /// blank the date tag (`apply_match` writes it), or the copy reads as a new contact.
+    fn merge_own_disk_pairs_a_copy_a_sync_dated(date_tag: &str, confirm: fn(&mut QsoRecord)) {
+        let day = 20_000;
+        let a = date_only("JA1XYZ", "20m", "FT8", day, Some("-05"));
+        let b = date_only("JA1XYZ", "20m", "FT8", day, Some("-12"));
+        let mut dated = a.clone();
+        confirm(&mut dated);
+        dated.confirmed = true;
+        crate::logbook::set_extra(&mut dated, date_tag, Some("20240101".into()));
+
+        let mut mem = vec![a, b];
+        let (added, sum) = merge_own_disk(&mut mem, vec![dated]);
+        assert!(
+            added.is_empty(),
+            "{date_tag}: a copy of our own -05 contact, not a new one: {added:?}"
+        );
+        assert_eq!((mem.len(), sum.matched), (2, 1), "{date_tag}");
+        assert_eq!(
+            crate::logbook::extra_field(&mem[0], date_tag),
+            Some("20240101"),
+            "{date_tag}: the date came across"
+        );
+        assert_eq!(
+            crate::logbook::extra_field(&mem[1], date_tag),
+            None,
+            "{date_tag}: and nothing landed on its twin"
+        );
+    }
+
+    #[test]
+    fn merge_own_disk_pairs_a_copy_a_lotw_sync_dated() {
+        merge_own_disk_pairs_a_copy_a_sync_dated("LOTW_QSLRDATE", |r| r.qsl_rcvd.lotw = true);
+    }
+
+    #[test]
+    fn merge_own_disk_pairs_a_copy_an_eqsl_sync_dated() {
+        merge_own_disk_pairs_a_copy_a_sync_dated("EQSL_QSLRDATE", |r| r.qsl_rcvd.eqsl = true);
+    }
+
     #[test]
     fn merge_own_disk_keeps_two_records_that_share_a_second() {
         // Date-only imports park at midnight, so two rows CAN share an exact key. They are
@@ -2074,7 +2140,9 @@ mod tests {
     /// and a LoTW value carries no mark.
     #[test]
     fn lotw_detail_fills_empty_fields_and_replaces_only_a_callbook_value() {
-        use crate::logbook::callbook::{callbook_filled, fill_from_callbook, CallbookAnswer};
+        use crate::logbook::callbook::{
+            callbook_filled, fill_gridless_from_callbook, is_map_only_grid, CallbookAnswer,
+        };
         let d = 20_000;
         let detail = |r: QsoRecord| {
             let mut r = under(confirms(r, "DXCC"), "K2DEF");
@@ -2130,10 +2198,11 @@ mod tests {
         reconcile_lotw(&mut log, &[detail(w1aw_at(d, 12, 0))], Some("K2DEF"));
         assert_eq!(got(&log[0]), got(&mine), "the operator's values stay");
 
-        // The same values, filled by a callbook lookup: LoTW's replace them, and the mark goes.
+        // The same values, filled by a callbook lookup into a contact logged with no grid (the grid
+        // for the map only): LoTW's replace them, and the marks go, the map-only one with them.
         let mut looked_up = under(w1aw_at(d, 12, 0), "K2DEF");
         looked_up.country = Some("United States".into());
-        fill_from_callbook(
+        fill_gridless_from_callbook(
             &mut looked_up,
             &CallbookAnswer {
                 call: "W1AW".into(),
@@ -2147,9 +2216,12 @@ mod tests {
             },
         );
         assert!(!callbook_filled(&looked_up).is_empty(), "premise: marked");
+        assert!(is_map_only_grid(&looked_up), "premise: map only");
         let mut log = vec![looked_up];
         reconcile_lotw(&mut log, &[detail(w1aw_at(d, 12, 0))], Some("K2DEF"));
         assert_eq!(got(&log[0]), lotw, "LoTW's values replace the callbook's");
+        assert!(!is_map_only_grid(&log[0]), "LoTW's grid counts");
+        assert_eq!(crate::logbook::counted_grid(&log[0]), Some("FN31pr"));
         assert_eq!(
             log[0].state.as_deref(),
             Some("MA"),

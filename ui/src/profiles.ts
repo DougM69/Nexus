@@ -69,7 +69,7 @@ const NEVER_IMPORT: readonly string[] = [
   // betas simply stop arriving and nobody finds out. (The backend keeps the same value across a
   // payload that omits the key; this is the other half — a payload that carries a STALE one.)
   'betaUpdates',
-  // The LOGBOOK UPLOAD SWITCHES, every one under Settings ▸ Logging & Connectors ▸ Confirmations
+  // The LOGBOOK UPLOAD SWITCHES, every one under Settings ▸ Services ▸ Confirmations
   // (#396; the operator's ruling: profiles never touch them). Where your contacts are sent is not
   // part of a station. Left importable, loading a profile saved while QRZ upload was on turned it
   // back on after the operator had switched it off and forgotten the key, and every contact went
@@ -104,6 +104,11 @@ const NEVER_IMPORT: readonly string[] = [
   // there carries them, and loaded at the station they would mark its own form "Set at the station".
   'secretsSavedAtStation',
   'stationOnlySettings',
+  // The first-run answers, the operator's own like `licenseClass`: how much they have done (it
+  // picks the screens and how much of Settings opens) and whether this station's setup wizard was
+  // done. Each has one writer of its own; a profile from another station must move neither.
+  'experienceLevel',
+  'setupWizardSeen',
 ]
 
 /** Merge a stored profile onto the CURRENT settings — the load contract.

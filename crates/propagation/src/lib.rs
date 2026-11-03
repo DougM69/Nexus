@@ -17,22 +17,27 @@
 
 pub mod achievements;
 pub mod advisor;
+pub mod arrival;
+pub mod award_status;
 pub mod awards;
 pub mod awards_more;
 pub mod beacons;
 pub mod callstats;
 pub mod chirp;
+pub mod contact_path;
 pub mod custom;
 pub mod dxcc;
 pub mod dxped;
 pub mod engine;
 pub mod fccstate;
 pub mod ffma;
+pub mod flare;
 pub mod geo;
 pub mod gettingout;
 pub mod gridrarity;
 pub mod gridstate;
 pub mod insight;
+pub mod iota;
 pub mod journey;
 pub mod kc2g;
 pub mod kpforecast;
@@ -43,6 +48,8 @@ pub mod model;
 pub mod needalert;
 pub mod opening;
 pub mod p533;
+pub mod pathday;
+pub mod pathgeo;
 pub mod pca;
 pub mod pota;
 pub mod pounce;
@@ -50,6 +57,7 @@ pub mod predict;
 pub mod province;
 pub mod pskr_mqtt;
 pub mod repeaters;
+pub mod route;
 pub mod sat;
 pub mod satneeds;
 pub mod satsked;
@@ -60,6 +68,7 @@ pub mod space_wx;
 pub mod spot;
 pub mod stats;
 pub mod swpc_scales;
+pub mod us_counties;
 pub mod wae;
 pub mod wmm;
 pub mod wpx;
@@ -73,7 +82,7 @@ pub use achievements::Achievement;
 pub use advisor::{BandReport, PropAdvisor, PropAdvisory, RegionReport};
 pub use awards::{
     AwardBandNeeds, AwardSummary, Awards, BandAward, BandNeed, ContactExtras, DxccDisagreement,
-    EntityNeed, QslChannels, RecordFields,
+    EntityNeed, QslChannels, RecordFields, UsacaProgress,
 };
 pub use awards_more::{
     mark_award_needs, DxccChart, DxccChartRow, QslFor, QslSlot, QslWant, WaeCountry, WaeProgress,
@@ -92,7 +101,7 @@ pub use fccstate::FccStates;
 pub use gettingout::{getting_out, GettingOut, HeardMe};
 pub use gridrarity::{grid_rarity, GridRarity};
 pub use gridstate::state_for_grid;
-pub use insight::{generate_insights, Insight, InsightKind, InsightLevel};
+pub use insight::{generate_insights, insight_speaks_now, Insight, InsightKind, InsightLevel};
 pub use journey::{
     compute as compute_journey, model as journey_model, Cell as JourneyCell,
     Collection as JourneyCollection, Feat, First, JourneyModel, JourneyQso, JourneySummary, Ladder,
@@ -101,7 +110,8 @@ pub use journey::{
 pub use kc2g::MufStation;
 pub use kpforecast::{parse_kp_forecast, KpForecast, KpKind, KpPoint};
 pub use likelihood::{
-    mode_now_at, BandOutlook, ModeHourly, ModeNow, PathModel, PropParams, Workability,
+    mode_now_at, BandOutlook, ModeHourly, ModeNow, PathHour, PathLayer, PathModel, PropParams,
+    Workability,
 };
 pub use mapspots::{build_map_spots, MapSpot};
 pub use model::{
@@ -118,6 +128,14 @@ pub use opening::{
     classify as classify_opening, detect as detect_openings_v2, reciprocity, BandFeatures,
     BandSignal, OpeningConfig, OpeningEpisode, OpeningEvent, OpeningTracker,
 };
+pub use pathday::{
+    day_is_well_formed, path_day, refresh_hours, refresh_regions, sweep_regions, PathDay,
+    PathDayBand, PathDayCell, PathDayHour, PathRegion, RegionDay, PATH_REGIONS,
+};
+pub use pathgeo::{
+    path_geometry, path_geometry_route, KpSource, PathGeoHour, PathGeometry, PathSegment,
+    SegmentKind,
+};
 pub use pota::{parse_pota_spots, parse_sota_spots, OtaSpot};
 pub use predict::{
     band_outlook_ring, make_predictor, modeled_now, representative_muf, HeuristicEngine,
@@ -129,6 +147,9 @@ pub use pskr_mqtt::{
     parse_mqtt_report_payload as parse_pskr_mqtt_payload, region_topics as pskr_region_topics,
     LiveSpots, REGION_SPOT_CAP,
 };
+pub use route::{
+    compare_routes, compare_routes_at, Route, RouteCall, RouteConfidence, RouteReason, RouteVerdict,
+};
 pub use sat::{passes as sat_passes, subpoint as sat_subpoint, tle_age_days, Pass, Tle};
 pub use satneeds::{pass_earn, SatNeeds, SatPassEarn};
 pub use satsked::{mutual_schedule, mutual_windows, MutualWindow, SkedWindow};
@@ -137,4 +158,4 @@ pub use solar_wind::SolarWind;
 pub use space_wx::{ScalarTrend, SpaceWxHistory, SpaceWxSample, TrendDir, WxTrend};
 pub use spot::Spot;
 pub use stats::{compute_log_stats, ContinentTally, LogStats, ZoneTally};
-pub use swpc_scales::{AlertView, NoaaScalesView};
+pub use swpc_scales::{AlertView, GForecast, NoaaScalesView};

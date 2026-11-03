@@ -119,6 +119,10 @@ const MIGRATED = [
   // and the words for a call it refused or could not make.
   'components/ClientBanner.tsx',
   'features/clientWords.ts',
+  // The words for a restore refused while the radio is keyed (2026-10-29), born migrated.
+  'features/restoreWords.ts',
+  // The saved keys held back until the operator confirms them (2026-10-28), born migrated.
+  'components/KeyConfirmBanner.tsx',
   // This computer ▸ Audio (2026-10-08), born migrated: a driving computer's headset.
   'components/ThisComputerAudio.tsx',
   'components/ShackFilesSave.tsx',
@@ -158,11 +162,13 @@ const MIGRATED = [
   'components/RecentlyDeleted.tsx',
   // The import preview and its no-loss report's words — born migrated.
   'components/ImportPreview.tsx',
+  'components/Iota.tsx',
   'features/logImport.ts',
   'components/LogTools.tsx',
   'components/LogDupes.tsx',
   'components/LogBulkEdit.tsx',
   'components/LogCheck.tsx',
+  'components/LogGridFill.tsx',
   'components/LogCallbookUpdate.tsx',
   'features/logCleanup.ts',
   // The Logbook's country picker — born migrated: the entity names and numbers it lists are data.
@@ -195,6 +201,7 @@ const MIGRATED = [
   // lookup happens when the string is read rather than when the module loads.
   'components/AwardsView.tsx',
   'components/AwardsMore.tsx',
+  'components/AwardStatus.tsx',
   'components/CallStatsPane.tsx',
   'components/RecentQsosPane.tsx',
   'components/AwardsJourney.tsx',
@@ -227,6 +234,10 @@ const MIGRATED = [
   'propViz.ts',
   'openingAlert.ts',
   'stormAlert.ts',
+  // The flare heads-up toast, its copy in the catalog like the storm toast's.
+  'flareAlert.ts',
+  // The NOAA storm-watch heads-up toast (once per watch serial).
+  'arrivalAlert.ts',
   'tv/ConnectTv.tsx',
   // The dashboard bar over the Connect pop-out and the TV page: the index names, `UTC` and the
   // clock digits are tokens; its prose (the Stay behind toggle, the hover words) is the catalog's.
@@ -246,9 +257,14 @@ const MIGRATED = [
   'components/prop/BeaconMonitor.tsx',
   'components/prop/BestBandTable.tsx',
   'components/prop/ChaseFeedPane.tsx',
+  // FlareChip.tsx — the flare chip, moved out of MapView when the 3-D globe gained it too; born
+  // catalogued, so its `map.flare.*` entries are read here and not taken for orphans.
+  'components/prop/FlareChip.tsx',
   'components/prop/ChasePane.tsx',
   'components/prop/ClockPane.tsx',
   'components/prop/KpOutlookPane.tsx',
+  // The "coming" chip on the map and globe: NOAA's watch, the model line, a measured arrival.
+  'components/prop/ArrivalChip.tsx',
   'components/prop/DxpedCalendar.tsx',
   'components/prop/DxpedDigest.tsx',
   'components/prop/DxpedMonth.tsx',
@@ -261,6 +277,16 @@ const MIGRATED = [
   'components/prop/MeasuredMuf.tsx',
   'components/prop/OpeningStrip.tsx',
   'components/prop/OpeningsLogPane.tsx',
+  'components/prop/PathWhy.tsx',
+  'features/pathWhy.ts',
+  'components/prop/PathRoute.tsx',
+  'features/pathRoute.ts',
+  'features/pathRibbon.ts',
+  'components/prop/PathDayStrip.tsx',
+  'features/pathDay.ts',
+  'features/pathGrade.ts',
+  'components/prop/PathGradeCell.tsx',
+  'components/prop/ContactPath.tsx',
   'components/prop/ScalesAnnunciator.tsx',
   'components/prop/SolarTrends.tsx',
   'components/prop/SpaceWxGauges.tsx',
@@ -281,6 +307,9 @@ const MIGRATED = [
   // Check confirmations (2026-10-07) — born migrated: LoTW, calls, bands, modes and credit codes
   // are tokens, held as data or a named constant.
   'components/ConfirmationReview.tsx',
+  // Cards to send (2026-10-27) — born migrated: calls, bands, modes and the label stocks' product
+  // names are tokens.
+  'components/QslCardsToSend.tsx',
   'components/SpotLegend.tsx',
   'components/BandMap.tsx',
   'components/ContestSpotMe.tsx',
@@ -317,6 +346,10 @@ const MIGRATED = [
   // The radio switch notice (2026-10-27): born migrated. The radio name, the band and the routing
   // mode name in it are data.
   'useRadioSwitchNotice.ts',
+  // The first-contact walk-through and the experience answers (2026-10-27): born migrated. The TX
+  // buttons' names in the walk are the strip's own untranslated labels, quoted as data.
+  'components/FirstContactWalk.tsx',
+  'settings/experience.ts',
   'components/ContestView.tsx',
   'components/ContestOperators.tsx',
   // The activator's pane and its Stop checklist (2026-10-25): born migrated.
@@ -334,6 +367,13 @@ const MIGRATED = [
   // The contest setup (2026-10-26): born migrated — every string is a catalog key; contest names,
   // Cabrillo tokens and UTC times are invariant tokens.
   'components/ContestSetupWizard.tsx',
+  // The radio setup (2026-10-27): born migrated — every string is a catalog key; radio names,
+  // band tokens, model names, ports and the routing mode names are data or invariant tokens.
+  'components/RadioSetupWizard.tsx',
+  // The first-run journeys (2026-10-28): born migrated — every string is a catalog key; the
+  // logbook services' names and accounts are data from the backend.
+  'components/WizardServices.tsx',
+  'settings/journeys.ts',
   // What keeps a contest from starting, moved out of ContestView beside it: catalog keys only.
   'features/contestStart.ts',
   'components/ContestScoreChip.tsx',
@@ -667,6 +707,7 @@ const MIGRATED = [
   'features/slotOverDropped.ts',
   // …and of a PTT press the station kept off the air for the radio's DAX — migrated from birth.
   'features/pttRefused.ts',
+  'features/pcMic.ts',
   // …and of a voice-keyer message the station dropped before the radio took DAX — migrated from
   // birth.
   'features/voiceDropped.ts',
@@ -729,6 +770,12 @@ const MIGRATED = [
   'features/voiceDelete.ts',
   // The ATU button's menu, "Switch tuner out" (#344) — migrated from birth.
   'components/AtuSwitchOutMenu.tsx',
+  // Settings ▸ Digital ▸ JS8's colours and fonts (JS8Call's UI tab) — migrated from birth. The samples'
+  // calls, offsets and reports are data.
+  'components/Js8PaneStyleSettings.tsx',
+  // The JS8 sounds from any screen, and a sound file's notice when it cannot play — migrated from birth.
+  'components/Js8SoundPlayer.tsx',
+  'features/js8Sounds.ts',
 ]
 
 /**
@@ -921,6 +968,10 @@ const PARTIAL = [
   // this file. The rest of its palette labels are still code, the English "Auto (theme)" among
   // them, so it is partial in exactly this list's sense and does not belong on MIGRATED.
   'waterfall.ts',
+  // api.ts (2026-10-29) — for `callStation` alone: it puts the engine's English refusal of a
+  // click on a call shown as <...> in the operator's language (`shell.work.unresolved*`), which
+  // the orphan check can only see if it reads this file. Its other errors are still code.
+  'api.ts',
 ]
 
 /** Attributes whose value a human reads — on hover, or through a screen reader. */

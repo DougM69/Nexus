@@ -9,6 +9,7 @@ import { pollSingleFlight } from './singleFlight'
 import { t } from './i18n'
 import { isStreamInput } from './remote-native/stream-input'
 import { clientWords } from './features/clientWords'
+import { restoreRefusal } from './features/restoreWords'
 import { noteCallbookAnswer } from './features/callbookAnswers'
 import type { ActivationSpotReport } from './selfSpot'
 import type { ImportDone, ImportPreview } from './features/logImport'
@@ -69,6 +70,7 @@ import type {
   QrzPushResult,
   RouteMode,
   RadioSwitchPolicy,
+  ExperienceLevel,
   RoutingRule,
   Settings,
   SourceKind,
@@ -80,7 +82,7 @@ import type {
   KpForecast,
   DailySolarIndices,
 } from './types'
-import type { PropagationSnapshot, PathPrediction, GettingOut, AuroraPoint } from './types'
+import type { PropagationSnapshot, PathPrediction, GettingOut, AuroraOval, AuroraPoint } from './types'
 import type { MufStation, NoaaScalesView, AlertView } from './types'
 import type { RepeaterSearchResult, GeoCandidate, RadioProgFileNotice, RadioProgProject, ProgChannel } from './types'
 import type { TxHold } from './types'
@@ -90,6 +92,7 @@ import type { AnswerTo, LogQuestion } from './features/logAnswers'
 import type { LogColumnsSaved } from './features/logColumns'
 import type { SavedLogFilter } from './features/logFilter'
 import type { LogQuery } from './features/logQuery'
+import type { DecoderScreen } from './features/decoderScreens'
 import type { StreetPack } from './features/streetPack'
 import type {
   StreetArea,
@@ -273,20 +276,47 @@ export async function getPathOutlook(grid: string): Promise<PathPrediction> {
   return invoke<PathPrediction>('get_path_outlook', { grid })
 }
 
+/** The path grade of each Logbook row: its own stamp when it carries one made for its current
+ * grid and band, else the display-only grade of the log, else null. */
+export async function logPathGrades(rows: import('./types').PathGradeAsk[]): Promise<(import('./types').PathGrade | null)[]> {
+  return invoke<(import('./types').PathGrade | null)[]>('log_path_grades', { rows })
+}
+
+/** One contact's path over the day it was made, for the contact card. Null when it has no grid
+ * square, no solar flux for its part of the cycle, or no long path to compare. */
+export async function contactPathDay(row: import('./types').PathGradeAsk): Promise<import('./types').ContactPathDay | null> {
+  return invoke<import('./types').ContactPathDay | null>('contact_path_day', { row })
+}
+
+/** How the display-only grading of the log is going, and the 30-day success measures. */
+export async function pathGradingStatus(): Promise<import('./types').PathGradingStatus> {
+  return invoke<import('./types').PathGradingStatus>('path_grading_status')
+}
+
+/** The ten DX regions' path over the day from the operator's grid (the region strips). The model
+ * part is kept six hours at the shack; each hour's Kp is current at every ask. */
+export async function getPathRegions(): Promise<import('./types').PathRegions> {
+  return invoke<import('./types').PathRegions>('get_path_regions')
+}
+
 /** The no-selection "Band outlook (modelled)": modeled per-band workability + MUF to
  *  a ring of representative long-haul DX directions. Needs only the operator's grid. */
 export async function getBandOutlook(): Promise<PathPrediction> {
   return invoke<PathPrediction>('get_band_outlook')
 }
 
-/** "Am I getting out?" — who is hearing the operator now (observed). */
-export async function getGettingOut(): Promise<GettingOut> {
-  return invoke<GettingOut>('get_getting_out')
+/** "Am I getting out?" — who is hearing the operator now (observed). `since` (Unix seconds) is the
+ *  box's Start fresh time: reports before it are left out at the station. */
+export async function getGettingOut(since: number | null = null): Promise<GettingOut> {
+  return since == null ? invoke<GettingOut>('get_getting_out') : invoke<GettingOut>('get_getting_out', { since })
 }
 
-/** The current OVATION aurora oval for the map overlay. */
-export async function getAurora(): Promise<AuroraPoint[]> {
-  return invoke<AuroraPoint[]>('get_aurora')
+/** The current OVATION aurora oval for the map overlay, with the time it is a forecast for.
+ *  An older station answers with the bare point list and no stamps. */
+export async function getAurora(): Promise<AuroraOval> {
+  const v = await invoke<AuroraOval | AuroraPoint[] | null>('get_aurora')
+  if (Array.isArray(v)) return { points: v, observedAt: null, forecastAt: null }
+  return v ?? { points: [], observedAt: null, forecastAt: null }
 }
 
 export async function getKc2gMuf(): Promise<MufStation[]> {
@@ -422,6 +452,52 @@ export async function getLotwUsersStatus(): Promise<LotwUsersStatus> {
  * file changes weekly and an unchanged file costs a 304, not 6 MB). */
 export async function fetchLotwUsers(): Promise<LotwUsersStatus> {
   return invoke<LotwUsersStatus>('fetch_lotw_users')
+}
+
+/** The IOTA island-group list on the station: whether it is on, how many groups are in use, the
+ *  date of that copy (Unix seconds, 0: none), whether it is the copy that shipped with Nexus, and why
+ *  the last monthly check was not kept, if it was not. The list is IOTA Ltd's, shipped by its
+ *  permission. */
+export interface IotaListStatus {
+  enabled: boolean
+  count: number
+  fetchedAt: number
+  bundled: boolean
+  lastError: string | null
+}
+
+export async function getIotaListStatus(): Promise<IotaListStatus> {
+  return invoke<IotaListStatus>('get_iota_list_status')
+}
+
+/** Settings ▸ Logbook ▸ IOTA island list. On uses the list and checks for a newer one when a
+ *  month old; off shows no names, stops the check and deletes any downloaded copy. */
+export async function setIotaListEnabled(enabled: boolean): Promise<IotaListStatus> {
+  return invoke<IotaListStatus>('set_iota_list_enabled', { enabled })
+}
+
+/** One island group of the list: its reference and IOTA Ltd's name for it. */
+export interface IotaGroup {
+  reference: string
+  name: string
+}
+
+/** Every island group the station holds; empty without the list. */
+export async function getIotaGroups(): Promise<IotaGroup[]> {
+  return invoke<IotaGroup[]>('get_iota_groups')
+}
+
+/** An IOTA reference the station OFFERS a contact being logged (`tempo_core::logbook::offer::IotaOffer`),
+ *  and where it came from: the spot comments for the call, or a callbook lookup made this session. */
+export interface IotaOfferData {
+  reference: string
+  source: 'spot' | 'callbook'
+}
+
+/** What IOTA reference the station offers the contact a form holds for `call`; null for none, and
+ *  none while the form holds a reference of its own (`held`). Asking writes nothing. */
+export async function getIotaOffer(call: string, held?: string | null): Promise<IotaOfferData | null> {
+  return invoke<IotaOfferData | null>('get_iota_offer', { call, held: held ?? null })
 }
 
 export interface FccStatesStatus {
@@ -737,7 +813,24 @@ export async function callStation(
     snr: snr ?? null,
     // The decoded station's audio offset (Hz) — moves our RX/TX onto it (WSJT-X).
     freq: freq ?? null,
+  }).catch((err: unknown) => {
+    throw unresolvedRefusal(err) ?? err
   })
+}
+
+/** The engine's refusals of a click on a call shown as `<...>`, `Engine::UNRESOLVED_CQ` and
+ *  `Engine::UNRESOLVED_CALL`, word for word. The engine words them in English;
+ *  `unresolved-call-words.test.ts` holds these to its text. */
+export const ENGINE_UNRESOLVED_CQ =
+  "This CQ's call shows as <...>: Nexus has not decoded it in full yet. Click the station's next CQ once its call shows."
+export const ENGINE_UNRESOLVED_CALL =
+  "This call shows as <...>: Nexus has not decoded it in full yet. Click the station's next message once its call shows."
+
+/** One of those refusals in the operator's language; `undefined` for anything else. */
+function unresolvedRefusal(err: unknown): string | undefined {
+  if (err === ENGINE_UNRESOLVED_CQ) return t('shell.work.unresolvedCq')
+  if (err === ENGINE_UNRESOLVED_CALL) return t('shell.work.unresolvedCall')
+  return undefined
 }
 
 /** WSJT-X Tx-slot click: force `text` as the next transmission to `call`
@@ -1156,9 +1249,9 @@ export async function fdClubExport(format: 'cabrillo' | 'adif'): Promise<string>
   return invoke<string>('fd_club_export', { format })
 }
 
-/** The host's club log for its own screen: the newest contacts its club merged, newest first,
- *  each with the position that logged it, and how many the club holds. `null` when this instance
- *  is not hosting. A read; never on Remote. */
+/** The club log for this screen: the newest contacts the club merged, newest first, each with the
+ *  position that logged it, and how many the club holds; on a joined laptop, as the host last sent
+ *  it. `null` when this instance neither hosts nor has been sent one. A read; never on Remote. */
 export async function fdClubLogNewest(): Promise<FdClubLog | null> {
   return invoke<FdClubLog | null>('fd_club_log_newest')
 }
@@ -1194,6 +1287,31 @@ export async function fdClubRemovePosition(posid: string): Promise<FdRemoveAnswe
 /** Let a removed position back in: its next try joins, and it sends what it logged meanwhile. */
 export async function fdClubAllowBack(posid: string): Promise<FdRemoveAnswer> {
   return invoke<FdRemoveAnswer>('fd_club_allow_back', { posid })
+}
+
+/** What the host's "Import a laptop's file…" did (`fd_club_import`): how many of the file's
+ *  contacts it added, how many were duplicates or already in, and how many it kept out and why.
+ *  Nothing is ever taken out of the club's log. */
+export interface FdClubImport {
+  added: number
+  dupes: number
+  alreadyIn: number
+  otherContest: number
+  otherRunning: number
+  otherCall: number
+  takenBack: number
+  unreadable: number
+  /** Kept out where every contact enters the club's log, each with the host screen's sentence. */
+  refused: { call: string; reason: string }[]
+}
+
+/** ⭐ **Merge a laptop's contest file into the host's club log**, as that laptop's sync would have
+ *  merged it, recorded as from position `posid`: the host's own Contest screen, for a host that
+ *  died or a laptop that never synced. Importing the same file again adds nothing. Rejects, with
+ *  the sentence to show, when this Nexus is not hosting or the position cannot be used. Never on
+ *  Remote. */
+export async function fdClubImport(text: string, posid: string): Promise<FdClubImport> {
+  return invoke<FdClubImport>('fd_club_import', { text, posid })
 }
 
 /** The spectator scoreboard's bound state, for the Settings row: running?,
@@ -1298,9 +1416,12 @@ export async function resumeChatCq(): Promise<AppSnapshot> {
  * `expectedKey` is the identity of the hold the popup was SHOWING, and it goes on every
  * transport, not only a Remote one (operator ruling 2026-09-19: completed contacts queue). The
  * engine refuses an answer whose key is not the head's, so an edited call can never be filed
- * onto a contact that was promoted while the operator was typing. */
-export async function confirmPendingLog(record: LoggedQso, expectedKey?: string | null): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('confirm_pending_log', { record, expectedKey })
+ * onto a contact that was promoted while the operator was typing.
+ *
+ * `iotaOffer` is the IOTA offer the operator took in the popup: the station writes it into an
+ * empty IOTA field, held back from uploads until the operator touches it. */
+export async function confirmPendingLog(record: LoggedQso, expectedKey?: string | null, iotaOffer?: IotaOfferData | null): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('confirm_pending_log', { record, expectedKey, ...(iotaOffer ? { iotaOffer } : {}) })
 }
 
 /** Discard a QSO held by the prompt-to-log popup without logging it. Names the hold it
@@ -1407,8 +1528,11 @@ export async function qsoFreetext(text: string): Promise<AppSnapshot> {
 /** Operator "Log QSO": log the active QSO's contact now. `logged` is the engine's verdict
  *  (#100) — false when nothing was loggable (already logged / no QSO / no report yet), and
  *  the UI must not claim success then. Snapshot is fresh either way. */
-export async function logCurrentQso(): Promise<{ logged: boolean; pending?: boolean; snapshot: AppSnapshot }> {
-  return invoke<{ logged: boolean; pending?: boolean; snapshot: AppSnapshot }>('log_current_qso', {})
+/** `call` names the station logged or held, which with Auto-log and the popup off can be a
+ *  contact set aside behind the station now shown. `alreadyWaiting`: that station's offer was
+ *  already waiting in the log popup, so nothing new was held. */
+export async function logCurrentQso(): Promise<{ logged: boolean; call?: string | null; alreadyWaiting?: boolean; pending?: boolean; snapshot: AppSnapshot }> {
+  return invoke<{ logged: boolean; call?: string | null; alreadyWaiting?: boolean; pending?: boolean; snapshot: AppSnapshot }>('log_current_qso', {})
 }
 
 /** Where a log form's STATE came from: typed or picked by the operator, filled in by a callbook
@@ -1416,9 +1540,11 @@ export async function logCurrentQso(): Promise<{ logged: boolean; pending?: bool
  *  callbook's, and the operator's outrank both. */
 export type StateSource = 'operator' | 'callbook' | 'park'
 
-/** Append a contact to the ADIF logbook. Returns the fresh snapshot. */
-export async function logQso(record: LoggedQso, stateSource?: StateSource): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('log_qso', { record, stateSource })
+/** Append a contact to the ADIF logbook. Returns the fresh snapshot. `iotaOffer` is the IOTA offer
+ *  the operator took on the form ([`getIotaOffer`]): written into an empty IOTA field, held back
+ *  from uploads until the operator touches it. */
+export async function logQso(record: LoggedQso, stateSource?: StateSource, iotaOffer?: IotaOfferData | null): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('log_qso', { record, stateSource, ...(iotaOffer ? { iotaOffer } : {}) })
 }
 
 /** One contact "Check park states" lists: a hunted park or summit in ONE state whose contact
@@ -1882,6 +2008,13 @@ export type CleanupField =
   | 'MY_GRIDSQUARE' | 'MY_RIG' | 'OPERATOR' | 'STATION_CALLSIGN' | 'PROP_MODE' | 'SAT_NAME'
   | 'TX_PWR' | 'MY_POTA_REF' | 'MY_SOTA_REF'
   | 'GRIDSQUARE' | 'BAND' | 'DXCC' | 'IOTA' | 'POTA_REF' | 'SOTA_REF' | 'TIME_OFF'
+  | AwardStatusField
+
+/** An award's status on a contact, by the award's ADIF Credit code: set to 'SUBMITTED' or
+ *  'GRANTED' (one clears the other, in CREDIT_SUBMITTED / CREDIT_GRANTED), cleared for neither.
+ *  Only that code moves. */
+export type AwardStatusField =
+  | 'CREDIT_DXCC' | 'CREDIT_WAS' | 'CREDIT_CQWAZ_MIXED' | 'CREDIT_IOTA' | 'CREDIT_USACA'
 
 /** One field set (`value`) or cleared (`null`). */
 export interface FieldChange { field: CleanupField; value: string | null }
@@ -2044,6 +2177,32 @@ export async function applyLogFixes(fixes: LogFix[]): Promise<ToolRun> {
   return invoke<ToolRun>('apply_log_fixes', { fixes })
 }
 
+/** A contact logged with no grid, and the grid Nexus knows for its station: `heard`, the one it
+ *  sent on the air; `callbook`, its home QTH from a callbook lookup already made (for the distance
+ *  and the map only). `uploaded`: a service already has the contact. */
+export interface LogGridOffer {
+  id: string
+  call: string
+  whenUnix: number
+  band: string
+  mode: string
+  grid: string
+  source: 'heard' | 'callbook'
+  uploaded: boolean
+}
+
+/** The blank-grid contacts with a grid known (`blank`: how many contacts have no grid). Changes nothing. */
+export async function findLogGridOffers(): Promise<{ blank: number; offers: LogGridOffer[] }> {
+  return invoke('log_grid_offers')
+}
+
+/** Fill the ticked contacts' grids, as ONE change; a contact given a grid since is left out. */
+export async function fillLogGrids(
+  picks: Array<Pick<LogGridOffer, 'id' | 'grid' | 'source'>>,
+): Promise<ToolRun> {
+  return invoke<ToolRun>('log_grid_fill', { picks })
+}
+
 /** Mark the contact `target` QSL-sent (operator-declared): a card or request went out `via`
  *  "B"(ureau) / "D"(irect) / "E"(lectronic), dated now. A request is NOT a confirmation — this never
  *  moves `confirmed`/`awardConfirmed`. `via: null` WITHDRAWS the mark (#180): sending is once-only,
@@ -2057,6 +2216,23 @@ export async function markQslSentById(target: RowRef, via: 'B' | 'D' | 'E' | nul
  *  is award-eligible, so it moves the awards view. Clearable, for a mis-tick. */
 export async function markQslCardById(target: RowRef, received: boolean): Promise<RowAnswer> {
   return invoke<RowAnswer>('mark_qsl_card_by_id', { target, received })
+}
+
+/** Put the contact `target` in the cards-to-send queue (ADIF `QSL_SENT=Q`), or take it out. Marking
+ *  the card sent (`markQslSentById`) takes it out as well. */
+export async function queueQslCardById(target: RowRef, queued: boolean): Promise<RowAnswer> {
+  return invoke<RowAnswer>('queue_qsl_card_by_id', { target, queued })
+}
+
+/** The contacts whose paper QSL card is still to go out (ADIF `QSL_SENT` `Q` or `R`, not marked
+ *  sent), in log order, each with the key a change to it must send. */
+export async function qslCardQueue(): Promise<KeyedRow[]> {
+  return invoke<KeyedRow[]>('qsl_card_queue')
+}
+
+/** Open a sheet of QSL labels (a whole HTML page) in this computer's browser, to print. */
+export async function openQslLabels(html: string): Promise<void> {
+  await invoke('open_qsl_labels', { html })
 }
 
 /** Set — or REMOVE — the satellite tag on `target` (ADIF `PROP_MODE=SAT` + `SAT_NAME`).
@@ -2105,6 +2281,40 @@ export async function getAwards(): Promise<AwardSummary> {
 /** The whole-log DXCC chart: every current entity × every DXCC band, by mode class. */
 export async function getDxccChart(): Promise<import('./types').DxccChart> {
   return invoke('get_dxcc_chart')
+}
+
+/** An award whose status the log keeps. */
+export type AwardKind = 'dxcc' | 'was' | 'waz' | 'iota' | 'usaca'
+
+/** A contact to submit for an entity of an award. `entity`: a DXCC entity's name, a state's code,
+ *  a zone's number, an island group's reference, a county as `STATE,Name`. */
+export interface ReadyRow {
+  entity: string
+  id: string
+  call: string
+  whenUnix: number
+  band: string
+  mode: string
+  /** The channels that confirm it for this award: 'card', 'lotw', 'eqsl'. */
+  confirmedBy: string[]
+}
+
+/** One award's status over the log, in entities: worked, confirmed, submitted (not yet granted),
+ *  granted, and one contact per entity confirmed and neither submitted nor granted. */
+export interface AwardStatus {
+  award: AwardKind
+  creditCode: string
+  worked: number
+  confirmed: number
+  submitted: number
+  granted: number
+  ready: ReadyRow[]
+}
+
+/** One award's status: each ready entity's newest confirmed contact where `newest`, else its
+ *  oldest. Read-only. */
+export async function getAwardStatus(award: AwardKind, newest: boolean): Promise<AwardStatus> {
+  return invoke<AwardStatus>('get_award_status', { award, newest })
 }
 
 /** What to QSL: unconfirmed contacts whose confirmation fills a slot an award still needs,
@@ -2258,9 +2468,20 @@ export async function markLotwUploaded(): Promise<number> {
   return invoke<number>('mark_lotw_uploaded')
 }
 
-/** Store the eQSL password in the OS keychain (write-only; empty clears it). */
-export async function setEqslPassword(password: string): Promise<void> {
-  await invoke<void>('set_eqsl_password', { password })
+/** What saving the first login for an upload service would ask first: `null` when a login for it
+ *  is already stored (a save then asks nothing and changes nothing), else how many logged contacts
+ *  have not been sent there. Says only whether a login is stored, never anything of it. */
+export async function uploadBacklog(service: 'qrz' | 'clublog' | 'eqsl'): Promise<number | null> {
+  return invoke<number | null>('upload_backlog', { service })
+}
+
+/** Store the eQSL password in the OS keychain (write-only; empty clears it). `sendOld` answers
+ *  the first password's question (see `uploadBacklog`): `true` sends the contacts not yet sent
+ *  there, `false` starts eQSL's automatic uploads from now, and `undefined` (nothing was asked:
+ *  the count could not be read) saves as before. Required on purpose: a caller that skips the
+ *  question must say so, not silently send the whole log. */
+export async function setEqslPassword(password: string, sendOld: boolean | undefined): Promise<void> {
+  await invoke<void>('set_eqsl_password', { password, sendOld })
 }
 
 /** Remove the stored eQSL password from the OS keychain (idempotent). */
@@ -2327,9 +2548,10 @@ export async function callbookCacheClear(): Promise<void> {
   await invoke<void>('callbook_cache_clear')
 }
 
-/** Store the QRZ Logbook API key in the OS keychain (write-only; empty clears). */
-export async function setQrzLogbookKey(key: string): Promise<void> {
-  await invoke<void>('set_qrz_logbook_key', { key })
+/** Store the QRZ Logbook API key in the OS keychain (write-only; empty clears). `sendOld` as
+ *  `setEqslPassword`'s. */
+export async function setQrzLogbookKey(key: string, sendOld: boolean | undefined): Promise<void> {
+  await invoke<void>('set_qrz_logbook_key', { key, sendOld })
 }
 
 /** Remove the stored QRZ Logbook API key from the OS keychain (idempotent). */
@@ -2342,6 +2564,22 @@ export async function clearQrzLogbookKey(): Promise<void> {
  * with the failure reason. */
 export async function qrzTestConnection(): Promise<string> {
   return invoke<string>('qrz_test_connection', {})
+}
+
+/** Sign in to LoTW with the stored website login and read a report of no records (never an
+ * upload). Resolves to a summary or rejects with LoTW's own words / the network failure. */
+export async function lotwTestConnection(): Promise<string> {
+  return invoke<string>('lotw_test_connection', {})
+}
+
+/** Sign in to eQSL with the stored login and read an empty InBox query (never an upload). */
+export async function eqslTestConnection(): Promise<string> {
+  return invoke<string>('eqsl_test_connection', {})
+}
+
+/** Sign in to ClubLog with the upload's credentials and read its log matches (never an upload). */
+export async function clublogTestConnection(): Promise<string> {
+  return invoke<string>('clublog_test_connection', {})
 }
 
 /** Push one logged QSO to the operator's QRZ logbook. */
@@ -2383,9 +2621,9 @@ export async function qrzCorrectUndoMiss(): Promise<string> {
 }
 
 /** Store the ClubLog Application Password in the OS keychain (write-only; empty
- *  clears). */
-export async function setClublogPassword(password: string): Promise<void> {
-  await invoke<void>('set_clublog_password', { password })
+ *  clears). `sendOld` as `setEqslPassword`'s. */
+export async function setClublogPassword(password: string, sendOld: boolean | undefined): Promise<void> {
+  await invoke<void>('set_clublog_password', { password, sendOld })
 }
 
 /** Remove the stored ClubLog app-password from the OS keychain (idempotent). */
@@ -2712,6 +2950,19 @@ export async function revealSstvGallery(): Promise<void> {
  * cannot drift. Irreversible: the caller confirms first. */
 export async function sstvDeleteImage(path: string): Promise<void> {
   await invoke('sstv_delete_image', { path })
+}
+
+/** One picture a batch delete could not remove, and the station's reason. */
+export interface SstvDeleteFailure {
+  path: string
+  reason: string
+}
+
+/** Delete several received SSTV images at once ("Delete selected"): each goes through the same
+ * gallery-folder check as `sstvDeleteImage`, the gallery index is rewritten once, and the ones
+ * that could not be removed come back with their reasons. Irreversible: the caller confirms first. */
+export async function sstvDeleteImages(paths: string[]): Promise<SstvDeleteFailure[]> {
+  return invoke<SstvDeleteFailure[]>('sstv_delete_images', { paths })
 }
 
 /** Toggle Skip Tx1 — the station's session-only flag, resets each launch.
@@ -3382,6 +3633,18 @@ export async function setRadioSwitchPolicy(policy: RadioSwitchPolicy): Promise<A
   return invoke<AppSnapshot>('set_radio_switch_policy', { policy })
 }
 
+/** The first-run wizard's experience answer (also Settings ▸ Station) — the ONE writer of
+ * `experienceLevel` (a settings save keeps the live value, as for `setRadioSwitchPolicy`). */
+export async function setExperienceLevel(level: ExperienceLevel): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('set_experience_level', { level })
+}
+
+/** The first-run setup wizard was finished or skipped (`Settings.setupWizardSeen`'s one writer):
+ *  recorded beside the station's settings, so it never opens by itself again. */
+export async function markSetupWizardSeen(): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('mark_setup_wizard_seen')
+}
+
 /** Where a (band, mode class) WOULD route right now — the rule editor's "test" affordance.
  * Read-only: it never moves a rig. */
 export async function routePreview(
@@ -3389,6 +3652,39 @@ export async function routePreview(
   mode: RouteMode,
 ): Promise<{ radio: number; name: string }> {
   return invoke<{ radio: number; name: string }>('route_preview', { band, mode })
+}
+
+/** The radio setup's unsaved routing: every radio's band list (empty = every band) and on/off, the
+ *  ordered rules and the default radio. Rust `RoutingDraft`. */
+export interface RoutingDraft {
+  radios: { id: number; bands: string[]; enabled: boolean }[]
+  rules: RoutingRule[]
+  defaultRadio: number | null
+}
+
+/** [`routePreview`] for the radio setup's UNSAVED routing: the backend lays the draft over a copy of
+ *  the settings and asks the same routing function the engine uses. Stores nothing, moves no rig. */
+export async function routePreviewDraft(
+  draft: RoutingDraft,
+  band: string,
+  mode: RouteMode,
+): Promise<{ radio: number; name: string }> {
+  return invoke<{ radio: number; name: string }>('route_preview_draft', { draft, band, mode })
+}
+
+/** What the read-only Test CAT of a radio not in use found (Rust `RadioCatProbe`). */
+export interface RadioCatProbe {
+  id: number
+  state: 'answered' | 'notAnswering' | 'noFreshReport' | 'inUse' | 'disabled' | 'noCat' | 'notMonitored' | 'unknown'
+  ok: boolean | null
+  dialMhz: number | null
+}
+
+/** Test CAT for a radio that is NOT the one in use: the radio monitor's next reading of it. Selects,
+ *  switches and keys nothing and sends the radio nothing. The radio in use answers `inUse`; its probe
+ *  is [`testCat`]. Waits up to ten seconds. */
+export async function testRadioCat(id: number): Promise<RadioCatProbe> {
+  return invoke<RadioCatProbe>('test_radio_cat', { id })
 }
 
 /** The editable CAT/audio/PTT/rotator/native subset of a radio profile — the per-radio Settings
@@ -3424,6 +3720,11 @@ export interface RadioProfilePatch {
    * obeyed only on a radio that has one (`APRS_DATA_FM_MODELS`). Rides the patch like its
    * neighbours — a per-radio field missing here is blanked on Save. */
   aprsDataFm: boolean
+  /** Phone's PTT feeds this computer's microphone to the radio, from `pcMicDevice` at `pcMicGainDb`.
+   * Per radio, so it rides the patch like its neighbours. */
+  pcMic: boolean
+  pcMicDevice: string
+  pcMicGainDb: number
   audioIn: string
   audioOut: string
   txLevel: number
@@ -3794,6 +4095,16 @@ export interface AprsStation {
   firstHeardUnix: number
   /** Weather readings, when this station sends them. Sticky like the position. */
   wx: AprsWx | null
+  /** Where the station has been, oldest first, ending at its current position — one point per
+   * distinct position, held to the age window. Absent until the station has moved. */
+  track?: AprsTrackPoint[]
+}
+
+/** One place a station reported, and when (the latest packet that put it there). */
+export interface AprsTrackPoint {
+  lat: number
+  lon: number
+  atUnix: number
 }
 
 /** APRS weather readings — the common core of the WX format (APRS 1.0.1 ch. 12). Every field is
@@ -3874,6 +4185,30 @@ export interface AprsHealth {
   /** Enabled radios explicitly covering the band in use. >1 means the activation had a choice, and
    * the operator cannot tell from the radio which way it went. */
   bandRadioCount: number
+  /** The ISS channel's Doppler correction; present only while that channel is selected. */
+  issDoppler?: AprsIssDoppler | null
+}
+
+/** The ISS channel's Doppler correction (the engine's `aprs_iss`). While `on`, the radio listens on
+ * `rxHz` between packets and sends each packet on `txHz`; otherwise it stays on 145.825 and
+ * `whyOff` says why. */
+export interface AprsIssDoppler {
+  on: boolean
+  whyOff:
+    | 'switchedOff'
+    | 'satTracker'
+    | 'noCat'
+    | 'starting'
+    | 'noGrid'
+    | 'noElements'
+    | 'staleElements'
+    | 'belowHorizon'
+    | 'tunedAway'
+    | 'radioRounds'
+    | 'stopped'
+    | null
+  rxHz: number | null
+  txHz: number | null
 }
 
 /** Poll the APRS decoder's health beside the heard list. */
@@ -4432,6 +4767,30 @@ export async function js8SetGroups(groups: string[]): Promise<string[]> {
   return invoke<string[]>('js8_set_groups', { groups })
 }
 
+/** Settings ▸ JS8 ▸ Sounds, "Choose…": the OS file picker for a sound's WAV file.
+ *  Null when cancelled. It only reads a path back; Save writes it with the rest of the form. */
+export async function pickJs8SoundFile(): Promise<string | null> {
+  return invoke<string | null>('pick_js8_sound_file')
+}
+
+/** Play one JS8 sound on this computer, in Rust (`src-tauri/src/js8_sounds.rs`): `file` (the WAV the
+ *  form holds for it) or its built-in tone, on Settings `js8SoundDevice`, or on `route`'s output from
+ *  Settings' Test. Resolves with why a file fell
+ *  back to the tone, if it did; rejects with why nothing played: 'txDevice' (the output is a device the
+ *  station transmits from, refused for VOX safety), 'txDefault' (a TX audio device is the system
+ *  default, and so is the output), 'txUnsure' (the output cannot be told apart from a TX audio
+ *  device), 'noDevice' or 'failed'. */
+export async function playJs8SoundHere(event: string, file: string | null, route?: Js8SoundRoute): Promise<{ fileRefused: string | null }> {
+  return invoke<{ fileRefused: string | null }>('play_js8_sound', { event, file, device: route?.device ?? null, txDevices: route?.txDevices ?? null })
+}
+
+/** Where Settings' Test plays a JS8 sound before Save: the form's output ('' = the system default),
+ *  refused against the form's TX audio devices as well as the saved ones. */
+export interface Js8SoundRoute {
+  device: string
+  txDevices: string[]
+}
+
 /** The JS8 call list's Remove on @ALLCALL and Add of @ALLCALL (Settings `js8AvoidAllcall`, JS8Call's
  *  "Do not participate in the @ALLCALL group"), that one field, never the settings form. Resolves
  *  with the setting as saved. */
@@ -4473,6 +4832,14 @@ export async function sstvAutoArm(): Promise<SstvState> {
  * start the receiver — the decoding bug again, one ISS pass later. */
 export async function sstvAutoDisarm(): Promise<SstvState> {
   return invoke<SstvState>('sstv_auto_disarm')
+}
+
+/** The operator left a receive screen for another section (`features/decoderScreens.ts`): stop
+ * the decoder that opening it started, unless something still needs it. RX only. Resolves true
+ * when the decoder is still running on the screen's arm — ask again at the next section change.
+ * A decoder the operator armed is never stopped here. */
+export async function leaveDecoderScreen(screen: DecoderScreen): Promise<boolean> {
+  return invoke<boolean>('leave_decoder_screen', { screen })
 }
 
 /** Live SSTV RX state: in-flight progress + preview + the saved-image gallery
@@ -4860,6 +5227,12 @@ export async function getKpForecast(): Promise<KpForecast> {
   return invoke<KpForecast>('get_kp_forecast')
 }
 
+/** "Coming": NOAA's geomagnetic watch, its forecast days, the WSA-Enlil run and the L1 wind,
+ *  each kept and backed off on its own server-side (see src-tauri arrival_outlook.rs). */
+export async function getArrivalOutlook(): Promise<import('./types').ArrivalOutlook> {
+  return invoke<import('./types').ArrivalOutlook>('get_arrival_outlook')
+}
+
 /** NOAA's daily solar indices: the last thirty days of SFI and sunspot number. Cached an hour
  *  server-side, and the last good copy is served when a fetch fails — every row carries its own
  *  date, so the caller can say how old the newest day is. EMPTY = never had the file. */
@@ -5149,7 +5522,7 @@ export async function getScopeRow(
   _transmitting: boolean,
   loHz: number,
   hiHz: number,
-  window?: ScopeWindow,
+  window?: ScopeAnalysis,
 ): Promise<Spectrum> {
   return invoke<Spectrum>('get_scope_row', { loHz, hiHz, window })
 }
@@ -5163,14 +5536,24 @@ export async function getScopeRow(
  * copies of a source that sweeps slower than it polls. Two answers come back whatever `lastSeq`
  * says, because neither means "nothing new": a source that went quiet answers its EMPTY frame, and
  * a row nobody numbered (the Companion path) comes back unsequenced (`seq` 0) on every poll.
+ *
+ * `rfView` is the absolute RF window the scope is drawing on a native panadapter row. It rides the
+ * poll as a standing request: an SDR's IQ panadapter (TCI, SDRconnect) computes its rows over that
+ * window at a finer resolution than its whole span allows. A radio's own scope ignores it.
  */
 export async function getScopeFrame(
   loHz: number,
   hiHz: number,
-  window: ScopeWindow | undefined,
+  window: ScopeAnalysis | undefined,
   lastSeq: number,
+  rfView?: { loHz: number; hiHz: number },
 ): Promise<SpectrumFrameWire | null> {
-  return invoke<SpectrumFrameWire | null>('get_scope_frame', { loHz, hiHz, window, lastSeq })
+  return invoke<SpectrumFrameWire | null>(
+    'get_scope_frame',
+    rfView
+      ? { loHz, hiHz, window, lastSeq, rfLoHz: rfView.loHz, rfHiHz: rfView.hiHz }
+      : { loHz, hiHz, window, lastSeq },
+  )
 }
 
 /**
@@ -5200,6 +5583,13 @@ export async function getRfFrame(lastSeq: number): Promise<SpectrumFrameWire | n
  * rather than to a blank scope.
  */
 export type ScopeWindow = 'fast' | 'balanced' | 'sharp'
+
+/**
+ * What the rig scope's row is computed with: one of the windows above, or `hidef`, the CW scope's
+ * zoom FFT of its own passband (a steady carrier ~4–5 Hz wide, ~256 ms behind the audio). Mirrors
+ * `tempo_core::spectrum::ScopeAnalysis`; a backend that does not know `hidef` draws `balanced`.
+ */
+export type ScopeAnalysis = ScopeWindow | 'hidef'
 
 /** Set the MSK144 T/R period (5/10/15/30 s) — the cockpit's narrow write. Deliberately not a
  * full settings save, which clears the TX queue and re-derives the TX cycle (#54; the mode
@@ -5444,6 +5834,32 @@ export async function clientStatus(): Promise<ClientStatus | null> {
   return invoke<ClientStatus | null>('client_status')
 }
 
+/** One saved key the station holds back until the operator confirms it for the address it would
+ *  go to (a settings restore set that address where the station had none): Cloudlog's
+ *  (`radioId` null) or a radio's Icom network password. Never the key, nor anything about it. */
+export interface KeyToConfirm {
+  radioId: number | null
+  /** The radio's name; empty for Cloudlog. */
+  radio: string
+  /** The Cloudlog URL, or the radio's network address. */
+  address: string
+  /** Kept only because removing it failed: it was saved for another address (or a radio no
+   *  longer on the roster), so it can only be removed. */
+  removalFailed: boolean
+}
+
+/** The saved keys that wait for the operator. Refused on a computer driving another station. */
+export async function keysToConfirm(): Promise<KeyToConfirm[]> {
+  return invoke<KeyToConfirm[]>('keys_to_confirm')
+}
+
+/** The operator's answer about a saved key that waits: Use (`useIt`) lets it go to `address`, the
+ *  one the notice showed (the station refuses it when the address has changed since); Remove
+ *  forgets it from the system keychain. */
+export async function answerSavedKey(radioId: number | null, useIt: boolean, address: string): Promise<void> {
+  return invoke<void>('answer_saved_key', { radioId, useIt, address })
+}
+
 /** Moves a test build's road switch: where it is now. Blocking one road while the other is
  *  blocked is refused (`oneRoadAtATime`); a shipped build has no such command. */
 export async function benchRoadSwitch(to: BenchPosition): Promise<BenchPosition> {
@@ -5539,5 +5955,7 @@ export async function resetSettings(): Promise<AppSnapshot> {
 /** Restore a bundle written by `exportSettingsBundle`. Refuses anything that is not one, by
  *  name and schema — a partial restore is worse than a refusal. */
 export async function importSettingsBundle(text: string): Promise<AppSnapshot> {
-  return invoke<AppSnapshot>('import_settings_bundle', { text })
+  return invoke<AppSnapshot>('import_settings_bundle', { text }).catch((e: unknown) => {
+    throw restoreRefusal(e)
+  })
 }

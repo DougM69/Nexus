@@ -48,7 +48,7 @@ set -u
 usage() {
   cat >&2 <<USAGE
 usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
-       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|topbar|header|rttyfit
+       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|radiosetup|logwaiting|topbar|header|rttyfit|firstrun|journeys|clublog|aprsmap|logbook
 
   --scenario <pattern>  matched against the suite's test NAMES (node --test
                         --test-name-pattern). Default 'stream'. The names are built
@@ -132,6 +132,18 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         Why? opens Settings at the Radios cards, whose routing lines and switch
                         choice are on screen with nothing sideways, with a planted overflow in
                         the notice and in a card that must be caught (ui/probe/radioswitch-probe.mjs)
+  --desktop radiosetup  the radio setup ("Set up radios…") in the real app, at 1024×768 and
+                        1920×1080: reached from the Radios cards, every step inside the window
+                        with Next/Finish, Back and Cancel reachable and nothing sideways (the band
+                        grid included), Test CAT on a radio not in use and "Where would this go?"
+                        answered on screen, an untouched Finish writing nothing, with a planted
+                        overflow that must be caught (ui/probe/radiosetup-probe.mjs)
+  --desktop logwaiting  the Operate strip's Log button with a count of contacts waiting for
+                        Log QSO, at 1024×768 and 1920×1080 in both themes, with and without a
+                        station on screen, asserting no control moves for the count, the count
+                        is drawn whole and covers none, Log stays topmost and live and a click
+                        reaches it, with a control (the count in the flow) that must be caught
+                        (ui/probe/logwaiting-probe.mjs; it builds nothing)
   --desktop topbar      the top bar on the FT screen and on CW at the common full-screen sizes
                         and 125/150 % on a 1080p screen, without and with a status-lane message,
                         asserting the message changes neither the bar's height nor the line any
@@ -150,6 +162,42 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         Tune, the Esc/Stop macro, the TX latch and the scope's nudges are on
                         screen, with a planted margin that must be caught
                         (ui/probe/rttyfit-probe.mjs; it builds nothing)
+  --desktop firstrun    a fresh install's first-run wizard in the real app, at 1024×768 and
+                        1920×1080: the About-you question and its answers on screen, Finish
+                        writes the answer, the Getting started guide then the first-contact
+                        walk on screen, and Settings folded for a new operator with Show all
+                        opening it, with a planted overflow in an answer and in the walk that
+                        must be caught (ui/probe/firstrun-probe.mjs)
+  --desktop journeys    the first-run journeys in the real app, at 1024×768 and 1920×1080 in the
+                        dark and light themes: About you with both questions, "Two or more"
+                        opening the radio setup once the second radio is saved, "Experienced"
+                        showing where contacts go with QRZ's Test and the import preview with
+                        nothing imported before Import, Settings ▸ Confirmations after Finish,
+                        and no call that uploads or stores a login; with a planted overflow in
+                        the services and in the preview that must be caught
+                        (ui/probe/journeys-probe.mjs)
+  --desktop clublog     the club log on a joined laptop (five positions with long names, the
+                        newest 100 of 4,321 contacts) on the Contest screen and in the club
+                        board pop-out at 1024×768 and 1920×1080, asserting it is under the club
+                        board with its head, nothing scrolls sideways, and the newest and the
+                        hundredth contact's cells are on screen, with a planted wide row that
+                        must be caught (ui/probe/clublog-probe.mjs; it builds nothing)
+  --desktop aprsmap     the APRS screen's map in the real app, at 1024×768 and 1920×1080: nothing
+                        scrolls sideways, Stop TX and the TX latch on screen, every control of the
+                        map's toolbar inside the map, the Layers panel on it, the map drawn, and a
+                        station's card opening inside the map with Follow on screen, with a toolbar
+                        forced onto one row that must be caught (ui/probe/aprsmap-probe.mjs)
+  --desktop logbook     the Logbook in the app's own wrapper at 1024×768, 1920×1080 and
+                        2560×1440, asserting the panel spans the window and the table the
+                        panel, nothing scrolls sideways at the page, the default table fits,
+                        every column scrolls sideways inside the table with its header, and a
+                        real drag of a header moves the column without sorting while a click
+                        still sorts; then each row's ✎ and ⋯ buttons, call/date/time whole from
+                        1024 px up, nothing invisible clickable, and the ⋯ menu inside the window,
+                        from 1024 to 2560 at 100% and 150% in both themes (LOGBOOK_PROBE_SHOTS=<dir>
+                        saves screenshots); the old centred measure, 22 px buttons and a hidden
+                        row button are controls that must be caught (ui/probe/logbook-probe.mjs;
+                        it builds nothing)
 
 exit: 0 the scenario passed · 1 it failed · 2 usage, or the pattern matched no test
 USAGE
@@ -166,7 +214,7 @@ while [ $# -gt 0 ]; do
                 case "$SHARD" in 0|1) ;; *) echo "browser-probe: --shard takes 0 or 1 (CI runs two)" >&2; exit 2 ;; esac ;;
     --no-build) BUILD=0; shift ;;
     --desktop)  [ $# -ge 2 ] || { usage; exit 2; }; DESKTOP="$2"; shift 2
-                case "$DESKTOP" in rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|topbar|header|rttyfit) ;; *) echo "browser-probe: --desktop takes rotor, contestlog, spots, callcard, activation, voicenote, contactcard, atu, jtty, waterfalls, txmeters, radioswitch, topbar, header or rttyfit" >&2; exit 2 ;; esac ;;
+                case "$DESKTOP" in rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|radiosetup|logwaiting|topbar|header|rttyfit|firstrun|journeys|clublog|aprsmap|logbook) ;; *) echo "browser-probe: --desktop takes rotor, contestlog, spots, callcard, activation, voicenote, contactcard, atu, jtty, waterfalls, txmeters, radioswitch, radiosetup, logwaiting, topbar, header, rttyfit, firstrun, journeys, clublog, aprsmap or logbook" >&2; exit 2 ;; esac ;;
     -h|--help)  usage; exit 0 ;;
     *)          echo "browser-probe: unknown argument '$1'" >&2; usage; exit 2 ;;
   esac
@@ -193,10 +241,17 @@ if [ -n "$DESKTOP" ]; then
   [ "$DESKTOP" = jtty ] && exec node "$ROOT/ui/probe/jtty-probe.mjs"
   [ "$DESKTOP" = waterfalls ] && exec node "$ROOT/ui/probe/waterfalls-probe.mjs"
   [ "$DESKTOP" = txmeters ] && exec node "$ROOT/ui/probe/txmeters-probe.mjs"
+  [ "$DESKTOP" = logwaiting ] && exec node "$ROOT/ui/probe/logwaiting-probe.mjs"
   [ "$DESKTOP" = radioswitch ] && exec node "$ROOT/ui/probe/radioswitch-probe.mjs"
+  [ "$DESKTOP" = radiosetup ] && exec node "$ROOT/ui/probe/radiosetup-probe.mjs"
+  [ "$DESKTOP" = firstrun ] && exec node "$ROOT/ui/probe/firstrun-probe.mjs"
+  [ "$DESKTOP" = journeys ] && exec node "$ROOT/ui/probe/journeys-probe.mjs"
   [ "$DESKTOP" = topbar ] && exec node "$ROOT/ui/probe/topbar-probe.mjs"
   [ "$DESKTOP" = header ] && exec node "$ROOT/ui/probe/header-probe.mjs"
   [ "$DESKTOP" = rttyfit ] && exec node "$ROOT/ui/probe/rttyfit-probe.mjs"
+  [ "$DESKTOP" = clublog ] && exec node "$ROOT/ui/probe/clublog-probe.mjs"
+  [ "$DESKTOP" = aprsmap ] && exec node "$ROOT/ui/probe/aprsmap-probe.mjs"
+  [ "$DESKTOP" = logbook ] && exec node "$ROOT/ui/probe/logbook-probe.mjs"
   exec node "$ROOT/ui/probe/desktop-probe.mjs" "$DESKTOP"
 fi
 
@@ -212,6 +267,11 @@ if [ "$BUILD" = 1 ]; then
 fi
 
 LOG="$(mktemp -t browser-probe.XXXXXX.log)"
+# A red probe keeps its log and names it (below); a probe stopped by Ctrl-C, `timeout` or a closed
+# terminal removes it, as a green one does.
+trap 'rm -f "$LOG"; exit 130' INT
+trap 'rm -f "$LOG"; exit 143' TERM
+trap 'rm -f "$LOG"; exit 129' HUP
 if [ -n "$SHARD" ]; then
   echo "browser-probe: running CI SHARD $SHARD of 2 entire against $(google-chrome --version 2>/dev/null || echo Chrome)"
 else

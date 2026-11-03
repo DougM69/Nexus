@@ -13,7 +13,8 @@ import { T } from '../i18n/T'
 import type { MessageKey } from '../i18n'
 import type { ProfileId } from '../features/profiles'
 import type { FeatureId, View } from '../features/registry'
-import type { AudioDevices, CatTestResult, DetectedRig, ImportStats, Settings } from '../types'
+import type { AudioDevices, CatTestResult, DetectedRig, ExperienceLevel, ImportStats, Settings } from '../types'
+import { EXPERIENCE_LEVELS, featurePreset, finishDefaults } from '../settings/experience'
 import {
   addRadio,
   detectRigs,
@@ -22,13 +23,18 @@ import {
   getAudioDevices,
   getRigModels,
   getSettings,
-  importAdif,
   probeCatPorts,
   tciProbe,
   updateRadioProfile,
   type TciServerFound,
 } from '../api'
-import { baudForRig, radioPatch } from './SettingsPanel'
+import { baudForRig, FREQ_BANDS, radioPatch } from './SettingsPanel'
+import { RadioSetupWizard } from './RadioSetupWizard'
+import { ImportPreview } from './ImportPreview'
+import { WizardServices } from './WizardServices'
+import { importTooLarge } from '../features/logImport'
+import { handsOffToRadioSetup, RADIO_COUNTS, showsServices, type RadioCount } from '../settings/journeys'
+import { KIT_FIELDS, type FinishPlan, type RadioKit } from '../settings/radioSetup'
 import { NO_CAT_PTT_MODELS, NO_CAT_PTT_TRANSCEIVERS } from '../rigFormChecks'
 import { ProveTxButton, SetupHealth } from './SetupHealth'
 import { isValidGrid } from '../grid'
@@ -83,14 +89,26 @@ interface Props {
     tuning?: boolean
     txPower?: number | null
   }
-  /** Apply goal profile(s) + modes + license + the station/rig draft, then navigate. */
+  /** Apply goal profile(s) + modes + license + the station/rig draft, then navigate.
+   * `license` is the class picked here, or null when it is the class the station already holds:
+   * like the draft, an untouched wizard writes nothing. `experience` is the About-you answer given
+   * in THIS run, or null when none was given (the step was not asked, or was passed without a
+   * pick): App writes it only when it is set. */
   onApply: (
     ids: ProfileId[],
     landing: View,
     modes: FeatureId[],
-    license: string,
+    license: string | null,
     draft: WizardDraft,
+    experience: ExperienceLevel | null,
   ) => void
+  /** Ask "How much have you done?" first (the About-you step). App passes it on a fresh install's
+   * first run only; the wizard re-opened from Settings does not ask again (Settings ▸ Station
+   * changes the answer). */
+  askExperience?: boolean
+  /** Re-opened from Settings: Finish keeps the screens the operator has on (App applies no
+   * feature preset), so its button promises no change of screens. */
+  rerun?: boolean
   /** Save the draft so far and probe CAT against it (Settings' test, wizard-reachable). */
   onTestCat: (draft: WizardDraft) => Promise<CatTestResult>
   /** Key a bounded tune carrier to prove CAT→PTT→RF (the strip's Prove TX; confirm-gated). */
@@ -100,6 +118,12 @@ interface Props {
   /** Open the Getting started guide once the wizard finishes, if the operator
    * asked for the walkthrough on the last step. Omitted ⇒ no offer is shown. */
   onOpenGuide?: () => void
+  /** Open the first-contact walk-through once the wizard finishes, if the operator asked for it
+   * on the last step. Omitted ⇒ no offer is shown. */
+  onOpenWalk?: () => void
+  /** Open Settings ▸ Confirmations once the wizard finishes, if the operator asked for it beside
+   * the logbook services (the switching-apps journey). Omitted ⇒ no offer is shown. */
+  onOpenServices?: () => void
 }
 
 // License class → sets the transmit-privilege lockout + the licensed-segment band dropdown.
@@ -179,7 +203,9 @@ const WIZARD_EXAMPLES = {
 const gridOk = isValidGrid
 
 /**
- * First-run setup wizard — four short, individually skippable steps:
+ * First-run setup wizard — four short, individually skippable steps, after the About-you
+ * question on a fresh install's first run (`askExperience`: "How much have you done?", whose
+ * answer picks the starting features, packs, guide and walk; `settings/experience.ts`):
  * 1. STATION (callsign + grid — the locator every feature computes from),
  * 2. RIG & AUDIO (auto-detect / Serial-vs-Network with Find-my-Flex + DAX / audio),
  * 3. LOG (optional ADIF import — seeds worked-before / needs / awards from your history),
@@ -190,27 +216,43 @@ const gridOk = isValidGrid
  * Settings ▸ re-open path acts as an editor. Built on the Radix [`Dialog`].
  * See feature-modularity.md §4.6.
  */
-export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, onSkip, onOpenGuide }: Props) {
+export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, onSkip, onOpenGuide, onOpenWalk, onOpenServices, askExperience = false, rerun = false }: Props) {
   const [step, setStep] = useState(0) // 0 station · 1 rig · 2 log · 3 goals
+  // The About-you step sits BEFORE step 0 and only when asked, so the four steps keep their
+  // numbers (and every gate written against them) whether or not it is shown.
+  const [onAbout, setOnAbout] = useState(askExperience)
+  // The answer given in this run. Unanswered keeps whatever the station already holds.
+  const [experience, setExperience] = useState<ExperienceLevel | null>(null)
+  const level = experience ?? settings?.experienceLevel ?? null
+  // How many radios Nexus will run, asked beside it. Never stored: "two or more" only hands the rig
+  // step on to the radio setup once the second radio is saved (`settings/journeys.ts`).
+  const [radioCount, setRadioCount] = useState<RadioCount | null>(null)
   // Closed, the keyboard goes back to where the wizard was opened from (focusReturn.ts).
   const returnFocus = useFocusReturn(true)
 
-  // --- Step 3: optional ADIF log import (seeds worked-before / needs / awards) ---
+  // --- Step 3: optional log import (seeds worked-before / needs / awards) ---
+  // The file opens the Logbook's own import preview (`ImportPreview`) over this step: what the file
+  // holds, its dates, new against already in the log, its problems, and nothing written until the
+  // operator presses Import or Import new only there. Its counts come back here as the result line.
   const [importStats, setImportStats] = useState<ImportStats | null>(null)
   const [importError, setImportError] = useState<string | null>(null)
-  const [importing, setImporting] = useState(false)
+  const [importFile, setImportFile] = useState<{ text: string; name: string } | null>(null)
+  const [reading, setReading] = useState(false)
   const logFileRef = useRef<HTMLInputElement>(null)
-  const onImportAdif = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const onPickLog = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0]
     e.target.value = '' // let the same file be re-picked
     if (!f) return
-    setImporting(true)
     setImportError(null)
-    setImportStats(null)
+    // Feedback is INLINE, not a toast: a toast paints dimmed behind this modal wizard.
+    const tooLarge = importTooLarge(f.size)
+    if (tooLarge) {
+      setImportError(tooLarge)
+      return
+    }
+    setReading(true)
     try {
-      // Feedback is INLINE (below), not a toast — a toast paints dimmed + undismissable behind
-      // this modal wizard. A 0/0 result (non-ADIF file) is surfaced as a warning, not a success.
-      setImportStats(await importAdif(await f.text()))
+      setImportFile({ text: await f.text(), name: f.name })
     } catch (err) {
       setImportError(
         t('setup.log.import.failed', {
@@ -218,9 +260,11 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
         }),
       )
     } finally {
-      setImporting(false)
+      setReading(false)
     }
   }
+  // Open Settings ▸ Confirmations after Finish (offered beside the services, never ticked first).
+  const [wantServices, setWantServices] = useState(false)
 
   // --- Step 1: station identity ---
   const [mycall, setMycall] = useState(() => settings?.mycall ?? '')
@@ -387,6 +431,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
     seeded?: boolean
   }>(null)
   const [secondElapsed, setSecondElapsed] = useState(0)
+  const [radioSetup, setRadioSetup] = useState<Settings | null>(null)
   const [swapOffer, setSwapOffer] = useState(false)
   useEffect(() => {
     if (!second?.probing) return
@@ -443,6 +488,9 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
       const generic = (name: string | null | undefined) =>
         !!name && !/\b(FT|IC|TS|TX)-?\d/i.test(name)
       setSwapOffer(generic(row?.suggestedAudio) && generic(audioIn))
+      // "Two or more radios" on the first step: the second one is saved, so the radio setup opens
+      // (which radio for which band and mode). Its Cancel writes nothing, as from the button.
+      if (handsOffToRadioSetup(radioCount)) openRadioSetup()
     } catch (e) {
       setSecond({
         id: -1,
@@ -483,6 +531,44 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
     setSwapOffer(false)
   }
 
+  // "Set up radios" from here: radio 1, the radio this page sets up, is the radio in use, and this
+  // page's Finish writes its own choices for it whole, AFTER anything the radio setup wrote. So the
+  // setup opens showing this page's unsaved sound cards and keying for radio 1 (not what was stored
+  // before them), and a change it makes to them comes back into this page, as the audio swap's does,
+  // or this page's Finish would put its older choice back over it.
+  const kitSetters: Record<keyof RadioKit, (value: string) => void> = {
+    audioIn: setAudioIn,
+    audioOut: setAudioOut,
+    pttMethod: pickKeying,
+    pttSerialPort: setPttSerialPort,
+  }
+  const radio1 = (s: Settings) => s.activeRadio ?? s.radios?.[0]?.id ?? 0
+  // Every unsaved per-radio choice on this page (model, port, connection, baud as well as the sound
+  // cards and keying), so the setup's checks and hints for radio 1 judge the radio this page will
+  // save, not the one stored before it. Only the sound cards and keying are ever written from there
+  // (`finishPlan` compares those alone, over a fresh read), so the rest only informs.
+  const openRadioSetup = () => {
+    const d = draft()
+    const perRadio = Object.keys(radioPatch({}))
+    const unsaved = Object.fromEntries(Object.entries(d).filter(([k, v]) => perRadio.includes(k) && v !== undefined))
+    void getSettings()
+      .then((s) => setRadioSetup({ ...s, radios: (s.radios ?? []).map((r) => (r.id === radio1(s) ? { ...r, ...unsaved } : r)) }))
+      .catch(() => {})
+  }
+  // A Finish refused partway may have stopped before radio 1's write: then only what the station
+  // holds now comes back, so this page does not take up a change that was never saved.
+  const adoptRadioSetup = async (plan: FinishPlan, complete: boolean) => {
+    if (!radioSetup) return
+    const id = radio1(radioSetup)
+    const changes = plan.radios.find((r) => r.id === id)?.changes ?? {}
+    const stored = complete ? null : (await getSettings().catch(() => null))?.radios?.find((r) => r.id === id)
+    if (!complete && !stored) return
+    for (const f of KIT_FIELDS) {
+      const value = changes[f]
+      if (value !== undefined && (complete || stored?.[f] === value)) kitSetters[f](value)
+    }
+  }
+
   const scannedOnEntry = useRef(false)
   useEffect(() => {
     if (step !== 1) return
@@ -503,7 +589,12 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
   }, [step])
 
   // --- Step 3: license (goals/modes questions removed — everything starts on) ---
-  const [license, setLicense] = useState('open')
+  // Opens on the class the station holds, read once as the wizard opens. It used to open on
+  // "Outside the US" whatever was saved, so a re-run finished untouched wrote Open over a
+  // Technician's class and took the transmit lockout off. Finish writes the class only when the
+  // operator picked a different one.
+  const [heldLicense] = useState(() => settings?.licenseClass || 'open')
+  const [license, setLicense] = useState(heldLicense)
 
   // --- Step 3: optional starter-channel packs. First run ONLY: snapshot whether the
   // bank was empty when the wizard opened, and show the offer only then — so a returning
@@ -563,15 +654,31 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
   // honoured on either completion path — "instead of dismissing", the wizard
   // hands the operator the Getting started guide for what they just set up.
   const [wantGuide, setWantGuide] = useState(false)
+  const [wantWalk, setWantWalk] = useState(false)
+
+  /** An answer sets what the last step starts with (packs, guide, walk); each stays the
+   * operator's to change there. Packs only where the offer is shown at all (an empty bank). */
+  const pickExperience = (l: ExperienceLevel) => {
+    setExperience(l)
+    const d = finishDefaults(l)
+    if (bankWasEmpty) setPacks(new Set(d.packs ? ['na-calling', 'na-digital'] : []))
+    setWantGuide(d.guide)
+    setWantWalk(d.walk)
+  }
 
   /** The one exit that applies: seed packs, write the settings, then open the
    * guide if it was asked for. Both finish buttons go through here so they can
    * never drift apart. */
   const finish = (profileIds: ProfileId[], view: View, modeIds: FeatureId[]) => {
     seedPacks()
-    onApply(profileIds, view, modeIds, license, draft())
+    onApply(profileIds, view, modeIds, license === heldLicense ? null : license, draft(), experience)
     if (wantGuide) onOpenGuide?.()
+    if (wantWalk) onOpenWalk?.()
+    if (wantServices && showsServices(level)) onOpenServices?.()
   }
+  // The starting features follow the answer (this run's, else the one the station holds);
+  // none = everything on, as every earlier build started.
+  const preset = featurePreset(level)
 
   const gridState = mygrid.trim() === '' ? 'empty' : gridOk(mygrid) ? 'ok' : 'bad'
   const dax = findDaxDevices(audio.input, audio.output)
@@ -770,28 +877,79 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
       <div
         className="wizard-dots"
         aria-label={t('setup.steps.aria', {
-          n: step + 1,
-          total: steps.length,
-          title: t(steps[step].titleKey),
+          n: (onAbout ? 0 : step + 1) + (askExperience ? 1 : 0),
+          total: steps.length + (askExperience ? 1 : 0),
+          title: t(onAbout ? 'setup.steps.about' : steps[step].titleKey),
         })}
       >
+        {askExperience && (
+          <button
+            type="button"
+            className={`wizard-dot${onAbout ? ' cur' : ' done'}`}
+            onClick={() => setOnAbout(true)}
+            title={t('setup.steps.about')}
+          >
+            <span className="wizard-dot-n">1</span> {t('setup.steps.about')}
+          </button>
+        )}
         {steps.map((s, i) => (
           <button
             key={s.titleKey}
             type="button"
-            className={`wizard-dot${i === step ? ' cur' : ''}${i < step ? ' done' : ''}`}
+            className={`wizard-dot${!onAbout && i === step ? ' cur' : ''}${!onAbout && i < step ? ' done' : ''}`}
             // Same gates as Next: a malformed grid can't be walked past via the dots, and nor can
             // an unanswered keying choice, from any step.
             disabled={(step === 0 && gridState === 'bad' && i !== 0) || (keyingMissing && i > 1)}
-            onClick={() => setStep(i)}
+            onClick={() => {
+              setOnAbout(false)
+              setStep(i)
+            }}
             title={t(s.titleKey)}
           >
-            <span className="wizard-dot-n">{i + 1}</span> {t(s.titleKey)}
+            <span className="wizard-dot-n">{i + 1 + (askExperience ? 1 : 0)}</span> {t(s.titleKey)}
           </button>
         ))}
       </div>
 
-      {step === 0 && (
+      {onAbout && (
+        <>
+          <h2 className="wizard-title">{t('setup.about.title')}</h2>
+          <p className="wizard-sub">{t('setup.about.sub')}</p>
+          <div className="wizard-modes" role="group" aria-label={t('setup.about.title')}>
+            {EXPERIENCE_LEVELS.map((l) => (
+              <button
+                key={l.value}
+                type="button"
+                className={`wizard-mode${experience === l.value ? ' sel' : ''}`}
+                aria-pressed={experience === l.value}
+                onClick={() => pickExperience(l.value)}
+              >
+                <span className="wizard-mode-label">{l.label}</span>
+                <span className="wizard-mode-blurb">{l.blurb}</span>
+              </button>
+            ))}
+          </div>
+          <h3 id="wizard-radios-title" className="wizard-modes-title">
+            {t('setup.about.radios.title')}
+          </h3>
+          <div className="wizard-modes" role="group" aria-labelledby="wizard-radios-title">
+            {RADIO_COUNTS.map((r) => (
+              <button
+                key={r.value}
+                type="button"
+                className={`wizard-mode${radioCount === r.value ? ' sel' : ''}`}
+                aria-pressed={radioCount === r.value}
+                onClick={() => setRadioCount(radioCount === r.value ? null : r.value)}
+              >
+                <span className="wizard-mode-label">{r.label}</span>
+                <span className="wizard-mode-blurb">{r.blurb}</span>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+
+      {!onAbout && step === 0 && (
         <>
           <h2 className="wizard-title">{t('setup.station.title')}</h2>
           <p className="wizard-sub">{t('setup.station.sub')}</p>
@@ -838,10 +996,15 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
         </>
       )}
 
-      {step === 1 && (
+      {!onAbout && step === 1 && (
         <>
           <h2 className="wizard-title">{t('setup.rig.title')}</h2>
           <p className="wizard-sub">{t('setup.rig.sub')}</p>
+          {handsOffToRadioSetup(radioCount) && (
+            <p className="wizard-license-sub wizard-several-hint">
+              {t('setup.rig.several.hint', { button: t('setup.rig.second.action') })}
+            </p>
+          )}
           <div className="wizard-detect">
             <button type="button" className="wizard-btn" disabled={detecting} onClick={runDetect}>
               {detecting ? t('setup.rig.detect.busy') : t('setup.rig.detect.action')}
@@ -1319,12 +1482,32 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
               {second && !second.probing && second.portName && (
                 <span className="wizard-field-hint">{t('setup.rig.second.twoWindows')}</span>
               )}
+              {/* Two radios now: offer the radio setup (which radio for which band and mode). It
+                  opens on the settings as saved; its own Cancel writes nothing. */}
+              {second && !second.probing && second.portName && (
+                <button
+                  type="button"
+                  className="wizard-btn setup-radio-setup-open"
+                  title={t('setup.rig.second.radioSetup.title')}
+                  onClick={openRadioSetup}
+                >
+                  {t('setup.rig.second.radioSetup')}
+                </button>
+              )}
+              {radioSetup && (
+                <RadioSetupWizard
+                  settings={radioSetup}
+                  bands={FREQ_BANDS}
+                  onFinished={(plan, complete) => void adoptRadioSetup(plan, complete)}
+                  onClose={() => setRadioSetup(null)}
+                />
+              )}
             </div>
           )}
         </>
       )}
 
-      {step === 2 && (
+      {!onAbout && step === 2 && (
         <>
           <h2 className="wizard-title">{t('setup.log.title')}</h2>
           <p className="wizard-sub">
@@ -1334,17 +1517,17 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
             <input
               ref={logFileRef}
               type="file"
-              accept=".adi,.adif,.txt"
+              accept=".adi,.adif,.adx,.cbr,.log,.txt"
               style={{ display: 'none' }}
-              onChange={onImportAdif}
+              onChange={(e) => void onPickLog(e)}
             />
             <button
               type="button"
               className="wizard-go"
-              disabled={importing}
+              disabled={reading || importFile != null}
               onClick={() => logFileRef.current?.click()}
             >
-              {importing
+              {reading || importFile != null
                 ? t('setup.log.import.busy')
                 : importStats
                   ? t('setup.log.import.again')
@@ -1381,11 +1564,22 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
                 </p>
               ))}
             <p className="wizard-license-sub">{t('setup.log.sources')}</p>
+            {importFile && (
+              <ImportPreview
+                text={importFile.text}
+                fileName={importFile.name}
+                onClose={() => setImportFile(null)}
+                onImported={(stats) => setImportStats(stats)}
+              />
+            )}
           </div>
+          {showsServices(level) && (
+            <WizardServices openAfter={wantServices} onOpenAfter={onOpenServices ? setWantServices : undefined} />
+          )}
         </>
       )}
 
-      {step === 3 && (
+      {!onAbout && step === 3 && (
         <>
           <h2 className="wizard-title">{t('setup.finish.title')}</h2>
           <p className="wizard-sub">{t('setup.finish.sub')}</p>
@@ -1437,19 +1631,32 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
             </>
           )}
 
-          {onOpenGuide && (
+          {(onOpenGuide || onOpenWalk) && (
             <>
               <h3 className="wizard-modes-title">{t('setup.finish.guide.title')}</h3>
               <div className="wizard-modes">
-                <button
-                  type="button"
-                  className={`wizard-mode${wantGuide ? ' sel' : ''}`}
-                  aria-pressed={wantGuide}
-                  onClick={() => setWantGuide(!wantGuide)}
-                >
-                  <span className="wizard-mode-label">{t('setup.finish.guide.label')}</span>
-                  <span className="wizard-mode-blurb">{t('setup.finish.guide.blurb')}</span>
-                </button>
+                {onOpenGuide && (
+                  <button
+                    type="button"
+                    className={`wizard-mode${wantGuide ? ' sel' : ''}`}
+                    aria-pressed={wantGuide}
+                    onClick={() => setWantGuide(!wantGuide)}
+                  >
+                    <span className="wizard-mode-label">{t('setup.finish.guide.label')}</span>
+                    <span className="wizard-mode-blurb">{t('setup.finish.guide.blurb')}</span>
+                  </button>
+                )}
+                {onOpenWalk && (
+                  <button
+                    type="button"
+                    className={`wizard-mode${wantWalk ? ' sel' : ''}`}
+                    aria-pressed={wantWalk}
+                    onClick={() => setWantWalk(!wantWalk)}
+                  >
+                    <span className="wizard-mode-label">{t('setup.finish.walk.label')}</span>
+                    <span className="wizard-mode-blurb">{t('setup.finish.walk.blurb')}</span>
+                  </button>
+                )}
               </div>
             </>
           )}
@@ -1459,22 +1666,27 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
       <div className="wizard-actions">
         <span />
         <div className="wizard-actions-right">
-          {step > 0 && (
-            <button type="button" className="wizard-skip" onClick={() => setStep(step - 1)}>
+          {(step > 0 || (askExperience && !onAbout)) && (
+            <button
+              type="button"
+              className="wizard-skip"
+              onClick={() => (step > 0 ? setStep(step - 1) : setOnAbout(true))}
+            >
               {t('setup.nav.back')}
             </button>
           )}
           <button type="button" className="wizard-skip" onClick={onSkip}>
             {t('setup.nav.skip')}
           </button>
-          {step < 3 ? (
+          {onAbout || step < 3 ? (
             <button
               type="button"
               className="wizard-go"
               // A malformed grid must not ride into settings; empty is fine (skip). Nor does the
-              // rig step let go of a radio whose keying nobody has picked.
-              disabled={(step === 0 && gridState === 'bad') || (step === 1 && keyingMissing)}
-              onClick={() => setStep(step + 1)}
+              // rig step let go of a radio whose keying nobody has picked. The About-you answer
+              // is optional, like every step.
+              disabled={!onAbout && ((step === 0 && gridState === 'bad') || (step === 1 && keyingMissing))}
+              onClick={() => (onAbout ? setOnAbout(false) : setStep(step + 1))}
             >
               {t('setup.nav.next')}
             </button>
@@ -1483,9 +1695,10 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
               type="button"
               className="wizard-go"
               disabled={keyingMissing}
-              onClick={() => finish(['everything'], 'operate', [])}
+              onClick={() => finish(preset.profiles, 'operate', preset.extraOn)}
             >
-              {t('setup.nav.finish')}
+              {/* Re-run from Settings, Finish keeps the screens on now (App applies no preset). */}
+              {!rerun && preset.profiles.includes('everything') ? t('setup.nav.finish') : t('setup.nav.finishPlain')}
             </button>
           )}
         </div>

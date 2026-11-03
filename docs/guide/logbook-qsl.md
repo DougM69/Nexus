@@ -48,10 +48,13 @@ log stores about the station you worked — their grid, IOTA, county, CQ and ITU
 zones, continent and distance, the dates a card was sent and a QSL received,
 each service's upload state, and a contest contact's exchange. Untick one to
 hide it. Drag the right edge of a column's header to change its width (or press
-Alt+← / Alt+→ on the header); double-click the edge to put it back. A table with
-added columns scrolls sideways. Nexus keeps the choice in your settings, and
-**Reset to the default columns** in the same menu, or Settings ▸ Logbook ▸
-Logbook display, puts the default table back.
+Alt+← / Alt+→ on the header); double-click the edge to put it back. Drag a
+column's header left or right to move the column (or press Alt+Shift+← /
+Alt+Shift+→ on the header); a click on a header still sorts by it. The table
+uses the whole width of the window; one with more columns than fit scrolls
+sideways inside the table, its header with it. Nexus keeps the choice, the order
+included, in your settings, and **Reset to the default columns** in the same
+menu, or Settings ▸ Logbook ▸ Logbook display, puts the default table back.
 
 **What each contact records.** Besides the call, band, mode and reports, a contact you log
 carries:
@@ -70,17 +73,35 @@ carries:
 - **The worked station's continent** (CONT) and **the distance to it** in km (DISTANCE) when
   both grids are known.
 - **What your callbook lookup said**, when you looked the station up before logging (the
-  callsign card or the log strip): name, QTH, grid, state, county (CNTY), IOTA, CQ and ITU
+  callsign card or the log strip): name, QTH, grid, state, county (CNTY), CQ and ITU
   zones, position (LAT/LON), e-mail, web page and QSL manager (QSL_VIA), plus whether they use
   LoTW, eQSL or paper cards and their UTC offset. Every way of logging takes it, the FT
   auto-log too; nothing waits for a lookup. Where the station is comes only from its own
   callbook entry, never a home call's entry for a /P or a station at a park, and a LoTW
-  confirmation's grid, county, zones or IOTA replaces a callbook one.
-- **Space weather**, if you turn on **Log space weather on each contact** in
-  [Settings ▸ Logging & Connectors ▸ Integrations & Feeds](settings-reference.md#integrations--feeds)
+  confirmation's grid, county or zones replace a callbook one.
+- **An IOTA reference only when you take it.** When a DX-cluster spot comment for the call names
+  an island group, or your callbook lookup does, the log strip, the Logbook's Add form and the
+  log popup show it as a chip ("IOTA EU-131 · from the spot"). Press **Use** to log it, or ×
+  to leave it out; nothing is filled in by itself, and a reference you typed is never replaced.
+  Use is for that one contact: the next starts with nothing taken, even with the same station.
+  When two spot comments for the call in the last 20 minutes name different groups, none is
+  offered. An FT contact logged by itself with no popup logs without one. A reference taken this
+  way stays in your log and its exports but goes to no service, and not to DXKeeper or HRD
+  Logbook (both can upload it themselves), until you confirm it on the contact card or edit it.
+  Confirming it later does not send it on to DXKeeper or HRD Logbook, which keep the contact as
+  they first got it; once confirmed, a LoTW confirmation no longer replaces it.
+- **Space weather**, when **Log space weather on each contact** is on (it is for a new
+  installation) in
+  [Settings ▸ Services ▸ Integrations & Feeds](settings-reference.md#integrations--feeds)
   ▸ Propagation: the K index,
   A index and solar flux (K_INDEX, A_INDEX, SFI), and nothing when the latest reading is more
   than 3 hours old.
+- **The path it took**, when the Path card had worked out the path to that station within six
+  hours of the contact: whether the signal most likely went the short or the long way round,
+  how sure, and why. Nexus keeps this in your own log and its exports only; no service is sent
+  it. Nexus never fills in the antenna heading or antenna path (ANT_AZ, ANT_PATH) itself; set
+  ANT_PATH yourself on the contact card when you know it. A contact that did not go by the
+  ionosphere (a satellite, EME or repeater contact) is not graded.
 
 A field the contact already carries (from WSJT-X, an import or what you typed) is kept. A
 contact whose start is more than 3 hours before you log it gets no operator, rig, power, grid
@@ -127,7 +148,7 @@ than saying "failed". Both replies are mocked for this capture: nothing was sign
 reached LoTW.*
 
 1. Set your **LoTW Station Location** (and optionally the TQSL path) in
-   [Settings ▸ Logging & Connectors](settings-reference.md#confirmations).
+   [Settings ▸ Services](settings-reference.md#confirmations).
    Nexus signs through *your installed TQSL* against that named Station Location
    — no certificate or password is stored by Nexus.
 2. Click **Upload to LoTW** in the logbook. The button shows the count of
@@ -137,8 +158,7 @@ reached LoTW.*
    a batch is ever refused, and it is unavailable while *Sign from ADIF location*
    is on — that mode signs everything from wherever you are now, so it needs you
    to pick the moment.
-3. Pull confirmations back with **Download confirmations** (Settings ▸ Logging &
-   Connectors ▸ LoTW). That button only goes one way, *down*; the upload is step 2
+3. Pull confirmations back with **Download confirmations** (Settings ▸ Services ▸ LoTW). That button only goes one way, *down*; the upload is step 2
    above. The first pull covers your whole history; later ones are incremental.
    Pulling also
    marks which of *your* uploads LoTW holds on file, so a pending contact reads
@@ -158,7 +178,7 @@ reached LoTW.*
 ### Push a single QSO to QRZ / ClubLog / HRDLog / WRL
 
 Auto-upload (configured per service in
-[Settings ▸ Logging & Connectors](settings-reference.md#confirmations)) pushes
+[Settings ▸ Services](settings-reference.md#confirmations)) pushes
 each QSO as you log it. When one fails — a service was down, a key was
 wrong — the logbook gives you a **per-row re-push** for **QRZ**, **ClubLog**,
 **HRDLog.net**, and **World Radio League** so you can retry that one contact
@@ -168,7 +188,8 @@ answer, not an error.
 The buttons live at the right-hand end of the row and appear on hover, so an
 untouched table shows none of them. Left to right they are **📢** (spot this
 station), **QRZ** (push to QRZ), **QRZ✎** (correct a contact QRZ already holds),
-**CL**, **HL**, **WRL**, a **QSL▸** menu, **✎** to edit and **✕** to delete.
+**CL**, **HL**, **WRL**, **LoTW** (sign this one contact with TQSL and upload it,
+the way Upload to LoTW does), a **QSL▸** menu, **✎** to edit and **✕** to delete.
 They all stay on one line and stay clickable at every window size — that column
 is floored to the width the whole run needs.
 
@@ -176,10 +197,10 @@ is floored to the width the whole run needs.
 
 ![The World Radio League block in Settings: an API KEY box showing the placeholder wrl_live_… with Set and Forget buttons, an AUTO-UPLOAD EACH QSO switch turned on, and an "Already have a log?" panel with an Export ADIF for WRL button.](../img/manual/settings-wrl.webp)
 
-*World Radio League in Settings ▸ Logging & Connectors, Nexus 1.10.3. The key
+*World Radio League in Settings ▸ Services, Nexus 1.10.3. The key
 box here is empty and showing its placeholder.*
 
-Paste your WRL API key in Settings ▸ Logging & Connectors and it is verified
+Paste your WRL API key in Settings ▸ Services and it is verified
 against your WRL account the moment you save it — your destination logbook is
 found automatically. From then on every contact flows to WRL as you log it (the
 auto-push switch is beside the key), and each logbook row carries a WRL button
@@ -273,7 +294,7 @@ upload, while the download uses your ordinary LoTW website login.
 
 ### How to tell it worked
 
-Nothing here asks you to trust it. **Settings ▸ Logging & Connectors ▸
+Nothing here asks you to trust it. **Settings ▸ Services ▸
 Connections** carries one row per configured connector, and the dot is painted
 from the **last round trip**, never from whether a credential exists — a
 revoked ClubLog app-password or a rotated QRZ key used to sit green forever

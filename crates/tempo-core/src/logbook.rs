@@ -267,7 +267,17 @@ pub const EQSL_AG_FIELD: &str = "APP_EQSL_AG";
 /// And `STATE`, which no passthrough holds: asked for here, the narrow read brings a merged
 /// contest contact's exchange `STATE` with it, the state its upload carries and WAS counts
 /// ([`record_field`]).
-pub const AWARD_EXTRAS: &[&str] = &["CQZ", LOTW_DXCC_FIELD, EQSL_AG_FIELD, "STATE"];
+///
+/// And the map-only mark ([`callbook::MAP_ONLY_GRID_FIELD`]): a grid a callbook filled for a
+/// contact logged with none is for the distance and the map, and counts toward nothing
+/// ([`counted_grid`]).
+pub const AWARD_EXTRAS: &[&str] = &[
+    "CQZ",
+    LOTW_DXCC_FIELD,
+    EQSL_AG_FIELD,
+    "STATE",
+    callbook::MAP_ONLY_GRID_FIELD,
+];
 
 /// A passthrough field's value, by its (uppercased) ADIF name.
 fn extra_value<'a>(r: &'a QsoRecord, name: &str) -> Option<&'a str> {
@@ -293,6 +303,25 @@ pub fn record_lotw_dxcc(r: &QsoRecord) -> Option<u32> {
 /// qualifies the record's eQSL confirmation and means nothing without one.
 pub fn record_eqsl_ag(r: &QsoRecord) -> bool {
     extra_value(r, EQSL_AG_FIELD).is_some_and(|v| v.eq_ignore_ascii_case("Y"))
+}
+
+/// ★ The worked station's grid as the awards, the needs and every service count it: the grid the
+/// contact carries in its own field, as it is, **unless it is for the distance and the map only**
+/// ([`callbook::MAP_ONLY_GRID_FIELD`]): a callbook's grid filled into a contact logged with no grid
+/// of its own (an FT8/FT4 contact, the Blank grids clean-up). A callbook says where the station's
+/// licence is, its home QTH, not where the contact was made: that grid is kept on the contact for
+/// the distance and the map, and never counts toward a grid award (VUCC, the grid counts), never
+/// fills a GRID need and is never sent to a logging service (operator decision, 2026-10-27).
+///
+/// ⚠️ Keyed on that mark ONLY, never on the callbook's own mark ([`callbook::CALLBOOK_FILLED_FIELD`]):
+/// a grid a callsign-card lookup or Update from callbook filled counts and is sent as it always
+/// was, so no log's totals drop. An edit takes the mark off ([`callbook::unmark_edited`]), and so
+/// does LoTW's own grid (`reconcile::keep_lotw_detail`).
+pub fn counted_grid(r: &QsoRecord) -> Option<&str> {
+    if callbook::is_map_only_grid(r) {
+        return None;
+    }
+    r.grid.as_deref()
 }
 
 /// ⭐ **A field's value by its (uppercased) ADIF name, wherever the record keeps it** — the value
@@ -449,6 +478,37 @@ fn unmark_self_filled(r: &mut QsoRecord, tag: &str) {
     set_self_filled(r, tags);
 }
 
+/// The own grid typed in the confirm-before-log popup, read as an edit (operator rulings,
+/// 2026-10-27). `held` is the held contact with the typed grid already in `my_grid`, and `filled`
+/// the contact as it was held. A grid that differs from the held one is the operator's: it loses
+/// the [`SELF_FILLED_FIELD`] mark and goes to LoTW, as an edit in the Logbook editor makes it
+/// ([`fields_set`]). One left as it was keeps the mark.
+///
+/// One exception, for a grid NEXUS filled in only (it carries the mark): a typed grid that is
+/// just the start of it, in any case and with any spaces (EN52 over EN52ab), counts as left
+/// alone, and the contact keeps the grid as filled in, so TQSL is never handed a shorter grid
+/// than its Station Location. A held grid without the mark is the operator's own, and a
+/// shortening of it is logged as typed.
+pub fn settle_popup_my_grid(held: &mut QsoRecord, filled: &QsoRecord) {
+    let norm = |g: &Option<String>| {
+        g.as_deref().map(|g| {
+            g.split_whitespace()
+                .collect::<String>()
+                .to_ascii_uppercase()
+        })
+    };
+    let (typed, was) = (norm(&held.my_grid), norm(&filled.my_grid));
+    let nexus_filled = self_filled(filled).contains(&"MY_GRIDSQUARE");
+    if let (true, Some(typed), Some(was)) = (nexus_filled, &typed, &was) {
+        if !typed.is_empty() && was.starts_with(typed.as_str()) {
+            held.my_grid = filled.my_grid.clone();
+        }
+    }
+    if norm(&held.my_grid) != was {
+        unmark_self_filled(held, "MY_GRIDSQUARE");
+    }
+}
+
 /// The record as the LoTW upload sends it: without the own-station fields Nexus filled in itself
 /// ([`SELF_FILLED_FIELD`]), so TQSL signs it from the Station Location (or, in ADIF-location mode,
 /// from the live setting) exactly as it did before Nexus filled them.
@@ -497,6 +557,7 @@ pub(crate) fn fields_set(r: &mut QsoRecord, fields: &[(String, Option<String>)])
         }
     }
     callbook::unmark_edited(&before, r);
+    offer::unmark_edited(&before, r);
 }
 
 /// The contest provenance of one general-log row (§3).
@@ -922,7 +983,7 @@ impl UploadDetail {
         match self {
             UploadDetail::Credentials => {
                 "The service turned the stored credentials down — fix them in Settings ▸ \
-                 Connectors, then upload again."
+                 Services ▸ Confirmations, then upload again."
             }
             UploadDetail::CallsignCertificate => {
                 "TQSL has no usable Callsign Certificate for this callsign — request or renew \
@@ -930,7 +991,8 @@ impl UploadDetail {
             }
             UploadDetail::StationLocation => {
                 "TQSL could not use the Station Location this upload asked for — create it in \
-                 TQSL, or set the name of one you already have in Settings ▸ Connectors."
+                 TQSL, or set the name of one you already have in Settings ▸ \
+                 Services ▸ Confirmations ▸ LoTW."
             }
             UploadDetail::RecordRefused => {
                 "The service took the request and refused this record — fix the QSO, then \
@@ -1142,9 +1204,11 @@ pub mod io_fence;
 pub mod logfile;
 pub mod migrate;
 pub mod mirror;
+pub mod offer;
 #[cfg(test)]
 mod one_row_tests;
 mod op;
+pub mod path_stamp;
 pub mod query;
 pub mod reader;
 mod records;
@@ -1282,10 +1346,10 @@ impl Logbook {
     /// row there): a test's handle on the one implementation, which the log itself reaches by id
     /// through [`Logbook::apply`]. Returns false if `index` is out of range.
     #[cfg(test)]
-    pub(crate) fn mark_qsl_card(&mut self, index: usize, received: bool) -> bool {
+    pub(crate) fn mark_qsl_card(&mut self, index: usize, received: bool, date_unix: u64) -> bool {
         match self.records.write_as(OpClass::Upgrade).get_mut(index) {
             Some(rec) => {
-                qsl_card_marked(Arc::make_mut(rec), received);
+                qsl_card_marked(Arc::make_mut(rec), received, date_unix);
                 true
             }
             None => false,
@@ -3088,6 +3152,12 @@ pub(crate) fn edited(old: &QsoRecord, mut rec: QsoRecord) -> QsoRecord {
                 || OLD_CALL_PLACE.contains(&k.as_str());
             !(of_old_call && old.extra.iter().any(|(ok, ov)| ok == k && ov == v))
         });
+        // The paper card's received mark went above, and its received date goes with it, as an
+        // untick takes it ([`qsl_card_marked`]): a card not received has no received date. Only
+        // a card the row held: a date with no card mark is left as it is.
+        if old.qsl_rcvd.card {
+            rec.extra.retain(|(k, _)| k != CARD_RCVD_DATE);
+        }
     }
     // A grid or state Nexus filled in itself that the operator has now changed is the operator's:
     // it goes to LoTW like one they typed ([`SELF_FILLED_FIELD`]).
@@ -3099,8 +3169,10 @@ pub(crate) fn edited(old: &QsoRecord, mut rec: QsoRecord) -> QsoRecord {
     if state_of(&rec) != state_of(old) {
         unmark_self_filled(&mut rec, "MY_STATE");
     }
-    // The same for a field a callbook lookup filled at log time ([`callbook::CALLBOOK_FILLED_FIELD`]).
+    // The same for a field a callbook lookup filled at log time ([`callbook::CALLBOOK_FILLED_FIELD`]),
+    // and for an IOTA reference taken from a log-time offer ([`offer::OFFER_HELD_FIELD`]).
     callbook::unmark_edited(old, &mut rec);
+    offer::unmark_edited(old, &mut rec);
     // The same resurrection, for a park. A side's OTHER programme's reference rides
     // in `extra` (the POTA pair beside a summit, the POTA_REF beside a WWFF park — see
     // `take_ota_side`), and it described the reference the side HAD. An edit that
@@ -3159,9 +3231,15 @@ pub(crate) fn edited(old: &QsoRecord, mut rec: QsoRecord) -> QsoRecord {
 /// really posts a card gets an ordinary monotonic sent mark back, not one permanently
 /// shadowed by their own correction.
 ///
+/// A card that goes out leaves the cards-to-send queue ([`qsl_card_queued`]): ADIF holds one
+/// `QSL_SENT`, and `Y` replaces the `Q` or `R` it held. A withdrawal leaves the queue as it is.
+///
 /// ★ THE one implementation of [`LogOp::MarkQslSent`] (SPEC-2 v3 §4.6), in the in-memory log and
 /// in a plan made on the row read from the store alike.
 pub(crate) fn qsl_sent_marked(rec: &mut QsoRecord, via: Option<QslVia>, date_unix: u64) {
+    if via.is_some() {
+        set_extra(rec, QSL_QUEUE_FIELD, None);
+    }
     rec.qsl_sent = match via {
         Some(via) => QslSent {
             sent: true,
@@ -3195,12 +3273,32 @@ pub(crate) fn qsl_sent_marked(rec: &mut QsoRecord, via: Option<QslVia>, date_uni
 /// `log.adi` all read them back: every fold counts a contact by `award_confirmed`, so a
 /// card that set only its channel counted for nothing until a restart re-read the log.
 ///
+/// The card's received date (ADIF `QSLRDATE`) goes with it. A card that arrives is dated
+/// `date_unix`'s UTC day — unless the contact already holds a date, as an imported log's card
+/// does: the day that log names is the better one. A card that is taken back takes its date
+/// with it, whoever wrote the date — a card not received has no received date, and the history
+/// keeps the old value for an undo. A tick that changes nothing (a card held, ticked again; an
+/// untick with no card) leaves the date as it is.
+///
 /// ★ THE one implementation of [`LogOp::MarkQslCard`] (SPEC-2 v3 §4.6).
-pub(crate) fn qsl_card_marked(rec: &mut QsoRecord, received: bool) {
+pub(crate) fn qsl_card_marked(rec: &mut QsoRecord, received: bool, date_unix: u64) {
+    let was = rec.qsl_rcvd.card;
     rec.qsl_rcvd.card = received;
     rec.confirmed = rec.qsl_rcvd.any();
     rec.award_confirmed = rec.qsl_rcvd.award();
+    match (was, received) {
+        (false, true) => {
+            let (y, m, d, ..) = datetime_utc(date_unix);
+            fill_extra(rec, CARD_RCVD_DATE, format!("{y:04}{m:02}{d:02}"));
+        }
+        (true, false) => rec.extra.retain(|(k, _)| k != CARD_RCVD_DATE),
+        _ => {}
+    }
 }
+
+/// ADIF `QSLRDATE`: the day a PAPER card arrived ([`qsl_card_marked`]). LoTW's and eQSL's own
+/// received dates are `LOTW_QSLRDATE` and `EQSL_QSLRDATE`.
+const CARD_RCVD_DATE: &str = "QSLRDATE";
 
 /// Set — or REMOVE — the satellite tag on `rec`: ADIF `PROP_MODE=SAT` + `SAT_NAME`.
 ///
@@ -3409,6 +3507,32 @@ pub fn adif_record_own_log(r: &QsoRecord) -> String {
     adif_record_for(r, Audience::OwnLog)
 }
 
+/// ★ The operator's own record for a logging program on their own machine (DXKeeper, HRD
+/// Logbook): [`adif_record_own_log`], private note included, but **never a grid for the distance
+/// and the map only** ([`counted_grid`]), nor its marks. Such a program counts the grid toward
+/// VUCC and its own totals, and can upload the contact itself (operator decision, 2026-10-27).
+/// For the same reason, **never an IOTA reference held back from uploads**
+/// ([`offer::withhold_iota`]), nor the marks naming it. Confirming it later in Nexus does not
+/// send it again: the program keeps the contact as it first got it.
+pub fn adif_record_own_logger(r: &QsoRecord) -> String {
+    let map_only = callbook::is_map_only_grid(r);
+    let held_iota = offer::withhold_iota(r);
+    if !map_only && !held_iota {
+        return adif_record_own_log(r);
+    }
+    let mut kept = r.clone();
+    if map_only {
+        kept.grid = None;
+        callbook::unmark_callbook_filled(&mut kept, "GRIDSQUARE");
+    }
+    if held_iota {
+        kept.ota.iota = None;
+        offer::unmark_offer_held(&mut kept, "IOTA");
+        callbook::unmark_callbook_filled(&mut kept, "IOTA");
+    }
+    adif_record_own_log(&kept)
+}
+
 /// One QSO as an ADIF record, **safe to send** — the private note is withheld.
 ///
 /// This is the default on purpose; see [`Audience`]. To write the operator's own log, say so
@@ -3425,7 +3549,14 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
     out.push_str(&field("CALL", &r.call));
     // `Some("")` is the same malformed shape as an empty MODE below — an import that
     // carried the tag with nothing in it. Filter rather than emit `<GRIDSQUARE:0>`.
-    if let Some(g) = r.grid.as_ref().filter(|g| !g.trim().is_empty()) {
+    // A grid for the distance and the map only stays in the operator's own log and goes to no
+    // service ([`counted_grid`]).
+    let withheld = audience == Audience::Outbound && callbook::is_map_only_grid(r);
+    if let Some(g) = r
+        .grid
+        .as_ref()
+        .filter(|g| !g.trim().is_empty() && !withheld)
+    {
         out.push_str(&field("GRIDSQUARE", g));
     }
     if let Some(c) = &r.country {
@@ -3661,13 +3792,16 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
         &r.ota.their_ref,
     ));
     // IOTA island-group reference — the standard ADIF `IOTA` field, so exports round-trip
-    // and upload cleanly (LoTW/QRZ/ClubLog all recognize it).
+    // and upload cleanly (LoTW/QRZ/ClubLog all recognize it). One taken from a log-time offer that
+    // the operator has not touched since stays in their own log and is sent nowhere
+    // ([`offer::OFFER_HELD_FIELD`]).
     if let Some(iota) = r
         .ota
         .iota
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
+        .filter(|_| audience == Audience::OwnLog || !offer::withhold_iota(r))
     {
         out.push_str(&field("IOTA", iota));
     }
@@ -3695,9 +3829,15 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
         }
         // Which own-station fields Nexus filled itself is for its own LoTW upload, never a
         // service's business ([`SELF_FILLED_FIELD`]); nor is which fields a callbook filled
-        // ([`callbook::CALLBOOK_FILLED_FIELD`]).
+        // ([`callbook::CALLBOOK_FILLED_FIELD`], [`callbook::MAP_ONLY_GRID_FIELD`]).
+        // Nor the path Nexus graded for a new contact ([`path_stamp`]): the model's opinion,
+        // not the operator's antenna data, and no service's business.
         if audience == Audience::Outbound
-            && (k == SELF_FILLED_FIELD || k == callbook::CALLBOOK_FILLED_FIELD)
+            && (k == SELF_FILLED_FIELD
+                || k == callbook::CALLBOOK_FILLED_FIELD
+                || k == offer::OFFER_HELD_FIELD
+                || k == callbook::MAP_ONLY_GRID_FIELD
+                || path_stamp::is_path_field(k))
         {
             continue;
         }
@@ -3712,6 +3852,11 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
         // the station sent, and the file then carried two, which can disagree. The exchange's
         // is the one [`record_field`] reads; the other stays in the store.
         if contest_adif.iter().any(|(t, cv)| t == k && !cv.is_empty()) {
+            continue;
+        }
+        // A card still to go and a sent mark cannot both be written: ADIF holds one `QSL_SENT`,
+        // and a sent mark is the later truth ([`qsl_card_queued`]).
+        if r.qsl_sent.sent && k == QSL_QUEUE_FIELD {
             continue;
         }
         out.push_str(&field(k, v));
@@ -4374,11 +4519,20 @@ fn body_after_eoh(bytes: &[u8]) -> &[u8] {
 /// `card` set would export the same false claim it was written to stop. A card already held
 /// on the LOGGED record is untouched — this only rewrites the incoming report rows, and
 /// [`QslRcvd::merge`] is monotonic.
+///
+/// The date each confirmation carries moves with it, for the same reason: LoTW spells it a bare
+/// `QSLRDATE`, the paper card's tag, and it is LoTW's received date — `LOTW_QSLRDATE`.
 fn lotw_channel_fixup(text: &str, incoming: &mut [QsoRecord]) {
     if !crate::lotw::is_lotw_adif(text) {
         return;
     }
     for r in incoming.iter_mut() {
+        if let Some(date) = extra_value(r, CARD_RCVD_DATE).map(str::to_string) {
+            r.extra.retain(|(k, _)| k != CARD_RCVD_DATE);
+            if !date.is_empty() {
+                fill_extra(r, "LOTW_QSLRDATE", date);
+            }
+        }
         if r.qsl_rcvd.card {
             r.qsl_rcvd.card = false;
             r.qsl_rcvd.lotw = true;
@@ -4403,6 +4557,10 @@ fn lotw_channel_fixup(text: &str, incoming: &mut [QsoRecord]) {
 /// no QSO: it neither confirms a contact nor names one the log lacks, so it is dropped. Nexus's
 /// InBox request does not filter listeners out (eQSL's `HamOnly`).
 ///
+/// Every other row is a card sent to the operator, so it confirms its contact by eQSL with or
+/// without `EQSL_QSL_RCVD`: the spec sends that field (and `EQSL_QSLRDATE`) only "if we have
+/// stored the date this record was added", so an older card carries neither.
+///
 /// Keyed on the FETCH SOURCE, as [`lotw_channel_fixup`] is, for the same reason: the same fields
 /// in another program's ADIF are that program's own, and [`crate::reconcile`]'s sent-mark merge is
 /// what a shared log's recovery from disk needs, so neither the parse nor the merge can do this.
@@ -4417,6 +4575,10 @@ fn eqsl_inbox_fixup(text: &str, incoming: &mut Vec<QsoRecord>) {
     });
     for r in incoming.iter_mut() {
         r.qsl_sent = QslSent::default();
+        // eQSL is no award channel, so `award_confirmed` is unchanged; an Authenticity-Guaranteed
+        // mark stays the card's own field.
+        r.qsl_rcvd.eqsl = true;
+        r.confirmed = r.qsl_rcvd.any();
     }
 }
 
@@ -4488,6 +4650,32 @@ fn parse_adif_time(t: &str) -> Option<(u32, u32, u32)> {
 /// [`QsoRecord::extra`].
 fn take_yes(f: &mut std::collections::HashMap<String, String>, k: &str) -> bool {
     f.remove(k).is_some_and(|v| v.eq_ignore_ascii_case("Y"))
+}
+
+/// Consume `QSL_SENT`: `Y` is the sent mark. A card still TO GO — `Q` (queued) or `R` (the other
+/// station asked for one), ADIF's own spellings — is left in the record's passthrough, written
+/// back as it came and read by [`qsl_card_queued`]: the cards-to-send list, and another logger's
+/// queue, survive an import. Anything else (`N`, `I`) is the absence of a mark, as before.
+fn take_qsl_sent(f: &mut std::collections::HashMap<String, String>) -> bool {
+    if f.get("QSL_SENT").is_some_and(|v| is_card_queue_value(v)) {
+        return false;
+    }
+    take_yes(f, "QSL_SENT")
+}
+
+/// The passthrough field that holds a card still to go out (ADIF `QSL_SENT` = `Q` or `R`).
+pub const QSL_QUEUE_FIELD: &str = "QSL_SENT";
+
+/// A `QSL_SENT` value that means a paper card is still to go out: `Q` (queued) or `R` (requested).
+fn is_card_queue_value(v: &str) -> bool {
+    let v = v.trim();
+    v.eq_ignore_ascii_case("Q") || v.eq_ignore_ascii_case("R")
+}
+
+/// Whether a paper QSL card is waiting to go out for `r`: its `QSL_SENT` says `Q` or `R` and it
+/// is not marked sent. A sent mark always wins — a card that went out is not still to go.
+pub fn qsl_card_queued(r: &QsoRecord) -> bool {
+    !r.qsl_sent.sent && extra_value(r, QSL_QUEUE_FIELD).is_some_and(is_card_queue_value)
 }
 
 /// Consume a `*_QSL_RCVD` flag. ADIF's `QSL_Rcvd` enumeration spells a confirmation
@@ -4920,7 +5108,7 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
     // Operator-declared OUTBOUND QSL request. Absent fields ⇒ default (not sent),
     // matching the QslRcvd legacy tolerance. QSLSDATE is date-only → UTC midnight.
     let qsl_sent = QslSent {
-        sent: take_yes(f, "QSL_SENT"),
+        sent: take_qsl_sent(f),
         via: f.remove("QSL_SENT_VIA").and_then(|v| QslVia::from_code(&v)),
         date_unix: f.remove("QSLSDATE").filter(|s| s.len() >= 8).map(|s| {
             let (sy, smo, sd) = (
@@ -5378,7 +5566,7 @@ mod tests {
         assert_eq!(book.adif(), before);
         for mutate in [
             (|b: &mut Logbook| {
-                b.mark_qsl_card(0, true);
+                b.mark_qsl_card(0, true, 1_700_000_000);
             }) as fn(&mut Logbook),
             |b| {
                 Arc::make_mut(&mut b.records_mut(OpClass::Upgrade)[0]).notes =
@@ -5630,7 +5818,9 @@ mod tests {
             ("a QSL-sent mark", |b| {
                 assert!(b.mark_qsl_sent(0, Some(QslVia::Bureau), 300));
             }),
-            ("a QSL-card mark", |b| assert!(b.mark_qsl_card(0, true))),
+            ("a QSL-card mark", |b| {
+                assert!(b.mark_qsl_card(0, true, 1_700_000_000))
+            }),
             ("an import that upgrades a held row", |b| {
                 let mut r = b.records()[0].as_ref().clone();
                 r.state = Some("VT".into());
@@ -5759,6 +5949,63 @@ mod tests {
             "identical-timestamp duplicate must dedup to one"
         );
         assert_eq!(skipped2, 1);
+    }
+
+    /// A grid a callbook filled for a contact logged with none stays in the operator's own log,
+    /// is sent to no service, and counts toward nothing ([`counted_grid`]); the same grid with no
+    /// mark is sent and counted. An edit of it makes it the operator's: sent and counted.
+    #[test]
+    fn a_map_only_grid_is_kept_counted_by_nothing_and_never_sent() {
+        let mut plain = rec("W1AW", "20m", 100);
+        plain.grid = Some("FN31pr".into());
+        let mut filled = plain.clone();
+        filled.grid = None;
+        callbook::fill_gridless_from_callbook(
+            &mut filled,
+            &callbook::CallbookAnswer {
+                call: "W1AW".into(),
+                grid: Some("FN31pr".into()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(filled.grid.as_deref(), Some("FN31pr"), "premise: filled");
+        assert!(callbook::is_map_only_grid(&filled), "premise: map only");
+        assert_eq!(counted_grid(&filled), None);
+        assert!(
+            !adif_record(&filled).contains(callbook::MAP_ONLY_GRID_FIELD),
+            "the mark is never sent"
+        );
+        assert!(adif_record_own_log(&filled).contains(callbook::MAP_ONLY_GRID_FIELD));
+        assert!(!adif_record(&filled).contains("<GRIDSQUARE:"), "never sent");
+        assert!(
+            adif_record_own_log(&filled).contains("<GRIDSQUARE:6>FN31pr"),
+            "kept"
+        );
+        assert_eq!(counted_grid(&plain), Some("FN31pr"));
+        assert!(adif_record(&plain).contains("<GRIDSQUARE:6>FN31pr"));
+        let mut edited = filled.clone();
+        edited.grid = Some("FN32".into());
+        callbook::unmark_edited(&filled, &mut edited);
+        assert!(!callbook::is_map_only_grid(&edited));
+        assert_eq!(counted_grid(&edited), Some("FN32"), "the operator's now");
+        assert!(adif_record(&edited).contains("<GRIDSQUARE:4>FN32"));
+    }
+
+    /// ★ A grid a callbook filled before the map-only mark existed (today's mark: a callsign-card
+    /// lookup at log time, or Update from callbook) counts and is sent exactly as it always was:
+    /// nobody's totals drop on update (operator decision, 2026-10-27).
+    #[test]
+    fn a_grid_with_todays_callbook_mark_counts_and_is_sent_as_before() {
+        let mut r = rec("W1AW", "20m", 100);
+        set_extra(
+            &mut r,
+            callbook::CALLBOOK_FILLED_FIELD,
+            Some("GRIDSQUARE".into()),
+        );
+        r.grid = Some("FN31pr".into());
+        assert!(callbook::is_callbook_filled(&r, "GRIDSQUARE"), "premise");
+        assert_eq!(counted_grid(&r), Some("FN31pr"));
+        assert!(adif_record(&r).contains("<GRIDSQUARE:6>FN31pr"), "sent");
     }
 
     fn rec(call: &str, band: &str, when: u64) -> QsoRecord {
@@ -7927,6 +8174,77 @@ mod tests {
         assert!(!lb.mark_qsl_sent(9, Some(QslVia::Bureau), 1_700_000_000));
     }
 
+    /// A card still to go out — ADIF `QSL_SENT` `Q` (queued) or `R` (requested) — survives an
+    /// import and is written back as it came; `N` is still the absence of a mark.
+    #[test]
+    fn a_queued_or_requested_card_survives_the_round_trip() {
+        for value in ["Q", "R", "q"] {
+            let adif = format!(
+                "<EOH>\n<CALL:5>K2DEF<BAND:3>40m<MODE:3>FT8<QSO_DATE:8>20240101<QSL_SENT:1>{value}<EOR>\n"
+            );
+            let back = &parse_adif(&adif)[0];
+            assert!(!back.qsl_sent.sent, "{value} is not a sent mark");
+            assert!(qsl_card_queued(back), "{value} is a card to send");
+            let out = adif_record(back);
+            assert!(
+                out.contains(&format!("<QSL_SENT:1>{value}")),
+                "{value}: {out}"
+            );
+            assert_eq!(out.matches("QSL_SENT:").count(), 1, "{out}");
+        }
+        let no = &parse_adif("<EOH>\n<CALL:5>K2DEF<BAND:3>40m<MODE:3>FT8<QSL_SENT:1>N<EOR>\n")[0];
+        assert!(!qsl_card_queued(no) && !no.qsl_sent.sent);
+        assert!(!adif_record(no).contains("QSL_SENT"));
+    }
+
+    /// Marking a queued card sent ends the queue, and changes nothing else about the contact.
+    #[test]
+    fn sending_a_queued_card_ends_the_queue_and_nothing_else() {
+        let mut queued = rec("W1AW", "20m", 1_700_000_000);
+        queued.rst_sent = Some("599".into());
+        queued.extra = vec![
+            ("CNTY".into(), "MA,MIDDLESEX".into()),
+            (QSL_QUEUE_FIELD.into(), "Q".into()),
+            ("QSL_VIA".into(), "W1XYZ".into()),
+        ];
+        let mut lb = Logbook::new();
+        lb.add(queued);
+        let before = lb.records()[0].as_ref().clone();
+        assert!(qsl_card_queued(&before));
+
+        assert!(lb.mark_qsl_sent(0, Some(QslVia::Bureau), 1_700_086_400));
+        let after = lb.records()[0].as_ref().clone();
+        assert!(after.qsl_sent.sent && !qsl_card_queued(&after));
+        let mut expect = before.clone();
+        expect.qsl_sent = after.qsl_sent;
+        expect.extra.retain(|(k, _)| k != QSL_QUEUE_FIELD);
+        assert_eq!(after, expect, "only the QSL-sent mark moved");
+        let out = adif_record(&after);
+        assert!(
+            out.contains("<QSL_SENT:1>Y") && out.matches("QSL_SENT:").count() == 1,
+            "{out}"
+        );
+
+        // A withdrawal leaves a queue alone.
+        let mut lb = Logbook::new();
+        lb.add(before.clone());
+        assert!(lb.mark_qsl_sent(0, None, 1_700_086_400));
+        assert!(qsl_card_queued(&lb.records()[0]));
+    }
+
+    /// A contact holding a sent mark AND a stale queue value (a merge of two copies) is sent: it is
+    /// not listed to send, and its ADIF carries one `QSL_SENT`, the `Y`.
+    #[test]
+    fn a_sent_mark_outranks_a_stale_queue_value() {
+        let mut r = rec("W1AW", "20m", 1_700_000_000);
+        r.qsl_sent.sent = true;
+        r.extra = vec![(QSL_QUEUE_FIELD.into(), "Q".into())];
+        assert!(!qsl_card_queued(&r));
+        let out = adif_record(&r);
+        assert_eq!(out.matches("QSL_SENT:").count(), 1, "{out}");
+        assert!(out.contains("<QSL_SENT:1>Y"), "{out}");
+    }
+
     /// #163 — `FREQ_RX` round-trips through ADIF, and is ABSENT when there is nothing to say.
     ///
     /// The standard field name, so every other logger reads it: ADIF pairs `FREQ` (the logging
@@ -8294,6 +8612,89 @@ mod tests {
         named.grid = Some("FN42".into());
         assert!(lb.update_record(0, named));
         assert_eq!(held(&lb.records()[0]), held(&original));
+    }
+
+    /// ★ A corrected call takes the paper card's received mark off, and the card's received date
+    /// (`QSLRDATE`) goes with it: a card not received has no received date. LoTW's and eQSL's
+    /// dates go with their confirmations the same way, whether the edit carries the extras or
+    /// leaves them to the row. An ordinary edit keeps every confirmation and every date, and the
+    /// contact the operator did not correct is left exactly as it was.
+    #[test]
+    fn a_call_correction_takes_each_cleared_confirmations_date_with_it() {
+        let dates = [
+            ("QSLRDATE", "20150303"),
+            ("LOTW_QSLRDATE", "20150301"),
+            ("EQSL_QSLRDATE", "20150302"),
+        ];
+        let mut original = rec("K1N", "20m", 1_423_571_640);
+        original.qsl_rcvd = QslRcvd {
+            card: true,
+            lotw: true,
+            eqsl: true,
+            qrz: false,
+        };
+        original.confirmed = true;
+        original.award_confirmed = true;
+        for (k, v) in dates.iter().chain(&[("PFX", "K1"), ("QSL_RCVD_VIA", "B")]) {
+            original.extra.push((k.to_string(), v.to_string()));
+        }
+        let mut other = original.clone();
+        other.call = "W1AW".into();
+        other.when_unix += 600;
+        let names = |r: &QsoRecord| -> Vec<String> {
+            let mut x: Vec<String> = r.extra.iter().map(|(k, _)| k.clone()).collect();
+            x.sort();
+            x
+        };
+        let w1aw = |lb: &Logbook| lb.records().iter().find(|r| r.call == "W1AW").cloned();
+
+        for sent_back in [false, true] {
+            let mut lb = Logbook::new();
+            lb.add(original.clone());
+            lb.add(other.clone());
+            let untouched = w1aw(&lb).expect("W1AW logged");
+            let at = lb.records().iter().position(|r| r.call == "K1N").unwrap();
+            let mut fixed = rec("K1NX", "20m", 1_423_571_640);
+            if sent_back {
+                fixed.extra = original.extra.clone();
+            }
+            assert!(lb.update_record(at, fixed));
+            let r = lb.records().iter().find(|r| r.call == "K1NX").unwrap();
+            assert!(!r.qsl_rcvd.any(), "sent back: {sent_back}");
+            assert_eq!(
+                names(r),
+                ["PFX", "QSL_RCVD_VIA"],
+                "every cleared confirmation's date goes, nothing else: sent back {sent_back}"
+            );
+            assert_eq!(w1aw(&lb), Some(untouched), "the other contact is untouched");
+        }
+
+        // A card held alone: its date goes with it.
+        let mut card_only = original.clone();
+        card_only.qsl_rcvd = QslRcvd {
+            card: true,
+            ..QslRcvd::default()
+        };
+        card_only
+            .extra
+            .retain(|(k, _)| k != "LOTW_QSLRDATE" && k != "EQSL_QSLRDATE");
+        let mut lb = Logbook::new();
+        lb.add(card_only);
+        assert!(lb.update_record(0, rec("K1NX", "20m", 1_423_571_640)));
+        assert_eq!(names(&lb.records()[0]), ["PFX", "QSL_RCVD_VIA"]);
+
+        // An ordinary edit keeps the confirmations, and every date with them.
+        let mut lb = Logbook::new();
+        lb.add(original.clone());
+        let mut named = rec("K1N", "20m", 1_423_571_640);
+        named.name = Some("Bob".into());
+        assert!(lb.update_record(0, named));
+        let r = &lb.records()[0];
+        assert_eq!(r.qsl_rcvd, original.qsl_rcvd);
+        assert_eq!(names(r), names(&original));
+        for (k, v) in dates {
+            assert_eq!(extra_value(r, k), Some(v), "{k} stays");
+        }
     }
 
     /// ★ A corrected call drops the old call's State only where the edit leaves it as it was: a
@@ -10943,6 +11344,131 @@ mod tests {
         assert_eq!(marked(other.records(), "W1AW"), Some(false));
     }
 
+    /// ★ LoTW's report dates each confirmation in a bare `QSLRDATE` (the detail Nexus asks for),
+    /// as it spells the confirmation itself a bare `QSL_RCVD`: LoTW's received date, which the
+    /// contact keeps as `LOTW_QSLRDATE` — the "LoTW received" column. Never as `QSLRDATE`, which
+    /// is a paper card's. It fills a date the contact lacks and never replaces one it holds.
+    #[test]
+    fn a_lotw_confirmation_brings_its_received_date() {
+        let (y, mo, d, ..) = datetime_utc(1_700_000_000);
+        let report = |calls: &[&str]| {
+            let rows: String = calls
+                .iter()
+                .map(|c| {
+                    format!(
+                        "<CALL:{}>{c}<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>{y:04}{mo:02}{d:02}\
+                         <QSL_RCVD:1>Y<QSLRDATE:8>20240315<EOR>\n",
+                        c.len()
+                    )
+                })
+                .collect();
+            format!(
+                "ARRL Logbook of the World Status Report\n<PROGRAMID:4>LoTW\n\
+                 <APP_LoTW_NUMREC:1>{}\n<eoh>\n{rows}",
+                calls.len()
+            )
+        };
+        let mut lb = Logbook::new();
+        lb.add(rec("W1AW", "20m", 1_700_000_000));
+        // Held already: a LoTW date from an earlier sync, and a paper card's own date.
+        let mut dated = rec("K1ABC", "20m", 1_700_000_000);
+        set_extra(&mut dated, "LOTW_QSLRDATE", Some("20231201".into()));
+        set_extra(&mut dated, "QSLRDATE", Some("20230101".into()));
+        dated.qsl_rcvd.card = true;
+        lb.add(dated);
+        let s = lb.merge_report(&report(&["W1AW", "K1ABC"]));
+        assert_eq!(s.matched, 2, "premise: both rows land");
+        let of = |call: &str, tag: &str| {
+            let r = lb.records().iter().find(|r| r.call == call).unwrap();
+            extra_field(r, tag).map(str::to_string)
+        };
+        assert_eq!(of("W1AW", "LOTW_QSLRDATE").as_deref(), Some("20240315"));
+        assert_eq!(of("W1AW", "QSLRDATE"), None, "no paper-card date from LoTW");
+        assert_eq!(
+            of("K1ABC", "LOTW_QSLRDATE").as_deref(),
+            Some("20231201"),
+            "a date held is not replaced"
+        );
+        assert_eq!(of("K1ABC", "QSLRDATE").as_deref(), Some("20230101"));
+        // Control: in another program's file a bare `QSLRDATE` is a paper card's, and it does
+        // not become LoTW's.
+        let third_party = format!(
+            "<EOH>\n<CALL:4>W1AW<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>{y:04}{mo:02}{d:02}\
+             <QSL_RCVD:1>Y<QSLRDATE:8>20240315<EOR>\n"
+        );
+        let mut other = Logbook::new();
+        other.add(rec("W1AW", "20m", 1_700_000_000));
+        assert_eq!(other.merge_report(&third_party).matched, 1);
+        assert_eq!(extra_field(&other.records()[0], "LOTW_QSLRDATE"), None);
+    }
+
+    /// The same for eQSL: its InBox dates each card in `EQSL_QSLRDATE`, which the contact keeps —
+    /// the "eQSL received" column — where it holds none.
+    #[test]
+    fn an_eqsl_card_brings_its_received_date() {
+        let (y, mo, d, ..) = datetime_utc(1_700_000_000);
+        let date = format!("{y:04}{mo:02}{d:02}");
+        // W1AW's card also carries a LoTW date: a date goes with its own service's confirmation,
+        // and this row confirms by eQSL alone.
+        let inbox = eqsl_inbox(&[
+            inbox_card("W1AW", "<LOTW_QSLRDATE:8>20240101"),
+            inbox_card("K1ABC", ""),
+        ]);
+        let mut lb = Logbook::new();
+        lb.add(rec("W1AW", "20m", 1_700_000_000));
+        let mut dated = rec("K1ABC", "20m", 1_700_000_000);
+        set_extra(&mut dated, "EQSL_QSLRDATE", Some("20200202".into()));
+        lb.add(dated);
+        assert_eq!(
+            lb.merge_report(&inbox).matched,
+            2,
+            "premise: both cards land"
+        );
+        let of = |call: &str| {
+            let r = lb.records().iter().find(|r| r.call == call).unwrap();
+            extra_field(r, "EQSL_QSLRDATE").map(str::to_string)
+        };
+        assert_eq!(of("W1AW"), Some(date));
+        assert_eq!(
+            of("K1ABC").as_deref(),
+            Some("20200202"),
+            "a date held is kept"
+        );
+        let w1aw = lb.records().iter().find(|r| r.call == "W1AW").unwrap();
+        assert_eq!(
+            extra_field(w1aw, "LOTW_QSLRDATE"),
+            None,
+            "no LoTW date without LoTW's confirmation"
+        );
+    }
+
+    /// An InBox row without `EQSL_QSLRDATE` (eQSL sends it only when it stored the day the record
+    /// arrived) leaves the contact without an eQSL date: the QSO date is no stand-in for it.
+    #[test]
+    fn an_eqsl_card_without_a_date_leaves_the_date_empty() {
+        let undated = without_field(&inbox_card("W1AW", ""), "EQSL_QSLRDATE");
+        assert!(!undated.contains("EQSL_QSLRDATE"), "premise: {undated}");
+        let mut lb = Logbook::new();
+        lb.add(rec("W1AW", "20m", 1_700_000_000));
+        let s = lb.merge_report(&eqsl_inbox(&[undated]));
+        assert_eq!(s.newly_confirmed_any, 1, "premise: the card still confirms");
+        assert!(lb.records()[0].qsl_rcvd.eqsl);
+        assert_eq!(extra_field(&lb.records()[0], "EQSL_QSLRDATE"), None);
+    }
+
+    /// `row` without its `<TAG:n>value` field.
+    fn without_field(row: &str, tag: &str) -> String {
+        let open = format!("<{tag}:");
+        let Some(at) = row.find(&open) else {
+            return row.to_string();
+        };
+        let rest = &row[at + open.len()..];
+        let close = rest.find('>').expect("a tag closes");
+        let len: usize = rest[..close].parse().expect("a length");
+        let end = at + open.len() + close + 1 + len;
+        format!("{}{}", &row[..at], &row[end..])
+    }
+
     /// ★ A listener's report in eQSL's InBox (`APP_EQSL_SWL`) is no QSO: it neither confirms a
     /// contact nor names one the log lacks. Nexus's InBox request does not filter them out, and
     /// they read as cards: one confirmed a contact with the same call, and one from a listener's
@@ -10973,6 +11499,84 @@ mod tests {
             (s.matched, s.newly_confirmed_any, s.orphans.len()),
             (1, 1, 1)
         );
+    }
+
+    /// ★ An older eQSL card confirms its contact. eQSL's DownloadInBox spec sends `EQSL_QSL_RCVD`
+    /// and `EQSL_QSLRDATE` only for a record whose upload date eQSL stored, so an older card
+    /// carries neither. Read by field name it was no confirmation: it confirmed nothing, and with
+    /// no contact to match it was not even reported as a QSO the log lacks. A card in the InBox
+    /// is one sent to the operator, so the InBox itself is the confirmation.
+    #[test]
+    fn an_older_eqsl_card_without_its_received_fields_still_confirms() {
+        let old = |call: &str, more: &str| {
+            let row = without_field(&inbox_card(call, more), "EQSL_QSL_RCVD");
+            without_field(&row, "EQSL_QSLRDATE")
+        };
+        let inbox = eqsl_inbox(&[
+            old("W1AW", ""),
+            old("K1ABC", "<APP_EQSL_AG:1>Y"),
+            old("N0NE", ""),
+        ]);
+        assert!(
+            !inbox.contains("EQSL_QSL_RCVD") && !inbox.contains("EQSL_QSLRDATE"),
+            "premise: {inbox}"
+        );
+        let mut lb = Logbook::new();
+        lb.add(rec("W1AW", "20m", 1_700_000_000));
+        lb.add(rec("K1ABC", "20m", 1_700_000_000));
+        let s = lb.merge_report(&inbox);
+        assert_eq!(
+            (s.matched, s.newly_confirmed_any, s.orphans.len()),
+            (2, 2, 1),
+            "{s:?}"
+        );
+        assert!(s.orphans[0].reason.contains("N0NE"), "{s:?}");
+        let by_call = |call: &str| {
+            lb.records()
+                .iter()
+                .find(|r| r.call == call)
+                .map(|r| QsoRecord::clone(r))
+                .expect("logged")
+        };
+        let (w1aw, k1abc) = (by_call("W1AW"), by_call("K1ABC"));
+        assert!(w1aw.qsl_rcvd.eqsl && w1aw.confirmed);
+        assert_eq!(
+            extra_field(&w1aw, "EQSL_QSLRDATE"),
+            None,
+            "no date stands in for the one eQSL did not send"
+        );
+        // An eQSL card is no award confirmation, and only an AG member's card is marked AG.
+        assert!(!w1aw.award_confirmed && !k1abc.award_confirmed);
+        assert_eq!(
+            (record_eqsl_ag(&w1aw), record_eqsl_ag(&k1abc)),
+            (false, true)
+        );
+        assert!(
+            report_rows(&inbox).iter().all(|r| r.qsl_rcvd.eqsl),
+            "Check confirmations reads the rows the merge reads"
+        );
+
+        // Controls. An older listener's report is still no QSO.
+        let listened = eqsl_inbox(&[
+            old("W1AW", "<APP_EQSL_SWL:1>Y"),
+            old("ONL4567", "<APP_EQSL_SWL:1>Y"),
+        ]);
+        let mut lb = Logbook::new();
+        lb.add(rec("W1AW", "20m", 1_700_000_000));
+        let s = lb.merge_report(&listened);
+        assert_eq!(
+            (s.matched, s.newly_confirmed_any, s.orphans.len()),
+            (0, 0, 0),
+            "{s:?}"
+        );
+        assert!(!lb.records()[0].confirmed);
+        // The same row in a file that is not eQSL's InBox states no confirmation.
+        let third_party = format!("<EOH>\n{}", old("W1AW", ""));
+        let mut other = Logbook::new();
+        other.add(rec("W1AW", "20m", 1_700_000_000));
+        let s = other.merge_report(&third_party);
+        assert_eq!((s.newly_confirmed_any, s.orphans.len()), (0, 0), "{s:?}");
+        assert!(!other.records()[0].confirmed);
     }
 
     #[test]
@@ -11531,7 +12135,7 @@ mod qsl_card_tests {
         assert!(!lb.records[0].qsl_rcvd.card, "starts unconfirmed");
         assert!(!lb.records[0].qsl_rcvd.award(), "and unclaimable");
 
-        assert!(lb.mark_qsl_card(0, true));
+        assert!(lb.mark_qsl_card(0, true, 1_700_000_000));
         assert!(lb.records[0].qsl_rcvd.card);
         assert!(
             lb.records[0].qsl_rcvd.award(),
@@ -11546,8 +12150,8 @@ mod qsl_card_tests {
     fn a_mistaken_card_can_be_taken_back() {
         let mut lb = Logbook::default();
         lb.records.push(rec());
-        assert!(lb.mark_qsl_card(0, true));
-        assert!(lb.mark_qsl_card(0, false));
+        assert!(lb.mark_qsl_card(0, true, 1_700_000_000));
+        assert!(lb.mark_qsl_card(0, false, 1_700_000_000));
         assert!(!lb.records[0].qsl_rcvd.card);
         assert!(!lb.records[0].qsl_rcvd.award());
     }
@@ -11563,7 +12167,7 @@ mod qsl_card_tests {
         lb.records.push(with_lotw);
         lb.records.push(rec());
 
-        assert!(lb.mark_qsl_card(0, true));
+        assert!(lb.mark_qsl_card(0, true, 1_700_000_000));
         assert!(
             lb.records[0].qsl_rcvd.lotw,
             "LoTW's own confirmation is untouched"
@@ -11584,12 +12188,12 @@ mod qsl_card_tests {
     fn a_card_marked_received_counts_at_once_and_an_untick_takes_back_only_the_card() {
         let mut lb = Logbook::default();
         lb.records.push(rec());
-        assert!(lb.mark_qsl_card(0, true));
+        assert!(lb.mark_qsl_card(0, true, 1_700_000_000));
         assert!(
             lb.records[0].award_confirmed && lb.records[0].confirmed,
             "the flags the folds read"
         );
-        assert!(lb.mark_qsl_card(0, false));
+        assert!(lb.mark_qsl_card(0, false, 1_700_000_000));
         assert!(!lb.records[0].award_confirmed && !lb.records[0].confirmed);
 
         // An untick takes back only what the card gave: an eQSL confirmation stays.
@@ -11597,9 +12201,9 @@ mod qsl_card_tests {
         eqsl.qsl_rcvd.eqsl = true;
         eqsl.confirmed = true;
         lb.records.push(eqsl);
-        assert!(lb.mark_qsl_card(1, true));
+        assert!(lb.mark_qsl_card(1, true, 1_700_000_000));
         assert!(lb.records[1].award_confirmed);
-        assert!(lb.mark_qsl_card(1, false));
+        assert!(lb.mark_qsl_card(1, false, 1_700_000_000));
         assert!(lb.records[1].confirmed && !lb.records[1].award_confirmed);
 
         // Each record reads as the store and `log.adi` read it back.
@@ -11611,15 +12215,64 @@ mod qsl_card_tests {
         }
     }
 
+    /// ★ A card marked received carries the day it was marked (ADIF `QSLRDATE`, UTC), which the
+    /// Logbook's "Card received" column shows and every export writes. Before, the mark set the
+    /// channel and nothing else: the column stayed empty however many cards were entered. An
+    /// untick takes the date off with the card — a card not received has no received date.
+    #[test]
+    fn a_card_marked_received_is_dated_and_an_untick_takes_the_date_off() {
+        let mut lb = Logbook::default();
+        lb.records.push(rec());
+        // 2023-11-14 22:13:20 UTC.
+        assert!(lb.mark_qsl_card(0, true, 1_700_000_000));
+        assert_eq!(extra_field(&lb.records[0], "QSLRDATE"), Some("20231114"));
+        assert!(
+            lb.adif().contains("<QSLRDATE:8>20231114"),
+            "the export carries it"
+        );
+        assert!(lb.mark_qsl_card(0, false, 1_700_100_000));
+        assert_eq!(extra_field(&lb.records[0], "QSLRDATE"), None);
+        assert!(!lb.adif().contains("QSLRDATE"));
+    }
+
+    /// A received date the contact already holds is the better one: an imported log's card came
+    /// on the day that log says, not the day the operator ticked it here. And a card already on
+    /// the record is not dated by a second tick, nor is a date touched by an untick of a card
+    /// that was never there.
+    #[test]
+    fn a_card_date_the_contact_holds_is_kept() {
+        let mut lb = Logbook::default();
+        let mut imported = rec();
+        set_extra(&mut imported, "QSLRDATE", Some("20200101".into()));
+        lb.records.push(imported.clone());
+        assert!(lb.mark_qsl_card(0, true, 1_700_000_000));
+        assert_eq!(extra_field(&lb.records[0], "QSLRDATE"), Some("20200101"));
+        // Taken back, it goes all the same, whoever wrote it: the card is no longer received.
+        assert!(lb.mark_qsl_card(0, false, 1_700_000_000));
+        assert_eq!(extra_field(&lb.records[0], "QSLRDATE"), None);
+
+        // A card held with no date (an older log): ticking it again invents none.
+        let mut held = rec();
+        held.qsl_rcvd.card = true;
+        lb.records.push(held);
+        assert!(lb.mark_qsl_card(1, true, 1_700_000_000));
+        assert_eq!(extra_field(&lb.records[1], "QSLRDATE"), None);
+
+        // No card on the record: an untick changes nothing, the date included.
+        lb.records.push(imported);
+        assert!(lb.mark_qsl_card(2, false, 1_700_000_000));
+        assert_eq!(extra_field(&lb.records[2], "QSLRDATE"), Some("20200101"));
+    }
+
     /// Out of range is false, not a panic — the UI holds indices that shift under it.
     #[test]
     fn an_index_that_is_gone_reports_false() {
         let mut lb = Logbook::default();
-        assert!(!lb.mark_qsl_card(0, true));
+        assert!(!lb.mark_qsl_card(0, true, 1_700_000_000));
         lb.records.push(rec());
-        assert!(!lb.mark_qsl_card(7, true));
+        assert!(!lb.mark_qsl_card(7, true, 1_700_000_000));
         assert!(
-            lb.mark_qsl_card(0, true),
+            lb.mark_qsl_card(0, true, 1_700_000_000),
             "control: a real index still works"
         );
     }
@@ -12662,7 +13315,7 @@ mod watermark_tests {
             ),
             (
                 "a QSL card arriving",
-                |lb| assert!(lb.mark_qsl_card(0, true)),
+                |lb| assert!(lb.mark_qsl_card(0, true, 1_700_000_000)),
                 [true, true, false, false],
                 false,
             ),

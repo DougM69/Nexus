@@ -23,11 +23,12 @@ describe('Settings ▸ Logbook', () => {
       'lotw-users',
       'callsign-state',
       'country-file',
+      'iota-list',
     ])
   })
 
-  it('leaves the sign-ins, uploads and logging programs on Logging & Connectors', () => {
-    expect(sectionsForTab('logging').map((s) => s.id)).toEqual([
+  it('leaves the sign-ins, uploads and logging programs on Services (Logging & Connectors until the regroup)', () => {
+    expect(sectionsForTab('services').map((s) => s.id)).toEqual([
       'connections',
       'integrations-feeds',
       'antenna-gain',
@@ -88,9 +89,9 @@ describe('a pointer written against the old place lands on the control', () => {
     expect(resolveTarget('Settings ▸ Logbook')).toEqual({ tab: 'logbook' })
   })
 
-  it('positive control — the QRZ Logbook key still lands on Logging & Connectors', () => {
+  it('positive control — the QRZ Logbook key still lands on Services', () => {
     expect(resolveTarget('Settings ▸ Logging & Connectors ▸ Confirmations')).toEqual({
-      tab: 'logging',
+      tab: 'services',
       section: 'confirmations',
     })
   })

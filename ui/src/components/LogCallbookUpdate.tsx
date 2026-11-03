@@ -7,7 +7,7 @@
 // no record, all in the call's one paced turn. The fill is the log's own callbook rule: a field the
 // contact holds is never replaced, a contest exchange's fields are never touched, the call,
 // country, upload marks and confirmations stay, and nothing is uploaded. Where the station is
-// (grid, QTH, state, county, IOTA, zones, position, UTC offset) goes only on a contact from the
+// (grid, QTH, state, county, zones, position, UTC offset) goes only on a contact from the
 // last 12 months: a callbook says where a station is now.
 //
 // Preview first: the contacts, the calls, the services asked, how many are already looked up, the
@@ -249,15 +249,21 @@ export function LogCallbookUpdate({
           )}
           <p className="qso-detail-bare">
             {t('logbook.tools.callbook.today', { spent: preview.spent, cap: preview.cap })}
+            {/* QRZ's count covers every program on the account and never holds the cap (ruling
+                954), so it is said here, as information, and not as the reason a run stops. */}
+            {preview.qrzCount !== null && (
+              <>
+                {' '}
+                {t('logbook.tools.callbook.qrzCount', { count: preview.qrzCount })}{' '}
+                {t('logbook.tools.callbook.qrzCountNote')}
+              </>
+            )}
           </p>
           {preview.lookupsNeeded > left && (
             <p className="qso-detail-bare">
               <strong>{t('logbook.tools.callbook.overCap', { count: left })}</strong>
               {preview.lookupsNeeded > preview.toLookUp && (
                 <> {t('logbook.tools.callbook.stroked', { count: preview.lookupsNeeded })}</>
-              )}
-              {preview.qrzCount !== null && (
-                <> {t('logbook.tools.callbook.qrzCount', { count: preview.qrzCount })}</>
               )}
             </p>
           )}

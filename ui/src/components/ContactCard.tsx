@@ -26,6 +26,8 @@ import { qrzLookup } from '../api'
 import type { LoggedQso } from '../types'
 import { Dialog } from './ui/Dialog'
 import { QsoHistory } from './QsoHistory'
+import { IotaReferenceNote } from './Iota'
+import { CardAwardStatus } from './AwardStatus'
 import { CallbookPhoto, qrzPageOf } from './CallCard'
 import { confirmDialog } from '../confirm'
 import { useFocusReturn } from '../focusReturn'
@@ -38,6 +40,7 @@ import { emptyAnswer } from '../features/logAnswers'
 import { fmtUtc } from '../features/logQuery'
 import { UTC_DATE_FORMAT, UTC_TIME_FORMATS } from '../features/utcLog'
 import { addedColumnText, columnName, logColumn, uploadMark, uploadOf, uploadWord } from '../features/logColumns'
+import { ContactPath } from './prop/ContactPath'
 import {
   PROGRAMS,
   cardDirty,
@@ -56,13 +59,23 @@ import {
   type Unclearable,
 } from '../features/contactCard'
 
+/** The mark on a contact whose IOTA reference was taken from a log-time offer, a spot comment's or a
+ *  callbook's (`offer::OFFER_HELD_FIELD`). */
+const OFFER_HELD_FIELD = 'APP_NEXUS_OFFER_HELD'
+/** The callbook's mark (`callbook::CALLBOOK_FILLED_FIELD`): naming IOTA beside the held mark, the
+ *  offer taken was the callbook's. */
+const CALLBOOK_FILLED_FIELD = 'APP_NEXUS_CALLBOOK_FILLED'
+
 /** Service names and the QRZ button: proper nouns, not words. */
 const QRZ_PAGE = 'QRZ ↗'
 /** A value a corrected call takes off, as the card names it: a place under its Logbook column's
  *  name, a confirmation in words. */
 function callFixLabel(c: CallFixClear): string {
+  if (c === 'card') return t('contactCard.callFix.card')
+  if (c === 'cardDated') return t('contactCard.callFix.cardDated')
   if (c === 'lotw') return t('contactCard.callFix.lotw')
   if (c === 'eqsl') return t('contactCard.callFix.eqsl')
+  if (c === 'qrz') return t('contactCard.callFix.qrz')
   const column = logColumn({ CQZ: 'cqz', ITUZ: 'ituz', CONT: 'cont', CNTY: 'county' }[c])
   return column ? columnName(column) : c
 }
@@ -245,6 +258,27 @@ function CardBody({
     }
   }
 
+  // An IOTA reference taken from a log-time offer (a spot comment's or the callbook's) is kept in the
+  // log and sent to no service until the operator confirms it (`tempo_core::logbook::offer`).
+  // Confirm takes the mark off: the one Nexus-kept field a card may change, and only by removing it.
+  const names = (field: string, tag: string) =>
+    !!q.extra?.find(([k]) => k === field)?.[1]?.split(',').some((t) => t.trim() === tag)
+  const spotMark = q.extra?.find(([k]) => k === OFFER_HELD_FIELD)?.[1] ?? null
+  const spotHeld = names(OFFER_HELD_FIELD, 'IOTA')
+  const heldFromCallbook = spotHeld && names(CALLBOOK_FILLED_FIELD, 'IOTA')
+  const confirmIota = async () => {
+    if (!contact.ref || busy || !spotMark) return
+    const made = cardSave(q, start, start, fieldsOf(q))
+    if (!made.ok) return
+    setBusy(true)
+    const answer = await save(contact.ref, made.edit, [...made.fields, { tag: OFFER_HELD_FIELD, old: spotMark, new: null }], q.call)
+    setBusy(false)
+    if (answer?.kind === 'applied' || answer?.kind === 'changed') {
+      onChanged()
+      if (q.id) onSwitch(q.id)
+    }
+  }
+
   const lookUp = () => {
     setLooking(true)
     void withErrorToast(() => qrzLookup(q.call), t('callbook.lookupFailed')).finally(() => setLooking(false))
@@ -408,6 +442,19 @@ function CardBody({
             {program('theirProgram', t('contactCard.program.theirs'))}
             {box('theirRef', t('logbook.field.parkTheirs.label'))}
             {box('iota', t('logbook.field.iota.label'), { maxLength: 6 })}
+            {(draft.iota.trim() !== '' || spotHeld) && (
+              <div className="logbook-field logbook-field-wide iota-card-note">
+                <IotaReferenceNote reference={draft.iota.trim().toUpperCase()} />
+                {spotHeld && (
+                  <span className="iota-card-held">
+                    <span className="settings-hint">{heldFromCallbook ? t('iota.card.callbookHeld') : t('iota.card.spotHeld')}</span>
+                    <button type="button" className="settings-test-btn" onClick={() => void confirmIota()} disabled={!canSave || busy || dirty}>
+                      {t('iota.card.confirm')}
+                    </button>
+                  </span>
+                )}
+              </div>
+            )}
             {program('myProgram', t('contactCard.program.mine'))}
             {box('myRef', t('logbook.field.parkMine.label'))}
             {box('myGrid', t('logbook.field.myGrid.label'))}
@@ -449,6 +496,13 @@ function CardBody({
             </label>
           </div>
         </section>
+
+        <ContactPath
+          q={q}
+          canPick={canSave}
+          picked={fields.find((f) => f.tag === 'ANT_PATH' && !f.removed)?.value ?? null}
+          onPick={(path) => setFields((fs) => [...fs, { tag: 'ANT_PATH', orig: null, value: path, removed: false }])}
+        />
 
         <details className="qso-detail-section contact-card-more">
           <summary className="qso-detail-heading">{t('contactCard.more')}</summary>
@@ -532,6 +586,17 @@ function CardBody({
             </dl>
           )}
         </details>
+
+        {/* Each award's status, set at once (it asks first) and undone from the History below. Not
+            while the card holds unsaved typing: reading the contact again would drop it. */}
+        <CardAwardStatus
+          q={q}
+          canSave={canSave && !dirty}
+          onChanged={() => {
+            onChanged()
+            if (q.id) onReload(q.id)
+          }}
+        />
 
         <section className="qso-detail-section">
           <h3 className="qso-detail-heading">{t('contactCard.recent')}</h3>

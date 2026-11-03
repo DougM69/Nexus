@@ -16,22 +16,26 @@ import {
   renderedColumns,
   uploadMark,
   visibleColumns,
+  withColumnMoved,
   withColumnShown,
+  withColumnStep,
   withColumnWidth,
   type LogColumnsSaved,
 } from './logColumns'
 import type { LoggedQso } from '../types'
 
 /** `.logbook-row`'s template before the model (styles.css, 59aeae99e). */
-const OLD_COMPACT = '1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1fr 0.6fr 0.9fr 0.7fr 1.4fr minmax(384px, 0.8fr)'
+const OLD_COMPACT = 'minmax(96px, 1fr) 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr minmax(84px, 1fr) minmax(64px, 0.6fr) 0.9fr 0.7fr 1.4fr minmax(80px, 80px)'
 /** `[data-viewport='sm'] .logbook-row`'s. */
-const OLD_NARROW = '1fr 1.3fr 0.7fr 0.7fr 1fr minmax(384px, 0.8fr)'
+const OLD_NARROW = 'minmax(96px, 1fr) 1.3fr 0.7fr 0.7fr 1fr minmax(80px, 80px)'
 /** `.logbook-table.wide .logbook-row`'s ("More columns"). */
 const OLD_WIDE =
-  '1fr 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr 1fr 0.6fr 0.9fr 0.7fr 0.9fr 0.8fr 1.1fr 1fr 1fr 0.5fr 0.6fr 0.8fr 1.4fr minmax(384px, 0.8fr)'
+  'minmax(96px, 1fr) 1.3fr 0.7fr 1fr 0.7fr 0.6fr 0.6fr minmax(84px, 1fr) minmax(64px, 0.6fr) 0.9fr 0.7fr 0.9fr 0.8fr 1.1fr 1fr 1fr 0.5fr 0.6fr 0.8fr 1.4fr minmax(80px, 80px)'
 
 const template = (saved: LogColumnsSaved, narrow = false) =>
   logGridTemplate(renderedColumns(saved, narrow), saved, narrow)
+/** A template's tracks: split on the spaces outside `minmax(…)`. */
+const tracksOf = (tpl: string) => tpl.split(/ (?![^(]*\))/)
 const ids = (saved: LogColumnsSaved, narrow = false) => renderedColumns(saved, narrow).map((c) => c.id)
 
 describe('the defaults are the table the Logbook had', () => {
@@ -50,7 +54,7 @@ describe('the defaults are the table the Logbook had', () => {
     expect(template(more)).toBe(OLD_WIDE)
     // …and at a narrow window it still shows every column, scrolling sideways.
     expect(template(more, true)).toBe(OLD_WIDE)
-    expect(logTableMinWidth(renderedColumns(more, false), more)).toBe('123rem')
+    expect(logTableMinWidth(renderedColumns(more, false), more)).toBe('calc(117.53rem + 80px)')
     expect(legacyLogColumns(false)).toEqual(DEFAULT_LOG_COLUMNS)
   })
 
@@ -84,7 +88,7 @@ describe('show and hide', () => {
     expect(off.hidden).toEqual(['freq'])
     expect(ids(off)).not.toContain('freq')
     // One track fewer, and still one per column shown.
-    expect(template(off).split(' minmax')[0].trim().split(/\s+/)).toHaveLength(ids(off).length - 1)
+    expect(tracksOf(template(off))).toHaveLength(ids(off).length)
     expect(withColumnShown(off, 'freq', true)).toEqual(DEFAULT_LOG_COLUMNS)
   })
 
@@ -100,7 +104,7 @@ describe('resize', () => {
   it('a dragged width replaces the share with px, and null puts the share back', () => {
     const wide = withColumnWidth(DEFAULT_LOG_COLUMNS, 'country', 210, 1366)
     expect(wide.widths).toEqual({ country: 210 })
-    expect(template(wide).split(' ')[1]).toBe('210px')
+    expect(tracksOf(template(wide))[1]).toBe('210px')
     expect(withColumnWidth(wide, 'country', null, 1366).widths).toEqual({})
   })
 
@@ -115,7 +119,7 @@ describe('resize', () => {
 
   it('a wide table grows by the px it was given', () => {
     const saved = withColumnWidth(withColumnShown(DEFAULT_LOG_COLUMNS, 'county', true), 'county', 150, 1920)
-    expect(logTableMinWidth(renderedColumns(saved, false), saved)).toMatch(/^calc\([\d.]+rem \+ 150px\)$/)
+    expect(logTableMinWidth(renderedColumns(saved, false), saved)).toMatch(/^calc\([\d.]+rem \+ 230px\)$/)
   })
 })
 
@@ -144,6 +148,74 @@ describe('a saved choice is clamped on load', () => {
 
   it('round-trips through JSON as settings.json keeps it', () => {
     const saved = withColumnWidth(withColumnShown(withColumnShown(DEFAULT_LOG_COLUMNS, 'grid', true), 'mode', false), 'grid', 90, 1366)
+    expect(clampLogColumns(JSON.parse(JSON.stringify(saved)), 1366)).toEqual(saved)
+  })
+})
+
+describe('order', () => {
+  it('a dragged column takes its new place, and the template and the row follow it', () => {
+    const moved = withColumnMoved(DEFAULT_LOG_COLUMNS, 'notes', 'call', 'after')
+    expect(moved.order).toBeDefined()
+    expect(ids(moved)).toEqual(['call', 'notes', 'country', 'band', 'freq', 'mode', 'sent', 'rcvd', 'date', 'time', 'park', 'qsl', 'actions'])
+    // The template is cut from the same list: Notes' share follows Notes.
+    expect(tracksOf(template(moved)).slice(0, 3)).toEqual(['minmax(96px, 1fr)', '1.4fr', '1.3fr'])
+    // Before the first column, and back.
+    expect(ids(withColumnMoved(moved, 'qsl', 'call', 'before')).slice(0, 2)).toEqual(['qsl', 'call'])
+  })
+
+  it('the action cluster stays last, whatever is dropped on it, and never moves itself', () => {
+    const toEnd = withColumnMoved(DEFAULT_LOG_COLUMNS, 'call', 'actions', 'after')
+    expect(ids(toEnd).slice(-2)).toEqual(['call', 'actions'])
+    expect(withColumnMoved(DEFAULT_LOG_COLUMNS, 'actions', 'call', 'before')).toBe(DEFAULT_LOG_COLUMNS)
+  })
+
+  it('a step moves a column past its rendered neighbour, and stops at either end', () => {
+    const cols = renderedColumns(DEFAULT_LOG_COLUMNS, false)
+    const right = withColumnStep(DEFAULT_LOG_COLUMNS, cols, 'country', 1)
+    expect(ids(right).slice(0, 3)).toEqual(['call', 'band', 'country'])
+    expect(withColumnStep(DEFAULT_LOG_COLUMNS, cols, 'call', -1)).toBe(DEFAULT_LOG_COLUMNS)
+    // The last data column cannot step past the action cluster.
+    expect(withColumnStep(DEFAULT_LOG_COLUMNS, cols, 'notes', 1)).toBe(DEFAULT_LOG_COLUMNS)
+    // At a narrow window the neighbour is the one on screen: Country past Band, then past QSL.
+    const narrow = renderedColumns(DEFAULT_LOG_COLUMNS, true)
+    const once = withColumnStep(DEFAULT_LOG_COLUMNS, narrow, 'band', 1)
+    expect(ids(once, true)).toEqual(['call', 'country', 'qsl', 'band', 'notes', 'actions'])
+  })
+
+  it('moving a column back to where it began saves no order at all', () => {
+    const there = withColumnMoved(DEFAULT_LOG_COLUMNS, 'band', 'call', 'before')
+    const back = withColumnMoved(there, 'band', 'country', 'after')
+    expect(back).toEqual(DEFAULT_LOG_COLUMNS)
+    expect('order' in back).toBe(false)
+  })
+
+  it('a column turned on later shows beside its default neighbour in the moved table', () => {
+    // Notes moved to the front, then IOTA turned on: IOTA sits after Grid's default neighbour
+    // chain (it follows Grid by default), so after the last default column before it.
+    const moved = withColumnMoved(DEFAULT_LOG_COLUMNS, 'notes', 'call', 'before')
+    const withIota = withColumnShown(moved, 'iota', true)
+    expect(ids(withIota)).toEqual(['notes', 'call', 'country', 'band', 'freq', 'mode', 'sent', 'rcvd', 'date', 'time', 'park', 'qsl', 'iota', 'actions'])
+  })
+
+  it('a saved order is clamped on load: unknown and repeated ids dropped, the actions ignored, the rest placed', () => {
+    const got = clampLogColumns({ shown: [], hidden: [], widths: {}, order: ['notes', 'nope', 7, 'notes', 'actions', 'call'] }, 1366)
+    expect(ids(got).slice(0, 3)).toEqual(['notes', 'call', 'country'])
+    expect(ids(got).slice(-1)).toEqual(['actions'])
+    // An order that is not a list, or is the default one, is no order.
+    expect(clampLogColumns({ shown: [], hidden: [], widths: {}, order: 'notes' }, 1366)).toEqual(DEFAULT_LOG_COLUMNS)
+    expect(clampLogColumns({ shown: [], hidden: [], widths: {}, order: LOG_COLUMNS.map((c) => c.id) }, 1366)).toEqual(DEFAULT_LOG_COLUMNS)
+  })
+
+  it('an old saved choice (no order) loads exactly as it did', () => {
+    const old = { shown: ['iota'], hidden: ['freq'], widths: { country: 210 } }
+    const got = clampLogColumns(old, 1366)
+    expect(got).toStrictEqual(old)
+    expect(ids(got)).toEqual(visibleColumns(old).map((c) => c.id))
+    expect(ids(got)).toEqual(LOG_COLUMNS.filter((c) => c.fixed || (c.base ? c.id !== 'freq' : c.id === 'iota')).map((c) => c.id))
+  })
+
+  it('round-trips an order through JSON as settings.json keeps it', () => {
+    const saved = withColumnMoved(withColumnShown(DEFAULT_LOG_COLUMNS, 'grid', true), 'grid', 'call', 'after')
     expect(clampLogColumns(JSON.parse(JSON.stringify(saved)), 1366)).toEqual(saved)
   })
 })
@@ -195,6 +267,9 @@ describe('the values the added columns print', () => {
       exchSent: '599 4',
       // No exchange logged on this side: the serial.
       exchRcvd: '345',
+      // The path is not printed from the record: its cell asks the shack for the grade
+      // (components/prop/PathGradeCell.tsx, features/pathGrade).
+      path: null,
     })
   })
 

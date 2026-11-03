@@ -15,7 +15,7 @@ Nexus left beta at 1.0.0. The habit the beta was written with does not close wit
 it: where a feature is opt-in, or a number comes from simulation rather than the
 air, these pages say so, and each page ends with what its section does **not** do.
 
-**This guide documents Nexus 1.21.0.** These pages ship inside the app, and the same files are
+**This guide documents Nexus 1.22.0.** These pages ship inside the app, and the same files are
 synced to the website and built into the PDF and EPUB at each release — so a copy matches the
 release it came out with. It cannot promise to match the build *you* are running. The website
 and the downloads track the latest release; your installed copy may be older, or newer than a
@@ -43,10 +43,21 @@ What the app needs from you before it can do anything:
 - **A sound card the radio is connected to**, for any mode that decodes or
   transmits audio — [Settings ▸ Radio ▸ Audio](settings-reference.md#audio).
 
-On first launch a four-step wizard — Station, Rig, Log, Finish — walks those.
-Every step is skippable and everything it sets stays editable later in Settings.
-Every section and mode starts ON; turn any section on or off in
-[Settings ▸ Appearance ▸ Features](settings-reference.md#features).
+On first launch a wizard walks those. It first asks how much you have done (new to
+the hobby, new to digital, or experienced), then Station, Rig, Log, Finish. The
+answer picks which sections start on: experienced starts with every section and mode
+ON, the two "new" answers with fewer, and a new ham is offered a short walk through a
+first FT8 contact (also under Help). The same first page asks how many radios Nexus
+will run: with two or more, the radio setup (which radio for which bands and modes)
+opens once the second radio is saved on the Rig step. Answered experienced, the Log step
+shows the import preview before anything is written and where your contacts go (each
+logbook service's state and QRZ Logbook's Test); logins stay in
+[Settings ▸ Confirmations](settings-reference.md#confirmations) and nothing is uploaded
+from the wizard. Every step is skippable and everything it sets
+stays editable later: the answer in
+[Settings ▸ Station](settings-reference.md#operator--radio), any section on or off in
+[Settings ▸ App ▸ Features](settings-reference.md#features). Run again from
+Settings, the wizard edits station, rig and log only and keeps the screens you have on.
 
 The supported window floor is **1024×768**. Everything is reachable there — some
 columns scroll to reach the bottom of themselves, and the pages that measure it
@@ -201,18 +212,18 @@ of a page.
 | Change the dial frequency a mode starts on | [Settings ▸ Digital ▸ Working Frequencies](settings-reference.md#working-frequencies) |
 | Set keyer speed, sidetone or the keying backend | [Settings ▸ CW](settings-reference.md#cw) |
 | Set repeater shift, CTCSS tone or mic gain | [Settings ▸ Phone ▸ Phone (SSB / FM)](settings-reference.md#phone-ssb--fm) |
-| Add a DX cluster, RBN or PSK Reporter feed | [Settings ▸ Logging & Connectors ▸ Integrations & Feeds](settings-reference.md#integrations--feeds) |
-| Feed WSJT-X, GridTracker or JTAlert over UDP | [Settings ▸ Logging & Connectors ▸ Integrations & Feeds](settings-reference.md#integrations--feeds) |
-| Turn on LoTW, QRZ, ClubLog, eQSL or HRDLog upload | [Settings ▸ Logging & Connectors ▸ Confirmations](settings-reference.md#confirmations) |
-| See whether an upload actually went | [Settings ▸ Logging & Connectors ▸ Connections](settings-reference.md#connections) |
-| Change how "worked before" is decided | [Settings ▸ Logging & Connectors ▸ Worked-before (B4) & dupes](settings-reference.md#worked-before-b4--dupes) |
+| Add a DX cluster, RBN or PSK Reporter feed | [Settings ▸ Services ▸ Integrations & Feeds](settings-reference.md#integrations--feeds) |
+| Feed WSJT-X, GridTracker or JTAlert over UDP | [Settings ▸ Services ▸ Integrations & Feeds](settings-reference.md#integrations--feeds) |
+| Turn on LoTW, QRZ, ClubLog, eQSL or HRDLog upload | [Settings ▸ Services ▸ Confirmations](settings-reference.md#confirmations) |
+| See whether an upload actually went | [Settings ▸ Services ▸ Connections](settings-reference.md#connections) |
+| Change how "worked before" is decided | [Settings ▸ Logbook ▸ Worked-before (B4) & dupes](settings-reference.md#worked-before-b4--dupes) |
 | Get an alert when a new one appears | [Settings ▸ Spots & Alerts ▸ Pounce](settings-reference.md#pounce--new-one-alert) |
 | Set the Field Day class, section and exchange | [Settings ▸ Contesting ▸ Field Day](settings-reference.md#field-day) |
 | Change theme, contrast or Night | [Settings ▸ Appearance ▸ Theme](settings-reference.md#theme) |
 | Change UI scale, text size or density, or pick a one-tap look | [Settings ▸ Appearance ▸ Workspace](settings-reference.md#workspace) |
-| Turn a whole section off | [Settings ▸ Appearance ▸ Features](settings-reference.md#features) |
+| Turn a whole section off | [Settings ▸ App ▸ Features](settings-reference.md#features) |
 | Turn on screen-reader announcements and earcons | [Settings ▸ Appearance ▸ Accessibility & eyes-free](settings-reference.md#accessibility--eyes-free) |
-| Back up, restore or reset everything | [Settings ▸ Config ▸ Backup & reset](settings-reference.md#backup--reset) |
+| Back up, restore or reset everything | [Settings ▸ App ▸ Backup & reset](settings-reference.md#backup--reset) |
 | Stop a transmission that is already going out | [Scenarios ▸ Stop a transmission](scenarios.md#stop-a-transmission) |
 | Work out why nothing is decoding | [Scenarios ▸ Nothing is decoding](scenarios.md#nothing-is-decoding) |
 | Work out why the rig will not key | [Scenarios ▸ The rig will not key](scenarios.md#the-rig-will-not-key) |

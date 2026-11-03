@@ -9,7 +9,7 @@
 [package]
 publish = false
 name = "tempo"
-version = "1.21.0"
+version = "1.22.0"
 edition = "2021"
 license = "GPL-3.0-only"
 authors = ["KD9TAW <kd9taw@protonmail.com>"]
@@ -85,7 +85,7 @@ tauri-plugin-updater = { version = "2", default-features = false, features = ["r
 # Windows Run key / macOS LaunchAgent / XDG autostart entry. Called from Rust
 # (set_launch_at_login), so no ACL capability entry.
 tauri-plugin-autostart = "2"
-# The OS folder picker behind Settings ▸ Config ▸ Data & log folder (#289) — the operator was
+# The OS folder picker behind Settings ▸ App ▸ Data & log folder (#289) — the operator was
 # otherwise typing a full filesystem path, and a typo there does not fail, it silently opens a
 # DIFFERENT folder. Tauri first-party, Apache-2.0 OR MIT; it pulls tauri-plugin-fs (Apache-2.0
 # OR MIT) and rfd (MIT) — all compatible with our GPL-3.0-only. OSS-integration checklist run
@@ -118,6 +118,9 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 # The application/domain logic. Built by the M3 UI task (#2). This shell only
 # locks its AppState behind a Mutex and forwards commands to it.
 tempo-app = { path = "../crates/tempo-app" }
+# A JS8 notification sound's WAV file, read and checked before it plays (`js8_sounds.rs`). Already in
+# the build through tempo-audio and tempo-client; named here because the shell reads it directly.
+tempo-codec = { path = "../crates/tempo-codec" }
 # Propagation & opening intelligence with LIVE feeds (NOAA SWPC + PSK Reporter).
 propagation = { path = "../crates/propagation", features = ["live"] }
 # DX-cluster / RBN spot feed for need-aware spotting.

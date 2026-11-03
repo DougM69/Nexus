@@ -19,6 +19,7 @@ import type {
   PropagationSnapshot,
   Station,
   WorkableCard,
+  XrayNow,
 } from '../../types'
 import type { Theme } from '../../useTheme'
 import type { MapIntent } from '../MapView'
@@ -28,15 +29,17 @@ import { useEntityCentroids } from '../../features/entityCentroids'
 import {
   BAND_OUTLOOK,
   DXPED_WINDOWS,
-  GETTING_OUT,
   KC2G_MUF,
   PATH_OUTLOOK,
   SPACE_WX_SCALES,
   XRAY_NOW,
+  gettingOutFeed,
   useFeed,
   useKeyedFeed,
 } from '../../features/connectFeeds'
+import { useGetoutSince } from '../../features/getoutSince'
 import { provLabel } from './paneFormat'
+import { xrayFastFresh } from '../../propViz'
 import type { NeededBoard, OtaBoard, PaneContext, SpotsFeed } from './paneContext'
 
 /** What the selected call resolves to, against EVERYTHING plotted: a decoded station, a live spot,
@@ -76,10 +79,14 @@ export function resolveSelection(
 export interface ConnectFeedValues {
   bandOutlook: PathPrediction | null
   getout: GettingOut | null
+  /** The Start fresh time `getout` counts from (features/getoutSince); null = every report. */
+  getoutSince: number | null
   scales: NoaaScalesView | null
   alerts: AlertView[]
   muf: MufStation[]
   xrayNow: number | null
+  /** The whole fast-lane answer (trace, NOAA's event and grid) while its GOES sample is fresh. */
+  xrayLane: XrayNow | null
   dxpedWindows: Map<string, DxpedWindow>
 }
 
@@ -91,7 +98,8 @@ const NO_MUF: MufStation[] = []
  *  nothing (the hosted Remote page). */
 export function useConnectFeeds(enabled = true): ConnectFeedValues {
   const bandOutlook = useFeed(BAND_OUTLOOK, enabled).value ?? null
-  const getout = useFeed(GETTING_OUT, enabled).value ?? null
+  const getoutSince = useGetoutSince()
+  const getout = useFeed(gettingOutFeed(getoutSince), enabled).value ?? null
   const swx = useFeed(SPACE_WX_SCALES, enabled).value
   const muf = useFeed(KC2G_MUF, enabled).value
   const xray = useFeed(XRAY_NOW, enabled).value
@@ -100,16 +108,22 @@ export function useConnectFeeds(enabled = true): ConnectFeedValues {
   return {
     bandOutlook,
     getout,
+    getoutSince,
     scales: swx?.scales ?? null,
     alerts: swx?.alerts ?? NO_ALERTS,
     muf: muf ?? NO_MUF,
-    xrayNow: xray?.flux ?? null,
+    // The fast lane's flux only while its GOES sample is young enough to be now (a gap ages it).
+    xrayNow: xrayFastFresh(xray, Date.now()),
+    xrayLane: xray && xrayFastFresh(xray, Date.now()) != null ? xray : null,
     dxpedWindows,
   }
 }
 
 export interface PaneContextInput {
   myGrid: string
+  /** Settings' station power and antenna gain (PaneContext `stationPowerW` / `antGainDbi`). */
+  stationPowerW?: number | null
+  antGainDbi?: number
   theme: Theme
   intent: MapIntent
   prop: PropagationSnapshot | null
@@ -136,10 +150,17 @@ export interface PaneContextInput {
   /** The call in the log entry of the cockpit beside the box (PaneContext `entryCall`); absent on every
    *  surface with no cockpit beside it. */
   entryCall?: string | null
+  /** The path-over-the-day scrub and its setter (PaneContext `dayScrub` / `onDayScrub`): Connect only. */
+  dayScrub?: PaneContext['dayScrub']
+  onDayScrub?: PaneContext['onDayScrub']
 }
 
 /** A box context, and the X-ray reading the map's flare layer draws (it is not a box's). */
-export function usePaneContext(i: PaneContextInput): { ctx: PaneContext; xrayNow: number | null } {
+export function usePaneContext(i: PaneContextInput): {
+  ctx: PaneContext
+  xrayNow: number | null
+  xrayLane: XrayNow | null
+} {
   // Fetched once per window and shared (features/entityCentroids): several boxes render through
   // plain functions that cannot hold the hook themselves.
   const entityCentroids = useEntityCentroids()
@@ -149,6 +170,8 @@ export function usePaneContext(i: PaneContextInput): { ctx: PaneContext; xrayNow
   const { selStation, selSpot, selDxped, selGrid } = i.selection
   const ctx: PaneContext = {
     myGrid: i.myGrid,
+    stationPowerW: i.stationPowerW,
+    antGainDbi: i.antGainDbi,
     entityCentroids,
     units,
     theme: i.theme,
@@ -171,6 +194,7 @@ export function usePaneContext(i: PaneContextInput): { ctx: PaneContext; xrayNow
     pathOpen: pathPred?.bands.filter((b) => b.workability !== 'Closed') ?? [],
     outlookOpen: f.bandOutlook?.bands.filter((b) => b.workability !== 'Closed') ?? [],
     getout: f.getout,
+    getoutSince: f.getoutSince,
     focusBand: i.focusBand,
     scales: f.scales,
     alerts: f.alerts,
@@ -185,6 +209,8 @@ export function usePaneContext(i: PaneContextInput): { ctx: PaneContext; xrayNow
     onPoint: i.onPoint,
     toggleFocusBand: i.toggleFocusBand,
     entryCall: i.entryCall ?? null,
+    dayScrub: i.dayScrub ?? null,
+    onDayScrub: i.onDayScrub,
   }
-  return { ctx, xrayNow: f.xrayNow }
+  return { ctx, xrayNow: f.xrayNow, xrayLane: f.xrayLane }
 }

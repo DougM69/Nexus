@@ -179,6 +179,27 @@ export function makeProjection(
     .scale(radius / Math.PI) // antipode (π rad) → disc rim
 }
 
+/**
+ * The view that puts `focus` in the middle of the map whose projection centre is `centre` — the
+ * APRS map's "centre on me" and "follow this station". The operator's own pan rides on top, so a
+ * drag after centring still moves the picture. On the Globe a rotation the operator has set by
+ * spinning it is theirs and is left alone; otherwise the sphere turns to face the focus. The flat
+ * maps (World, Beam) are centred by a pixel offset, which their translate takes linearly.
+ */
+export function viewCentredOn(
+  kind: Exclude<Projection, 'street'>,
+  centre: LatLon,
+  focus: LatLon,
+  width: number,
+  height: number,
+  view: MapView3,
+): MapView3 {
+  if (kind === 'globe') return view.rotate ? view : { ...view, rotate: [-focus.lon, -focus.lat] }
+  const p = makeProjection(kind, centre, width, height, { ...view, panX: 0, panY: 0 })([focus.lon, focus.lat])
+  if (!p || !Number.isFinite(p[0]) || !Number.isFinite(p[1])) return view
+  return { ...view, panX: view.panX + width / 2 - p[0], panY: view.panY + height / 2 - p[1] }
+}
+
 /** Project a lat/lon to screen `[x, y]`, or null if clipped/invalid. */
 export function project(proj: GeoProjection, ll: LatLon): [number, number] | null {
   const p = proj([ll.lon, ll.lat])
@@ -545,13 +566,15 @@ export function flareField(
   return out
 }
 
-/** D-RAP's empirical fade-recovery estimate (minutes) from the CURRENT flux:
- * 32.19·L² + 323.45·L + 837.2 for L = log10(flux). The published fit covers
- * M1–X5 (L −5…−3.3): ≈25 min at M1, ≈60 at X1, capped ≈120 above X5. Below M1
- * there is no published fit → null (the chip just omits the estimate). */
+/** D-RAP's empirical fade-recovery estimate (minutes) from the CURRENT flux, NOAA's piecewise
+ * fit for L = log10(flux): 32.19·L² + 323.45·L + 837.2 over M1–X5 (L −5…−3.3), ≈25 min at M1,
+ * ≈58 at X1, ≈120 at X5; above X5 NOAA continues it as 100·L + 450 (X10 → 150 min), so a
+ * bigger flare never reads as recovering sooner than an X5. Below M1 NOAA's fit is relative to
+ * the background flux, which this does not have → null (the chip just omits the estimate). */
 export function flareRecoveryMin(xrayLong: number): number | null {
   if (!(xrayLong >= 1e-5)) return null
-  const l = Math.min(-3.3, Math.log10(xrayLong))
+  const l = Math.log10(xrayLong)
+  if (l > -3.3) return 100 * l + 450
   return 32.19 * l * l + 323.45 * l + 837.2
 }
 

@@ -823,6 +823,8 @@ function DetachedPanelBody({ panel }: { panel: string }) {
         </DashboardBar>
         <ConnectView
           myGrid={snap?.mygrid ?? ''}
+          stationPowerW={settings?.stationPowerW ?? null}
+          antGainDbi={(settings?.antTxGainDbi ?? 0) + (settings?.antRxGainDbi ?? 0)}
           theme={theme}
           stations={snap?.stations ?? []}
           prop={prop}
@@ -1163,7 +1165,8 @@ function DetachedPanelBody({ panel }: { panel: string }) {
               logCurrentQso().then((r) => {
                 // The engine's verdict, as the main window reads it: a false is a refusal to log
                 // (already logged, no active QSO, no report exchanged), never a write.
-                if (r.logged) pushToast(t('shell.toast.logged'), 'success', 2500)
+                if (r.logged && r.alreadyWaiting && r.call) pushToast(t('shell.toast.logWaiting', { call: r.call }), 'info', 4000)
+                else if (r.logged) pushToast(r.call ? t('shell.toast.loggedCall', { call: r.call }) : t('shell.toast.logged'), 'success', 2500)
                 else if (!r.pending) pushToast(t('shell.toast.nothingToLog'), 'info', 4000)
                 return r.snapshot
               }),

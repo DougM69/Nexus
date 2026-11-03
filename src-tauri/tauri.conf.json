@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Nexus",
   "mainBinaryName": "Nexus",
-  "version": "1.21.0",
+  "version": "1.22.0",
   "identifier": "com.kd9taw.tempo",
   "build": {
     "frontendDist": "../ui/dist",
@@ -68,6 +68,7 @@
       "resources/hamlib/*": "resources/hamlib/",
       "resources/deepcw/*": "resources/deepcw/",
       "resources/tles/*": "resources/tles/",
+      "resources/iota/*": "resources/iota/",
       "../licenses/remote/*": "resources/remote/",
       "../licenses/stream/*": "resources/stream/",
       "../licenses/openssl/*": "resources/openssl/",
@@ -102,7 +103,8 @@
       }
     },
     "macOS": {
-      "entitlements": "Entitlements.plist"
+      "entitlements": "Entitlements.plist",
+      "minimumSystemVersion": "12.0"
     }
   },
   "plugins": {

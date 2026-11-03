@@ -9,7 +9,7 @@
 // modes, bearings, km, MHz, dB, knots, satellite names, CQ zone numbers, the layer and
 // projection ids, and the SP/LP path abbreviations below. The prose is in the catalog
 // under `map.*`. Nothing drawn on the canvas is prose — every fillText draws a token.
-import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { callCardTrigger } from './CallCard'
 import { flushSync } from 'react-dom'
 import type { AprsStation } from '../api'
@@ -27,7 +27,7 @@ import {
 } from '../aprsSymbols'
 import { MapLegend, MufLegend } from './MapLegend'
 import { geoPath, type GeoPermissibleObjects, type GeoProjection } from 'd3-geo'
-import { Layers as LayersIcon, Maximize2, Minimize2, RotateCcw } from 'lucide-react'
+import { Crosshair, Layers as LayersIcon, Maximize2, Minimize2, RotateCcw } from 'lucide-react'
 import type {
   AuroraPoint,
   PcaView,
@@ -41,6 +41,8 @@ import type {
   WorkableCard,
 } from '../types'
 import { MapInsightRail } from './prop/MapInsightRail'
+import { ArrivalChip } from './prop/ArrivalChip'
+import { agoLabel } from './prop/SpaceWxGauges'
 import { MapLayersPanel, OVERLAYS_SIDE_BY_SIDE_PX } from './MapLayersPanel'
 import type { Theme } from '../useTheme'
 import { getAurora, getDeclination, getPca, getSatellites, getLogStats, getOtaMapSpots, getPotaActivator } from '../api'
@@ -59,6 +61,7 @@ import {
   SAT_CHASE_EVENT,
 } from '../features/satChase'
 import { decollideLabels } from '../features/mapLabels'
+import { aprsLabelOrder, aprsTrail, placeAprsLabels } from '../features/aprsMap'
 import { SAT_ICON_RECTS, SAT_ICON_TILT_DEG } from '../features/satIcon'
 import { surfaceGet, surfaceHasOwn, surfaceSet } from '../features/windowScope'
 import { useStableByKey } from '../features/useStableByKey'
@@ -76,13 +79,16 @@ import {
 } from '../grid'
 import { heatBoost, sectorPulse } from '../features/pulse'
 import { txPaths, rxPaths, type MapPath } from '../features/mapPaths'
-import { openingModeColor } from '../bandColors'
+import { ribbonFor } from '../features/pathRibbon'
+import type { RibbonInk } from '../features/pathRoute'
+import { bandColor as bandInk, openingModeColor } from '../bandColors'
 import { relLuminance } from '../colormaps'
 import {
   APRS_HOME_ZOOM,
   MAX_ZOOM,
   MIN_ZOOM,
   aprsMapCenter,
+  viewCentredOn,
   graticule,
   makeProjection,
   project,
@@ -94,15 +100,12 @@ import {
   subsolarPoint,
   moonAt,
   inView,
-  flareHafMhz,
-  flareField,
   flareRScale,
   flareClass,
-  flareRecoveryMin,
   type Projection,
   type MapView3,
 } from '../mapGeo'
-import { needMeta, satTooltip, spotTooltip } from '../propViz'
+import { needMeta, satTooltip, spotTooltip, wxStampLabel } from '../propViz'
 import { fmtDistanceKm, useUnits } from '../units'
 import { modeClassOf } from '../features/needs'
 import { t, type MessageKey } from '../i18n'
@@ -110,6 +113,9 @@ import { StateBlock } from './StateBlock'
 import { usePaletteKey } from '../usePaletteRoles'
 import { STANDARD_MAP, STANDARD_SKY, type MapToken, type SkyToken } from '../features/skins'
 import { MOON_DISC, SUN_DISC, drawMoon, drawSun } from '../features/skyGlyphs'
+import { bandRings, flareFootprint, sunWarmth, warmSunInk, XRAY_LIVE_SECS, type FlareNoaa } from '../flareNow'
+import { FlareChip } from './prop/FlareChip'
+import { useViewportClass } from '../useViewport'
 // The base geography (Natural Earth 1:110m/50m/10m by zoom, public domain) and the shaded relief
 // laid over the World view's land (Natural Earth's hillshade, public domain). See basemap.ts.
 import {
@@ -218,12 +224,19 @@ interface Props {
   onFocusBand?: (band: string) => void
   /** Current path / general modelled outlook, for the overlay's MUF ceiling + heatmap. */
   outlook?: PathPrediction | null
+  /** A time (ms) the operator scrubbed the path-over-the-day strip to: the terminator, sun, moon
+   * and the selected station's ribbon are drawn at it instead of now. Null/absent = now. The host
+   * says so beside the map while it is set. */
+  scrubMs?: number | null
   /** Live measured ionosonde MUF fixes (KC2G). When present, the MUF overlay is anchored
    * to real data near each sonde and only falls back to the model out over the oceans. */
   muf?: MufStation[]
   /** GOES long-band X-ray flux (W/m²) — drives the D-RAP flare-blackout layer.
    * The host merges the 60 s fast lane with the prop snapshot (flareAlert.ts). */
   xrayLong?: number | null
+  /** What NOAA says beside that flux — the six-hour trace, the flare event and (during a flare)
+   *  the D-RAP grid the footprint is drawn from. Null for simulated flux (flareNow.ts). */
+  flareNoaa?: FlareNoaa | null
   /** Embedded detail globe (Satellites section): force a clean, locked GLOBE
    * showing just the basemap + the birds, centered on `focusSat`. Suppresses the
    * toolbar, layer panel, and every overlay rail/legend, and never touches the
@@ -245,6 +258,24 @@ interface Props {
   onSelectAprs?: (call: string) => void
   /** Highlighted APRS station (the list selection), drawn accented. */
   selectedAprs?: string | null
+  /** APRS map: draw each station's trail (its `track`), held to `aprsTrailMin` minutes (0 = the
+   *  whole track the store keeps). */
+  aprsTracks?: boolean
+  aprsTrailMin?: number
+  /** APRS map: name every station (a label with no free spot is left out). Off, only the selection
+   *  and the moving stations are named. */
+  aprsLabels?: boolean
+  /** APRS map: the station kept in the middle of the map; it is re-centred each time the station
+   *  reports a new position, and a drag between reports still moves the picture. */
+  aprsFollow?: string | null
+  /** APRS map: the toolbar's Centre button was pressed — the host drops its follow, if any. */
+  onAprsCentre?: () => void
+  /** APRS map: the host's own controls (its map picker and filters), at the start of the map's
+   *  toolbar, so the toolbar wraps them with the zoom and Centre buttons as one strip. */
+  aprsToolbar?: ReactNode
+  /** APRS map: drawn over the map canvas, above the Layers panel (the station card, the empty-map
+   *  note), so they are placed against the map and not against the toolbar. */
+  aprsOverlay?: ReactNode
   /** Bumped by a host that rewrote this surface's stored map setup (Connect's layouts:
    *  features/connectPresets `mapLayers`, through `setIntentMapLayer`): the map reads its layers
    *  again. */
@@ -471,6 +502,8 @@ function needColor(tag: NeedTag | undefined): string | null {
   switch (tag) {
     case 'NewEntity':
       return '#f23ec0' // magenta — all-time-new one (ATNO)
+    case 'NewIota':
+      return '#fb7185' // coral — new IOTA island group
     case 'NewZone':
       return '#c084fc' // violet — new zone
     case 'NewBand':
@@ -616,6 +649,27 @@ const APRS_EMBED_LAYERS: Record<LayerKey, Layer> = (() => {
   }
   return out
 })()
+/** The layers the APRS map offers in its Layers panel: the base map, the grid and its labels (APRS
+ *  speaks in grid squares), the satellites (the ISS and other birds carry APRS digipeaters) and
+ *  the stations. Everything else stays as APRS_EMBED_LAYERS has it: off. */
+const APRS_LAYER_CHOICES: readonly LayerKey[] = ['relief', 'coast', 'states', 'grid', 'gridLabels', 'sats', 'aprs']
+/** Where the APRS map's layer picks are kept, per window: `{ <layer>: boolean }`. */
+const APRS_LAYERS_KEY = 'nexus.aprs.map.layers'
+function loadAprsLayers(): Record<LayerKey, Layer> {
+  let raw: unknown = null
+  try {
+    raw = JSON.parse(surfaceGet(APRS_LAYERS_KEY) ?? 'null')
+  } catch {
+    raw = null
+  }
+  const out = { ...APRS_EMBED_LAYERS }
+  if (typeof raw !== 'object' || raw === null) return out
+  for (const k of APRS_LAYER_CHOICES) {
+    const v = (raw as Record<string, unknown>)[k]
+    if (typeof v === 'boolean') out[k] = { ...out[k], visible: v }
+  }
+  return out
+}
 const RINGS_KM = [1000, 3000, 5000, 10000]
 
 /** `SP` / `LP` — the ham abbreviations for the short and long great-circle path. Technical
@@ -830,11 +884,20 @@ export function MapView({
   aprsFadeAfterMin = 20,
   aprsTtlMin = 60,
   aprsNowSec,
+  aprsTracks = false,
+  aprsTrailMin = 0,
+  aprsLabels = false,
+  aprsFollow = null,
+  onAprsCentre,
+  aprsToolbar,
+  aprsOverlay,
   focusBand = null,
   onFocusBand,
   outlook = null,
+  scrubMs = null,
   muf,
   xrayLong = null,
+  flareNoaa = null,
   embedded,
   layersRev = 0,
 }: Props) {
@@ -866,7 +929,8 @@ export function MapView({
   const [ownKind, setKind] = useState<Projection>(() =>
     embedded ? 'globe' : flatPick(initialSetup?.map) ?? (intent ? INTENT_PRESETS[intent].kind : 'globe'),
   )
-  const kind: Projection = embedded
+  // The satellite detail globe is locked to the Globe; the APRS map takes its host's pick.
+  const kind: Projection = embedded && !embedded.aprs
     ? 'globe'
     : projection === 'street' && !streetPack
       ? 'world'
@@ -881,7 +945,7 @@ export function MapView({
   const [layers, setLayers] = useState(() =>
     embedded
       ? embedded.aprs
-        ? APRS_EMBED_LAYERS
+        ? loadAprsLayers()
         : EMBED_LAYERS
       : (layersFromValue(initialSetup?.layers) ??
         (intent
@@ -985,13 +1049,8 @@ export function MapView({
     return () => clearTimeout(id)
   }, [flarePreview])
   const xrayEff = flarePreview ? 2e-4 : xrayLong
-  // D-RAP flare state. The visualization gates at M1 (R1) — the SAME onset as
-  // the flare insight and toast, so the map never announces a "blackout" the
-  // rest of the app calls quiet. (C-class flux is routine background at solar
-  // max, adds little beyond normal daytime D-layer absorption, and would keep
-  // the pulse tick + fx canvas running near-continuously.)
-  const flareHafNow = flareHafMhz(xrayEff ?? 0)
-  const flareActive = flareRScale(xrayEff ?? 0) >= 1
+  // NOAA's picture of the flare (grid, event, trace) — never beside the simulated Preview flux.
+  const noaaNow = flarePreview ? null : flareNoaa
   // Interactive view: zoom (wheel), Globe rotation + flat-map pan (drag). Reset
   // when the projection changes (rotation/pan don't carry across projections).
   // The APRS map opens on the LOCAL picture — see APRS_HOME_ZOOM for why a whole
@@ -1075,6 +1134,24 @@ export function MapView({
     const id = setInterval(() => setNowMs(Date.now()), 60_000)
     return () => clearInterval(id)
   }, [])
+  // The sky's time: now, or the hour the path-over-the-day strip is scrubbed to (terminator, sun,
+  // moon and ribbon move together; live layers such as the flare stay at now).
+  const skyMs = scrubMs ?? nowMs
+  // D-RAP flare state. The visualization gates at M1 (R1) — the SAME onset as
+  // the flare insight and toast, so the map never announces a "blackout" the
+  // rest of the app calls quiet. (C-class flux is routine background at solar
+  // max, adds little beyond normal daytime D-layer absorption, and would keep
+  // the pulse tick + fx canvas running near-continuously; below M1 only the
+  // sun disc warms.) The footprint is NOAA's D-RAP grid while it is current,
+  // else the analytic field from the GOES flux (flareNow.ts says which).
+  const flareFoot = useMemo(() => flareFootprint(nowMs, xrayEff, noaaNow?.drap), [nowMs, xrayEff, noaaNow])
+  const flareHafNow = flareFoot?.hafSub ?? 0
+  const flareActive = flareFoot != null
+  const flareRings = useMemo(() => (flareFoot ? bandRings(flareFoot, nowMs) : []), [flareFoot, nowMs])
+  // Ring labels only where there is room for them (md and up).
+  const viewport = useViewportClass()
+  const ringLabels = viewport === 'md' || viewport === 'lg' || viewport === 'xl'
+  const scrubHour = scrubMs != null ? new Date(scrubMs).getUTCHours() : null
   // Amateur satellites — polled only while the layer is on (subpoints move
   // ~4°/min; 30 s keeps dots honest without hammering the 10-min view cache).
   const [nativeSats, setSats] = useState<SatView | null>(null)
@@ -1145,7 +1222,11 @@ export function MapView({
   // 1 s tick is what makes the birds visibly MOVE between the 30 s polls.
   const heatPulsing = layers.heat.visible && hasOpening
   const openingsPulsing = layers.openings.visible && hasOpening
-  const flarePulsing = layers.flare.visible && flareActive
+  const flareShown = layers.flare.visible && flareActive
+  // A GOES sample older than XRAY_LIVE_SECS freezes the footprint: still drawn, no longer breathing,
+  // and the chip says how old it is.
+  const xrayLive = noaaNow == null || nowMs / 1000 - noaaNow.xrayAt < XRAY_LIVE_SECS
+  const flarePulsing = flareShown && xrayLive
   const satsMoving = layers.sats.visible && sats != null && sats.birds.length > 0
   useEffect(() => {
     if (!heatPulsing && !openingsPulsing && !flarePulsing && !satsMoving) return
@@ -1164,6 +1245,13 @@ export function MapView({
     }, aprsRedraw)
     return () => clearInterval(id)
   }, [aprsRedraw])
+  // The APRS map's layer picks, per window — its own record, never the Connect map's.
+  useEffect(() => {
+    if (!embedded?.aprs) return
+    const picks: Record<string, boolean> = {}
+    for (const k of APRS_LAYER_CHOICES) picks[k] = layers[k].visible
+    surfaceSet(APRS_LAYERS_KEY, JSON.stringify(picks))
+  }, [layers, embedded?.aprs])
   // Persist this intent's setup whenever any of it changes — a projection pick, a layer toggle or
   // opacity nudge, the colour mode, a Reset, or a preset applied on first use — so the next visit,
   // window and launch restore it. Writing on mount is what makes a preset a FIRST-use default: the
@@ -1212,13 +1300,45 @@ export function MapView({
   )
   // Never draw "you are here" at a borrowed centre — that would invent a QTH.
   const showQth = myQth != null
+  // THE APRS MAP'S FOCUS: the followed station's position while one is followed, else the centre
+  // above. Every other map's focus is its centre. Keyed by value, so a poll that hands over the
+  // same position does not re-centre a picture the operator has just dragged.
+  const followAt = useMemo(() => {
+    if (!embedded?.aprs || !aprsFollow) return null
+    const st = aprs?.find((a) => a.call === aprsFollow)
+    return st && st.lat != null && st.lon != null ? { lat: st.lat, lon: st.lon } : null
+  }, [embedded?.aprs, aprsFollow, aprs])
+  const followKey = followAt ? `${followAt.lat},${followAt.lon}` : ''
+  const focusLL = followAt ?? me
+  // Follow: each new position of the followed station re-centres the map on it, at the zoom the
+  // operator chose (on Street, MapLibre's camera moves; it owns that view).
+  useEffect(() => {
+    if (!followAt) return
+    setView((v) => ({ ...v, rotate: null, panX: 0, panY: 0 }))
+    if (kind === 'street') streetRef.current?.centreOn(followAt.lon, followAt.lat)
+  }, [followKey, kind]) // eslint-disable-line react-hooks/exhaustive-deps
+  /** The APRS toolbar's Centre button: back to the operator's station (or the middle of the heard
+   *  traffic without a grid), at the same zoom, ending any follow. */
+  const centreOnMe = () => {
+    onAprsCentre?.()
+    setView((v) => ({ ...v, rotate: null, panX: 0, panY: 0 }))
+    const at = myQth ?? me
+    if (kind === 'street' && at) streetRef.current?.centreOn(at.lon, at.lat)
+  }
   /** The projection every overlay is placed, drawn and hit-tested through: the 2-D map's own, or on
    *  Street the Mercator locked to MapLibre's camera, which is null until the street map has said
    *  where it is. */
   const projectionFor = (w: number, h: number): GeoProjection | null =>
     kind === 'street'
       ? streetView && streetProjection(streetView, w, h)
-      : me && makeProjection(kind, me, w, h, view)
+      : me &&
+        makeProjection(
+          kind,
+          me,
+          w,
+          h,
+          embedded?.aprs && focusLL ? viewCentredOn(kind, me, focusLL, w, h, view) : view,
+        )
   // Street opens on the station when the pack holds it, else on the pack's own centre.
   const streetOpenAt: [number, number] | undefined =
     streetPack && myQth && packCovers(streetPack, myQth.lat, myQth.lon) ? [myQth.lon, myQth.lat] : undefined
@@ -1264,6 +1384,14 @@ export function MapView({
       lp: { brg: Math.round((spBrg + 180) % 360), km: EARTH_CIRC_KM - spKm },
     }
   }, [me, selStation])
+
+  // The model's route for the selected station (features/pathRoute): the LP button is lit when
+  // it favours the long path now. Advice only — this card never turns a rotator.
+  const lpSuggested = useMemo(() => {
+    if (!me || !selStation?.grid) return false
+    const sll = gridToLatLon(selStation.grid)
+    return sll != null && ribbonFor(me, sll, outlook, focusBand).favoured === 'long'
+  }, [me, selStation, outlook, focusBand])
 
   // With no station location the canvas is absent, not merely hidden. Attach
   // when it appears, and attach again after unavailable station data recovers.
@@ -1469,16 +1597,23 @@ export function MapView({
   // ~30–45 min, so a 10-min refresh is ample). Cleared when the layer is off.
   const [nativeAuroraPts, setAuroraPts] = useState<AuroraPoint[]>([])
   const auroraPts=nativeAuroraPts
+  // OVATION is a FORECAST: the time it is for (and when its input was observed) label the layer row.
+  const [auroraTimes, setAuroraTimes] = useState<{ forecastAt: number | null; observedAt: number | null } | null>(null)
   const auroraOn = layers.aurora.visible
   useEffect(() => {
     if (!auroraOn) {
       setAuroraPts([])
+      setAuroraTimes(null)
       return
     }
     let live = true
     const load = () =>
       getAurora()
-        .then((p) => live && setAuroraPts(p))
+        .then((o) => {
+          if (!live) return
+          setAuroraPts(o?.points ?? [])
+          setAuroraTimes(o ? { forecastAt: o.forecastAt, observedAt: o.observedAt } : null)
+        })
         .catch(() => {})
     load()
     const id = setInterval(load, 600_000)
@@ -1494,6 +1629,7 @@ export function MapView({
   const [nativePca, setPca] = useState<PcaView | null>(null)
   const pca=nativePca
   const pcaOn = layers.pca.visible
+  const pcaChip = pcaOn && pca != null && pca.points.length > 0
   useEffect(() => {
     if (!pcaOn) {
       setPca(null)
@@ -1965,7 +2101,7 @@ export function MapView({
         ctx.globalAlpha = 1
       }
     }
-    const baseDeps = [kind, w, h, dpr, view, streetView, me, theme, colourRoles, reliefReady, basemapRev, stars, layers.relief, layers.coast, layers.states, layers.grid, layers.gridLabels, layers.cqzones, layers.coverage, cqzones, coverageDim, coverageGridGeo, workedZones]
+    const baseDeps = [kind, w, h, dpr, view, streetView, me, focusLL, theme, colourRoles, reliefReady, basemapRev, stars, layers.relief, layers.coast, layers.states, layers.grid, layers.gridLabels, layers.cqzones, layers.coverage, cqzones, coverageDim, coverageGridGeo, workedZones]
     const cache = baseRef.current
     const base = cache.canvas ?? (cache.canvas = document.createElement('canvas'))
     if (
@@ -2006,6 +2142,49 @@ export function MapView({
         .filter((a) => a.lat != null && a.lon != null)
         .slice()
         .sort((a, b) => a.lastHeardUnix - b.lastHeardUnix)
+      // TRAILS, under every symbol: where each moving station has been (features/aprsMap
+      // `aprsTrail`), in its family's colour, the selection's in the accent and heavier with a dot
+      // at each report. A run of points the view cannot show (the Globe's far side) breaks the line
+      // rather than joining across it.
+      if (aprsTracks) {
+        for (const a of positioned) {
+          const pts = aprsTrail(a, drawNowSec, aprsTrailMin)
+          if (pts.length === 0) continue
+          const isSel = sel != null && a.call.toUpperCase() === sel
+          const sym = resolveSymbol(a.symbolTable, a.symbolCode)
+          const ink = isSel ? '#5eead4' : cssVar(CATEGORY_VAR[symbolCategory(sym.glyph)]) || 'rgba(203, 213, 225, 0.95)'
+          const fade = ageFade(a.lastHeardUnix, drawNowSec, aprsFadeAfterMin, aprsTtlMin)
+          const xy = pts.map((q) => placePoint(kind, proj, q))
+          ctx.save()
+          ctx.globalAlpha = layers.aprs.opacity * fade * (isSel ? 0.95 : 0.7)
+          ctx.strokeStyle = ink
+          ctx.lineWidth = (isSel ? 2.6 : 1.6) * ms
+          ctx.lineJoin = 'round'
+          ctx.lineCap = 'round'
+          ctx.beginPath()
+          let pen = false
+          for (const q of xy) {
+            if (!q) {
+              pen = false
+              continue
+            }
+            if (pen) ctx.lineTo(q[0], q[1])
+            else ctx.moveTo(q[0], q[1])
+            pen = true
+          }
+          ctx.stroke()
+          if (isSel) {
+            ctx.fillStyle = ink
+            for (const q of xy) {
+              if (!q) continue
+              ctx.beginPath()
+              ctx.arc(q[0], q[1], 2.2 * ms, 0, Math.PI * 2)
+              ctx.fill()
+            }
+          }
+          ctx.restore()
+        }
+      }
       for (const a of positioned) {
         const p = placePoint(kind, proj, { lat: a.lat as number, lon: a.lon as number })
         if (!p) continue
@@ -2117,13 +2296,31 @@ export function MapView({
           ctx.arc(p[0], p[1], (drawSymbols ? 16 : 9) * ms, 0, Math.PI * 2)
           ctx.stroke()
         }
-        // Label only the selection and anything moving — labelling every station
-        // turns a busy local net into a wall of text.
-        if (isSel || (a.speedKnots != null && a.speedKnots > 1)) {
-          ctx.fillStyle = cssVar('--text') || '#e2e8f0'
-          haloText(a.call, p[0] + 8 * ms, p[1])
-        }
         placedAprsRef.current.push({ call: a.call, x: p[0], y: p[1] })
+      }
+      // LABELS THAT DO NOT COLLIDE (features/aprsMap `placeAprsLabels`): in priority order — the
+      // selection, the moving stations, then the most recently heard — each takes the first free
+      // side of its symbol, clear of the labels already placed and of every other symbol, or is
+      // left out. With Labels off only the selection and the moving stations are candidates, as
+      // the map named them before.
+      const at = new Map(placedAprsRef.current.map((q) => [q.call, q]))
+      const symR = (drawSymbols ? 9 : 4) * ms
+      const clear = (drawSymbols ? 12 : 8) * ms
+      const rowH = 12 * ms
+      const cands = aprsLabelOrder(positioned, selectedAprs ?? null, aprsLabels).flatMap((call) => {
+        const q = at.get(call)
+        return q ? [{ key: call, x: q.x, y: q.y, w: ctx.measureText(call).width, h: rowH, clear }] : []
+      })
+      const labels = placeAprsLabels(
+        cands,
+        { w, h },
+        placedAprsRef.current.map((q) => ({ x: q.x, y: q.y, r: symR })),
+      )
+      ctx.globalAlpha = layers.aprs.opacity
+      ctx.textAlign = 'left'
+      for (const l of labels) {
+        ctx.fillStyle = sel != null && l.key.toUpperCase() === sel ? '#5eead4' : cssVar('--text') || '#e2e8f0'
+        haloText(l.key, l.x, l.y)
       }
       ctx.globalAlpha = 1
     }
@@ -2307,7 +2504,7 @@ export function MapView({
     // gold — the twice-daily greyline DX window. Drawn over the basemap but UNDER
     // spots/openings so stations stay bright on the dark side.
     if (layers.daynight.visible) {
-      const term = terminator(nowMs)
+      const term = terminator(skyMs)
       ctx.fillStyle = 'rgb(4, 8, 20)' // near-black night
       for (const cap of term.caps) {
         ctx.globalAlpha = layers.daynight.opacity * 0.2 // stacks: ~0.2 twilight → ~0.6 core
@@ -2333,7 +2530,7 @@ export function MapView({
     // breathes on the 1 s pulse tick (faster = stronger flare). The animated
     // sun + rays live on the separate fx canvas (below). Drawn over the night
     // shading, under spots/stations, so real activity stays legible.
-    if (layers.flare.visible && flareActive && xrayEff) {
+    if (flareShown && flareFoot && xrayEff) {
       const hw = Math.max(1, Math.floor(w / 3))
       const hh = Math.max(1, Math.floor(h / 3))
       const off =
@@ -2345,10 +2542,11 @@ export function MapView({
         fctx.clearRect(0, 0, hw, hh)
         fctx.globalCompositeOperation = 'lighter'
         const r = Math.max(1, flareRScale(xrayEff))
-        // Live time like the heat pulse — the 1 s pulseTick forces the redraws.
-        const pulse = 0.8 + 0.2 * Math.sin((Date.now() * 2 * Math.PI) / flarePulsePeriodMs(r))
+        // Live time like the heat pulse — the 1 s pulseTick forces the redraws. Frozen (an old GOES
+        // sample): no breath.
+        const pulse = flarePulsing ? 0.8 + 0.2 * Math.sin((Date.now() * 2 * Math.PI) / flarePulsePeriodMs(r)) : 1
         const splat = Math.max(8, Math.min(w, h) * 0.03) / 3
-        for (const s of flareField(nowMs, xrayEff)) {
+        for (const s of flareFoot.field) {
           const p = placePoint(kind, proj, { lat: s.lat, lon: s.lon }) // null on the far side
           if (!p) continue
           const [cr, cg, cb] = flareColor(s.haf)
@@ -2368,6 +2566,44 @@ export function MapView({
         ctx.drawImage(off, 0, 0, w, h)
         ctx.globalAlpha = 1
       }
+      // PER-BAND RINGS round the sub-solar point (flareNow `bandRings`): in each band's colour (the shared
+      // palette the globe paints its rings in; the spot table above has no 60 m), where
+      // it loses 1 dB (dashed — weakened) and 10 dB (solid — out). Drawn from NOAA's grid when that is
+      // the footprint, so the lines are NOAA's. Labelled at md and up, at each 1 dB ring's sunward-north
+      // point; never labelled where the map is small.
+      if (flareRings.length > 0) {
+        ctx.globalAlpha = Math.min(1, layers.flare.opacity + 0.2)
+        ctx.lineWidth = 1.4
+        for (const ring of flareRings) {
+          ctx.setLineDash(ring.db === 1 ? [5, 4] : [])
+          ctx.strokeStyle = bandInk(ring.band)
+          ctx.beginPath()
+          path({ type: 'LineString', coordinates: ring.ring } as unknown as GeoPermissibleObjects)
+          ctx.stroke()
+        }
+        ctx.setLineDash([])
+        if (ringLabels) {
+          ctx.font = `600 ${Math.round(10 * ms)}px system-ui, sans-serif`
+          ctx.textAlign = 'center'
+          ctx.textBaseline = 'middle'
+          ctx.lineWidth = 3
+          ctx.strokeStyle = MARKER_HALO
+          // Highest band first (the innermost ring, the one most worth naming); a label that would
+          // land on one already placed is skipped — the wide low-band rings converge at the map's edge.
+          const placedLabels: [number, number][] = []
+          for (const ring of [...flareRings].reverse()) {
+            if (ring.db !== 1) continue
+            const [lon, lat] = ring.ring[0]
+            const p = placePoint(kind, proj, { lat, lon })
+            if (!p || placedLabels.some(([x, y]) => Math.abs(x - p[0]) < 28 * ms && Math.abs(y - p[1]) < 12 * ms)) continue
+            placedLabels.push(p)
+            ctx.fillStyle = bandInk(ring.band)
+            ctx.strokeText(ring.band, p[0], p[1])
+            ctx.fillText(ring.band, p[0], p[1])
+          }
+        }
+        ctx.globalAlpha = 1
+      }
     }
 
     // THE SUN AND THE MOON where each is overhead. Both move with the 60 s greyline clock and have no
@@ -2379,12 +2615,16 @@ export function MapView({
       // M-class flare is on (animated, on its own canvas below), so without this the map had no sun
       // at all on a quiet day. While the flare layer's sun is up this one stands down: the two are
       // never drawn together.
-      const ss = subsolarPoint(nowMs)
+      const ss = subsolarPoint(skyMs)
       const sp = !flarePulsing && inView(kind, proj, ss) ? project(proj, ss) : null
-      if (sp) drawSun(ctx, sp[0], sp[1], SUN_DISC * ms, skyInk('--map-sun'), MARKER_HALO)
+      // Below the flare gate a C-class flare warms the disc toward orange (flareNow `sunWarmth`); its
+      // class is on the disc's hover. A flare-layer visual: with that layer off the sun stays the
+      // theme's, as it does on a scrubbed sky (another hour's).
+      const sunInk = warmSunInk(skyInk('--map-sun'), layers.flare.visible && scrubMs == null ? sunWarmth(xrayEff) : 0)
+      if (sp) drawSun(ctx, sp[0], sp[1], SUN_DISC * ms, sunInk, MARKER_HALO)
       // The moon, in its phase, lit as it looks from the operator's hemisphere: a waxing moon is lit
       // on the right in the north and on the left in the south. A flare leaves it alone.
-      const moon = moonAt(nowMs)
+      const moon = moonAt(skyMs)
       const mp = inView(kind, proj, moon.sublunar) ? project(proj, moon.sublunar) : null
       if (mp) {
         const south = (myQth ?? me).lat < 0
@@ -2422,7 +2662,8 @@ export function MapView({
       ctx.globalAlpha = 1
     }
 
-    // Aurora oval (OVATION nowcast) — green (low) → red (high) by probability.
+    // Aurora oval (OVATION forecast, labelled with its time on the layer row) — green (low) →
+    // red (high) by probability.
     // High aurora = degraded high-lat/polar HF paths, so it's both pretty and
     // operationally meaningful. Drawn over the field layers, under spots.
     if (layers.aurora.visible) {
@@ -2680,27 +2921,30 @@ export function MapView({
       ctx.globalAlpha = 1
     }
 
-    // Selected path: short-path = the geodesic (geoPath clips it cleanly); long-
-    // path = the same great circle the other way, sampled along the reversed
-    // bearing and dashed to distinguish it. (A manual polyline can jump the
-    // antimeridian in the world view, so break the line on a big screen-x jump.)
+    // Selected path ribbon: BOTH routes at once whenever a station is selected — short path
+    // solid, long path dashed (the rest of the same great circle) — each in its modelled
+    // reliability ink on the band in focus (or the best band now: green open, amber marginal,
+    // grey closed; the accent when the engine gave no figure), with the stretches inside the
+    // polar cap (aurora violet) and on the grey line (the terminator's gold) drawn over it and a
+    // bearing label at the QTH end. The route the SP/LP toggle follows is drawn heavier. A
+    // sampled polyline can jump the antimeridian in the world view, so it breaks on a big
+    // screen-x jump, and on any point the projection cannot show.
     if (layers.paths.visible && selStation?.grid) {
       const sll = gridToLatLon(selStation.grid)
       if (sll) {
-        ctx.strokeStyle = cssVar('--accent')
-        ctx.lineWidth = 1.5
-        if (pathMode === 'sp') {
-          ctx.beginPath()
-          path(greatCircle(me, sll))
-          ctx.stroke()
-        } else {
-          const lpKm = EARTH_CIRC_KM - haversineKm(me, sll)
-          const lpBrg = (bearingDeg(me, sll) + 180) % 360
-          ctx.setLineDash([5, 4])
-          ctx.beginPath()
+        const rib = ribbonFor(me, sll, outlook, focusBand, scrubHour)
+        const inkOf = (i: RibbonInk | null) =>
+          i === 'open'
+            ? cssVar('--band-open')
+            : i === 'marginal'
+              ? cssVar('--band-marginal')
+              : i === 'closed'
+                ? cssVar('--band-closed')
+                : cssVar('--accent')
+        const polyline = (pts: LatLon[]) => {
           let prevX: number | null = null
-          for (let i = 0; i <= 48; i++) {
-            const p = placePoint(kind, proj, destinationPoint(me, lpBrg, (lpKm * i) / 48))
+          for (const ll of pts) {
+            const p = placePoint(kind, proj, ll)
             if (!p) {
               prevX = null
               continue
@@ -2709,8 +2953,35 @@ export function MapView({
             else ctx.lineTo(p[0], p[1])
             prevX = p[0]
           }
+        }
+        ctx.font = `${Math.round(10 * ms)}px system-ui`
+        ctx.textBaseline = 'middle'
+        const qthAt = placePoint(kind, proj, me)
+        for (const l of rib.lines) {
+          const width = (pathMode === 'lp') === (l.route === 'long') ? 2.5 : 1.5
+          ctx.setLineDash(l.route === 'long' ? [5, 4] : [])
+          ctx.strokeStyle = inkOf(l.ink)
+          ctx.lineWidth = width
+          ctx.beginPath()
+          polyline(l.points)
           ctx.stroke()
+          for (const st of l.stretches) {
+            ctx.strokeStyle = cssVar(st.kind === 'polar' ? '--route-polar' : '--route-grey')
+            ctx.lineWidth = width + 1.5
+            ctx.beginPath()
+            polyline(st.points)
+            ctx.stroke()
+          }
           ctx.setLineDash([])
+          const at = placePoint(kind, proj, l.labelAt)
+          if (at) {
+            // A route leaving westward on screen runs its label leftward from the anchor, so the
+            // text never lies back over the QTH ring.
+            const west = qthAt !== null && at[0] < qthAt[0]
+            ctx.textAlign = west ? 'right' : 'left'
+            ctx.fillStyle = inkOf(l.ink)
+            haloText(l.label, at[0] + (west ? -4 : 4) * ms, at[1] - 6 * ms)
+          }
         }
       }
     }
@@ -2931,7 +3202,7 @@ export function MapView({
     // cssVar memo is emptied at the top of this effect).
     void theme
     void colourRoles
-  }, [me, myQth, myGrid, showQth, kind, streetView, streetScale, devScale, markerScale, colorBy, pathMode, view, size, layers, placed, placedSpots, placedDxped, txLines, rxLines, mufStations, auroraPts, pca, cqzones, sats, reliefReady, basemapRev, prop, selStation, selectedCall, needByCall, theme, colourRoles, nowMs, focusBand, pulseTick, xrayEff, flareActive, flarePulsing, flareHafNow, hoverKey, focusSat, placedMyParks, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev, aprsNowSec])
+  }, [me, myQth, myGrid, showQth, kind, streetView, streetScale, devScale, markerScale, colorBy, pathMode, outlook, view, size, layers, placed, placedSpots, placedDxped, txLines, rxLines, mufStations, auroraPts, pca, cqzones, sats, reliefReady, basemapRev, prop, selStation, selectedCall, needByCall, theme, colourRoles, nowMs, skyMs, scrubHour, focusBand, pulseTick, xrayEff, flareActive, flarePulsing, flareHafNow, flareFoot, flareRings, ringLabels, hoverKey, focusSat, placedMyParks, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev, aprsNowSec, aprsTracks, aprsTrailMin, aprsLabels, followAt, focusLL])
 
   // THE SUN + RADIATING ENERGY — the flare layer's animated half, on its own
   // transparent canvas at ~20 fps, mounted ONLY while a flare is active and the
@@ -3138,6 +3409,8 @@ export function MapView({
     return (
       <div className="map-view">
         <StateBlock kind="empty" title={t('map.empty.title')} detail={t('map.empty.detail')} />
+        {/* The APRS card still opens for a station picked in the list (one without a position). */}
+        {embedded?.aprs && aprsOverlay}
       </div>
     )
   }
@@ -3162,6 +3435,7 @@ export function MapView({
       | { kind: 'aprs'; name: string }
       | { kind: 'ota'; sp: OtaMapSpot }
       | { kind: 'muf'; muf: number }
+      | { kind: 'sun' }
     )
   // Hit targets grow with the markers (`markerScale`): a 1.9x dot inside a fixed 10 px target
   // would be a marker you can see but not reliably click, which is the complaint backwards.
@@ -3237,6 +3511,17 @@ export function MapView({
       }
       if (best) return best
     }
+    // The sun disc: its hover carries the X-ray class it is warmed by (info only, like a sonde). Not
+    // on a scrubbed sky (another hour's sun) and not for the simulated Preview flux.
+    if (layers.sunMoon.visible && scrubMs == null && !flarePreview && size.w > 0) {
+      const proj = projectionFor(size.w, size.h)
+      const ss = subsolarPoint(nowMs)
+      const p = proj && inView(kind, proj, ss) ? project(proj, ss) : null
+      if (p) {
+        const d = Math.hypot(p[0] - mx, p[1] - my)
+        if (d < 1.4 * hitR) return { kind: 'sun', d, x: p[0], y: p[1] }
+      }
+    }
     return null
   }
   /** A DXpedition's announced modes → the work-routing mode: single-class CW →
@@ -3292,6 +3577,13 @@ export function MapView({
     }
     if (hit.kind === 'muf') {
       return t('map.hover.muf', { muf: hit.muf.toFixed(1) })
+    }
+    if (hit.kind === 'sun') {
+      // The class with the GOES sample's own time: the fast lane's, else the snapshot's.
+      const at = noaaNow?.xrayAt ?? prop?.spaceWx?.xrayAt ?? null
+      return xrayEff != null && at != null
+        ? t('map.hover.sun', { cls: flareClass(xrayEff), time: wxStampLabel(at) })
+        : t('map.hover.sun.none')
     }
     if (hit.kind === 'aprs') {
       const a = aprs?.find((x) => x.call === hit.name)
@@ -3380,7 +3672,7 @@ export function MapView({
     // instead of one per mousemove. Together those are what make the card hold still.
     setHover((prev) => {
       if (!hit) return null
-      const next = { x: hit.x, y: hit.y, text: hitText(hit), info: hit.kind === 'muf' }
+      const next = { x: hit.x, y: hit.y, text: hitText(hit), info: hit.kind === 'muf' || hit.kind === 'sun' }
       return prev && prev.x === next.x && prev.y === next.y && prev.text === next.text && prev.info === next.info
         ? prev
         : next
@@ -3408,7 +3700,7 @@ export function MapView({
     setHoverKey(null)
     if (kind === 'globe') {
       const k = 0.32 / (d.base.zoom || 1) // deg per px, slower when zoomed in
-      const base = d.base.rotate ?? (me ? [-me.lon, -me.lat] : [0, 0])
+      const base = d.base.rotate ?? (focusLL ? [-focusLL.lon, -focusLL.lat] : [0, 0])
       const rot: [number, number] = [base[0] + dx * k, Math.max(-90, Math.min(90, base[1] - dy * k))]
       setView({ ...d.base, rotate: rot })
     } else {
@@ -3635,6 +3927,35 @@ export function MapView({
         </button>
       </div>
       )}
+      {/* THE APRS MAP'S TOOLBAR: the host's own controls (map picker, filters), then zoom and Centre.
+          The same wrapping strip as the main toolbar; no Reset, colour mode or Full screen — full
+          screen would cover the cockpit's TX strip, and its Stop TX and TX latch must stay on screen. */}
+      {embedded?.aprs && (
+        <div className="map-toolbar aprs-map-toolbar">
+          {aprsToolbar}
+          <div className="map-proj" role="group" aria-label={t('map.zoom.aria')}>
+            <button
+              type="button"
+              onClick={() => (kind === 'street' ? streetRef.current?.zoomBy(1) : setView((v) => ({ ...v, zoom: Math.min(MAX_ZOOM, v.zoom * 1.3) })))}
+              title={t('map.zoom.in')}
+              aria-label={t('map.zoom.in')}
+            >
+              +
+            </button>
+            <button
+              type="button"
+              onClick={() => (kind === 'street' ? streetRef.current?.zoomBy(-1) : setView((v) => ({ ...v, zoom: Math.max(MIN_ZOOM, v.zoom / 1.3) })))}
+              title={t('map.zoom.out')}
+              aria-label={t('map.zoom.out')}
+            >
+              −
+            </button>
+          </div>
+          <button type="button" className="map-chrome-btn" onClick={centreOnMe} title={t('map.centre.title')}>
+            <Crosshair size={13} /> {t('map.centre.label')}
+          </button>
+        </div>
+      )}
 
       <div className="map-body">
         <div className="map-canvas-wrap" ref={wrapRef}>
@@ -3740,7 +4061,11 @@ export function MapView({
                 <button className={pathMode === 'sp' ? 'active' : ''} onClick={() => setPathMode('sp')} title={t('map.path.short.title')}>
                   {PATH_SP}
                 </button>
-                <button className={pathMode === 'lp' ? 'active' : ''} onClick={() => setPathMode('lp')} title={t('map.path.long.title')}>
+                <button
+                  className={`${pathMode === 'lp' ? 'active' : ''}${lpSuggested ? ' suggested' : ''}`}
+                  onClick={() => setPathMode('lp')}
+                  title={lpSuggested ? t('map.path.long.suggested') : t('map.path.long.title')}
+                >
                   {PATH_LP}
                 </button>
               </div>
@@ -3756,12 +4081,34 @@ export function MapView({
           )}
           {!embedded && <MapLegend />}
           {layers.muf.visible && <MufLegend />}
+          {/* The APRS map's Layers panel: the same overlay as Connect's, with the layers that mean
+              something on a 2 m packet map (APRS_LAYER_CHOICES). */}
+          {embedded?.aprs && (
+            <MapLayersPanel className="map-layers" title={t('map.layers.head')} narrow={size.w > 0 && size.w < OVERLAYS_SIDE_BY_SIDE_PX}>
+              {APRS_LAYER_CHOICES.map((k) => (
+                <div
+                  className={`map-layer${streetScale && WORLD_SCALE_LAYERS.includes(k) ? ' street-dim' : ''}`}
+                  key={k}
+                >
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={layers[k].visible}
+                      onChange={(e) => setLayers((L) => ({ ...L, [k]: { ...L[k], visible: e.target.checked } }))}
+                    />
+                    {layerLabel(k)}
+                  </label>
+                </div>
+              ))}
+            </MapLayersPanel>
+          )}
+          {embedded?.aprs && aprsOverlay}
           {/* THE LAYERS PANEL — an overlay pinned top-left of the map: the same place and the same fold
               as on the 3-D globe (MapLayersPanel; why an overlay, not a column: `.map-layers` in
               styles.css). Gated on the embedded/standalone distinction only (the Expert gate went
               2026-07-26). Full screen is the third state: the panel is away, and the toolbar's
-              Layers button peeks it back (see `layersPeek`). Rendered BEFORE the flare/PCA chips: they
-              sit beside it via a sibling selector (`.map-layers ~ .flare-chip`). */}
+              Layers button peeks it back (see `layersPeek`). Rendered BEFORE the space-weather chip stack: it
+              sits beside it via a sibling selector (`.map-layers ~ .wx-chip-stack`). */}
           {!embedded && (!full || layersPeek) && (
             // Folded by default where it would cover the Conditions rail's band list (the 1024×768
             // floor), unless the operator has chosen (MapLayersPanel `narrow`).
@@ -3786,6 +4133,9 @@ export function MapView({
                     />
                     {layerLabel(k)}
                   </label>
+                  {k === 'aurora' && auroraTimes?.forecastAt != null && (
+                    <AuroraForecastNote forecastAt={auroraTimes.forecastAt} observedAt={auroraTimes.observedAt} />
+                  )}
                   {k === 'flare' && (
                     // The layer is event-driven (nothing draws below an M1 flare), so
                     // give the operator a way to SEE it on a quiet sun: a 60 s
@@ -3848,19 +4198,29 @@ export function MapView({
               ))}
             </MapLayersPanel>
           )}
-          {flarePulsing && xrayEff != null && (
-            <FlareChip
-              xrayLong={xrayEff}
-              hafMhz={flareHafNow}
-              trend={flarePreview ? null : (prop?.wxTrend?.xray.dir ?? null)}
-              preview={flarePreview}
-            />
-          )}
-          {layers.pca.visible && pca && pca.points.length > 0 && (
-            <div className="flare-chip pca-chip" role="status">
-              {t('map.pca.chip', { scale: sScaleOf(pca.j10), db: pca.a30Day.toFixed(1) })}
-            </div>
-          )}
+          {/* THE SPACE-WEATHER CHIP STACK — one column beside the Layers panel, so a chip can grow
+              (the flare chip unfolds) without covering the next. Later overlays add their chip here.
+              Always rendered: the storm-watch chip decides for itself whether it shows, and an empty
+              stack lets the pointer through and takes no room. */}
+          <div className="wx-chip-stack">
+            {flareShown && flareFoot && xrayEff != null && (
+              <FlareChip
+                xrayLong={xrayEff}
+                foot={flareFoot}
+                noaa={noaaNow}
+                qth={myQth ?? me}
+                nowMs={nowMs}
+                snapAt={prop?.spaceWx?.xrayAt ?? null}
+                preview={flarePreview}
+              />
+            )}
+            {pcaChip && pca && (
+              <div className="flare-chip pca-chip" role="status">
+                {t('map.pca.chip', { scale: sScaleOf(pca.j10), db: pca.a30Day.toFixed(1) })}
+              </div>
+            )}
+            <ArrivalChip compact={size.w > 0 && size.w < OVERLAYS_SIDE_BY_SIDE_PX} />
+          </div>
           {prop && (
             <MapInsightRail
               prop={prop}
@@ -3876,9 +4236,6 @@ export function MapView({
 }
 
 
-/** The live flare readout, shown only while the D-RAP layer is actually drawing:
- * class, R-scale, the absorption ceiling, and where the event is heading (the
- * X-ray trend word + the D-RAP recovery estimate once it's falling). */
 /** NOAA S-scale from J(≥10 MeV): S1=10 pfu, S2=100, S3=1e3, S4=1e4, S5=1e5. */
 function sScaleOf(j10: number): number {
   if (j10 >= 1e5) return 5
@@ -3889,42 +4246,26 @@ function sScaleOf(j10: number): number {
   return 0
 }
 
-function FlareChip({
-  xrayLong,
-  hafMhz,
-  trend,
-  preview = false,
-}: {
-  xrayLong: number
-  hafMhz: number
-  trend: 'rising' | 'steady' | 'falling' | null
-  /** Simulated flux from the Layers-panel Preview button — labeled so simulated
-   * data can never be mistaken for a real event. */
-  preview?: boolean
-}) {
-  const rec = flareRecoveryMin(xrayLong)
-  // Each phase is its OWN appended statement, never a stem plus a tail — see the
-  // `map.flare.phase.*` note in the catalog.
-  const mins = rec ? Math.round(rec) : 0
-  const phase =
-    trend === 'rising'
-      ? t('map.flare.phase.rising')
-      : trend === 'falling'
-        ? rec
-          ? t('map.flare.phase.recoveringIn', { mins })
-          : t('map.flare.phase.recovering')
-        : rec
-          ? t('map.flare.phase.fade', { mins })
-          : ''
+/** How long past its forecast time an OVATION oval may be before the row says how old it is: the
+ *  oval is normally a forecast for 30–90 min ahead, refreshed every few minutes, so a forecast
+ *  time half an hour gone means the feed has stopped. */
+const AURORA_PAST_SECS = 30 * 60
+
+/** The aurora layer row's second line: the oval is a forecast, for this time (NOAA OVATION's own
+ *  `Forecast Time`), from the solar wind observed at its `Observation Time` (on hover). Past
+ *  AURORA_PAST_SECS it dims and says how long ago that was. */
+export function AuroraForecastNote({ forecastAt, observedAt }: { forecastAt: number; observedAt: number | null }) {
+  const time = wxStampLabel(forecastAt)
+  const past = Math.floor(Date.now() / 1000 - forecastAt)
+  const old = past >= AURORA_PAST_SECS
+  const title =
+    observedAt != null
+      ? `${t('map.layer.aurora.forecast.title', { time })} · ${t('map.layer.aurora.observed', { time: wxStampLabel(observedAt) })}`
+      : t('map.layer.aurora.forecast.title', { time })
   return (
-    <div className="flare-chip" role="status">
-      {t('map.flare.chip', {
-        cls: flareClass(xrayLong),
-        r: flareRScale(xrayLong),
-        haf: Math.round(hafMhz),
-      })}
-      {preview ? t('map.flare.phase.preview') : phase}
-    </div>
+    <span className="map-layer-note" data-stale={old ? '' : undefined} title={title}>
+      {old ? t('map.layer.aurora.forecast.past', { time, ago: agoLabel(past) }) : t('map.layer.aurora.forecast', { time })}
+    </span>
   )
 }
 

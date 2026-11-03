@@ -20,6 +20,8 @@ import type { FieldDayStatus } from '../types'
 
 vi.mock('../api', () => ({
   contestRemoved: vi.fn(async () => []),
+  // A joined laptop's club block lists the club log the host sent: none here.
+  fdClubLogNewest: vi.fn(async () => null),
   contestUnmerged: vi.fn(async () => []),
   getSettings: vi.fn(async () => ({ ...defaultSettings, fdOperator: 'W9OPX' })),
   setSettings: vi.fn(async () => ({})),
@@ -29,6 +31,7 @@ vi.mock('../api', () => ({
   fdClubGivePosition: vi.fn(async () => ({ outcome: 'given' })),
   fdClubRemovePosition: vi.fn(async () => ({ outcome: 'done' })),
   fdClubAllowBack: vi.fn(async () => ({ outcome: 'done' })),
+  fdClubImport: vi.fn(async () => ({})),
   openPanelWindow: vi.fn(async () => {}),
 }))
 

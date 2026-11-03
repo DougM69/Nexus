@@ -262,7 +262,7 @@ pub const MAIN_SUB_SAT_RIGS: [u32; 4] = [3081, 3044, 3068, 3090];
 /// were down at once — ve7cc accepted TCP and never sent a login prompt, wa9pie refused — and
 /// every default-config install had no phone source at all; that is the whole reason the list
 /// grew. The migration recognises exactly that shipped pair and appends the rest; the operator
-/// edits the list in Settings ▸ Logging & Connectors ▸ Integrations & Feeds ▸ Spot Sources.
+/// edits the list in Settings ▸ Services ▸ Integrations & Feeds ▸ Spot Sources.
 ///
 /// ⚠️ **"Accepts TCP" is not "is a working node", and this comment previously got that wrong.**
 /// It claimed ve7cc "was answering again by 2026-09-17" on the strength of a connect check,
@@ -445,11 +445,21 @@ pub fn rig_has_xit(rig_model: u32) -> bool {
 /// ⭐ #393 (FT-991A): APRS is soundcard audio, and the FT-991/991A takes it from the USB codec in
 /// DATA-FM when menu 077 FM PKT PORT SELECT is USB (its default is DATA, the rear jack), while
 /// plain FM takes 074 FM MIC SELECT. Hamlib's `PKTFM` is `MD0A;` (DATA-FM) on model 1035 — the
-/// FT-991 and FT-991A share it. Only the model with that evidence: the FT-891 (1036) has no 2 m,
-/// and the native Icom path keeps APRS in plain FM on purpose (`CivBackend::try_set_mode`).
+/// FT-991 and FT-991A share it. The FT-891 (1036) has no 2 m.
+///
+/// The Icoms with a 2 m FM-D, where the USB codec feeds the modulator through the radio's DATA
+/// MOD setting rather than plain FM's MOD input: the IC-7100 (3070), IC-9700 (3081), IC-705
+/// (3085) and IC-905 (3090). Hamlib (4.6.5 and the bundled 4.7.1, captured against a fake
+/// radio) sends `PKTFM` to each as `26 00 05 01 01` — FM, Data mode ON, FIL1 — the same frame
+/// it sends `PKTUSB` as with `01` for the mode. The native CI-V daemon sends `06 05` and
+/// `1A 06 01 01` (`CivBackend::try_set_mode`), the bytes each radio's CI-V reference defines
+/// (the IC-7100 is Hamlib-only). Left out, each on its evidence: the IC-9100 (3068), whose
+/// Hamlib caps list no FM-D and whose `1A 06` from Hamlib carries filter byte `05`, outside the
+/// `01`–`03` Icom defines; the ID-5100 (3071), whose backend refuses `PKTFM`; and the ID-4100
+/// (3082), whose backend sends it as plain `06 05`. Plain FM still turns DATA off everywhere.
 /// Mirrored in the UI as `APRS_DATA_FM_MODELS` (SettingsPanel).
 pub fn aprs_data_fm_available(rig_model: u32) -> bool {
-    rig_model == 1035
+    matches!(rig_model, 1035 | 3070 | 3081 | 3085 | 3090)
 }
 
 /// Full-duplex satellite rigs with no Main/Sub CAT path in this build: the
@@ -721,6 +731,47 @@ pub fn tci_reachable(rig_model: u32, rig_conn: &str, host: &str, port: u16) -> b
     rig_model != 0 && rig_conn_is_tci(rig_conn) && !host.trim().is_empty() && port != 0
 }
 
+/// One radio's settings that say where its transmit audio goes ([`tx_audio_on_sound_card`]).
+pub struct TxAudioRoute<'a> {
+    pub rig_model: u32,
+    pub rig_conn: &'a str,
+    pub tci_host: &'a str,
+    pub tci_port: u16,
+    pub tci_audio: bool,
+    pub flex_native_cat: bool,
+    pub flex_radio_ip: &'a str,
+    pub flex_native_audio: bool,
+}
+
+/// Does this radio's transmit audio leave through this computer's sound card? False only where
+/// Nexus sends no transmit audio to a card at all, decided the way the radio's audio path decides:
+/// - the Icom network connection: nothing transmits over it, and the engine refuses every over
+///   before PTT ([`rig_conn_is_icom_lan`], `tempo_audio::icomlan`);
+/// - Nexus's TCI client with Audio over TCI on: the transmit audio goes into the TCI session through
+///   its tee, and that client keys Nexus's audio only while the tee is in ([`tci_reachable`],
+///   [`Settings::tci_audio`]);
+/// - Nexus's own Flex client with native audio on: DAX over the network, and Phone at the shack
+///   keys the radio's own microphone ([`flex_client_reachable`], [`Settings::flex_native_audio`]).
+///
+/// Every other radio, and any of these with its network audio off, takes its audio from the card.
+/// The headphone monitor and the JS8 sounds use it to leave out a TX device of "system default" on
+/// a radio that does not transmit from a card ([`Settings`]'s TX devices, in `tempo_audio`).
+///
+/// This is decided from the settings, and the live path can still fall back to the card: while the
+/// Flex client's DAX audio has failed, or before the TCI tee is ready, the radio loop plays the
+/// transmit audio to the TX device, and a TX device of "system default" is the default output.
+/// That is safe only because the operating radio's backend holds its resolved TX output open
+/// (`tempo_audio::notify_sound::hold_tx_output`), which those guards also refuse; an idle radio
+/// does not transmit. Dropping that hold for network radios would turn this rule into a hole.
+pub fn tx_audio_on_sound_card(r: &TxAudioRoute) -> bool {
+    let icom_lan = rig_conn_is_icom_lan(r.rig_conn);
+    let tci = tci_reachable(r.rig_model, r.rig_conn, r.tci_host, r.tci_port) && r.tci_audio;
+    let flex = r.flex_native_cat
+        && flex_client_reachable(r.rig_model, r.flex_radio_ip)
+        && r.flex_native_audio;
+    !(icom_lan || tci || flex)
+}
+
 /// The port Nexus's own TCI server listens on unless the operator moves it
 /// ([`Settings::tci_server_port`]): 40001, where WSJT-X, JTDX, MacLoggerDX and the Go TCI tools
 /// look by default, and clear of 50001, where Thetis (and, by a user's report, ExpertSDR3) serves
@@ -791,6 +842,17 @@ impl SdrconnectFollow {
 
 /// SDRconnect's WebSocket API port as SDRplay ships it.
 pub const SDRCONNECT_DEFAULT_PORT: u16 = 5454;
+
+/// Does this radio's waterfall source ([`RadioProfile::native_scope`]) say the sound card's audio
+/// waterfall rather than the radio's own scope? Only the word `audio` does: `auto` (the default)
+/// and any other word, including one from a later build, leave the radio's scope where it is.
+pub fn native_scope_is_audio(word: &str) -> bool {
+    word.trim().eq_ignore_ascii_case("audio")
+}
+
+fn default_native_scope() -> String {
+    "auto".to_string()
+}
 
 fn default_scope_source() -> String {
     ScopeSource::Radio.as_setting().to_string()
@@ -1094,6 +1156,68 @@ pub enum PounceThreshold {
 /// a blank key.
 fn cloudlog_key_absent(s: &str) -> bool {
     s.trim().is_empty()
+}
+
+/// The saved keys this station holds back until the operator confirms them for the address they
+/// now go to ([`Settings::keys_to_confirm`]). Names only which keys: never a key, and nothing
+/// about one.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct KeysToConfirm {
+    /// The Cloudlog/Wavelog API key.
+    pub cloudlog: bool,
+    /// The Icom network password of each of these radios, by profile id.
+    pub icom_lan: Vec<u32>,
+    /// Of those that wait, the ones kept only because removing them from the keychain failed:
+    /// Cloudlog's key, and each of these radios' passwords. The station knows such a key was typed
+    /// for another address (or for a radio it no longer has), so it can only be removed, never
+    /// used ([`Self::not_removed`]).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub cloudlog_not_removed: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub icom_lan_not_removed: Vec<u32>,
+}
+
+impl KeysToConfirm {
+    pub fn is_empty(&self) -> bool {
+        !self.cloudlog && self.icom_lan.is_empty()
+    }
+
+    /// Whether radio `id`'s Icom network password waits.
+    pub fn icom_lan_waits(&self, id: u32) -> bool {
+        self.icom_lan.contains(&id)
+    }
+
+    /// Whether this key (Cloudlog's for `None`, else radio `radio_id`'s password) waits only
+    /// because removing it failed.
+    pub fn not_removed(&self, radio_id: Option<u32>) -> bool {
+        radio_id.map_or(self.cloudlog_not_removed, |id| {
+            self.icom_lan_not_removed.contains(&id)
+        })
+    }
+
+    /// Hold this key back as one whose removal failed: it waits, and can only be removed.
+    pub fn hold_not_removed(&mut self, radio_id: Option<u32>) {
+        match radio_id {
+            None => (self.cloudlog, self.cloudlog_not_removed) = (true, true),
+            Some(id) => {
+                if !self.icom_lan_waits(id) {
+                    self.icom_lan.push(id);
+                }
+                if !self.icom_lan_not_removed.contains(&id) {
+                    self.icom_lan_not_removed.push(id);
+                }
+            }
+        }
+    }
+
+    /// Forget why a key waited once it waits no more, so a later wait starts afresh.
+    pub(crate) fn only_of_keys_that_wait(mut self) -> Self {
+        self.cloudlog_not_removed &= self.cloudlog;
+        let waits = self.icom_lan.clone();
+        self.icom_lan_not_removed.retain(|id| waits.contains(id));
+        self
+    }
 }
 
 /// ⭐ **The seven settings a contest weekend changes, as they were before it changed them** —
@@ -1484,6 +1608,31 @@ pub struct Settings {
     /// "directed", "inbox", "callNew" and "callOld". Empty, the default, plays none.
     #[serde(default)]
     pub js8_sounds: Vec<String>,
+    // --- JS8 screen options: JS8Call 3.0.3's own, at its defaults ---
+    /// JS8Call's "Reset the Band Activity, Call Activity, and RX history at startup" (`ResetActivity`,
+    /// OFF by default, Configuration.ui:429-433, Configuration.cpp:2303): on, the cockpit starts each
+    /// run with its RX pane, Band activity and call list empty, as JS8Call reads none of them back
+    /// (mainwindow.cpp:505-508, :607-609) and clears them at its first band (:1281-1285). Display
+    /// only, as the lists' Clear All is: the station's own record of who it heard is kept.
+    #[serde(default)]
+    pub js8_reset_activity: bool,
+    /// JS8Call's colours and fonts for its RX pane, its two lists and its compose box (Configuration
+    /// ▸ UI, Configuration.ui:3250-4060). Empty by default: every pane then follows the theme.
+    #[serde(default)]
+    pub js8_pane_style: Js8PaneStyle,
+    /// The WAV file each of those sounds plays, by the same event names: JS8Call's
+    /// `Notifications/<event>/path`, picked with its "Select" button (Configuration.cpp:2054-2066,
+    /// :2462-2478). An event with none, the default, plays Nexus's own tone for it, and so does one
+    /// whose file cannot be played. Paths on this computer: they travel in a profile, and the
+    /// Remote settings document does not carry them.
+    #[serde(default)]
+    pub js8_sound_files: std::collections::BTreeMap<String, String>,
+    /// The output the JS8 sounds play on, by device name, as JS8Call lets its notifications pick one.
+    /// Empty, the default, is the system default output. Never a device the station transmits from:
+    /// every play is refused while this (or the default it stands for) is a TX audio device
+    /// (`tempo_audio::notify_sound`), so a VOX-keyed rig is never keyed by a notification.
+    #[serde(default)]
+    pub js8_sound_device: String,
     // --- JS8Call's API for other programs on this computer (`engine/js8_api.rs`) ---
     /// Serve JS8Call's TCP API (`TCPEnabled`): OFF by default, as JS8Call ships it. Read-only, and
     /// on 127.0.0.1 only whatever else changes (`src-tauri/src/js8_api.rs`).
@@ -2094,6 +2243,10 @@ pub struct Settings {
     /// [`RadioProfile::icom_data_mode`]). 1 is today's behaviour.
     #[serde(default = "one")]
     pub icom_data_mode: u8,
+    /// The active radio's waterfall source (flat mirror — see [`RadioProfile::native_scope`]).
+    /// `"auto"` is today's behaviour.
+    #[serde(default = "default_native_scope")]
+    pub native_scope: String,
     /// The active radio's transmit audio source for CAT PTT (flat mirror — see
     /// [`RadioProfile::tx_audio_source`]). "front" is today's behaviour.
     #[serde(default = "default_tx_audio_source")]
@@ -2112,6 +2265,24 @@ pub struct Settings {
     /// so nobody's working APRS changes (#393). Per radio: it depends on how that rig is set.
     #[serde(default)]
     pub aprs_data_fm: bool,
+    /// Feed THIS computer's microphone to the radio while the operator holds Phone's PTT: its audio
+    /// goes out by the radio's transmit audio route (the sound card's output, or the TCI connection
+    /// on a TCI radio) and the radio is keyed as for any audio Nexus plays. OFF by default, so a
+    /// station that talks into the radio's own microphone, or routes a microphone by the OS, sees
+    /// no change. Per radio: it is a property of how THAT radio is wired. Phone only; the digital
+    /// modes never take it (`engine/pc_mic.rs`).
+    /// Flat mirror of [`RadioProfile::pc_mic`].
+    #[serde(default)]
+    pub pc_mic: bool,
+    /// The input device the computer's microphone is captured from (flat mirror of
+    /// [`RadioProfile::pc_mic_device`]). Empty = none chosen: the microphone is never the system
+    /// default, which on a radio station is often the radio's own receive audio.
+    #[serde(default)]
+    pub pc_mic_device: String,
+    /// The computer microphone's gain in dB, -20 to +20, 0 = as captured (flat mirror of
+    /// [`RadioProfile::pc_mic_gain_db`]).
+    #[serde(default)]
+    pub pc_mic_gain_db: f32,
     /// DEPRECATED / ignored. Digital now ALWAYS forces the DATA submode (like Phone/CW
     /// force their mode), so this opt-out is no longer consulted by
     /// [`rig_mode`](Self::rig_mode). Kept only so older settings files still deserialize.
@@ -2128,6 +2299,30 @@ pub struct Settings {
     /// band dropdown. `Open` (default) = no restrictions (non-US). See [`LicenseClass`].
     #[serde(default)]
     pub license_class: LicenseClass,
+    /// The first-run wizard's "How much have you done?" answer ([`ExperienceLevel`]). `None` =
+    /// never asked: a file from before the question and a first run read the same, and an
+    /// existing file is never given one by an update (nothing is written for `None`). It only
+    /// picks the UI's starting features and how much of Settings opens; nothing on the Rust side
+    /// reads it, and it touches no transmit path. Written only by `Engine::set_experience_level`;
+    /// a settings form save keeps the live value.
+    ///
+    /// Read leniently ([`lenient_experience_level`]): an answer this build does not know (one a
+    /// later build added) reads as `None` rather than failing the whole file.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "lenient_experience_level"
+    )]
+    pub experience_level: Option<ExperienceLevel>,
+    /// Whether the first-run setup wizard has been done (finished or skipped). ⭐ `false` only for a
+    /// NEW install: `Settings::default()` (no settings file) says not seen, while an existing file
+    /// without the key reads as seen (the field's own serde default), and so does a file that is
+    /// present but cannot be read. Kept here, beside the station's settings, rather than in the
+    /// WebView's storage, so a WebView data reset or a reinstall that keeps the settings never
+    /// shows the wizard to an existing station again. Written only by
+    /// `Engine::mark_setup_wizard_seen`; once seen it stays seen (`apply_settings_inner`).
+    #[serde(default = "default_true")]
+    pub setup_wizard_seen: bool,
     /// How CW is keyed (CAT `send_morse` vs soundcard tone). Also picks the CW
     /// rig-mode: CAT → CW, Soundcard → a DATA submode, PKTUSB/PKTLSB (audio tone). See [`rig_mode`].
     pub cw_keyer: CwKeyerBackend,
@@ -2797,6 +2992,13 @@ pub struct Settings {
     /// today's behaviour exactly.
     #[serde(default)]
     pub aprs_ssid: Option<u8>,
+    /// Doppler correction on the APRS cockpit's ISS channel (145.825 MHz). On (the default),
+    /// while that channel is selected and the ISS is above the horizon, Nexus keeps the radio on
+    /// the receive-corrected frequency between overs and moves it to the transmit-corrected one
+    /// for each APRS over, never while keyed. Off leaves the radio on 145.825. No other channel
+    /// is ever corrected.
+    #[serde(default = "default_true")]
+    pub aprs_iss_doppler: bool,
 
     // --- audio I/O ---
     /// Input (capture) device name. Empty = system default input.
@@ -2836,7 +3038,11 @@ pub struct Settings {
     pub station_power_w: Option<f64>,
     /// Log the space weather on each contact (ADIF `K_INDEX`, `A_INDEX`, `SFI`): the latest
     /// planetary K and A index and 10.7 cm solar flux Nexus fetched, and only when that reading is
-    /// no more than three hours old. Off by default — a logger's propagation fields are opt-in.
+    /// no more than three hours old. ⭐ **On for a NEW install** (`Settings::default()`, no
+    /// settings file): the path a contact took is explained from the space weather at the time.
+    /// An existing station keeps what its file says, and a file without the key (from before
+    /// the default changed) or one that cannot be read reads off — the field's own serde
+    /// default — so an update turns nothing on.
     #[serde(default)]
     pub log_space_weather: bool,
     /// Display units for distances/temperature/speed (F4MQS): `"auto"` (from the OS
@@ -2969,7 +3175,9 @@ pub struct Settings {
     /// Prompt the operator to confirm/edit the QSO before logging (WSJT-X
     /// "Prompt me to log QSO"). When true the snapshot exposes a pending log
     /// record instead of silently writing it; the UI shows a confirm popup.
-    /// Off by default (silent auto-log). Has no effect unless `auto_log`.
+    /// Off by default (silent auto-log). With it on, the popup opens by itself when an FT8/FT4
+    /// or RTTY Auto contact completes, `auto_log` on or off, as WSJT-X's does (operator ruling, 2026-10-27);
+    /// with both off nothing is logged until the operator presses Log QSO.
     #[serde(default)]
     pub prompt_to_log: bool,
     /// Auto-save a WAV of the recent receive audio when a QSO is logged — an automatic
@@ -3623,6 +3831,18 @@ pub struct Settings {
     /// Auto-upload each logged QSO to eQSL.cc (ImportADIF). Off by default. The
     /// eQSL username is `eqsl_username`; the password lives in the OS keychain.
     pub eqsl_upload: bool,
+    /// Where QRZ Logbook's automatic uploads start, as an earlier build of this change kept it
+    /// in one window's settings. Read only to be moved beside the shared log, where every window
+    /// reads it ([`crate::upload_start`]), and cleared once moved; nothing else reads or writes it.
+    /// `None`, the only value a released build's file has, writes no key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub qrz_logbook_upload_from: Option<u64>,
+    /// ClubLog's, as [`Self::qrz_logbook_upload_from`]: read only to be moved beside the log.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clublog_upload_from: Option<u64>,
+    /// eQSL's, as [`Self::qrz_logbook_upload_from`]: read only to be moved beside the log.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eqsl_upload_from: Option<u64>,
     /// The eQSL account's QTH Nickname. Required by eQSL when one callsign has
     /// several QTH profiles ("if not logged in, if multiple accounts with same
     /// callsign" — their spec); such an account cannot authenticate at all without
@@ -3689,6 +3909,19 @@ pub struct Settings {
     /// prior build's behaviour; the mitigation is simply not to downgrade with a migration pending.
     #[serde(default, skip_serializing_if = "cloudlog_key_absent")]
     pub cloudlog_key: String,
+    /// ⛔ THE SAVED KEYS NOT TO SEND YET. A settings restore onto a station that had no address for
+    /// a service (a fresh install, or reset settings) lands the backup's address, while the system
+    /// keychain, which outlives both, may still hold a key, and cannot say which address it was
+    /// typed for. That key is kept but not used: no Cloudlog upload goes out with it and the Icom
+    /// network radio does not sign in with it, until the operator answers Use (it is the key for
+    /// that address) or Remove. Typing the key again answers too.
+    ///
+    /// ENGINE-OWNED, like the pending key above: `Engine::apply_settings_inner` keeps the
+    /// engine's value across every form save, profile load and restore, so a form that posts it
+    /// back empty can never let a key go out. Only the restore, the operator's answer, a key typed
+    /// again and removing the radio change it (`Engine::set_keys_to_confirm`).
+    #[serde(default, skip_serializing_if = "KeysToConfirm::is_empty")]
+    pub keys_to_confirm: KeysToConfirm,
     /// Auto-forward each logged QSO to the Cloudlog/Wavelog instance above. Off by default.
     #[serde(default)]
     pub cloudlog_upload: bool,
@@ -4312,6 +4545,14 @@ where
     })
 }
 
+/// The lenient loader of [`Settings::experience_level`]: a known answer, else `None` ("not asked").
+/// An answer from a later build must not cost the file around it (see [`lenient_list`]'s WHY).
+fn lenient_experience_level<'de, D: serde::Deserializer<'de>>(
+    de: D,
+) -> Result<Option<ExperienceLevel>, D::Error> {
+    Ok(serde_json::from_value(serde_json::Value::deserialize(de)?).ok())
+}
+
 /// [`lenient_list`]'s scalar twin: a string, or empty for any other JSON value.
 fn lenient_string<'de, D: serde::Deserializer<'de>>(de: D) -> Result<String, D::Error> {
     Ok(match serde_json::Value::deserialize(de)? {
@@ -4400,6 +4641,20 @@ impl Macros {
             self.active_cw_profile = 0;
         }
     }
+}
+
+/// The answer to the first-run wizard's one question, "How much have you done?" (Settings ▸
+/// Station ▸ Your experience changes it later). The UI uses it to pick the starting feature set,
+/// how much of Settings starts open, the starter packs and the first-contact walk-through.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ExperienceLevel {
+    /// New to the hobby.
+    NewToHobby,
+    /// Experienced on phone or CW, new to the digital modes.
+    NewToDigital,
+    /// Experienced: everything on, Settings as it always was.
+    Experienced,
 }
 
 /// What the operator sees when Nexus switches the active radio BY ITSELF — a band or mode the
@@ -4527,6 +4782,28 @@ impl RoutingRule {
     pub fn matches_bandless(&self, mode: RouteMode) -> bool {
         self.bands.is_empty() && self.mode.is_none_or(|m| m == mode)
     }
+}
+
+/// One radio as the radio setup has it before Finish: which bands it lists (empty = covers every
+/// band) and whether it is on. Part of a [`RoutingDraft`].
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct RadioRoutingDraft {
+    pub id: u32,
+    pub bands: Vec<String>,
+    pub enabled: bool,
+}
+
+/// The routing the radio setup is showing and has NOT saved: every radio's band list and on/off,
+/// the ordered rules and the default radio. [`Settings::with_routing_draft`] lays it over a copy
+/// of the settings so "Where would this go?" is answered by [`Settings::route_radio`] itself, the
+/// function the engine routes by, and never by a second copy of the rules. Nothing stores it.
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct RoutingDraft {
+    pub radios: Vec<RadioRoutingDraft>,
+    pub rules: Vec<RoutingRule>,
+    pub default_radio: Option<u32>,
 }
 
 /// One radio's complete, independently-configurable connection profile. A single-radio station has
@@ -4689,6 +4966,18 @@ pub struct RadioProfile {
     /// so nobody's working APRS changes (#393). Per radio: it depends on how that rig is set.
     #[serde(default)]
     pub aprs_data_fm: bool,
+    /// Feed THIS computer's microphone to the radio while the operator holds Phone's PTT: its audio
+    /// goes out by the radio's transmit audio route (the sound card's output, or the TCI connection
+    /// on a TCI radio) and the radio is keyed as for any audio Nexus plays. OFF by default, so a
+    /// station that talks into the radio's own microphone, or routes a microphone by the OS, sees
+    /// no change. Per radio: it is a property of how THAT radio is wired. Phone only; the digital
+    /// modes never take it (`engine/pc_mic.rs`).
+    pub pc_mic: bool,
+    /// The input device the computer's microphone is captured from. Empty = none chosen; never
+    /// the system default.
+    pub pc_mic_device: String,
+    /// The computer microphone's gain in dB, -20 to +20; 0 = as captured.
+    pub pc_mic_gain_db: f32,
     // --- audio (a rig's own RX codec) ---
     pub audio_in: String,
     pub audio_out: String,
@@ -4711,7 +5000,16 @@ pub struct RadioProfile {
     pub last_dial_mhz: f64,
     pub last_band: String,
     pub last_sideband: String,
-    // --- native panadapter: "auto" | "none" | "flex" | "civ" ---
+    /// THIS radio's waterfall source, where Nexus streams the radio's own scope over its Icom
+    /// CI-V engine (the native CI-V switch, or the Icom network connection): `"auto"` (the
+    /// default) draws the radio's scope there as every release has, and `"audio"` draws the sound
+    /// card's audio waterfall instead, as on the Hamlib path, and stops the radio's scope stream
+    /// while CI-V keeps serving CAT ([`native_scope_is_audio`]; any other word is `"auto"`).
+    ///
+    /// Per radio, because the reason to choose it is the radio: an IC-7300's scope is ~105 Hz a
+    /// point at ±25 kHz, coarser than the audio waterfall for close-in work (#417). The FlexRadio
+    /// panadapter, the FT-710's and a TCI program's are not read here: each is already its own
+    /// per-radio switch, off by default (`flex_native_pan`, `yaesu_rf_scope`, `tci_pan`).
     pub native_scope: String,
     // --- FlexRadio native lane (PER-RADIO since 2026-08-18) ---
     /// THIS radio's FlexRadio LAN IP for the SmartSDR Ethernet API (port 4992) — the address the
@@ -4859,6 +5157,15 @@ pub struct RadioProfilePatch {
     /// so nobody's working APRS changes (#393). Per radio: it depends on how that rig is set.
     #[serde(default)]
     pub aprs_data_fm: bool,
+    /// See `RadioProfile::pc_mic` and the two fields after it. `Option`s, like the TCI fields:
+    /// `None` leaves the radio's stored value alone, so a form from before them neither fails its
+    /// Save nor turns the computer's microphone off.
+    #[serde(default)]
+    pub pc_mic: Option<bool>,
+    #[serde(default)]
+    pub pc_mic_device: Option<String>,
+    #[serde(default)]
+    pub pc_mic_gain_db: Option<f32>,
     pub audio_in: String,
     pub audio_out: String,
     pub tx_level: f32,
@@ -4942,6 +5249,48 @@ impl Settings {
     }
 }
 
+impl RadioProfile {
+    /// Whether the radio monitor holds a read-only CAT connection to this radio while radio
+    /// `active` is the one in use: it is on, not the one in use, and has a CAT model. THE monitor's
+    /// predicate (`tempo-audio`'s `monitor_want`), kept here so the radio setup's read-only Test CAT
+    /// asks the same question. An OmniRig radio has no model number of Nexus's (OmniRig holds it), so
+    /// the monitor does not watch it, although the radio has CAT when it is the one in use.
+    pub fn monitored_while(&self, active: u32) -> bool {
+        self.enabled && self.id != active && self.rig_model != 0
+    }
+
+    /// Where this radio's transmit audio goes ([`tx_audio_on_sound_card`]).
+    pub fn tx_audio_route(&self) -> TxAudioRoute<'_> {
+        TxAudioRoute {
+            rig_model: self.rig_model,
+            rig_conn: &self.rig_conn,
+            tci_host: &self.tci_host,
+            tci_port: self.tci_port,
+            tci_audio: self.tci_audio,
+            flex_native_cat: self.flex_native_cat,
+            flex_radio_ip: &self.flex_radio_ip,
+            flex_native_audio: self.flex_native_audio,
+        }
+    }
+}
+
+impl Settings {
+    /// Where the radio in use's transmit audio goes, from the flat mirror of its settings
+    /// ([`tx_audio_on_sound_card`]).
+    pub fn tx_audio_route(&self) -> TxAudioRoute<'_> {
+        TxAudioRoute {
+            rig_model: self.rig_model,
+            rig_conn: &self.rig_conn,
+            tci_host: &self.tci_host,
+            tci_port: self.tci_port,
+            tci_audio: self.tci_audio,
+            flex_native_cat: self.flex_native_cat,
+            flex_radio_ip: &self.flex_radio_ip,
+            flex_native_audio: self.flex_native_audio,
+        }
+    }
+}
+
 impl RadioProfilePatch {
     /// Copy the patch fields onto a profile, leaving its identity / bands / tune-memory alone.
     pub fn apply_to(self, p: &mut RadioProfile) {
@@ -4968,6 +5317,15 @@ impl RadioProfilePatch {
         p.data_modes_plain_ssb = self.data_modes_plain_ssb;
         p.sstv_hold_data_submode = self.sstv_hold_data_submode;
         p.aprs_data_fm = self.aprs_data_fm;
+        if let Some(v) = self.pc_mic {
+            p.pc_mic = v;
+        }
+        if let Some(v) = self.pc_mic_device {
+            p.pc_mic_device = v;
+        }
+        if let Some(v) = self.pc_mic_gain_db {
+            p.pc_mic_gain_db = v;
+        }
         p.audio_in = self.audio_in;
         p.audio_out = self.audio_out;
         p.tx_level = self.tx_level;
@@ -5113,6 +5471,9 @@ impl Default for RadioProfile {
             data_modes_plain_ssb: false,
             sstv_hold_data_submode: false,
             aprs_data_fm: false,
+            pc_mic: false,
+            pc_mic_device: String::new(),
+            pc_mic_gain_db: 0.0,
             audio_in: String::new(),
             audio_out: String::new(),
             tx_level: 0.9,
@@ -5765,6 +6126,38 @@ fn default_js8_mfi() -> String {
     "\u{2026}\u{2026}".to_string()
 }
 
+/// The JS8 panes' colours and fonts ([`Settings::js8_pane_style`]), as JS8Call's UI settings hold
+/// them: the RX pane's background and its received and transmitted text, the two lists' background,
+/// text, selected row and row tints, and the compose box's background and text. A colour is kept for
+/// the theme it was picked under (`light`, `dark`), so a choice made readable on one theme never
+/// paints the other; a font is one for both, as in JS8Call. An element or pane with no entry takes
+/// the theme's own. Display only, read by the UI, which checks every entry it reads.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8PaneStyle {
+    /// Colours picked under the Light theme, by element (`rxBg`, `tableFg`, `cq`, …), each `#rrggbb`.
+    #[serde(default)]
+    pub light: std::collections::BTreeMap<String, String>,
+    /// The same under the Dark theme.
+    #[serde(default)]
+    pub dark: std::collections::BTreeMap<String, String>,
+    /// Fonts by pane: `rx` and `tx` (the RX pane's received and transmitted text), `table`, `compose`.
+    #[serde(default)]
+    pub fonts: std::collections::BTreeMap<String, Js8PaneFont>,
+}
+
+/// One pane's font, as JS8Call's font buttons name it ("Font (family size)").
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Js8PaneFont {
+    /// One family name; empty takes the theme's.
+    #[serde(default)]
+    pub family: String,
+    /// Points, as JS8Call's; 0 takes the theme's size.
+    #[serde(default)]
+    pub size_pt: u16,
+}
+
 /// JS8Call's `ActivityAging` default (minutes). See [`Settings::js8_activity_aging_min`].
 fn default_js8_activity_aging_min() -> u16 {
     2
@@ -5814,6 +6207,11 @@ pub struct LogbookColumns {
     /// Dragged widths, in CSS px, by column id.
     #[serde(default)]
     pub widths: std::collections::BTreeMap<String, u32>,
+    /// The column order the operator dragged, by column id; empty while the table is in its
+    /// default order, and then not written at all, so a choice saved before there was an order
+    /// is written back exactly as it was.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub order: Vec<String>,
 }
 
 impl Default for Settings {
@@ -5898,6 +6296,10 @@ impl Default for Settings {
             js8_eot: default_js8_eot(),
             js8_mfi: default_js8_mfi(),
             js8_sounds: Vec::new(),
+            js8_reset_activity: false,
+            js8_pane_style: Js8PaneStyle::default(),
+            js8_sound_files: std::collections::BTreeMap::new(),
+            js8_sound_device: String::new(),
             js8_api_tcp: false,
             js8_api_tcp_port: default_js8_api_tcp_port(),
             js8_api_udp: false,
@@ -6008,15 +6410,23 @@ impl Default for Settings {
             split_detect_enabled: false,
             yaesu_rf_scope: false,
             icom_data_mode: 1,
+            native_scope: default_native_scope(),
             tx_audio_source: default_tx_audio_source(),
             data_modes_plain_ssb: false,
             sstv_hold_data_submode: false,
             aprs_data_fm: false,
+            pc_mic: false,
+            pc_mic_device: String::new(),
+            pc_mic_gain_db: 0.0,
             set_rig_mode: true, // force the DATA submode for digital, so sections set the rig
             operating_mode: OperatingMode::Digital, // digital obeys; phone/CW force
             keyboard_modem: KeyboardModem::Psk,
             license_class: LicenseClass::Open, // no TX lockout until the operator declares a class
-            cw_keyer: CwKeyerBackend::Cat,     // rig keyer via send_morse (zero hardware)
+            // Not asked until the first-run wizard asks it (see the field).
+            experience_level: None,
+            // No settings file: a new install, so the setup wizard is due (see the field).
+            setup_wizard_seen: false,
+            cw_keyer: CwKeyerBackend::Cat, // rig keyer via send_morse (zero hardware)
             winkeyer_port: String::new(),
             cw_key_port: String::new(),
             cw_key_line: default_cw_key_line(),
@@ -6159,6 +6569,7 @@ impl Default for Settings {
             aprs_comment: default_aprs_comment(),
             aprs_path: default_aprs_path(),
             aprs_ssid: None,
+            aprs_iss_doppler: true,
             audio_in: String::new(),
             audio_out: String::new(),
             voice_mic_device: String::new(),
@@ -6168,7 +6579,7 @@ impl Default for Settings {
             monitor_device: String::new(),
             monitor_level: 0.5,
             station_power_w: None,
-            log_space_weather: false,
+            log_space_weather: true,
             units: default_units(),
             swr_stop_enabled: false,
             swr_stop_threshold: 2.5,
@@ -6297,6 +6708,9 @@ impl Default for Settings {
             clublog_api_key: String::new(),
             clublog_upload: false,
             eqsl_upload: false,
+            qrz_logbook_upload_from: None,
+            clublog_upload_from: None,
+            eqsl_upload_from: None,
             eqsl_qth_nickname: String::new(),
             hrdlog_upload: false,
             wrl_upload: false, // the credential is the opt-in
@@ -6305,6 +6719,7 @@ impl Default for Settings {
             cloudlog_url: String::new(),
             cloudlog_station_id: String::new(),
             cloudlog_key: String::new(),
+            keys_to_confirm: KeysToConfirm::default(),
             cloudlog_upload: false,
             opening_regional: true,
             macros: Macros::default(),
@@ -6459,6 +6874,9 @@ impl Settings {
             data_modes_plain_ssb: self.data_modes_plain_ssb,
             sstv_hold_data_submode: self.sstv_hold_data_submode,
             aprs_data_fm: self.aprs_data_fm,
+            pc_mic: self.pc_mic,
+            pc_mic_device: self.pc_mic_device.clone(),
+            pc_mic_gain_db: self.pc_mic_gain_db,
             audio_in: self.audio_in.clone(),
             audio_out: self.audio_out.clone(),
             tx_level: self.tx_level,
@@ -6478,7 +6896,7 @@ impl Settings {
             last_dial_mhz: self.dial_mhz,
             last_band: self.band.clone(),
             last_sideband: self.sideband.clone(),
-            native_scope: "auto".to_string(),
+            native_scope: self.native_scope.clone(),
             // The Flex three come from the flat mirror like every other rig field — this IS the
             // migration for a pre-multi-radio settings file (see `load`'s sibling for the file
             // that already HAS profiles).
@@ -6702,6 +7120,26 @@ impl Settings {
         (rule.radio != self.active_radio).then_some(rule.radio)
     }
 
+    /// A COPY of these settings with the radio setup's unsaved routing laid over it, exactly as
+    /// the verbs Finish calls would leave them (`set_radio_bands`, `set_radio_enabled`,
+    /// `set_routing_rules`, `set_default_radio`). A radio the draft does not name keeps what it
+    /// has. The active radio stays as it is, so a preview answers "from the radio in use now".
+    /// Read-only: `self` is untouched.
+    pub fn with_routing_draft(&self, draft: &RoutingDraft) -> Settings {
+        let mut s = self.clone();
+        for d in &draft.radios {
+            if let Some(p) = s.radios.iter_mut().find(|p| p.id == d.id) {
+                p.bands = d.bands.clone();
+                // The radio in use cannot be switched off (`set_radio_enabled` refuses it).
+                p.enabled = d.enabled || p.id == s.active_radio;
+            }
+        }
+        s.routing_rules = draft.rules.clone();
+        s.default_radio = draft.default_radio;
+        s.ensure_routing_targets();
+        s
+    }
+
     /// Drop routing state that points at a radio which no longer EXISTS, so a removed radio can
     /// never leave a rule that silently never fires — or worse, a `default_radio` aimed at a gone
     /// rig. A merely DISABLED radio keeps its rules (unplugging a rig for the afternoon must not
@@ -6733,7 +7171,16 @@ impl Settings {
     /// flat rig form always edits the active radio). Does NOT change the active radio.
     pub fn add_radio_profile(&mut self) -> u32 {
         self.ensure_radio_profiles();
-        let next_id = self.radios.iter().map(|p| p.id).max().unwrap_or(0) + 1;
+        // Never the id of a password that waits for the operator (`keys_to_confirm`): that one
+        // belongs to a radio no longer on the roster, and a new radio inherits none.
+        let next_id = self
+            .radios
+            .iter()
+            .map(|p| p.id)
+            .chain(self.keys_to_confirm.icom_lan.iter().copied())
+            .max()
+            .unwrap_or(0)
+            + 1;
         let mut used: Vec<u16> = self
             .radios
             .iter()
@@ -6933,11 +7380,15 @@ impl Settings {
         // mode selects which audio input the rig transmits from, so the wrong one is wrong
         // TX audio routing on the radio you just switched to.
         self.icom_data_mode = p.icom_data_mode;
+        self.native_scope = p.native_scope;
         self.tx_audio_source = p.tx_audio_source;
         self.yaesu_rf_scope = p.yaesu_rf_scope;
         self.data_modes_plain_ssb = p.data_modes_plain_ssb;
         self.sstv_hold_data_submode = p.sstv_hold_data_submode;
         self.aprs_data_fm = p.aprs_data_fm;
+        self.pc_mic = p.pc_mic;
+        self.pc_mic_device = p.pc_mic_device;
+        self.pc_mic_gain_db = p.pc_mic_gain_db;
         self.audio_in = p.audio_in;
         self.audio_out = p.audio_out;
         self.tx_level = p.tx_level;
@@ -6990,11 +7441,15 @@ impl Settings {
             rigctld_port,
             icom_native_cat,
             icom_data_mode,
+            native_scope,
             tx_audio_source,
             yaesu_rf_scope,
             data_modes_plain_ssb,
             sstv_hold_data_submode,
             aprs_data_fm,
+            pc_mic,
+            pc_mic_device,
+            pc_mic_gain_db,
             audio_in,
             audio_out,
             tx_level,
@@ -7035,11 +7490,15 @@ impl Settings {
             self.rigctld_port,
             self.icom_native_cat,
             self.icom_data_mode,
+            self.native_scope.clone(),
             self.tx_audio_source.clone(),
             self.yaesu_rf_scope,
             self.data_modes_plain_ssb,
             self.sstv_hold_data_submode,
             self.aprs_data_fm,
+            self.pc_mic,
+            self.pc_mic_device.clone(),
+            self.pc_mic_gain_db,
             self.audio_in.clone(),
             self.audio_out.clone(),
             self.tx_level,
@@ -7081,11 +7540,15 @@ impl Settings {
             p.rigctld_port = rigctld_port;
             p.icom_native_cat = icom_native_cat;
             p.icom_data_mode = icom_data_mode;
+            p.native_scope = native_scope;
             p.tx_audio_source = tx_audio_source;
             p.yaesu_rf_scope = yaesu_rf_scope;
             p.data_modes_plain_ssb = data_modes_plain_ssb;
             p.sstv_hold_data_submode = sstv_hold_data_submode;
             p.aprs_data_fm = aprs_data_fm;
+            p.pc_mic = pc_mic;
+            p.pc_mic_device = pc_mic_device;
+            p.pc_mic_gain_db = pc_mic_gain_db;
             p.audio_in = audio_in;
             p.audio_out = audio_out;
             p.tx_level = tx_level;
@@ -7322,6 +7785,17 @@ impl Settings {
         Self::load_at(path, now)
     }
 
+    /// The defaults for a settings file that is present but could not be used: the station is not a
+    /// new install, so the first-run setup wizard is not shown ([`Self::setup_wizard_seen`]) and
+    /// space weather is not newly logged ([`Self::log_space_weather`]).
+    fn not_a_new_install() -> Self {
+        Settings {
+            setup_wizard_seen: true,
+            log_space_weather: false,
+            ..Settings::default()
+        }
+    }
+
     /// [`Self::load`] with the clock given: `now_unix` dates a file kept aside.
     pub(crate) fn load_at(path: &Path, now_unix: i64) -> Self {
         // The RETIRED `satDoppler` opt-in, read from the raw file before serde
@@ -7350,7 +7824,7 @@ impl Settings {
             // too: then the file stays where it is, and save() refuses to write over it.
             Err(e) => {
                 tempo_core::keep_aside::keep_aside("settings", path, now_unix, &e.to_string());
-                Settings::default()
+                Settings::not_a_new_install()
             }
             Ok(text) => match serde_json::from_str(&text) {
                 Ok(s) => {
@@ -7386,7 +7860,7 @@ impl Settings {
                     // Corrupt file: keep the evidence (defaults are still the right fallback,
                     // and when the rename fails save() refuses to write over the file).
                     tempo_core::keep_aside::keep_aside("settings", path, now_unix, &e.to_string());
-                    Settings::default()
+                    Settings::not_a_new_install()
                 }
             },
         };
@@ -8240,6 +8714,195 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// ⭐ **An experience answer this build does not know reads as "not asked", and costs nothing
+    /// else in the file.** A later build may add an answer; going back to this one must not set
+    /// the whole file aside and start the station unconfigured. CONTROL: a known answer in the
+    /// same file still reads as itself, and nothing is kept aside either way.
+    #[test]
+    fn an_unknown_experience_answer_reads_as_not_asked_and_keeps_the_file() {
+        let dir = scratch_dir("experience_unknown");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        for (value, want) in [
+            (
+                serde_json::json!("seasonedContester"),
+                None::<ExperienceLevel>,
+            ),
+            (serde_json::json!(7), None),
+            (serde_json::json!(null), None),
+            (
+                serde_json::json!("newToDigital"),
+                Some(ExperienceLevel::NewToDigital),
+            ),
+        ] {
+            let file = serde_json::json!({ "mycall": "KD9TAW", "experienceLevel": value });
+            std::fs::write(&path, file.to_string()).unwrap();
+            let s = Settings::load_at(&path, KEPT_AT);
+            assert_eq!(
+                (s.mycall.as_str(), s.experience_level, kept_for(&dir).len()),
+                ("KD9TAW", want, 0),
+                "{value}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **Only a station with NO settings file is a new install for the setup wizard.** The
+    /// wizard's "seen" record lives in the settings file, so a WebView data reset or a reinstall
+    /// that keeps the file never shows it again. A missing file reads "not seen"; a file without
+    /// the key (every station from before it) reads "seen"; a file that is present but cannot be
+    /// read is not a new install either. CONTROL: a new install's file says "not seen" until the
+    /// wizard is done, and "seen" once it is.
+    #[test]
+    fn the_setup_wizard_is_due_only_where_there_was_no_settings_file() {
+        let dir = scratch_dir("wizard_seen");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let fresh = Settings::load_at(&path, KEPT_AT);
+        assert!(!fresh.setup_wizard_seen, "no file: a new install");
+        fresh.save(&path).unwrap();
+        assert!(
+            !Settings::load_at(&path, KEPT_AT).setup_wizard_seen,
+            "a new install's first save keeps the wizard due"
+        );
+        let mut done = Settings::load_at(&path, KEPT_AT);
+        done.setup_wizard_seen = true;
+        done.save(&path).unwrap();
+        assert!(Settings::load_at(&path, KEPT_AT).setup_wizard_seen);
+
+        let full = include_str!("../../../ui/src/components/__fixtures__/defaultSettings.json");
+        assert!(
+            !full.contains("setupWizardSeen"),
+            "fixture predates the key"
+        );
+        std::fs::write(&path, full).unwrap();
+        assert!(
+            Settings::load_at(&path, KEPT_AT).setup_wizard_seen,
+            "an existing station's file is not a new install"
+        );
+        std::fs::write(&path, "{ not json").unwrap();
+        assert!(
+            Settings::load_at(&path, KEPT_AT).setup_wizard_seen,
+            "a file that does not read is not a new install"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **Space weather is logged with each contact from a NEW install on; an existing station
+    /// keeps the choice its file holds.** A first run (no file) starts on. A file that says either
+    /// way keeps it. A file without the key (every station from before the default changed) is
+    /// an existing station that never turned it on, so it stays off; so does a file that is
+    /// present but cannot be read. CONTROL: a new install's first save keeps it on, and turning
+    /// it off there stays off.
+    #[test]
+    fn space_weather_logging_starts_on_for_a_new_install_only() {
+        let dir = scratch_dir("log_space_weather");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let fresh = Settings::load_at(&path, KEPT_AT);
+        assert!(fresh.log_space_weather, "no file: a new install starts on");
+        fresh.save(&path).unwrap();
+        assert!(Settings::load_at(&path, KEPT_AT).log_space_weather);
+        let mut off = Settings::load_at(&path, KEPT_AT);
+        off.log_space_weather = false;
+        off.save(&path).unwrap();
+        assert!(
+            !Settings::load_at(&path, KEPT_AT).log_space_weather,
+            "turned off stays off"
+        );
+
+        let full = include_str!("../../../ui/src/components/__fixtures__/defaultSettings.json");
+        assert!(
+            full.contains("\"logSpaceWeather\": false"),
+            "fixture holds the old default"
+        );
+        std::fs::write(&path, full).unwrap();
+        assert!(
+            !Settings::load_at(&path, KEPT_AT).log_space_weather,
+            "an existing file says off"
+        );
+        std::fs::write(
+            &path,
+            full.replace("\"logSpaceWeather\": false", "\"logSpaceWeather\": true"),
+        )
+        .unwrap();
+        assert!(
+            Settings::load_at(&path, KEPT_AT).log_space_weather,
+            "an existing file says on"
+        );
+        let without: String = full
+            .lines()
+            .filter(|l| !l.contains("logSpaceWeather"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&path, without).unwrap();
+        assert!(
+            !Settings::load_at(&path, KEPT_AT).log_space_weather,
+            "a file from before the key is an existing station: off"
+        );
+        std::fs::write(&path, "{ not json").unwrap();
+        assert!(
+            !Settings::load_at(&path, KEPT_AT).log_space_weather,
+            "a file that does not read is not a new install"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⭐ **The experience answer is asked of a new install only, and an existing file never grows
+    /// one.** A first run and a file without the key both read "not asked" (`None`): the answer
+    /// is the first-run wizard's to give, never a default. A full stored file (the UI's fixture
+    /// of every key) saves back WITHOUT the key, so an update writes nothing new into it.
+    /// CONTROL: each saved answer reads back as itself.
+    #[test]
+    fn experience_level_is_unset_until_answered_and_an_existing_file_stays_without_it() {
+        let dir = scratch_dir("experience_level");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        assert_eq!(
+            Settings::load(&path).experience_level,
+            None,
+            "a first run has not been asked"
+        );
+        let full = include_str!("../../../ui/src/components/__fixtures__/defaultSettings.json");
+        assert!(
+            !full.contains("experienceLevel"),
+            "fixture predates the key"
+        );
+        std::fs::write(&path, full).unwrap();
+        let loaded = Settings::load(&path);
+        assert_eq!(
+            loaded.experience_level, None,
+            "an existing file was not asked"
+        );
+        loaded.save(&path).unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !saved.contains("experienceLevel"),
+            "saving an existing file wrote the new key into it"
+        );
+        for (word, want) in [
+            ("newToHobby", ExperienceLevel::NewToHobby),
+            ("newToDigital", ExperienceLevel::NewToDigital),
+            ("experienced", ExperienceLevel::Experienced),
+        ] {
+            let file = serde_json::json!({ "mycall": "KD9TAW", "experienceLevel": word });
+            std::fs::write(&path, file.to_string()).unwrap();
+            let s = Settings::load(&path);
+            assert_eq!(s.experience_level, Some(want), "{word}");
+            s.save(&path).unwrap();
+            assert_eq!(
+                Settings::load(&path).experience_level,
+                Some(want),
+                "{word} saved"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// ⭐ **A NEW station is told when Nexus switches radio by itself; an EXISTING one keeps the
     /// silent switch it has always had** (the switch-and-tell default for new installs, operator
     /// ruling 2026-10-27). New is told from existing by the settings file: a first
@@ -8401,6 +9064,9 @@ mod tests {
             data_modes_plain_ssb: true,
             sstv_hold_data_submode: true,
             aprs_data_fm: true,
+            pc_mic: Some(true),
+            pc_mic_device: Some("Desk Mic".into()),
+            pc_mic_gain_db: Some(6.0),
             audio_in: "USB Audio CODEC #2".into(),
             audio_out: "USB Audio CODEC #2 out".into(),
             tx_level: 0.42,
@@ -8758,6 +9424,9 @@ mod tests {
             data_modes_plain_ssb: false,
             sstv_hold_data_submode: false,
             aprs_data_fm: false,
+            pc_mic: None,
+            pc_mic_device: None,
+            pc_mic_gain_db: None,
             audio_in: String::new(),
             audio_out: String::new(),
             tx_level: 0.0,
@@ -8922,6 +9591,9 @@ mod tests {
             data_modes_plain_ssb: false,
             sstv_hold_data_submode: false,
             aprs_data_fm: false,
+            pc_mic: None,
+            pc_mic_device: None,
+            pc_mic_gain_db: None,
             audio_in: String::new(),
             audio_out: String::new(),
             tx_level: 0.0,
@@ -9259,6 +9931,9 @@ mod tests {
             data_modes_plain_ssb: p.data_modes_plain_ssb,
             sstv_hold_data_submode: p.sstv_hold_data_submode,
             aprs_data_fm: p.aprs_data_fm,
+            pc_mic: Some(p.pc_mic),
+            pc_mic_device: Some(p.pc_mic_device.clone()),
+            pc_mic_gain_db: Some(p.pc_mic_gain_db),
             audio_in: p.audio_in.clone(),
             audio_out: p.audio_out.clone(),
             tx_level: p.tx_level,
@@ -10016,6 +10691,100 @@ mod tests {
             }
         }
         assert_eq!(Settings::default().sdrconnect_target(), None);
+    }
+
+    /// The per-radio waterfall source (`native_scope`) by its wire key: the radio's own scope
+    /// in a fresh and an older file, carried to the flat form and back for the radio in use, and
+    /// a second radio keeps its own choice across a switch. By JSON, so it reads the stored file
+    /// exactly as a later build would.
+    #[test]
+    fn the_waterfall_source_defaults_to_the_radio_scope_and_is_per_radio() {
+        let fresh = serde_json::to_value(Settings::default()).expect("serializes");
+        let older: Settings = serde_json::from_str("{}").expect("an older file loads");
+        let older = serde_json::to_value(older).expect("serializes");
+        for (what, v) in [("fresh", &fresh), ("older", &older)] {
+            assert_eq!(v["nativeScope"], "auto", "{what} file, flat");
+        }
+        // A whole stored file from before the flat key (the UI's fixture of every key; its radios
+        // already carry theirs).
+        let full = include_str!("../../../ui/src/components/__fixtures__/defaultSettings.json");
+        let raw: serde_json::Value = serde_json::from_str(full).expect("the fixture is JSON");
+        assert!(
+            raw.get("nativeScope").is_none(),
+            "fixture predates the flat key"
+        );
+        let stored: Settings = serde_json::from_str(full).expect("the stored file loads");
+        assert_eq!(
+            stored.native_scope, "auto",
+            "a stored file from before the key"
+        );
+        let profile: RadioProfile = serde_json::from_str(r#"{"id": 3, "rigModel": 3073}"#)
+            .expect("a profile from before the choice loads");
+        assert_eq!(profile.native_scope, "auto", "an older profile");
+        assert!(!native_scope_is_audio(&profile.native_scope));
+
+        // Two radios: the IC-7300 on its audio waterfall, the other left alone.
+        let mut s = Settings {
+            radios: vec![
+                RadioProfile {
+                    id: 0,
+                    rig_model: 3073,
+                    native_scope: "audio".into(),
+                    ..RadioProfile::default()
+                },
+                RadioProfile {
+                    id: 1,
+                    rig_model: 3081,
+                    ..RadioProfile::default()
+                },
+            ],
+            active_radio: 0,
+            ..Settings::default()
+        };
+        s.sync_flat_from_active();
+        let flat = serde_json::to_value(&s).expect("serializes");
+        assert_eq!(
+            flat["nativeScope"], "audio",
+            "the radio in use brings its choice"
+        );
+        s.active_radio = 1;
+        s.sync_flat_from_active();
+        let flat = serde_json::to_value(&s).expect("serializes");
+        assert_eq!(
+            flat["nativeScope"], "auto",
+            "the second radio is unaffected"
+        );
+
+        // An edit to the radio in use goes through the flat form and reaches its profile only.
+        let mut flat = serde_json::to_value(&s).expect("serializes");
+        flat["nativeScope"] = "audio".into();
+        let mut s: Settings = serde_json::from_value(flat).expect("loads");
+        s.sync_active_from_flat();
+        assert_eq!(
+            s.radios[1].native_scope, "audio",
+            "a flat save reaches the profile"
+        );
+        assert_eq!(
+            s.radios[0].native_scope, "audio",
+            "the other radio kept its own"
+        );
+        s.radios[0].native_scope = "auto".into();
+        s.sync_active_from_flat();
+        assert_eq!(
+            s.radios[0].native_scope, "auto",
+            "saving radio 1 never writes radio 0"
+        );
+    }
+
+    /// Only the word "audio" moves the waterfall off the radio's scope; anything else, including
+    /// a word from a later build, leaves it where it has always been.
+    #[test]
+    fn only_audio_moves_the_waterfall_off_the_radio_scope() {
+        assert!(native_scope_is_audio("audio"));
+        assert!(native_scope_is_audio(" Audio "));
+        for word in ["auto", "", "none", "civ", "flex", "radio"] {
+            assert!(!native_scope_is_audio(word), "{word:?}");
+        }
     }
 
     /// The stored words are read leniently, and a word this build does not know leaves the
@@ -13129,6 +13898,156 @@ mod tests {
         );
     }
 
+    /// JS8Call's "Reset the Band Activity, Call Activity, and RX history at startup": off by
+    /// default (`ResetActivity`, Configuration.cpp:2303), its camelCase wire key, an upgrader's
+    /// file, a round trip of the choice, and the TS mirror.
+    #[test]
+    fn js8_reset_activity_defaults_off_as_js8call_and_round_trips() {
+        assert!(
+            !Settings::default().js8_reset_activity,
+            "ResetActivity: off"
+        );
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(json.contains("\"js8ResetActivity\":false"), "the wire key");
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert!(!old.js8_reset_activity, "an upgrader's lists are kept");
+        let on: Settings = serde_json::from_str(r#"{"js8ResetActivity":true}"#).unwrap();
+        assert!(on.js8_reset_activity);
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&on).unwrap()).unwrap();
+        assert_eq!(back, on);
+
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        let typed = |key: &str| {
+            body.lines()
+                .any(|l| l.trim_start().starts_with(&format!("{key}:")))
+        };
+        assert!(
+            typed("js8ResetActivity"),
+            "ui/src/types.ts Settings is missing `js8ResetActivity`"
+        );
+        assert!(
+            !typed("js8ResetActivities"),
+            "control: a near miss is not found"
+        );
+    }
+
+    /// JS8Call's colours and fonts for the JS8 panes: empty by default (every pane follows the
+    /// theme), the camelCase wire shape, an upgrader's file, a partial record, a round trip of
+    /// colours picked under each theme and a font, and the TS mirror.
+    #[test]
+    fn js8_pane_style_defaults_empty_and_round_trips_per_theme() {
+        let s = Settings::default();
+        assert_eq!(s.js8_pane_style, Js8PaneStyle::default());
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            json.contains(r#""js8PaneStyle":{"light":{},"dark":{},"fonts":{}}"#),
+            "the wire shape"
+        );
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(
+            old.js8_pane_style,
+            Js8PaneStyle::default(),
+            "an upgrader's panes follow the theme"
+        );
+        let partial: Settings =
+            serde_json::from_str(r##"{"js8PaneStyle":{"dark":{"rxBg":"#000000"}}}"##).unwrap();
+        assert!(partial.js8_pane_style.light.is_empty() && partial.js8_pane_style.fonts.is_empty());
+        let chosen: Settings = serde_json::from_str(
+            r##"{"js8PaneStyle":{"light":{"rxBg":"#ffeaa7"},"dark":{"cq":"#1f6f3f"},"fonts":{"rx":{"family":"DejaVu Sans Mono","sizePt":11}}}}"##,
+        )
+        .unwrap();
+        let p = &chosen.js8_pane_style;
+        assert_eq!(p.light.get("rxBg").map(String::as_str), Some("#ffeaa7"));
+        assert_eq!(p.dark.get("cq").map(String::as_str), Some("#1f6f3f"));
+        assert_eq!(
+            p.fonts.get("rx"),
+            Some(&Js8PaneFont {
+                family: "DejaVu Sans Mono".into(),
+                size_pt: 11
+            })
+        );
+        let back: Settings =
+            serde_json::from_str(&serde_json::to_string(&chosen).unwrap()).unwrap();
+        assert_eq!(back, chosen);
+
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        let typed = |key: &str| {
+            body.lines()
+                .any(|l| l.trim_start().starts_with(&format!("{key}:")))
+        };
+        assert!(
+            typed("js8PaneStyle"),
+            "ui/src/types.ts Settings is missing `js8PaneStyle`"
+        );
+        assert!(!typed("js8PaneStyles"), "control: a near miss is not found");
+    }
+
+    /// The JS8 sounds' output: the system default (empty) by default, its camelCase wire key, an
+    /// upgrader's file, a round trip, and the TS mirror.
+    #[test]
+    fn js8_sound_device_is_the_system_default_by_default_and_round_trips() {
+        assert_eq!(Settings::default().js8_sound_device, "");
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(json.contains("\"js8SoundDevice\":\"\""), "the wire key");
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(old.js8_sound_device, "", "an upgrader plays on the default");
+        let on: Settings =
+            serde_json::from_str(r#"{"js8SoundDevice":"Speakers (Realtek)"}"#).unwrap();
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&on).unwrap()).unwrap();
+        assert_eq!(back.js8_sound_device, "Speakers (Realtek)");
+        let ts = include_str!("../../../ui/src/types.ts");
+        assert!(
+            ts.contains("  js8SoundDevice?: string"),
+            "ui/src/types.ts Settings mirrors it"
+        );
+    }
+
+    /// The JS8 sounds' WAV files: none by default (JS8Call's empty paths, so every sound plays its
+    /// built-in tone), the camelCase wire key, an upgrader's file, a round trip of chosen paths
+    /// with their slashes and backslashes as written, and the TS mirror.
+    #[test]
+    fn js8_sound_files_are_none_by_default_and_round_trip() {
+        let wire = |s: &Settings| serde_json::to_value(s).unwrap()["js8SoundFiles"].clone();
+        assert_eq!(
+            wire(&Settings::default()),
+            serde_json::json!({}),
+            "no file: every sound its tone"
+        );
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(wire(&old), serde_json::json!({}), "an upgrader's file");
+        let chosen: Settings = serde_json::from_str(
+            r#"{"js8Sounds":["cq","inbox"],"js8SoundFiles":{"cq":"/home/op/sounds/cq.wav","inbox":"C:\\Sounds\\mail.wav"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            wire(&chosen),
+            serde_json::json!({"cq": "/home/op/sounds/cq.wav", "inbox": "C:\\Sounds\\mail.wav"})
+        );
+        let back: Settings =
+            serde_json::from_str(&serde_json::to_string(&chosen).unwrap()).unwrap();
+        assert_eq!(back, chosen);
+
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        assert!(
+            body.lines()
+                .map(str::trim_start)
+                .any(|l| { l.starts_with("js8SoundFiles:") || l.starts_with("js8SoundFiles?:") }),
+            "ui/src/types.ts Settings is missing `js8SoundFiles`"
+        );
+    }
+
     /// A group JS8Call will not let be joined (@APRSIS, @JS8NET) is refused only by the
     /// operator's Settings Save, in the panel. The file keeps it: every background save (window
     /// places, band and rig state, through `SettingsWriter`, which calls `save`) writes it back
@@ -13806,6 +14725,7 @@ mod tests {
             widths: [("country".to_string(), 210), ("county".to_string(), 140)]
                 .into_iter()
                 .collect(),
+            order: Vec::new(),
         };
         assert_eq!(
             loaded.logbook_columns.as_ref(),
@@ -13827,6 +14747,48 @@ mod tests {
                 hidden: vec!["mode".into()],
                 ..LogbookColumns::default()
             })
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **A dragged column order survives the file, and a choice saved before there was one is
+    /// written back exactly as it was** — no `order` key appears in a file that never had one.
+    #[test]
+    fn logbook_column_order_round_trips_and_an_old_choice_is_unchanged() {
+        let dir = std::env::temp_dir().join(format!("tempo_logcols_order_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(
+            &path,
+            r#"{"mycall":"KD9TAW","logbookColumns":{"shown":["iota"],"hidden":[],"widths":{},"order":["notes","call","country"]}}"#,
+        )
+        .unwrap();
+        let loaded = Settings::load(&path);
+        let cols = loaded.logbook_columns.clone().unwrap();
+        assert_eq!(
+            cols.order,
+            vec!["notes", "call", "country"],
+            "loaded under the UI's key"
+        );
+        loaded.save(&path).unwrap();
+        assert_eq!(
+            Settings::load(&path).logbook_columns.unwrap().order,
+            vec!["notes", "call", "country"],
+            "an ordinary save dropped it"
+        );
+
+        let old: Settings = serde_json::from_str(
+            r#"{"logbookColumns":{"shown":["iota"],"hidden":["freq"],"widths":{"country":210}}}"#,
+        )
+        .unwrap();
+        let cols = old.logbook_columns.clone().unwrap();
+        assert!(cols.order.is_empty(), "an old choice has no order");
+        let written = serde_json::to_value(&old).unwrap();
+        assert_eq!(
+            written["logbookColumns"],
+            serde_json::json!({"shown":["iota"],"hidden":["freq"],"widths":{"country":210}}),
+            "an old choice is written back as it was"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -14065,6 +15027,151 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ THE SAVED KEYS HELD BACK FOR CONFIRMING ARE THE ENGINE'S: a form save, a profile load and
+    /// a restore that carry none (as every form does) keep them, so no stale form lets a key go
+    /// out; they survive a save to disk and back; removing the radio keeps its wait (the shell
+    /// lets it go once the password is removed), and a radio added then never takes its id.
+    /// CONTROL: the engine's own setter changes them.
+    #[test]
+    fn the_keys_held_back_for_confirming_survive_every_apply() {
+        use crate::engine::Engine;
+        let mut station = Settings::default();
+        station.radios = vec![
+            RadioProfile {
+                id: 0,
+                ..Default::default()
+            },
+            RadioProfile {
+                id: 1,
+                ..Default::default()
+            },
+        ];
+        station.active_radio = 0;
+        station.sync_flat_from_active();
+        let mut eng = Engine::with_settings(station);
+        let held = KeysToConfirm {
+            cloudlog: true,
+            icom_lan: vec![1],
+            ..Default::default()
+        };
+        eng.set_keys_to_confirm(held.clone());
+        assert_eq!(
+            eng.keys_to_confirm(),
+            &held,
+            "CONTROL: the setter sets them"
+        );
+
+        let mut form = eng.settings().clone();
+        form.keys_to_confirm = KeysToConfirm::default();
+        form.mycall = "W9FORM".into();
+        eng.apply_settings(form.clone());
+        assert_eq!(
+            (eng.settings().mycall.as_str(), eng.keys_to_confirm()),
+            ("W9FORM", &held),
+            "a form save that carries none keeps them"
+        );
+        eng.apply_restored_settings(form);
+        assert_eq!(eng.keys_to_confirm(), &held, "so does a restore's apply");
+
+        let dir = std::env::temp_dir().join(format!("tempo_keys_confirm_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        eng.settings().save(&path).unwrap();
+        assert_eq!(
+            Settings::load(&path).keys_to_confirm,
+            held,
+            "saved and read back"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(eng.remove_radio(1), "premise: radio 1 removed");
+        assert_eq!(
+            eng.keys_to_confirm(),
+            &held,
+            "the removed radio's wait stays until its password is removed"
+        );
+        assert_eq!(
+            eng.add_radio(),
+            2,
+            "a radio added then never takes the id whose password waits"
+        );
+        eng.set_keys_to_confirm(KeysToConfirm::default());
+        assert!(eng.remove_radio(2), "premise: radio 2 removed");
+        assert_eq!(
+            eng.add_radio(),
+            1,
+            "CONTROL: with nothing waiting, the next id after the roster's"
+        );
+    }
+
+    /// ★ A KEY KEPT ONLY BECAUSE ITS REMOVAL FAILED SAYS SO UNTIL IT STOPS WAITING: the mark is
+    /// saved and read back, and goes with the wait, so a later wait for that key starts afresh.
+    /// CONTROL: a settings file from before the mark existed reads as no removal failed.
+    #[test]
+    fn a_failed_removals_mark_lives_and_ends_with_its_wait() {
+        use crate::engine::Engine;
+        let mut eng = Engine::with_settings(Settings::default());
+        let mut keys = KeysToConfirm::default();
+        keys.hold_not_removed(None);
+        keys.hold_not_removed(Some(3));
+        keys.hold_not_removed(Some(3));
+        eng.set_keys_to_confirm(keys.clone());
+        assert_eq!(
+            (
+                eng.keys_to_confirm().clone(),
+                keys.not_removed(None),
+                keys.not_removed(Some(3)),
+                keys.not_removed(Some(4)),
+            ),
+            (
+                KeysToConfirm {
+                    cloudlog: true,
+                    icom_lan: vec![3],
+                    cloudlog_not_removed: true,
+                    icom_lan_not_removed: vec![3],
+                },
+                true,
+                true,
+                false
+            ),
+            "each waits, marked once"
+        );
+        let json = serde_json::to_string(&keys).unwrap();
+        assert_eq!(
+            serde_json::from_str::<KeysToConfirm>(&json).unwrap(),
+            keys,
+            "saved and read back"
+        );
+
+        let mut let_go = eng.keys_to_confirm().clone();
+        let_go.cloudlog = false;
+        let_go.icom_lan.clear();
+        eng.set_keys_to_confirm(let_go);
+        assert_eq!(
+            eng.keys_to_confirm(),
+            &KeysToConfirm::default(),
+            "the marks went with the waits"
+        );
+        let mut again = KeysToConfirm::default();
+        again.cloudlog = true;
+        again.icom_lan.push(3);
+        eng.set_keys_to_confirm(again);
+        assert!(
+            !eng.keys_to_confirm().not_removed(None) && !eng.keys_to_confirm().not_removed(Some(3)),
+            "a later wait starts afresh"
+        );
+        assert_eq!(
+            serde_json::from_str::<KeysToConfirm>(r#"{"cloudlog":true,"icomLan":[1]}"#).unwrap(),
+            KeysToConfirm {
+                cloudlog: true,
+                icom_lan: vec![1],
+                ..Default::default()
+            },
+            "CONTROL: an older file reads as no removal failed"
+        );
     }
 
     /// round 10 N2 — the serializer skip and the migration gate must agree on a WHITESPACE-only key.

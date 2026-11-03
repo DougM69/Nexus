@@ -36,6 +36,11 @@ mod account_sign_in;
 /// One alert, made in Rust where it is raised, with its id and a versioned shape: what every window
 /// and a computer driving the station hear.
 mod alert;
+/// The APRS cockpit's ISS channel: where the ISS is, once a second, for its Doppler correction.
+mod aprs_iss_doppler;
+/// `get_arrival_outlook`: NOAA's watch, forecast days, model run and L1 wind, each kept and
+/// backed off on its own.
+mod arrival_outlook;
 /// Test builds only (the `bench-road-switch` feature): the switch on a computer driving a station
 /// that blocks its command link or its Stop road, one at a time, so each road can be tried alone.
 #[cfg(feature = "bench-road-switch")]
@@ -65,6 +70,8 @@ mod command_classes;
 /// admits: deny by default at both ends, Stop never refused, at most once, the caps, and the
 /// revision a whole save is checked against.
 mod command_dispatch;
+/// Settings ▸ Connections ▸ Test for LoTW, eQSL and ClubLog: sign in and read, never upload.
+mod connector_checks;
 /// The contest strip's Super Check Partial download and call-history file: the HTTP and the
 /// commands, off the Engine lock. The rules are `tempo_app::scp` and `tempo_app::call_history`.
 mod contest_lists;
@@ -75,9 +82,15 @@ mod contest_spot;
 mod data_folder_location;
 /// Band map frequency markers: a dial and a call to come back to, per contest session, local only.
 mod freq_markers;
+/// The IOTA island-group list on this machine: downloaded only with the operator's yes, never
+/// shipped, refreshed at most monthly.
+mod iota_list;
 /// JS8Call's API for other programs on this computer: TCP and UDP on 127.0.0.1, read-only, off
 /// until the operator turns a side on. What each line says is `tempo_app::engine::js8_api`.
 mod js8_api;
+/// Settings ▸ Digital ▸ JS8 ▸ Sounds: the OS picker for a sound's WAV file, and the sound played here
+/// in Rust on the operator's output, never on a TX audio device. Desktop only.
+mod js8_sounds;
 /// Remote over this network on the PC an operator works from: its key for each station, pairing,
 /// the pinned road, and the loopback origin the window's page comes from. No engine, no command.
 mod lan_client;
@@ -98,6 +111,13 @@ mod log_tools;
 /// Parsec presence mode's watcher thread: stop latched transmissions when the operator's Parsec
 /// session drops (off by default; started on Windows only).
 mod parsec_presence;
+/// Your contacts' paths: the log-time grade of a new contact, and the display-only grading of the
+/// existing log, kept beside settings.json.
+mod path_grades;
+/// `get_path_outlook`'s kept predictions: six hours per day, grids, engine, power and SSN.
+mod path_outlook;
+/// The region strips' sweep: ten DX regions' path over the day, kept in memory and on disk.
+mod path_regions;
 mod pouncer;
 /// The licence-class band edges the scopes draw, read from the transmit gate's own table. Display
 /// only: the gate stays `privileges::tx_allowed`.
@@ -327,6 +347,7 @@ mod whole_log_reader_tests {
                 qso_is_sat(q.prop_mode.as_deref()),
                 crate::log_folds::award_fields(&q),
             );
+            needs.add_iota(q.ota.iota.as_deref(), q.award_confirmed);
         }
         needs
     }
@@ -596,14 +617,7 @@ mod whole_log_reader_tests {
 
 /// TTL cache for the OVATION aurora oval (distinct payload type from PropCache, so
 /// a distinct TypeId for `.manage()`).
-type AuroraCache = Arc<
-    Mutex<
-        Option<(
-            std::time::Instant,
-            Vec<propagation::live::aurora::AuroraPoint>,
-        )>,
-    >,
->;
+type AuroraCache = Arc<Mutex<Option<(std::time::Instant, propagation::live::aurora::AuroraOval)>>>;
 /// TTL cache for the KC2G ionosonde MUF map. Distinct payload type → distinct
 /// TypeId for `.manage()`.
 type Kc2gCache = Arc<Mutex<Option<(std::time::Instant, Vec<propagation::MufStation>)>>>;
@@ -754,10 +768,11 @@ fn pounce_offer(sp: &tempo_net::cluster::ClusterSpot) {
         // board showed "Digital" for a spot and "FT8" for a PSK Reporter row describing the same
         // FT8 station, with nothing to explain the difference (reported on 1.0.3).
         //
-        // Display only, verified before changing it: `workTarget` picks a cockpit by matching
-        // 'CW' / 'Phone' / 'RTTY' exactly and defaulting everything else to Operate, and
-        // `modeDefaultMhz` returns null for anything that is not CW or Phone. "Digital" and "FT8"
-        // therefore take the same arm in both, so where a click lands is unchanged.
+        // Not display only: on a Work click the UI's `workTier` reads FT8 or FT4 from this name and
+        // opens the FT screen on that tier (the frequency is the spot's either way). Which cockpit
+        // opens is unchanged by it: `workTarget` matches 'CW' / 'Phone' / 'RTTY' exactly and sends
+        // everything else to Operate, and `modeDefaultMhz` returns null for anything that is not
+        // CW or Phone, so "Digital", "FT8" and "FT4" take the same arm in both.
         mode: propagation::digital_hole_mode(freq_mhz)
             .map(str::to_string)
             .unwrap_or_else(|| {
@@ -770,6 +785,7 @@ fn pounce_offer(sp: &tempo_net::cluster::ClusterSpot) {
             .chain(&sp.corroborators)
             .cloned()
             .collect(),
+        iota: propagation::iota::in_comment(&sp.comment),
     });
 }
 
@@ -1064,6 +1080,7 @@ fn own_decode_heards(
             // US state hint (drives WAS NewState): FCC baseline refined by this live decode grid —
             // a precise 6-char grid that disagrees with the license means a rover. See us_state_hint.
             us_state: us_state_hint(&s.call, s.grid.as_deref()),
+            iota: None, // a decode names no island; `place_iotas` reads a callbook answer
         })
         .collect()
 }
@@ -1085,6 +1102,7 @@ fn jtty_heards(heard: &[tempo_app::dto::JttyHeard]) -> Vec<propagation::Heard> {
             evidence: Some("decoded by YOUR radio in JTTY, in two separate messages".to_string()),
             grid: h.grid.clone(),
             us_state: us_state_hint(&h.call, h.grid.as_deref()),
+            iota: None,
         })
         .collect()
 }
@@ -1191,6 +1209,7 @@ fn start_cluster_feed(
                     let mut s = sp.clone();
                     s.rbn = true;
                     pounce_offer(&s);
+                    note_spot_iota(&s);
                     // RANKED, never plain `push`: the buffer's corroborator cap has to
                     // choose which voices a re-spotted row keeps, and the Needed board
                     // admits the row on whether a NEAR voice is among them.
@@ -1818,6 +1837,7 @@ fn start_human_cluster_feed(
                 }
                 if let Ok(mut b) = buf.lock() {
                     pounce_offer(sp);
+                    note_spot_iota(sp);
                     // Ranked — see the RBN callback above.
                     b.push_ranked(sp.clone(), spotter_evidence_rank);
                 }
@@ -1833,6 +1853,29 @@ fn start_human_cluster_feed(
             },
         );
     });
+}
+
+/// The PSK Reporter MQTT client id for one of this process's feeds: `feed` is `""` for the
+/// operator's own spots and `"rgn-"` for the near-region one, `bound` the radio this process
+/// drives ([`bound_radio_id`]).
+///
+/// The broker keeps ONE session per client id and drops the older on a duplicate, so two radio
+/// windows (simultaneous radios) under one callsign must not share an id, or each knocks the
+/// other off in turn and both feeds flap. A bound window adds its radio's profile key; the
+/// shorter `nx-` prefix keeps such an id inside the 23 bytes MQTT 3.1.1 guarantees a broker
+/// accepts for an ordinary callsign. A window bound to no radio keeps the id it always had.
+fn pskr_client_id(feed: &str, call: &str, bound: Option<u32>) -> String {
+    match bound {
+        None => format!("nexus-{feed}{call}"),
+        Some(id) => format!("nx-{feed}{call}-{}", radio_profile_key(id)),
+    }
+}
+
+/// [`pskr_client_id`] for THIS process: its feed starters take the id from here, never with a
+/// bound radio of their own choosing, so a radio window can never connect under the unbound id,
+/// which the other radio window would then share (the broker drops one session for the other).
+fn pskr_feed_client_id(feed: &str, call: &str) -> String {
+    pskr_client_id(feed, call, bound_radio_id())
 }
 
 /// Spawn the PSK Reporter MQTT firehose thread once per process (the [`PSKR_STARTED`]
@@ -1859,7 +1902,7 @@ fn start_pskr_feed(live_paths: &SharedLivePaths, mycall: &str, health: &SharedHe
         let topic_refs: Vec<&str> = topics.iter().map(|s| s.as_str()).collect();
         tempo_net::mqtt::subscribe(
             PSKR_MQTT_ADDR,
-            &format!("nexus-{call}"),
+            &pskr_feed_client_id("", &call),
             &topic_refs,
             |topic, payload| {
                 if let Some(spot) = propagation::parse_pskr_mqtt_payload(topic, payload, now_unix())
@@ -1946,6 +1989,164 @@ fn start_wspr_feed(live_paths: &SharedLivePaths, mycall: &str) {
     });
 }
 
+#[cfg(test)]
+mod pskr_client_id_tests {
+    use super::pskr_client_id;
+
+    /// A window bound to no radio keeps the ids every release has used.
+    #[test]
+    fn an_unbound_window_keeps_its_ids() {
+        assert_eq!(
+            (
+                pskr_client_id("", "W9XYZ", None),
+                pskr_client_id("rgn-", "W9XYZ", None)
+            ),
+            ("nexus-W9XYZ".to_string(), "nexus-rgn-W9XYZ".to_string())
+        );
+    }
+
+    /// Two radio windows under one callsign, and the single window beside them: six distinct
+    /// ids, each within the 23 bytes every MQTT 3.1.1 broker must accept.
+    #[test]
+    fn every_window_and_feed_has_its_own_id() {
+        let ids: Vec<String> = [None, Some(0), Some(1)]
+            .into_iter()
+            .flat_map(|b| ["", "rgn-"].map(|f| pskr_client_id(f, "W9XYZ", b)))
+            .collect();
+        let distinct: std::collections::BTreeSet<&String> = ids.iter().collect();
+        assert_eq!(distinct.len(), ids.len(), "{ids:?}");
+        assert!(ids.iter().all(|id| id.len() <= 23), "{ids:?}");
+    }
+
+    /// The bound ids name the radio's profile, so a window's id stays its own across launches.
+    #[test]
+    fn a_bound_window_names_its_radio() {
+        assert_eq!(
+            (
+                pskr_client_id("", "W9XYZ", Some(1)),
+                pskr_client_id("rgn-", "W9XYZ", Some(12))
+            ),
+            ("nx-W9XYZ-r1".to_string(), "nx-rgn-W9XYZ-r12".to_string())
+        );
+    }
+}
+
+/// The hops from the process's `--profile r<id>` to the three places a radio window must carry
+/// its radio: the radio loop's config (its monitor then leaves the other radio's port and rigctld
+/// to that radio's window) and both PSK Reporter client ids. Each hop dropped alone brings back
+/// two windows fighting over one radio, or bumping each other off PSK Reporter.
+///
+/// The profile is read once per process from the arguments or `NEXUS_PROFILE`, so the bound half
+/// runs in a child: this same test binary, re-run for this one test with `NEXUS_PROFILE=r1`.
+#[cfg(test)]
+mod bound_radio_wiring_tests {
+    use super::{bound_radio_id, pskr_feed_client_id};
+
+    const CHILD: &str = "NEXUS_BOUND_WIRING_CHILD";
+
+    /// What this process carries: `(radio loop's bound radio, own-spots id, near-region id)`.
+    fn carried() -> (Option<u32>, String, String) {
+        #[cfg(feature = "radio")]
+        let bound = super::radio_config_for(
+            &tempo_app::settings::Settings::default(),
+            &tempo_app::engine::SpectrumFeed::default(),
+            &std::sync::Arc::new(tempo_audio::rxtap::RxTap::new()),
+            &tempo_app::engine::MeterFeed::default(),
+        )
+        .bound_radio;
+        #[cfg(not(feature = "radio"))]
+        let bound = bound_radio_id();
+        (
+            bound,
+            pskr_feed_client_id("", "W9XYZ"),
+            pskr_feed_client_id("rgn-", "W9XYZ"),
+        )
+    }
+
+    #[test]
+    fn a_radio_window_carries_its_radio_into_the_radio_loop_and_both_feeds() {
+        if std::env::var(CHILD).is_ok() {
+            assert_eq!(
+                bound_radio_id(),
+                Some(1),
+                "control: the child is bound to r1"
+            );
+            assert_eq!(
+                carried(),
+                (
+                    Some(1),
+                    "nx-W9XYZ-r1".to_string(),
+                    "nx-rgn-W9XYZ-r1".to_string()
+                )
+            );
+            return;
+        }
+        let out = std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args([
+                "--exact",
+                "bound_radio_wiring_tests::a_radio_window_carries_its_radio_into_the_radio_loop_and_both_feeds",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env("NEXUS_PROFILE", "r1")
+            .output()
+            .expect("re-run this test binary");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            out.status.success(),
+            "the bound child failed: {stdout}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        // Control: the filter matched and ran the child half; "0 passed" would pass trivially.
+        assert!(
+            stdout.contains("1 passed"),
+            "the child ran nothing: {stdout}"
+        );
+
+        // The unbound half, in this process (no profile): the single window keeps every id it had.
+        if bound_radio_id().is_none() {
+            assert_eq!(
+                carried(),
+                (
+                    None,
+                    "nexus-W9XYZ".to_string(),
+                    "nexus-rgn-W9XYZ".to_string()
+                )
+            );
+        }
+    }
+
+    /// The call sites the test above cannot reach: each feed's client id is taken inside its own
+    /// thread, once per process, on a connection to the public broker, and `run` starts the
+    /// whole app. Source-scanned, because what is pinned is which function each one calls.
+    #[test]
+    fn the_feeds_and_the_launch_take_the_wired_values() {
+        fn body_of<'a>(src: &'a str, sig: &str) -> &'a str {
+            let rest = &src[src.find(&format!("\n{sig}")).expect(sig) + 1..];
+            &rest[..rest.find("\n}\n").expect("the end of the function")]
+        }
+        let src = include_str!("lib.rs");
+        for (feed, call) in [
+            ("fn start_pskr_feed(", "&pskr_feed_client_id(\"\", &call),"),
+            (
+                "fn start_pskr_region_feed(",
+                "&pskr_feed_client_id(\"rgn-\", &call),",
+            ),
+        ] {
+            let body = body_of(src, feed);
+            assert!(
+                body.contains(call) && !body.contains("pskr_client_id("),
+                "{feed} takes its id from pskr_feed_client_id"
+            );
+        }
+        let run = body_of(src, "pub fn run() {");
+        assert!(
+            run.contains("radio_config_for(&settings,") && !run.contains("RadioConfig {"),
+            "run builds the radio config through radio_config_for"
+        );
+    }
+}
+
 /// Spawn the near-region opening MQTT thread once per process (Phase 2). No-op
 /// unless `mycall` is real, `mygrid` resolves (nothing can be "near" otherwise),
 /// and the operator hasn't opted out. Subscribes to the per-band VHF/10 m global
@@ -1976,7 +2177,7 @@ fn start_pskr_region_feed(region_paths: &SharedRegionPaths, mycall: &str, mygrid
         let connected = std::sync::atomic::AtomicBool::new(false);
         tempo_net::mqtt::subscribe(
             PSKR_MQTT_ADDR,
-            &format!("nexus-rgn-{call}"),
+            &pskr_feed_client_id("rgn-", &call),
             &topic_refs,
             |topic, payload| {
                 let now = now_unix();
@@ -2167,13 +2368,86 @@ static LAST_SOLAR_WIND: Mutex<Option<propagation::SolarWind>> = Mutex::new(None)
 /// Last-good 12-month smoothed sunspot number (R12) from SWPC's predicted
 /// solar cycle — the p533 engine's proper solar input (daily SFI is the wrong
 /// quantity for monthly-median CCIR maps; without this the engine falls back
-/// to a Covington inversion of SFI). Refreshed on the space-wx fetch cadence.
-static LAST_SSN: Mutex<Option<f32>> = Mutex::new(None);
+/// to a Covington inversion of SFI). Refreshed on the space-wx fetch cadence. Held with the UTC
+/// (year, month) it is the prediction for; read it through [`held_ssn`].
+static LAST_SSN: Mutex<Option<(f32, (i64, u32))>> = Mutex::new(None);
 
-/// The X-ray "fast lane" cache: (fetched-at, flux W/m², reading unix time). A
-/// flare's rise takes minutes, so `get_xray_now` refetches GOES every 60 s —
-/// much fresher than the 5-min snapshot TTL — and serves last-good on failure.
-static LAST_XRAY: Mutex<Option<(std::time::Instant, f32, i64)>> = Mutex::new(None);
+/// The held R12, while it may speak for `now` ([`ssn_for_month`]).
+fn held_ssn(now: i64) -> Option<f32> {
+    ssn_for_month(LAST_SSN.lock().ok().and_then(|g| *g), now)
+}
+
+/// A held R12 speaks for `now` only within the UTC month it is the prediction for. That is its
+/// age limit, and it is a month rather than a span of hours because of what the number is.
+///
+/// SWPC predicts one R12 per calendar month, and P.533's maps are monthly medians indexed by
+/// month. So within its month the held value is the number a fresh fetch would give, however
+/// long the feed has been down. From the next month on, it is another month's number.
+///
+/// A month-boundary fetch failure therefore leaves no R12. The engine falls back to the number it
+/// derives from the SFI, as on a cold start, until the first successful fetch of the new month.
+/// The feed is asked again on every space-weather fetch.
+fn ssn_for_month(held: Option<(f32, (i64, u32))>, now: i64) -> Option<f32> {
+    held.filter(|&(_, month)| month == propagation::solar_cycle::year_month(now))
+        .map(|(ssn, _)| ssn)
+}
+
+/// The smoothed sunspot number the solar-cycle feed gave for this month, if it has given one.
+/// Only a value NOAA's feed answered is ever stored (`LAST_SSN` is written on a successful fetch
+/// alone), so it is never the model's stand-in; the grades take it only for a recent contact.
+fn current_ssn() -> Option<f64> {
+    held_ssn(now_unix()).map(f64::from)
+}
+
+#[cfg(test)]
+mod held_ssn_tests {
+    use super::ssn_for_month;
+
+    /// 2026-05-31 23:59:59Z and the second after it.
+    const MAY_END: i64 = 1_780_271_999;
+
+    #[test]
+    fn a_held_sunspot_number_speaks_only_for_its_own_month() {
+        assert_eq!(propagation::solar_cycle::year_month(MAY_END), (2026, 5));
+        assert_eq!(propagation::solar_cycle::year_month(MAY_END + 1), (2026, 6));
+        let may = Some((112.0, (2026, 5)));
+        assert_eq!(ssn_for_month(may, MAY_END), Some(112.0), "its own month");
+        assert_eq!(
+            ssn_for_month(may, MAY_END - 30 * 86_400),
+            Some(112.0),
+            "its month's first day"
+        );
+        assert_eq!(ssn_for_month(may, MAY_END + 1), None, "the next month");
+        assert_eq!(
+            ssn_for_month(may, MAY_END + 400 * 86_400),
+            None,
+            "a year on"
+        );
+        assert_eq!(
+            ssn_for_month(Some((112.0, (2025, 5))), MAY_END),
+            None,
+            "the same month a year before"
+        );
+        assert_eq!(ssn_for_month(None, MAY_END), None);
+    }
+}
+
+/// The flare lanes behind `get_xray_now`. A flare's rise takes minutes, so GOES, NOAA's event
+/// list and (during a flare) NOAA's D-RAP grid are each asked at most once a minute — much
+/// fresher than the 5-min snapshot TTL — and each serves its last good answer on failure.
+/// The lane stamps every ask before it goes out and backs off while failing, so neither a
+/// poll nor a NOAA outage ever turns into a request per call (`propagation::flare::Lane`).
+static XRAY_LANE: Mutex<propagation::flare::Lane<propagation::live::swpc::XrayTrace>> =
+    Mutex::new(propagation::flare::Lane::new());
+static FLARE_EVENT_LANE: Mutex<propagation::flare::Lane<propagation::flare::FlareEvent>> =
+    Mutex::new(propagation::flare::Lane::new());
+static DRAP_LANE: Mutex<propagation::flare::Lane<propagation::flare::DrapGrid>> =
+    Mutex::new(propagation::flare::Lane::new());
+/// Once a minute while answering; after failures 2, 4, 8 … minutes, capped at 15.
+const FLARE_LANE_CADENCE: propagation::flare::Cadence = propagation::flare::Cadence {
+    period: 60,
+    cap: 900,
+};
 
 /// The base config root: `%APPDATA%` on Windows, `$XDG_CONFIG_HOME`/`~/.config` on Unix,
 /// else the CWD. The `tempo[-<profile>]` app directory hangs off this.
@@ -2221,10 +2495,10 @@ fn sanitize_profile(s: &str) -> Option<String> {
 /// declined on 2026-09-07. The reasons, so the next reader does not add it on the strength of
 /// that reply:
 ///
-/// * The extra-detail tier already has a switch — Settings ▸ Logging & Connectors ▸ "Extra
-///   detail in the diagnostic log" — and it applies LIVE, with no restart. Whatever is being
-///   chased is usually happening right now, so a flag that only takes effect on the next launch
-///   is the worse instrument, not the better one.
+/// * The extra-detail tier already has a switch — Settings ▸ Services ▸ Integrations & Feeds ▸
+///   "Extra detail in the diagnostic log" — and it applies LIVE, with no restart. Whatever is
+///   being chased is usually happening right now, so a flag that only takes effect on the next
+///   launch is the worse instrument, not the better one.
 /// * The case a launch flag would uniquely cover — a fault that kills the app before Settings
 ///   is reachable — is already covered: the BASE diagnostic log runs from the first moments of
 ///   startup and cannot be turned off. The extra tier adds CAT traffic and per-period decode
@@ -2293,6 +2567,100 @@ fn config_dir() -> PathBuf {
 /// this reason; the per-radio config dirs do not. Also noted in CHANGELOG ▸ Known limitations.
 fn radio_profile_key(radio_id: u32) -> String {
     format!("r{radio_id}")
+}
+
+/// The radio loop's startup config, from the launch settings and the three shared feeds `run`
+/// builds. A function rather than a literal inside `run` so the one field `run` cannot take from
+/// settings, the radio this process is bound to, is reachable by a test.
+#[cfg(feature = "radio")]
+fn radio_config_for(
+    settings: &tempo_app::settings::Settings,
+    spectrum_feed: &tempo_app::engine::SpectrumFeed,
+    rx_tap: &std::sync::Arc<tempo_audio::rxtap::RxTap>,
+    meter_feed: &tempo_app::engine::MeterFeed,
+) -> tempo_audio::service::RadioConfig {
+    tempo_audio::service::RadioConfig {
+        on_active_profile_change: None,
+        // The SAME feed the UI reads (registered as managed state in `run`) and the tee the
+        // rx-dsp thread drains. The waterfall row is produced on that thread, not on the radio
+        // loop, so blocking CAT can no longer starve it — see tempo-audio/src/rxtap.rs.
+        spectrum_feed: spectrum_feed.clone(),
+        rx_tap: rx_tap.clone(),
+        capture_radio_id: Some(settings.active_radio),
+        meter_feed: meter_feed.clone(),
+        ptt_method: settings.ptt_method.clone(),
+        // The operator's D1/D2/D3 choice, from the ACTIVE radio's profile. Without this the
+        // picker is decorative: the setting saved, the UI moved, the CI-V command supported it,
+        // and nothing carried the value into the backend (found by issue triage, same day).
+        icom_data_mode: settings
+            .radios
+            .iter()
+            .find(|r| r.id == settings.active_radio)
+            .map(|r| r.icom_data_mode)
+            .unwrap_or(settings.icom_data_mode),
+        // …and its transmit audio source for CAT PTT (#381), from the same profile, so the
+        // startup transport keys as the one every tick after it derives from settings.
+        tx_audio_source: settings
+            .radios
+            .iter()
+            .find(|r| r.id == settings.active_radio)
+            .map(|r| r.tx_audio_source.clone())
+            .unwrap_or_else(|| settings.tx_audio_source.clone()),
+        rig_model: settings.rig_model,
+        // The operator's name for the active radio, so the STARTUP CAT line names it. Without
+        // this the first line of every log said "model 1042" while every later line said
+        // "Yeasu" — the same radio under two names, in the file we hand to a stranger.
+        radio_label: settings
+            .radios
+            .iter()
+            .find(|r| r.id == settings.active_radio)
+            .map(|r| {
+                if r.name.trim().is_empty() {
+                    r.rig_model_name.clone()
+                } else if r.rig_model_name.trim().is_empty() {
+                    r.name.clone()
+                } else {
+                    format!("{} — {} (model {})", r.name, r.rig_model_name, r.rig_model)
+                }
+            })
+            .unwrap_or_default(),
+        // Seeded here rather than waiting for the first settings tick: the launch of rigctld is
+        // itself what keys an undeclared RTS-wired cable, so a tick later is too late (#44).
+        cat_rts_keys_ptt: settings.cat_rts_keys_ptt,
+        serial_port: settings.serial_port.clone(),
+        baud: settings.baud,
+        rig_conn: settings.rig_conn.clone(),
+        rig_addr: settings.rig_addr.clone(),
+        omnirig_slot: settings.omnirig_slot,
+        rigctld_port: settings.rigctld_port,
+        icom_native_cat: settings.icom_native_cat,
+        flex_native_cat: settings.flex_native_cat,
+        flex_radio_ip: settings.flex_radio_ip.clone(),
+        flex_native_unbenched: settings.flex_native_unbenched,
+        icom_lan_host: settings.icom_lan_host.clone(),
+        icom_lan_user: settings.icom_lan_user.clone(),
+        icom_lan_port: settings.icom_lan_port,
+        radio_id: settings.active_radio,
+        // One window per radio (simultaneous radios): this process's monitor leaves every other
+        // radio to its own window. `None` (the single band-following window) monitors them all.
+        bound_radio: bound_radio_id(),
+        broker_self_port: if settings.cat_broker {
+            Some(settings.cat_broker_port)
+        } else {
+            None
+        },
+        dial_hz: settings.dial_hz(),
+        mode: settings.rig_mode(), // DATA submode (PKTUSB/…) for FT8, not voice USB
+        wsjtx_udp: settings.wsjtx_udp,
+        wsjtx_addr: settings.wsjtx_udp_addr.clone(),
+        pskreporter: settings.pskreporter,
+        // The package's version, known once the app is built: `finish_launch` sets it.
+        app_version: String::new(),
+        audio_in: settings.audio_in.clone(),
+        audio_out: settings.audio_out.clone(),
+        tx_level: settings.tx_level,
+        rx_gain: settings.rx_gain,
+    }
 }
 
 /// The radio id THIS instance was launched to drive — `--profile r<id>`, as the launch picker
@@ -2760,6 +3128,7 @@ fn data_dir_entries(from: &Path) -> Vec<PathBuf> {
         "fd-rules.json",
         "fd-rules.meta.json",
         "tles.json",
+        tempo_app::upload_start::FILE_NAME,
     ] {
         if from.join(name).is_file() {
             out.push(PathBuf::from(name));
@@ -3259,11 +3628,15 @@ mod durable_command_tests {
 
     /// A store-backed engine on a folder of the test's own, with `n` contacts.
     pub(super) fn engine_on_store(tag: &str, n: usize) -> (PathBuf, SharedEngine) {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("nexus-durable-{tag}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-durable-{tag}-{nanos}-{}",
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).expect("scratch");
         let mut adif = tempo_core::logbook::adif_header();
         for i in 0..n {
@@ -3319,7 +3692,11 @@ mod durable_command_tests {
         by_command(
             engine,
             id,
-            tempo_core::logbook::LogOp::MarkQslCard { id, received: true },
+            tempo_core::logbook::LogOp::MarkQslCard {
+                id,
+                received: true,
+                date_unix: 1_700_000_000,
+            },
         )
         .0
     }
@@ -3359,7 +3736,11 @@ mod durable_command_tests {
                 let (made, durability) = by_command(
                     &engine,
                     id,
-                    tempo_core::logbook::LogOp::MarkQslCard { id, received: true },
+                    tempo_core::logbook::LogOp::MarkQslCard {
+                        id,
+                        received: true,
+                        date_unix: 1_700_000_000,
+                    },
                 );
                 (Ok::<bool, String>(made), durability)
             };
@@ -3433,7 +3814,11 @@ mod durable_command_tests {
                 let (made, durability) = by_command(
                     &eng,
                     id,
-                    tempo_core::logbook::LogOp::MarkQslCard { id, received: true },
+                    tempo_core::logbook::LogOp::MarkQslCard {
+                        id,
+                        received: true,
+                        date_unix: 1_700_000_000,
+                    },
                 );
                 (Ok::<bool, String>(made), durability)
             }))
@@ -3753,7 +4138,7 @@ mod lotw_batch_tests {
 
 #[cfg(test)]
 mod logbook_startup_tests {
-    use super::durable_command_tests::{card_at, engine_on_store, id_at};
+    use super::durable_command_tests::{by_command, card_at, engine_on_store, id_at};
     use super::*;
     use crate::remote_service::stored_log_tests::StoredLog;
     use std::time::{Duration, Instant};
@@ -3763,11 +4148,15 @@ mod logbook_startup_tests {
     /// A folder of the test's own — created only when `contacts` is `Some`, holding a 1.13
     /// `log.adi` of that many contacts.
     fn folder(tag: &str, contacts: Option<usize>) -> PathBuf {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("nexus-startup-{tag}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-startup-{tag}-{nanos}-{}",
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         if let Some(n) = contacts {
             std::fs::create_dir_all(&dir).expect("scratch");
             let mut adif = tempo_core::logbook::adif_header();
@@ -3990,7 +4379,11 @@ mod logbook_startup_tests {
             super::durable_command_tests::by_command(
                 &engine,
                 id,
-                tempo_core::logbook::LogOp::MarkQslCard { id, received: true }
+                tempo_core::logbook::LogOp::MarkQslCard {
+                    id,
+                    received: true,
+                    date_unix: 1_700_000_000,
+                }
             )
             .0,
             "not waited for"
@@ -4037,7 +4430,17 @@ mod logbook_startup_tests {
 
         // The control: beside the writer, while a change waits on a stalled disk.
         let hold = WriteHold::take(&db).expect("stall the store");
-        assert!(card_at(&engine, 3));
+        let id = id_at(&engine, 3);
+        let (made, landed) = by_command(
+            &engine,
+            id,
+            tempo_core::logbook::LogOp::MarkQslCard {
+                id,
+                received: true,
+                date_unix: 1_700_000_000,
+            },
+        );
+        assert!(made);
         let beside = dir.with_extension("beside");
         copy_data_dir_verified(&dir, &beside, None).expect("copied");
         drop(hold);
@@ -4045,6 +4448,12 @@ mod logbook_startup_tests {
             !marked(&beside, 3),
             "control: a copy beside the writer misses the change on its way"
         );
+        // The released change commits now, and holds the write lock through its flush. The next
+        // stall starts once it is on disk: taken beside that commit, it would wait for the lock
+        // and give up after the store's busy timeout on a disk slow to flush.
+        landed
+            .wait(tempo_app::logstore::DURABLE_WAIT)
+            .expect("the control's change lands once released");
 
         // Through the writer: another change, the same stall, released while the copy waits.
         let hold = WriteHold::take(&db).expect("stall the store");
@@ -4061,6 +4470,38 @@ mod logbook_startup_tests {
         for d in [&dir, &beside, &moved] {
             let _ = std::fs::remove_dir_all(d);
         }
+    }
+
+    /// PSK Reporter names Nexus with the version tauri.conf.json gives the app, the one the app
+    /// shows and the installer is named for. The launch hands the radio loop the package's
+    /// version (source-scanned: what is under test is which value `finish_launch` passes, and no
+    /// type sees that), and the package's version is tauri.conf.json's.
+    #[test]
+    fn psk_reporter_is_handed_tauri_confs_version() {
+        let src = include_str!("lib.rs");
+        let finish = body_of(src, "fn finish_launch(");
+        let stamp = "rest.radio_cfg.app_version = handle.package_info().version.to_string();";
+        let (at_stamp, at_start) = (
+            finish
+                .find(stamp)
+                .expect("the launch hands the radio loop the app version"),
+            finish
+                .find("start_on_the_logbook(&d, logbook_store, rest);")
+                .expect("the launch starts the radio loop"),
+        );
+        assert!(
+            at_stamp < at_start,
+            "the version is set before the radio loop starts"
+        );
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json");
+        let conf_version = conf["version"]
+            .as_str()
+            .expect("a version in tauri.conf.json");
+        assert_eq!(
+            crate::context().package_info().version.to_string(),
+            conf_version
+        );
     }
 
     /// The body of the top-level function `sig` in this file.
@@ -4743,11 +5184,15 @@ mod data_folder_tests {
     /// A unique scratch directory. No tempfile dependency in this crate; the name carries the
     /// test's own label so a leftover is attributable.
     fn scratch(label: &str) -> PathBuf {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("nexus-data-folder-{label}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-data-folder-{label}-{nanos}-{}",
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).expect("scratch dir");
         dir
     }
@@ -6006,11 +6451,15 @@ mod assistance_journal_tests {
     const ASIDE: &str = "assistance_journal.unreadable-20260930-142233.json";
 
     fn scratch(label: &str) -> PathBuf {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("nexus-assist-{label}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-assist-{label}-{nanos}-{}",
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).expect("scratch dir");
         dir
     }
@@ -6264,7 +6713,7 @@ fn local_data_dir() -> PathBuf {
 /// location WSJT-X uses for its own ALL.TXT. Written only when `settings.write_all_txt` is on;
 /// the Settings panel surfaces this path + a "Reveal" button
 /// (`all_txt_location`/`reveal_all_txt`).
-fn all_txt_path() -> PathBuf {
+pub(crate) fn all_txt_path() -> PathBuf {
     local_data_dir().join("ALL.TXT")
 }
 
@@ -6491,23 +6940,195 @@ fn legacy_sstv_gallery_dir() -> PathBuf {
 /// stall the whole window on a slow disk. Caught by `no_engine_locking_command_runs_on_the_ui_thread`.
 #[tauri::command(async)]
 fn sstv_delete_image(state: State<'_, SharedEngine>, path: String) -> Result<(), String> {
-    delete_sstv_gallery_image(&mut engine_lock(&state), &path)
+    delete_sstv_gallery_image(&state, &sstv_gallery_dir(), &path)
 }
 
-/// Delete one received picture and reconcile the gallery index, for the desktop command above and
-/// for the Remote gallery delete, which resolves the path from its own gallery row and never takes
-/// one from a browser. The caller holds the Engine lock; the file removal is inside it, which the
-/// directory read below already was.
+/// Delete one received picture and reconcile the gallery index, for the desktop command above. The
+/// Engine lock is held only to copy the gallery and, later, to apply the result: the file lookups,
+/// the removal, the folder read and the gallery.json write all run without it (see
+/// [`rewrite_sstv_gallery_index`]).
 ///
-/// ⛔ The containment check is load-bearing whichever caller arrives: only a file inside the
-/// station's own gallery folder can be removed, and a path that does not resolve there is refused
-/// rather than followed.
+/// ⛔ The containment and membership checks are load-bearing whichever caller arrives: only a
+/// picture the gallery lists, inside the station's own gallery folder, can be removed, and a path
+/// that does not resolve there is refused rather than followed.
 pub(crate) fn delete_sstv_gallery_image(
-    eng: &mut tempo_app::engine::Engine,
+    engine: &std::sync::Mutex<tempo_app::engine::Engine>,
+    dir: &std::path::Path,
     path: &str,
 ) -> Result<(), String> {
-    let dir = sstv_gallery_dir();
+    let _deleting = sstv_gallery_delete_lock();
+    let listed = engine_lock(engine).sstv_gallery().to_vec();
+    unlink_sstv_gallery_file(dir, &canonical_gallery_paths(&listed), path)?;
+    let (gen, entries) = rewrite_sstv_gallery_index(engine, dir, &[path]);
+    tempo_app::sstv_gallery::write_gallery_json(dir, gen, &entries);
+    Ok(())
+}
+
+/// One gallery delete at a time, single or batch, for the whole of the delete.
+///
+/// A delete reads the gallery folder with the Engine lock released, then relocks and adopts the
+/// files the read found that its copy did not list. If a second delete could remove such a file
+/// in between (a picture received after the first delete's copy, deleted from the desktop and from
+/// Remote at the same moment), the first would put it back as an entry whose file is gone. With
+/// deletes serialised, only the decoder changes the gallery during the read, and it only adds.
+///
+/// ⛔ Lock order: this lock first, then the Engine lock, briefly. Never the reverse: nothing takes
+/// this lock while holding the Engine lock, and the decoder and the radio loop never take it, so
+/// they never wait on a delete. Not the Engine lock itself, which would put the folder read back
+/// under the lock the radio loop and Stop TX wait on.
+fn sstv_gallery_delete_lock() -> std::sync::MutexGuard<'static, ()> {
+    static SSTV_GALLERY_DELETE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    SSTV_GALLERY_DELETE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// One picture the batch delete could not remove, and why, in the words the single delete uses.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SstvDeleteFailure {
+    path: String,
+    reason: String,
+}
+
+/// Delete several received pictures at once: the gallery's "Delete selected".
+///
+/// Each path goes through the same removal the single delete uses, containment and membership
+/// checks included, so a path the single delete refuses is refused here too. The index is
+/// rewritten ONCE at the end, not once per picture. One picture that cannot be removed (already
+/// gone, locked by another program, not a gallery picture) does not stop the rest; it comes back in
+/// the list with its reason, and the UI says which ones stayed. A path asked for twice is removed
+/// once and is not a failure.
+///
+/// A picture open in the viewer needs nothing extra: the viewer reads the gallery and moves on
+/// from a picture that is no longer in it, as it does after a single delete.
+///
+/// `(async)` for the single delete's reason: the engine mutex plus file I/O, here for many files.
+#[tauri::command(async)]
+fn sstv_delete_images(
+    state: State<'_, SharedEngine>,
+    paths: Vec<String>,
+) -> Vec<SstvDeleteFailure> {
+    delete_sstv_gallery_images(&state, &sstv_gallery_dir(), &paths)
+}
+
+/// [`sstv_delete_images`] against an explicit gallery folder, so the tests can use a scratch one.
+///
+/// The Engine lock is never held across file work: it is taken only to copy the gallery, and then
+/// by [`rewrite_sstv_gallery_index`] to copy it again and to apply the result. The file lookups,
+/// the unlinks, the folder read and the gallery.json write all run without it, since a Select all
+/// over a full gallery in a slow folder would otherwise hold the radio loop off for every file. The
+/// rewrite reconciles against the folder as it stands then, so the index matches the disk whichever
+/// unlinks failed, and a picture received in between is kept.
+fn delete_sstv_gallery_images(
+    engine: &std::sync::Mutex<tempo_app::engine::Engine>,
+    dir: &std::path::Path,
+    paths: &[String],
+) -> Vec<SstvDeleteFailure> {
+    let _deleting = sstv_gallery_delete_lock();
+    let listed = engine_lock(engine).sstv_gallery().to_vec();
+    let pictures = canonical_gallery_paths(&listed);
+    let mut asked = std::collections::HashSet::new();
+    let mut failed = Vec::new();
+    let mut removed = Vec::new();
+    for path in paths {
+        if !asked.insert(path.as_str()) {
+            continue;
+        }
+        match unlink_sstv_gallery_file(dir, &pictures, path) {
+            Ok(()) => removed.push(path.as_str()),
+            Err(reason) => failed.push(SstvDeleteFailure {
+                path: path.clone(),
+                reason,
+            }),
+        }
+    }
+    #[cfg(test)]
+    if let Some(hook) = BEFORE_BATCH_RELOCK.with(|h| h.borrow_mut().take()) {
+        hook(engine);
+    }
+    if !removed.is_empty() {
+        let (gen, entries) = rewrite_sstv_gallery_index(engine, dir, &removed);
+        tempo_app::sstv_gallery::write_gallery_json(dir, gen, &entries);
+    }
+    failed
+}
+
+#[cfg(test)]
+type BatchRelockHook = Box<dyn FnOnce(&std::sync::Mutex<tempo_app::engine::Engine>)>;
+
+#[cfg(test)]
+thread_local! {
+    /// Runs once, between the batch delete's unlinks and its relock: the seam a test uses to land
+    /// a newly received picture at exactly that moment.
+    static BEFORE_BATCH_RELOCK: std::cell::RefCell<Option<BatchRelockHook>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+type GalleryDiskHook = Box<dyn FnMut(&'static str)>;
+
+#[cfg(test)]
+thread_local! {
+    /// Runs at each step of a delete that touches the gallery folder (resolving the gallery's
+    /// pictures, removing a file, reading the folder back): the seam a test uses to ask whether the
+    /// Engine lock is free at that moment.
+    static ON_GALLERY_DISK_WORK: std::cell::RefCell<Option<GalleryDiskHook>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn gallery_disk_work(step: &'static str) {
+    ON_GALLERY_DISK_WORK.with(|h| {
+        if let Some(hook) = h.borrow_mut().as_mut() {
+            hook(step);
+        }
+    });
+}
+
+/// The gallery's pictures as canonical paths, for the membership check below. A picture whose
+/// file is already gone has no canonical path and is left out; it could not be removed anyway.
+/// So is an entry that is a symbolic link rather than a picture file: following it would make
+/// whatever it points at count as a gallery picture.
+fn canonical_gallery_paths(
+    entries: &[tempo_app::dto::SstvGalleryEntry],
+) -> std::collections::HashSet<std::path::PathBuf> {
+    #[cfg(test)]
+    gallery_disk_work("membership");
+    entries
+        .iter()
+        .map(|e| std::path::Path::new(&e.path))
+        .filter(|p| is_regular_file(p))
+        .filter_map(|p| p.canonicalize().ok())
+        .collect()
+}
+
+/// A plain file, not a symbolic link to one. The gallery holds only the pictures the decoder wrote,
+/// and those are never links.
+fn is_regular_file(path: &std::path::Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_file())
+}
+
+/// Remove one picture file. The in-memory gallery and the index on disk are the caller's to update,
+/// once, after it has removed everything it is going to.
+///
+/// ⛔ The containment check is load-bearing: only a file inside `dir` can be removed. Both sides
+/// are canonicalised, so `..` cannot walk out. ⛔ So is the membership check: inside the folder is
+/// not enough, the file must be one of the gallery's `pictures` (canonical, from
+/// [`canonical_gallery_paths`]), so an operator's own file kept there, or `gallery.json` itself, is
+/// refused. A request that names a symbolic link is refused as not a picture: removing what it
+/// points at would delete a file the request never named.
+fn unlink_sstv_gallery_file(
+    dir: &std::path::Path,
+    pictures: &std::collections::HashSet<std::path::PathBuf>,
+    path: &str,
+) -> Result<(), String> {
+    #[cfg(test)]
+    gallery_disk_work("unlink");
     let target = std::path::Path::new(path);
+    if std::fs::symlink_metadata(target).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err("That file is not a picture in the SSTV gallery".into());
+    }
     let canon_dir = dir
         .canonicalize()
         .map_err(|e| format!("no gallery folder: {e}"))?;
@@ -6517,21 +7138,81 @@ pub(crate) fn delete_sstv_gallery_image(
     if !canon.starts_with(&canon_dir) {
         return Err("That file is not in the SSTV gallery folder".into());
     }
+    if !pictures.contains(&canon) {
+        return Err("That file is not a picture in the SSTV gallery".into());
+    }
     std::fs::remove_file(&canon)
         .map_err(|e| format!("Could not delete {}: {e}", canon.display()))?;
-    eng.remove_sstv_gallery(path);
-    // Rewrite the index from what the directory now holds, rather than from the entry we just
-    // dropped: it costs one directory read and it also sweeps up any other drift.
-    let entries = reconcile_gallery(&dir, eng.sstv_gallery().to_vec());
-    if let Ok(text) = serde_json::to_string(&entries) {
-        let p = dir.join("gallery.json");
-        let tmp = p.with_extension("json.tmp");
-        if std::fs::write(&tmp, text).is_ok() {
-            let _ = std::fs::rename(&tmp, &p);
-        }
-    }
-    eng.load_sstv_gallery(entries);
     Ok(())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many times this thread rewrote a gallery index, for the test that holds the batch
+    /// delete to one rewrite.
+    static SSTV_INDEX_WRITES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Drop the `removed` pictures from the gallery and reconcile it with what the directory now
+/// holds, rather than with the entries just dropped: it costs one directory read and it also
+/// sweeps up any other drift. Returns the gallery and its generation for the caller to write to
+/// `gallery.json`.
+///
+/// ⛔ No file work under the Engine lock. The radio loop and Stop TX wait on that lock, and the
+/// gallery folder can be a slow OneDrive or network folder, where each lookup is a round trip. So
+/// the folder is read against a copy of the gallery, and the lock is retaken only to apply what the
+/// read found to the gallery as it stands THEN: entries whose files have gone are dropped, files
+/// the gallery did not list are adopted, and anything the decoder added or changed in between (a
+/// new picture, its FSK ID) is kept as the decoder left it.
+///
+/// ⛔ The caller writes with `tempo_app::sstv_gallery::write_gallery_json` AFTER this returns, with
+/// no lock held. The decode thread writes the same way; the generation stops an older copy landing
+/// after a newer one.
+fn rewrite_sstv_gallery_index(
+    engine: &std::sync::Mutex<tempo_app::engine::Engine>,
+    dir: &std::path::Path,
+    removed: &[&str],
+) -> (u64, Vec<tempo_app::dto::SstvGalleryEntry>) {
+    #[cfg(test)]
+    SSTV_INDEX_WRITES.with(|n| n.set(n.get() + 1));
+    let listed: Vec<tempo_app::dto::SstvGalleryEntry> = engine_lock(engine)
+        .sstv_gallery()
+        .iter()
+        .filter(|e| !removed.contains(&e.path.as_str()))
+        .cloned()
+        .collect();
+    let found = reconcile_gallery(dir, listed.clone());
+    let on_disk: std::collections::HashSet<&str> = found.iter().map(|e| e.path.as_str()).collect();
+    let was_listed: std::collections::HashSet<&str> =
+        listed.iter().map(|e| e.path.as_str()).collect();
+    let vanished: std::collections::HashSet<&str> = was_listed
+        .iter()
+        .copied()
+        .filter(|p| !on_disk.contains(p))
+        .collect();
+
+    let mut eng = engine_lock(engine);
+    for path in removed {
+        eng.remove_sstv_gallery(path);
+    }
+    let mut entries: Vec<tempo_app::dto::SstvGalleryEntry> = eng
+        .sstv_gallery()
+        .iter()
+        .filter(|e| !vanished.contains(e.path.as_str()))
+        .cloned()
+        .collect();
+    // Adopt only files the copy did not list: one it did list and the gallery no longer has was
+    // removed in between (another delete), and must not come back.
+    let known: std::collections::HashSet<String> = entries.iter().map(|e| e.path.clone()).collect();
+    entries.extend(
+        found
+            .iter()
+            .filter(|e| !was_listed.contains(e.path.as_str()) && !known.contains(&e.path))
+            .cloned(),
+    );
+    entries.sort_by(|a, b| a.finished_utc.cmp(&b.finished_utc));
+    eng.load_sstv_gallery(entries);
+    eng.sstv_gallery_snapshot()
 }
 
 /// Reconcile a gallery index against the files that are actually on disk.
@@ -6553,9 +7234,13 @@ fn reconcile_gallery(
     dir: &std::path::Path,
     entries: Vec<tempo_app::dto::SstvGalleryEntry>,
 ) -> Vec<tempo_app::dto::SstvGalleryEntry> {
+    #[cfg(test)]
+    gallery_disk_work("reconcile");
+    // Plain files only, here and in the adoption below: a symbolic link named like a picture
+    // (dangling, or pointing at something else in or out of the folder) is not one the decoder wrote.
     let mut kept: Vec<tempo_app::dto::SstvGalleryEntry> = entries
         .into_iter()
-        .filter(|e| std::path::Path::new(&e.path).is_file())
+        .filter(|e| is_regular_file(std::path::Path::new(&e.path)))
         .collect();
     let known: std::collections::HashSet<String> = kept.iter().map(|e| e.path.clone()).collect();
 
@@ -6573,7 +7258,9 @@ fn reconcile_gallery(
                 .extension()
                 .and_then(|e| e.to_str())
                 .map(str::to_ascii_lowercase);
-            if !matches!(ext.as_deref(), Some("bmp") | Some("png")) {
+            if !matches!(ext.as_deref(), Some("bmp") | Some("png"))
+                || !f.file_type().is_ok_and(|t| t.is_file())
+            {
                 continue;
             }
             let p = path.to_string_lossy().into_owned();
@@ -6772,11 +7459,15 @@ mod conversations_file_tests {
     const ASIDE: &str = "conversations.unreadable-20260930-142233.json";
 
     fn scratch(label: &str) -> PathBuf {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("nexus-convs-{label}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-convs-{label}-{nanos}-{}",
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).expect("scratch dir");
         dir
     }
@@ -7003,11 +7694,15 @@ mod ui_state_file_tests {
     use super::*;
 
     fn scratch(label: &str) -> PathBuf {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("nexus-ui-state-{label}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-ui-state-{label}-{nanos}-{}",
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).expect("scratch dir");
         dir
     }
@@ -7471,6 +8166,26 @@ fn set_source(state: State<'_, SharedEngine>, kind: String) -> Result<AppSnapsho
     Ok(eng.snapshot())
 }
 
+/// The space weather a logged contact may carry, each number only if it is a reading and each
+/// with its own stamp: the planetary Kp and its sample time, NOAA's daily planetary A for every
+/// UT day it has published (`a_by_day`, each with its day; never the Kp-derived ap estimate),
+/// and the solar flux with its measurement time. The engine judges each stamp against the
+/// contact's own time when it logs one, and takes only the contact's own day's A. A stand-in is
+/// `None`, so its ADIF field is left off rather than filled with a guess.
+#[allow(clippy::type_complexity)] // three stamped readings, named by the doc above
+fn space_wx_for_log(
+    wx: &propagation::SpaceWx,
+    stamps: &propagation::model::SpaceWxStamps,
+    a_by_day: &[(i64, f32)],
+) -> (Option<(f32, u64)>, Vec<(f32, u64)>, Option<(f32, u64)>) {
+    let at = |t: i64| t.max(0) as u64;
+    (
+        stamps.kp_at.map(|t| (wx.kp, at(t))),
+        a_by_day.iter().map(|&(day, a)| (a, at(day))).collect(),
+        stamps.sfi_at.map(|t| (wx.sfi, at(t))),
+    )
+}
+
 /// The propagation & opening-intelligence nowcast, built from LIVE NOAA SWPC +
 /// PSK Reporter data for the operator's call/grid. Cached for [`PROP_TTL_SECS`]
 /// to respect PSK Reporter's query cadence; falls back to the last good snapshot
@@ -7618,7 +8333,8 @@ async fn get_propagation(
     // live-spot window (the detector's full baseline) and replaces the snapshot's
     // openings with the tracker-stamped set (hysteresis-entered, onset-timed).
     let cfg = propagation::OpeningConfig::default();
-    let wx = propagation::SpaceWx {
+    let stamps = snap.space_wx.stamps;
+    let measured = propagation::SpaceWx {
         sfi: snap.space_wx.sfi,
         ssn: None, // opening detector/heuristic don't read R12
         kp: snap.space_wx.kp,
@@ -7627,6 +8343,10 @@ async fn get_propagation(
         // true R-scale — an X-class blackout no longer collapses to "R1 / M-class".
         xray_long: snap.space_wx.xray_long,
     };
+    // What the detector, advisor, banners, insights and model run on: only the Kp and X-ray
+    // that may speak for now. A cached snapshot is served at any age, and a GOES gap keeps its
+    // last flux, so an hours-old Kp 6 or flare would otherwise raise a storm or flare line.
+    let wx = measured.speaking_now(&stamps, now);
     // ANCHORED window = operator-REACHABLE evidence only: own-call PSK Reporter MQTT
     // + the near-region (≤REGION_RADIUS_KM) census (disjoint — the region feed drops
     // own-call spots) + the operator's own decodes. This is what drives the BAND
@@ -7747,27 +8467,7 @@ async fn get_propagation(
         record_opening_episodes(tr.drain_closed());
     }
 
-    // Rebuild the band advisor on the ANCHORED (operator-reachable) window — "best
-    // band FOR YOU", reflecting activity AROUND the operator, NOT the busiest band
-    // worldwide. Rebuild whenever we have any anchored evidence (own-call MQTT,
-    // near-region, or own decodes); when empty we keep the cached snapshot's
-    // own-call advisory (never the global firehose, which `anchored` excludes).
-    if !anchored.is_empty() {
-        let advisor = propagation::PropAdvisor::new(&mycall, &mygrid);
-        snap.advisory = advisor.advise(now, &anchored, &wx);
-        // Best-band-per-region recommender + the (region, band) activity matrix, from the
-        // SAME anchored window (operator-reachable only — never the firehose). One pass.
-        let rb = advisor.region_band(now, &anchored, &snap.advisory.bands);
-        snap.best_to_region = rb.best_to_region;
-        snap.region_band = rb.cells;
-    }
-    // "Worldwide activity" = the SAME advisor over the GLOBAL firehose window, so the
-    // UI can show busy-worldwide beside best-FOR-YOU (workable vs merely-loud). Only
-    // when the firehose actually adds something beyond the anchored set.
-    if wide.len() > anchored.len() {
-        snap.worldwide =
-            Some(propagation::PropAdvisor::new(&mycall, &mygrid).advise(now, &wide, &wx));
-    }
+    advise_for_now(&mut snap, &mycall, &mygrid, now, &anchored, &wide, &wx);
 
     // Locate the merged window for the map (grid or DXCC centroid), so the map
     // fills with the cluster/RBN/PSKR firehose + own decodes, not just the native
@@ -7779,25 +8479,36 @@ async fn get_propagation(
     // trend and regenerate the insight feed with it (overwriting the engine layer's
     // threshold-only insights). me_ll drives the representative MUF + greyline test.
     let me_ll = propagation::geo::maidenhead_to_latlon(&mygrid);
-    // A reading SWPC actually answered, for the opt-in space weather on each logged contact —
-    // never the model's stand-in values a failed fetch leaves in the snapshot.
+    // The readings SWPC actually answered, each on its own with its stamp, for the opt-in space
+    // weather on each logged contact — never the model's stand-in values a failed product leaves
+    // in the snapshot (`space_wx_for_log`).
     if fetched_fresh && snap.space_wx.fetched {
-        let (kp, a_index, sfi, at) = (wx.kp, wx.a_index, wx.sfi, now.max(0) as u64);
+        let (kp, a_daily, sfi) = space_wx_for_log(&measured, &stamps, &snap.space_wx.a_by_day);
+        let at = now.max(0) as u64;
         let _ = with_engine(&state, move |mut eng| {
-            eng.note_space_weather(kp, a_index, sfi, at)
+            eng.note_space_weather(kp, &a_daily, sfi, at)
         })
         .await;
     }
+    // The trend history takes only a whole sample that speaks for now: a stand-in SFI 120
+    // between two real 90s would read as "flux rising" and its model MUF as "MUF building", and
+    // a frozen feed's old number would be filed as now's.
+    let sample_measured = {
+        use propagation::model::WxKey;
+        [WxKey::Sfi, WxKey::Kp, WxKey::Xray]
+            .into_iter()
+            .all(|k| stamps.usable(k, now))
+    };
     if fetched_fresh {
-        if let Ok(mut h) = wx_history.lock() {
+        if let Some(mut h) = wx_history.lock().ok().filter(|_| sample_measured) {
             let muf = me_ll
-                .map(|me| propagation::representative_muf(me, now, &wx))
+                .map(|me| propagation::representative_muf(me, now, &measured))
                 .unwrap_or(0.0);
             h.push(propagation::SpaceWxSample {
                 t: now,
-                sfi: wx.sfi,
-                kp: wx.kp,
-                xray_long: wx.xray_long,
+                sfi: measured.sfi,
+                kp: measured.kp,
+                xray_long: measured.xray_long,
                 muf,
             });
         }
@@ -7822,7 +8533,7 @@ async fn get_propagation(
         .await
         {
             if let Ok(mut g) = LAST_SSN.lock() {
-                *g = Some(ssn);
+                *g = Some((ssn, (yy, mm)));
             }
         }
     }
@@ -7833,10 +8544,12 @@ async fn get_propagation(
         .lock()
         .map(|h| h.trend(now, 3 * 3600))
         .unwrap_or_default();
+    // The trend lines ("MUF building", "flux rising") speak only while the flux they rest on
+    // is measured; with a stand-in SFI the model MUF behind them is the stand-in's.
     snap.insights = propagation::generate_insights(
         now,
         &wx,
-        Some(&snap.wx_trend),
+        Some(&snap.wx_trend).filter(|_| stamps.usable(propagation::model::WxKey::Sfi, now)),
         &snap.advisory.bands,
         &snap.openings,
         me_ll,
@@ -7851,11 +8564,18 @@ async fn get_propagation(
 /// the current space weather. Answers "is THIS path workable, which band, when"
 /// for a station you may have no live spots on. Empty bands if either grid is
 /// unknown (operator hasn't set a grid, or the station has none).
+///
+/// Also attaches the path's geometry (polar cap, auroral oval, grey line, Kp per hour)
+/// from the Kp outlook and aurora oval already held — read from their caches, never
+/// fetched here, so a cold cache simply means "latest Kp only" / "oval unknown", and with
+/// no SWPC reading at all, "Kp unknown".
 #[tauri::command]
 async fn get_path_outlook(
     grid: String,
     state: State<'_, SharedEngine>,
     cache: State<'_, PropCache>,
+    kp_cache: State<'_, KpForecastCache>,
+    aurora: State<'_, AuroraCache>,
 ) -> Result<propagation::PathPrediction, String> {
     let (mygrid, prop_engine, station_power_w, ant_gain_dbi) = {
         let eng = engine_lock(&state);
@@ -7874,30 +8594,606 @@ async fn get_path_outlook(
             bands: Vec::new(),
             muf_now: 0.0,
             muf_hourly: Vec::new(),
+            geometry: None,
+            long_path: None,
+            routes: None,
+            day: None,
         });
     };
     // Current space weather from the propagation cache's last snapshot (the same
-    // SWPC-fed values get_propagation uses); benign defaults if the cache is cold.
-    let wx = {
+    // SWPC-fed values get_propagation uses); benign defaults if the cache is cold. Its stamps go
+    // with the card to `path_grades::keep_outlook`, which keeps it for a contact's grade only
+    // when they say the flux and Kp were measured and current.
+    let (wx, stamps) = {
         let guard = cache.lock().map_err(|e| e.to_string())?;
-        guard
-            .as_ref()
-            .map(|(_, s)| propagation::SpaceWx {
-                sfi: s.space_wx.sfi,
-                ssn: LAST_SSN.lock().ok().and_then(|g| *g),
-                kp: s.space_wx.kp,
-                a_index: s.space_wx.a_index,
-                xray_long: if s.space_wx.flare { 1e-5 } else { 1e-7 },
-            })
-            .unwrap_or_default()
+        let view = guard.as_ref().map(|(_, s)| &s.space_wx);
+        let wx = view
+            .map(|v| outlook_wx(v, held_ssn(now_unix()), now_unix()))
+            .unwrap_or_default();
+        (wx, view.map(|v| v.stamps))
     };
     // The configured engine: "p533" (native ITU-R P.533, ~100 ms/prediction) or
     // the heuristic fallback. p533 is compute-heavy → keep it off the async core.
     let eng = propagation::make_predictor(&prop_engine, me, station_power_w, ant_gain_dbi);
     let t = now_unix();
-    tauri::async_runtime::spawn_blocking(move || eng.predict(dx, t, &wx))
-        .await
-        .map_err(|e| e.to_string())
+    let forecast = kp_cache
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|(_, f)| f.clone()));
+    // The oval is a ~30-minute nowcast: an older one says nothing about now.
+    const OVAL_FRESH_SECS: u64 = 1800;
+    let oval: Option<Vec<(f32, f32)>> = aurora.lock().ok().and_then(|g| {
+        g.as_ref()
+            .filter(|(when, _)| when.elapsed().as_secs() < OVAL_FRESH_SECS)
+            .map(|(_, oval)| oval.points.iter().map(|p| (p.lat, p.lon)).collect())
+    });
+    // The geometry's Kp is only ever one SWPC reported: `wx.kp` above may be the cold-cache
+    // default or a failed fetch's stand-in, which the engine may use but no label may call a
+    // reading.
+    let kp_now = {
+        let guard = cache.lock().map_err(|e| e.to_string())?;
+        swpc_kp(guard.as_ref().map(|(_, s)| &s.space_wx), t)
+    };
+    // P.533 pairs are kept (`path_outlook`): the client asks again every 60 s, and only the
+    // serving hour's scalars and the geometry are recomputed then.
+    let keep = prop_engine == "p533";
+    let key = path_outlook::key(
+        t,
+        &mygrid,
+        &grid,
+        &prop_engine,
+        station_power_w,
+        ant_gain_dbi,
+        &wx,
+    );
+    tauri::async_runtime::spawn_blocking(move || {
+        let (mut pred, long) = match keep.then(|| path_outlook::get(&key)).flatten() {
+            Some((mut sp, mut lp)) => {
+                path_outlook::refresh_now(&mut sp, t);
+                if let Some(lp) = lp.as_mut() {
+                    path_outlook::refresh_now(lp, t);
+                }
+                (sp, lp)
+            }
+            None => {
+                // Both routes at once on their own threads: the long path costs the same chain
+                // again, so this keeps the card's wait at one prediction's. Neither holds a lock.
+                let (sp, lp) = std::thread::scope(|s| {
+                    let lp = s.spawn(|| eng.predict_route(dx, propagation::Route::Long, t, &wx));
+                    let sp = eng.predict(dx, t, &wx);
+                    (sp, lp.join().ok().flatten())
+                });
+                if keep {
+                    path_outlook::put(key, sp.clone(), lp.clone());
+                }
+                (sp, lp)
+            }
+        };
+        if let Some(me) = me {
+            let geom = |route| {
+                propagation::path_geometry_route(
+                    me,
+                    dx,
+                    route,
+                    t,
+                    kp_now,
+                    forecast.as_ref(),
+                    oval.as_deref(),
+                )
+            };
+            pred.geometry = Some(geom(propagation::Route::Short));
+            let long = long.map(|mut lp| {
+                lp.geometry = Some(geom(propagation::Route::Long));
+                lp
+            });
+            // The day as the path-over-the-day strip draws it (both routes, every hour).
+            pred.day = propagation::path_day(&pred, long.as_ref());
+            if let Some(lp) = long {
+                pred.routes = Some(propagation::compare_routes(&pred, &lp));
+                pred.long_path = Some(Box::new(lp));
+            }
+        }
+        // Kept for the grade of a contact logged with this station (`path_grades::at_log`), when
+        // it was computed from measured space weather (`keep_outlook` decides).
+        path_grades::keep_outlook(&mygrid, &grid, t, &pred, stamps.as_ref());
+        pred
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// The path grade of each Logbook row asked about: its own stamp when it carries one made for its
+/// current grid and band, else the display-only grade of the existing log (`path_grades`), else
+/// none. Reads only what `path_grades` holds; the Engine lock for the station's grid, once.
+#[tauri::command]
+async fn log_path_grades(
+    rows: Vec<path_grades::GradeAsk>,
+    state: State<'_, SharedEngine>,
+) -> Result<Vec<Option<path_grades::GradeView>>, String> {
+    let mygrid = with_engine(&state, |eng| eng.settings().mygrid.clone()).await?;
+    let (now, ssn) = (now_unix(), current_ssn());
+    tauri::async_runtime::spawn_blocking(move || {
+        rows.iter()
+            .map(|a| path_grades::view_for(a, &mygrid, now, ssn))
+            .collect()
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// One contact's path over the day it was made (`path_grades::contact_day`) — the contact card.
+/// Two predictions on a blocking thread with no lock held.
+#[tauri::command]
+async fn contact_path_day(
+    row: path_grades::GradeAsk,
+    state: State<'_, SharedEngine>,
+) -> Result<Option<path_grades::ContactDay>, String> {
+    let (mygrid, power, gain) = with_engine(&state, |eng| {
+        let st = eng.settings();
+        (
+            st.mygrid.clone(),
+            st.station_power_w,
+            st.ant_tx_gain_dbi + st.ant_rx_gain_dbi,
+        )
+    })
+    .await?;
+    let (now, ssn) = (now_unix(), current_ssn());
+    tauri::async_runtime::spawn_blocking(move || {
+        path_grades::contact_day(&row, &mygrid, power, gain, now, ssn)
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// How the display-only grading of the log is going, and the success measures it counted.
+#[tauri::command]
+fn path_grading_status() -> path_grades::Status {
+    path_grades::status()
+}
+
+/// The region strips: ten fixed DX regions' path over the day from the operator's grid — both
+/// routes per band and UTC hour, the route the model favours, and each hour's Kp with its source.
+/// With P.533 the sweep (~2 s of compute, on a blocking thread, no Engine lock held) is kept six
+/// hours in memory and beside settings.json (`path_regions`); the hours' Kp is re-read from the
+/// held outlook on every ask, never fetched here. Empty when the operator's grid is unset.
+#[tauri::command]
+async fn get_path_regions(
+    state: State<'_, SharedEngine>,
+    cache: State<'_, PropCache>,
+    kp_cache: State<'_, KpForecastCache>,
+) -> Result<path_regions::PathRegionsView, String> {
+    let (mygrid, prop_engine, station_power_w, ant_gain_dbi) = {
+        let eng = engine_lock(&state);
+        let st = eng.settings();
+        (
+            st.mygrid.clone(),
+            st.prop_engine.clone(),
+            st.station_power_w,
+            st.ant_tx_gain_dbi + st.ant_rx_gain_dbi,
+        )
+    };
+    let Some(me) = propagation::geo::maidenhead_to_latlon(mygrid.trim()) else {
+        return Ok(path_regions::PathRegionsView {
+            engine: prop_engine,
+            computed_unix: 0,
+            regions: Vec::new(),
+        });
+    };
+    // The same space weather get_path_outlook reads, from the propagation cache's last snapshot:
+    // its Kp and X-ray only while they may speak for now (`outlook_wx`).
+    let t = now_unix();
+    let wx = {
+        let guard = cache.lock().map_err(|e| e.to_string())?;
+        guard
+            .as_ref()
+            .map(|(_, s)| outlook_wx(&s.space_wx, held_ssn(t), t))
+            .unwrap_or_default()
+    };
+    let forecast = kp_cache
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|(_, f)| f.clone()));
+    // Only a Kp SWPC reported labels an hour (see `swpc_kp`); the engine may use the stand-in.
+    let kp_now = {
+        let guard = cache.lock().map_err(|e| e.to_string())?;
+        swpc_kp(guard.as_ref().map(|(_, s)| &s.space_wx), t)
+    };
+    let ask = path_regions::Ask {
+        me,
+        key: path_regions::sweep_key(t, &mygrid, &prop_engine, station_power_w, ant_gain_dbi, &wx),
+        engine: propagation::make_predictor(&prop_engine, Some(me), station_power_w, ant_gain_dbi),
+        t,
+        kp_now,
+        wx,
+        forecast,
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        path_regions::serve(ask, &path_regions::file_path())
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// The band advice of a served snapshot (fresh, or cached at any age), made for `now`: the
+/// advisor, the best band per region, the banners and the worldwide ranking, from the windows
+/// `get_propagation` gathered and from `wx`, the Kp and X-ray that may speak for now.
+fn advise_for_now(
+    snap: &mut propagation::PropagationSnapshot,
+    call: &str,
+    grid: &str,
+    now: i64,
+    anchored: &[propagation::PathSpot],
+    wide: &[propagation::PathSpot],
+    wx: &propagation::SpaceWx,
+) {
+    // Rebuild the band advisor on the ANCHORED (operator-reachable) window — "best
+    // band FOR YOU", reflecting activity AROUND the operator, NOT the busiest band
+    // worldwide. Rebuild whenever we have any anchored evidence (own-call MQTT,
+    // near-region, or own decodes); when empty we keep the cached snapshot's
+    // own-call advisory (never the global firehose, which `anchored` excludes).
+    // The model's words need a usable solar flux and Kp; otherwise the advisor reports only what
+    // was heard (`PropAdvisor::without_model`), here and for the worldwide ranking below.
+    let model_usable = snap.space_wx.stamps.model_usable(now);
+    let advisor_for = || {
+        let a = propagation::PropAdvisor::new(call, grid);
+        if model_usable {
+            a
+        } else {
+            a.without_model()
+        }
+    };
+    if !anchored.is_empty() {
+        let advisor = advisor_for();
+        snap.advisory = advisor.advise(now, anchored, wx);
+        // Best-band-per-region recommender + the (region, band) activity matrix, from the
+        // SAME anchored window (operator-reachable only — never the firehose). One pass.
+        let rb = advisor.region_band(now, anchored, &snap.advisory.bands);
+        snap.best_to_region = rb.best_to_region;
+        snap.region_band = rb.cells;
+    } else if !model_usable {
+        // Not rebuilt: the served words are the model's at the fetch, from a Kp and an hour of
+        // the day that are gone. Once the model may not speak, the bands say only what was heard.
+        served_without_model(snap, call, grid);
+    }
+    // A served snapshot's banners were built from the numbers it was fetched with: rebuild
+    // them from the ones that may speak for now, rebuilt advisory or not.
+    snap.advisory.banners = advisor_for().banners(wx);
+    // "Worldwide activity" = the SAME advisor over the GLOBAL firehose window, so the
+    // UI can show busy-worldwide beside best-FOR-YOU (workable vs merely-loud). Only
+    // when the firehose actually adds something beyond the anchored set.
+    if wide.len() > anchored.len() {
+        snap.worldwide = Some(advisor_for().advise(now, wide, wx));
+    }
+}
+
+#[cfg(test)]
+mod served_advisory_tests {
+    use super::advise_for_now;
+    use propagation::model::{ActivityTier, SpaceWxStamps};
+
+    const NOW: i64 = 1_761_800_000;
+    const FETCHED: i64 = NOW - 2 * 3600;
+
+    /// A snapshot fetched two hours ago with a measured flux and Kp, so its bands carry the
+    /// model's words from then, and a best-to-region row carrying one too. Its Kp is stamped at
+    /// the fetch; `kp_at` restamps it.
+    fn cached(kp_at: i64) -> propagation::PropagationSnapshot {
+        let wx = propagation::SpaceWx::default();
+        let mut snap = propagation::PropagationEngine::new("KD9TAW", "EN52").snapshot_measured(
+            FETCHED,
+            &[],
+            &wx,
+            true,
+            &[],
+            &propagation::NeedsSet::default(),
+        );
+        snap.source = "cached".into();
+        snap.space_wx.fetched = true;
+        snap.space_wx.stamps = SpaceWxStamps {
+            sfi_at: Some(FETCHED - 3600),
+            kp_at: Some(kp_at),
+            xray_at: Some(kp_at),
+            a_day: None,
+        };
+        snap.best_to_region = vec![propagation::advisor::RegionBest {
+            region: "Europe".into(),
+            octant: "NE".into(),
+            bearing_deg: 45.0,
+            band: "20m".into(),
+            tier: ActivityTier::Quiet,
+            modeled: "Open".into(),
+            stations: 1,
+            bidirectional: false,
+            score: 0.1,
+        }];
+        snap
+    }
+
+    fn model_words(snap: &propagation::PropagationSnapshot) -> Vec<String> {
+        let bands = snap.advisory.bands.iter();
+        bands
+            .flat_map(|b| [&b.modeled, &b.modeled_reason])
+            .chain(snap.best_to_region.iter().map(|r| &r.modeled))
+            .filter(|w| !w.is_empty())
+            .cloned()
+            .collect()
+    }
+
+    /// A cached snapshot with nothing heard since: its Kp is two hours old, so the model may not
+    /// speak, and the words it spoke at the fetch are not served as now's.
+    #[test]
+    fn a_cached_snapshot_keeps_no_model_words_once_its_kp_is_old() {
+        let mut snap = cached(FETCHED);
+        assert!(!model_words(&snap).is_empty(), "control: the fetch spoke");
+        let wx = propagation::SpaceWx::default();
+        advise_for_now(&mut snap, "KD9TAW", "EN52", NOW, &[], &[], &wx);
+        assert_eq!(model_words(&snap), Vec::<String>::new());
+        assert_eq!(heard_only_wrongs(&snap.advisory), Vec::<String>::new());
+        assert_eq!(
+            snap.advisory.bands.len(),
+            propagation::model::Band::ALL.len()
+        );
+    }
+
+    /// What a band nobody heard may not say once the model is gone: the model's reason ("open
+    /// per model", "solar flux too low"), or the Quiet tier and meter its prior gave; and the
+    /// headline may not name a band to try. Every band of the fixture was heard by nobody.
+    fn heard_only_wrongs(a: &propagation::PropAdvisory) -> Vec<String> {
+        let mut out: Vec<String> = a
+            .bands
+            .iter()
+            .filter(|b| {
+                b.reason != "no activity heard" || b.tier != ActivityTier::Closed || b.score != 0.0
+            })
+            .map(|b| format!("{} {:?} {:.3} {}", b.band, b.tier, b.score, b.reason))
+            .collect();
+        if a.headline.contains("safest bet") {
+            out.push(a.headline.clone());
+        }
+        out
+    }
+
+    /// The TV summary page reads the cached snapshot itself, not through `get_propagation`, so
+    /// it takes the same rule: no model word, model reason or model tier once the Kp is old.
+    #[test]
+    fn the_tv_board_serves_no_model_words_once_the_kp_is_old() {
+        let board =
+            super::connect_board(cached(FETCHED), "KD9TAW".into(), "EN52".into(), None, NOW);
+        let wrong: Vec<String> = board
+            .bands
+            .iter()
+            .filter(|b| {
+                !b.modeled.is_empty() || b.reason != "no activity heard" || b.tier != "Closed"
+            })
+            .map(|b| format!("{} {} {} {}", b.band, b.tier, b.modeled, b.reason))
+            .collect();
+        assert_eq!(wrong, Vec::<String>::new());
+        assert!(!board.headline.contains("safest bet"), "{}", board.headline);
+        // A fresh Kp beside a stand-in flux is no model either: the board strips on the flux too.
+        let mut standin = cached(NOW - 60);
+        standin.space_wx.stamps.sfi_at = None;
+        let board = super::connect_board(standin, "KD9TAW".into(), "EN52".into(), None, NOW);
+        assert!(board
+            .bands
+            .iter()
+            .all(|b| b.modeled.is_empty() && b.reason == "no activity heard"));
+        // Negative control: with a Kp that may speak, the board carries the model's words.
+        let fresh =
+            super::connect_board(cached(NOW - 60), "KD9TAW".into(), "EN52".into(), None, NOW);
+        assert!(fresh.bands.iter().any(|b| !b.modeled.is_empty()));
+    }
+
+    /// The TV summary prints an index only while it may speak for now: the hours-old Kp and X-ray
+    /// and the stand-in A are dashes, never the raw numbers. The flux, measured 3 h ago, speaks.
+    #[test]
+    fn the_tv_board_prints_no_stand_in_or_old_index() {
+        let board =
+            super::connect_board(cached(FETCHED), "KD9TAW".into(), "EN52".into(), None, NOW);
+        assert_eq!(
+            (board.sfi, board.kp, board.a_index, board.xray_class),
+            (Some(120.0), None, None, None)
+        );
+        let mut standin = cached(NOW - 60);
+        standin.space_wx.stamps.sfi_at = None;
+        let board = super::connect_board(standin, "KD9TAW".into(), "EN52".into(), None, NOW);
+        assert_eq!(board.sfi, None, "a stand-in flux is no reading");
+        // Positive control: a Kp and X-ray measured a minute ago are printed.
+        assert_eq!(board.kp, Some(2.0));
+        assert!(board.xray_class.is_some());
+        // Each index on its own stamp: a fresh Kp beside an old X-ray, and the reverse.
+        let mut old_xray = cached(NOW - 60);
+        old_xray.space_wx.stamps.xray_at = Some(NOW - 2 * 3600);
+        let board = super::connect_board(old_xray, "KD9TAW".into(), "EN52".into(), None, NOW);
+        assert_eq!((board.kp, board.xray_class), (Some(2.0), None));
+        let mut old_kp = cached(NOW - 2 * 3600);
+        old_kp.space_wx.stamps.xray_at = Some(NOW - 60);
+        let board = super::connect_board(old_kp, "KD9TAW".into(), "EN52".into(), None, NOW);
+        assert_eq!(board.kp, None);
+        assert!(board.xray_class.is_some());
+    }
+
+    /// The negative control: a Kp that may still speak keeps the served words.
+    #[test]
+    fn a_cached_snapshot_with_a_fresh_kp_keeps_its_model_words() {
+        let mut snap = cached(NOW - 60);
+        let before = model_words(&snap);
+        let wx = propagation::SpaceWx::default();
+        advise_for_now(&mut snap, "KD9TAW", "EN52", NOW, &[], &[], &wx);
+        assert!(!before.is_empty());
+        assert_eq!(model_words(&snap), before);
+    }
+}
+
+/// A served snapshot's band advice told again with no model, from the stations it heard at the
+/// fetch ([`propagation::PropAdvisor::forget_model`]): no model word, reason, tier or rank, and
+/// no best-to-region word. For a cached snapshot once its solar flux or Kp may not speak; the
+/// desktop, Remote and TV page (`advise_for_now`) and the TV summary (`connect_board`) share it.
+fn served_without_model(snap: &mut propagation::PropagationSnapshot, call: &str, grid: &str) {
+    propagation::PropAdvisor::new(call, grid)
+        .without_model()
+        .forget_model(&mut snap.advisory);
+    for r in &mut snap.best_to_region {
+        r.modeled.clear();
+    }
+}
+
+/// The space weather a path, band or DXpedition outlook runs on, from the propagation cache's
+/// snapshot: its Kp and X-ray only while they may speak for `now`
+/// ([`propagation::SpaceWx::speaking_now`]), since a cached snapshot is served at any age and an
+/// hours-old Kp 6 or a GOES gap's last flare would otherwise shape the forecast. `ssn` is the R12
+/// for the engines that read it. The path and band outlooks once passed only the flare flag as a
+/// flux (M1 or B1); their engines read no X-ray, so the measured flux changes none of their numbers.
+fn outlook_wx(v: &propagation::SpaceWxView, ssn: Option<f32>, now: i64) -> propagation::SpaceWx {
+    propagation::SpaceWx {
+        sfi: v.sfi,
+        ssn,
+        kp: v.kp,
+        a_index: v.a_index,
+        xray_long: v.xray_long,
+    }
+    .speaking_now(&v.stamps, now)
+}
+
+/// The Kp SWPC actually reported, from the propagation cache's snapshot, when it may speak for
+/// `now` — `None` when the cache is cold, when the Kp is the model's stand-in (its product did
+/// not answer), or when its sample is older than the gauge's limit (a cached snapshot is served
+/// at any age). The Kp's own stamp decides, not `fetched`, which is true when any one product
+/// answered ([`propagation::model::SpaceWxStamps::usable`]).
+fn swpc_kp(wx: Option<&propagation::SpaceWxView>, now: i64) -> Option<f32> {
+    wx.filter(|w| w.stamps.usable(propagation::model::WxKey::Kp, now))
+        .map(|w| w.kp)
+}
+
+#[cfg(test)]
+mod ring_key_tests {
+    use super::ring_key;
+    use propagation::SpaceWx;
+
+    #[test]
+    fn with_no_sunspot_number_held_an_sfi_change_is_another_ring_key() {
+        let at = |sfi: f32, ssn: Option<f32>| {
+            ring_key(
+                0,
+                "FN42",
+                0.0,
+                None,
+                &SpaceWx {
+                    sfi,
+                    ssn,
+                    ..SpaceWx::default()
+                },
+            )
+        };
+        assert_ne!(at(70.0, None), at(200.0, None));
+        assert_eq!(at(70.0, Some(105.0)), at(200.0, Some(105.0)));
+    }
+}
+
+#[cfg(test)]
+mod path_outlook_kp_tests {
+    use super::{outlook_wx, swpc_kp};
+
+    const NOW: i64 = 1_761_800_000;
+
+    /// A snapshot's space weather whose Kp was sampled at `kp_at` (`None` = the stand-in).
+    fn view(kp: f32, kp_at: Option<i64>) -> propagation::SpaceWxView {
+        propagation::SpaceWxView {
+            sfi: 120.0,
+            kp,
+            a_index: 8.0,
+            xray_class: "B-class".into(),
+            flare: false,
+            xray_long: 1e-7,
+            solar_wind: None,
+            fetched: kp_at.is_some(),
+            stamps: propagation::model::SpaceWxStamps {
+                kp_at,
+                ..Default::default()
+            },
+            ap_now: None,
+            a_by_day: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_cold_cache_gives_no_kp() {
+        assert_eq!(swpc_kp(None, NOW), None);
+    }
+
+    #[test]
+    fn a_failed_fetchs_stand_in_kp_is_not_a_reading() {
+        assert_eq!(swpc_kp(Some(&view(2.0, None)), NOW), None);
+    }
+
+    #[test]
+    fn a_fetched_kp_is_passed_on() {
+        assert_eq!(swpc_kp(Some(&view(3.33, Some(NOW - 60))), NOW), Some(3.33));
+    }
+
+    /// Another product answering does not make the Kp a reading: its own stamp decides.
+    #[test]
+    fn a_stand_in_kp_beside_a_measured_flux_is_not_a_reading() {
+        let mut v = view(2.0, None);
+        v.stamps.sfi_at = Some(NOW - 3600);
+        v.fetched = true;
+        assert_eq!(swpc_kp(Some(&v), NOW), None);
+    }
+
+    /// A cached snapshot's Kp from two hours ago says nothing about the path now.
+    #[test]
+    fn an_hours_old_cached_kp_is_not_now() {
+        assert_eq!(swpc_kp(Some(&view(6.0, Some(NOW - 2 * 3600))), NOW), None);
+    }
+
+    /// The path, band and DXpedition outlooks run on the cached snapshot's Kp and X-ray only
+    /// while each may speak for now: an hours-old storm and flare shape no forecast.
+    #[test]
+    fn the_outlooks_take_only_a_kp_and_flare_that_speak_for_now() {
+        let quiet = propagation::SpaceWx::default();
+        let storm = |at: i64| {
+            let mut v = view(6.0, Some(at));
+            v.xray_long = 2e-4;
+            v.flare = true;
+            v.stamps.xray_at = Some(at);
+            v
+        };
+        let old = outlook_wx(&storm(NOW - 2 * 3600), Some(80.0), NOW);
+        assert_eq!((old.kp, old.xray_long), (quiet.kp, quiet.xray_long));
+        assert!(!old.flare_in_progress());
+        // Positive control: the same storm, measured a minute ago, reaches the outlook whole.
+        let fresh = outlook_wx(&storm(NOW - 60), Some(80.0), NOW);
+        assert_eq!(
+            (fresh.kp, fresh.xray_long, fresh.ssn),
+            (6.0, 2e-4, Some(80.0))
+        );
+        assert!(fresh.flare_in_progress());
+        // The flux and A are not the gate's: they pass as they are.
+        assert_eq!((old.sfi, old.a_index), (120.0, 8.0));
+    }
+
+    #[test]
+    fn an_unfetched_snapshot_draws_no_polar_stretch_on_either_route() {
+        // Boston -> Tokyo runs over a cap both ways round at any real Kp.
+        let (me, dx, t) = ((42.36, -71.06), (35.68, 139.69), 1_778_846_400);
+        let polar = |kp_now, route| {
+            propagation::path_geometry_route(me, dx, route, t, kp_now, None, None)
+                .segments_now
+                .iter()
+                .any(|s| s.kind == propagation::SegmentKind::Polar)
+        };
+        for route in [propagation::Route::Short, propagation::Route::Long] {
+            assert!(!polar(swpc_kp(None, NOW), route), "cold cache, {route:?}");
+            assert!(
+                !polar(swpc_kp(Some(&view(2.0, None)), NOW), route),
+                "stand-in, {route:?}"
+            );
+            // Positive control: the same Kp, really reported, draws the stretch.
+            assert!(
+                polar(swpc_kp(Some(&view(2.0, Some(NOW - 60))), NOW), route),
+                "{route:?}"
+            );
+        }
+    }
 }
 
 /// Ring-outlook cache (p533 only): (computed-at, params-key, value). The 8-azimuth
@@ -7934,6 +9230,10 @@ async fn get_band_outlook(
             bands: Vec::new(),
             muf_now: 0.0,
             muf_hourly: Vec::new(),
+            geometry: None,
+            long_path: None,
+            routes: None,
+            day: None,
         });
     };
     let p533 = prop_engine == "p533";
@@ -7941,18 +9241,11 @@ async fn get_band_outlook(
         let guard = cache.lock().map_err(|e| e.to_string())?;
         guard
             .as_ref()
-            .map(|(_, s)| propagation::SpaceWx {
+            .map(|(_, s)| {
                 // R12 only matters to p533; withholding it from the heuristic keeps
                 // that path byte-identical to its pre-engine-seam behavior.
-                ssn: if p533 {
-                    LAST_SSN.lock().ok().and_then(|g| *g)
-                } else {
-                    None
-                },
-                sfi: s.space_wx.sfi,
-                kp: s.space_wx.kp,
-                a_index: s.space_wx.a_index,
-                xray_long: if s.space_wx.flare { 1e-5 } else { 1e-7 },
+                let ssn = if p533 { held_ssn(now_unix()) } else { None };
+                outlook_wx(&s.space_wx, ssn, now_unix())
             })
             .unwrap_or_default()
     };
@@ -7967,6 +9260,32 @@ async fn get_band_outlook(
         t,
     )
     .await
+}
+
+/// The sunspot number a P.533 cache keys on, as a key fragment: the one the engine runs on (the
+/// R12 held, else the one it derives from the SFI — `effective_ssn`, the engine's own rule), so
+/// a changed SFI is another key whenever no R12 is held.
+pub(crate) fn ssn_key(wx: &propagation::SpaceWx) -> String {
+    format!(
+        "ssn{}",
+        propagation::p533::engine::effective_ssn(wx).round() as i32
+    )
+}
+
+/// The ring outlook's cache key: UTC day, grid, gain, power and the sunspot number the engine runs on.
+fn ring_key(
+    t: i64,
+    mygrid: &str,
+    ant_gain_dbi: f64,
+    station_power_w: Option<f64>,
+    wx: &propagation::SpaceWx,
+) -> String {
+    format!(
+        "{}|{mygrid}|{ant_gain_dbi}|{:?}|{}",
+        t / 86_400,
+        station_power_w,
+        ssn_key(wx),
+    )
 }
 
 async fn ring_prediction(
@@ -7985,12 +9304,7 @@ async fn ring_prediction(
         let eng = propagation::HeuristicEngine::new(Some(me));
         return Ok(propagation::band_outlook_ring(&eng, me, 9000.0, 8, t, &wx));
     }
-    let key = format!(
-        "{}|{mygrid}|{ant_gain_dbi}|{:?}|{:?}",
-        t / 86_400,
-        station_power_w,
-        wx.ssn.map(|v| v.round() as i32),
-    );
+    let key = ring_key(t, &mygrid, ant_gain_dbi, station_power_w, &wx);
     if let Ok(g) = RING_OUTLOOK.lock() {
         if let Some((when, k, v)) = g.as_ref() {
             if *k == key && when.elapsed().as_secs() < RING_TTL_SECS {
@@ -8068,7 +9382,8 @@ type DxpedWindowsCache = Mutex<Vec<(std::time::Instant, String, Vec<DxpedWindow>
 static DXPED_WINDOWS: DxpedWindowsCache = Mutex::new(Vec::new());
 const DXPED_WINDOWS_TTL_SECS: u64 = 6 * 3600;
 
-/// Identical cache identity for the native producer and passive Remote reader.
+/// Identical cache identity for the native producer and passive Remote reader. The sunspot
+/// number is the one the engine runs on ([`ssn_key`]), as the ring and path caches key it.
 #[allow(clippy::too_many_arguments)]
 fn dxped_windows_key(
     day: i64,
@@ -8077,16 +9392,38 @@ fn dxped_windows_key(
     prop_engine: &str,
     station_power_w: Option<f64>,
     ant_gain_dbi: f64,
-    ssn: Option<f32>,
+    wx: &propagation::SpaceWx,
     mut calls: Vec<&str>,
 ) -> String {
     calls.sort_unstable();
     format!(
-        "{day}|{days}|{mygrid}|{prop_engine}|{ant_gain_dbi}|{:?}|{:?}|{}",
+        "{day}|{days}|{mygrid}|{prop_engine}|{ant_gain_dbi}|{:?}|{}|{}",
         station_power_w,
-        ssn.map(|v| v.round() as i32),
+        ssn_key(wx),
         calls.join(",")
     )
+}
+
+#[cfg(test)]
+mod dxped_windows_key_tests {
+    use super::dxped_windows_key;
+    use propagation::SpaceWx;
+
+    /// The DXpedition windows key on the sunspot number the engine runs on, as the ring and path
+    /// caches do: with no R12 held, a changed SFI is another key; with one held, it is not.
+    #[test]
+    fn with_no_sunspot_number_held_an_sfi_change_is_another_dxped_key() {
+        let at = |sfi: f32, ssn: Option<f32>| {
+            let wx = SpaceWx {
+                sfi,
+                ssn,
+                ..SpaceWx::default()
+            };
+            dxped_windows_key(0, 7, "FN42", "p533", None, 0.0, &wx, vec!["VP8A"])
+        };
+        assert_ne!(at(70.0, None), at(200.0, None));
+        assert_eq!(at(70.0, Some(105.0)), at(200.0, Some(105.0)));
+    }
 }
 
 /// Modelled best-contact windows for every active + upcoming DXpedition, from
@@ -8157,13 +9494,7 @@ async fn get_dxped_windows(
                 ));
             }
         }
-        let wx = propagation::SpaceWx {
-            sfi: s.space_wx.sfi,
-            ssn: LAST_SSN.lock().ok().and_then(|g| *g),
-            kp: s.space_wx.kp,
-            a_index: s.space_wx.a_index,
-            xray_long: s.space_wx.xray_long,
-        };
+        let wx = outlook_wx(&s.space_wx, held_ssn(now_unix()), now_unix());
         (targets, wx)
     };
     if targets.is_empty() {
@@ -8177,7 +9508,7 @@ async fn get_dxped_windows(
         &prop_engine,
         station_power_w,
         ant_gain_dbi,
-        wx.ssn,
+        &wx,
         targets.iter().map(|(c, ..)| c.as_str()).collect(),
     );
     if let Ok(g) = DXPED_WINDOWS.lock() {
@@ -8205,6 +9536,11 @@ async fn get_dxped_windows(
                 // different question, where 60 m is a legitimate answer and demoting it
                 // would be a lie. Only a caller that knows it is ranking chases may do it.
                 p.demote_award_ineligible();
+                // The chase board reads scores and windows, never the per-hour hop geometry:
+                // drop it so each expedition does not carry ~1 KB of it per band.
+                for b in &mut p.bands {
+                    b.detail = None;
+                }
                 // NO TRUNCATION HERE, AND THAT IS THE FIX. A `p.bands.truncate(4)` used to
                 // follow this line with no recorded reason. Once each WORK NOW card began
                 // headlining its OWN band instead of a shared cross-band line, that truncation
@@ -8282,8 +9618,12 @@ async fn get_dxped_windows(
 /// "Am I getting out?" — who is hearing the operator right now, from the live PSK
 /// Reporter / RBN firehose (spots where the operator is the TX side). Pure
 /// observed data — the most reassuring live answer a station can get.
+/// `since` (Unix secs) is the screen's "Start fresh" time: reports before it are left out.
+/// Each screen keeps its own and sends it, so a remote one never changes what the shack's
+/// own screen shows.
 #[tauri::command]
 async fn get_getting_out(
+    since: Option<i64>,
     state: State<'_, SharedEngine>,
     live_paths: State<'_, SharedLivePaths>,
 ) -> Result<propagation::GettingOut, String> {
@@ -8297,15 +9637,24 @@ async fn get_getting_out(
         .lock()
         .map(|b| b.recent(now, 1800))
         .unwrap_or_default();
-    Ok(propagation::getting_out(&mycall, &mygrid, &spots, now))
+    Ok(propagation::getting_out(
+        &mycall, &mygrid, &spots, now, since,
+    ))
 }
 
-/// The current OVATION aurora oval (downsampled prob ≥ 8 %), for the map overlay.
-/// Cached `AURORA_TTL_SECS`; serves the last-good set on a fetch failure.
+/// The TV page's `since` for `get_getting_out`: the same key the desktop's IPC call carries.
+fn tv_getting_out_since(args: &serde_json::Value) -> Option<i64> {
+    args.get("since").and_then(|x| x.as_i64())
+}
+
+/// The current OVATION aurora oval (downsampled prob ≥ 8 %), for the map overlay, with the
+/// time it is a forecast for, when its input was observed, and when this copy was fetched.
+/// Cached `AURORA_TTL_SECS`; serves the last-good oval on a fetch failure, its stamps saying
+/// how old it is; an empty oval with no stamps if we never had one.
 #[tauri::command]
 async fn get_aurora(
     cache: State<'_, AuroraCache>,
-) -> Result<Vec<propagation::live::aurora::AuroraPoint>, String> {
+) -> Result<propagation::live::aurora::AuroraOval, String> {
     const AURORA_TTL_SECS: u64 = 600;
     {
         let g = cache.lock().map_err(|e| e.to_string())?;
@@ -8321,11 +9670,12 @@ async fn get_aurora(
         .await
         .unwrap_or_else(|e| Err(e.to_string()));
     match fetched {
-        Ok(pts) => {
+        Ok(mut oval) => {
+            oval.fetched_at = Some(now_unix());
             if let Ok(mut g) = cache.lock() {
-                *g = Some((std::time::Instant::now(), pts.clone()));
+                *g = Some((std::time::Instant::now(), oval.clone()));
             }
-            Ok(pts)
+            Ok(oval)
         }
         Err(_) => {
             // Serve a stale oval rather than nothing; empty if we never had one.
@@ -8349,10 +9699,15 @@ struct PcaView {
     /// Day/night 30 MHz cap absorption (dB) — the headline numbers.
     a30_day: f64,
     a30_night: f64,
-    /// Polar-cap cutoff (geomagnetic latitude, °) at the current Kp.
-    cutoff_deg: f64,
+    /// Polar-cap cutoff (geomagnetic latitude, °) at the measured Kp. `None` without a measured
+    /// Kp: the edge is then unknown, and the shading below is drawn at the quiet-field cutoff
+    /// (Kp 0, the most poleward cap), the least it can be — never at a stand-in Kp.
+    cutoff_deg: Option<f64>,
     /// Polar shading samples (empty when quiet — draw nothing).
     points: Vec<propagation::pca::PcaPoint>,
+    /// The GOES proton sample's own time (Unix seconds), so a copy served after a failed
+    /// refetch says how old it is.
+    protons_at: Option<i64>,
 }
 
 #[tauri::command]
@@ -8393,21 +9748,28 @@ async fn get_pca(
     let Some(flux) = flux else {
         return Ok(None); // never fetched — honest offline, not a fabricated quiet
     };
+    // Only a measured, fresh Kp places the cap edge: a cold cache, a snapshot whose Kp is a
+    // stand-in, or an hours-old cached one gives none (`pca_kp`).
+    let now = now_unix();
     let kp = {
         let guard = cache.lock().map_err(|e| e.to_string())?;
-        guard
-            .as_ref()
-            .map(|(_, s)| s.space_wx.kp as f64)
-            .unwrap_or(0.0)
+        pca_kp(guard.as_ref().map(|(_, s)| &s.space_wx), now)
     };
-    let now = now_unix();
     Ok(Some(PcaView {
         j10: flux.j10,
         a30_day: propagation::pca::a30_day(flux.j5),
         a30_night: propagation::pca::a30_night(flux.j1),
-        cutoff_deg: propagation::pca::cutoff_lat_deg(kp),
-        points: propagation::pca::pca_layer(flux.j5, flux.j1, kp, now, MIN_DB),
+        cutoff_deg: kp.map(propagation::pca::cutoff_lat_deg),
+        points: propagation::pca::pca_layer(flux.j5, flux.j1, kp.unwrap_or(0.0), now, MIN_DB),
+        protons_at: flux.at,
     }))
+}
+
+/// The Kp the polar-cap edge is placed at: the snapshot's Kp only when it may speak for `now`
+/// ([`swpc_kp`]), never the stand-in a failed fetch leaves or an hours-old cached reading, and
+/// nothing on a cold cache.
+fn pca_kp(wx: Option<&propagation::SpaceWxView>, now: i64) -> Option<f64> {
+    swpc_kp(wx, now).map(f64::from)
 }
 
 /// Magnetic declination (degrees, east-positive) at the operator's QTH right
@@ -13816,7 +15178,9 @@ async fn get_kp_forecast(
         .await
         .unwrap_or_else(|e| Err(e.to_string()));
     match fetched {
-        Ok(v) => {
+        Ok(mut v) => {
+            // When this copy was fetched, so a last-good one served after a failure says how old.
+            v.fetched_at = Some(now_unix());
             if let Ok(mut g) = cache.lock() {
                 *g = Some((std::time::Instant::now(), v.clone()));
             }
@@ -13895,21 +15259,69 @@ async fn get_kc2g_muf(cache: State<'_, Kc2gCache>) -> Result<Vec<propagation::Mu
             Ok(v)
         }
         Err(_) => {
-            // Serve a stale set rather than nothing; empty if we never had one.
+            // Serve a stale set rather than nothing; empty if we never had one. Each station's
+            // age was measured when the copy was fetched, so it grows by the time since — a
+            // reading kept through an outage is not as young as it was then.
             let g = cache.lock().map_err(|e| e.to_string())?;
-            Ok(g.as_ref().map(|(_, v)| v.clone()).unwrap_or_default())
+            Ok(g.as_ref()
+                .map(|(when, v)| kc2g_aged(v, when.elapsed().as_secs()))
+                .unwrap_or_default())
         }
     }
 }
 
-/// The freshest GOES long-band X-ray flux for the D-RAP flare layer + heads-up.
-#[derive(serde::Serialize, Clone, Copy)]
+/// A cached KC2G set with every station's age moved on by `elapsed` seconds.
+fn kc2g_aged(v: &[propagation::MufStation], elapsed: u64) -> Vec<propagation::MufStation> {
+    let elapsed = i64::try_from(elapsed).unwrap_or(i64::MAX);
+    v.iter()
+        .cloned()
+        .map(|mut s| {
+            s.age_secs = s.age_secs.saturating_add(elapsed);
+            s
+        })
+        .collect()
+}
+
+/// The freshest GOES long-band X-ray flux for the D-RAP flare layer + heads-up, with what
+/// NOAA says about the flare: its event times and (during a flare) its absorption grid.
+#[derive(serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct XrayNow {
     /// GOES 0.1–0.8 nm flux, W/m².
     flux: f32,
-    /// When the reading was fetched (Unix seconds, UTC).
+    /// The GOES sample's own time (Unix seconds, UTC) — never the fetch time, so a feed gap
+    /// reads as an old sample and not as "now".
     as_of: i64,
+    /// The six-hour trace, `[unix, flux]` per five minutes (each bucket's peak), oldest first:
+    /// the sparkline.
+    series: Vec<(i64, f32)>,
+    /// The raw GOES minutes of the last 70 minutes, `[unix, flux]`, oldest first: the direction
+    /// word reads these, because bucket peaks hide the dip when a decay turns up again.
+    recent: Vec<(i64, f32)>,
+    /// NOAA's newest flare event, when its list has answered.
+    event: Option<propagation::flare::FlareEvent>,
+    /// NOAA's D-RAP grid, only while the flux is at a flare (M1+, where the map draws it):
+    /// it is not asked on a quiet sun, and not sent where nothing would draw it.
+    drap: Option<propagation::flare::DrapGrid>,
+}
+
+/// Ask one lane if it is due (off the async runtime), then serve what it keeps.
+async fn lane_ask<T: Clone + Send + 'static>(
+    lane: &'static Mutex<propagation::flare::Lane<T>>,
+    fetch: fn() -> Result<T, String>,
+) -> Option<T> {
+    let go = lane
+        .lock()
+        .map(|mut l| l.claim(now_unix(), FLARE_LANE_CADENCE))
+        .unwrap_or(false);
+    if go {
+        if let Ok(Ok(v)) = tauri::async_runtime::spawn_blocking(fetch).await {
+            if let Ok(mut l) = lane.lock() {
+                l.answered(v);
+            }
+        }
+    }
+    lane.lock().ok().and_then(|l| l.kept().cloned())
 }
 
 /// The 60 s X-ray fast lane: refetches GOES far more often than the 5-min prop
@@ -13917,38 +15329,62 @@ struct XrayNow {
 /// last-good reading on a fetch failure; errors only when we never had one.
 #[tauri::command]
 async fn get_xray_now() -> Result<XrayNow, String> {
-    const XRAY_TTL_SECS: u64 = 60;
-    if let Some((when, flux, as_of)) = LAST_XRAY.lock().ok().and_then(|g| *g) {
-        if when.elapsed().as_secs() < XRAY_TTL_SECS {
-            return Ok(XrayNow { flux, as_of });
-        }
-    }
-    let fetched = tauri::async_runtime::spawn_blocking(propagation::live::swpc::fetch_xray_now)
+    use propagation::live::swpc;
+    let x = lane_ask(&XRAY_LANE, swpc::fetch_xray_trace)
         .await
-        .map_err(|e| e.to_string())?;
-    match fetched {
-        Ok(flux) => {
-            let as_of = now_unix();
-            if let Ok(mut g) = LAST_XRAY.lock() {
-                *g = Some((std::time::Instant::now(), flux, as_of));
-            }
-            Ok(XrayNow { flux, as_of })
-        }
-        Err(e) => {
-            // Serve stale rather than nothing (and re-arm the TTL so a NOAA outage
-            // is retried once a minute, not on every UI poll).
-            if let Ok(mut g) = LAST_XRAY.lock() {
-                if let Some(entry) = g.as_mut() {
-                    entry.0 = std::time::Instant::now();
-                }
-            }
-            LAST_XRAY
-                .lock()
-                .ok()
-                .and_then(|g| *g)
-                .map(|(_, flux, as_of)| XrayNow { flux, as_of })
-                .ok_or(e)
-        }
+        .ok_or("xray: no GOES reading yet")?;
+    let event = lane_ask(&FLARE_EVENT_LANE, swpc::fetch_flare_latest).await;
+    // Only during a flare, and only beside a GOES sample the UI still uses (flare.rs `wants_drap`).
+    let drap = if propagation::flare::wants_drap(x.now.value, x.now.at, now_unix()) {
+        lane_ask(&DRAP_LANE, swpc::fetch_drap_grid).await
+    } else {
+        None
+    };
+    Ok(xray_now(x, event, drap))
+}
+
+/// The fast lane's answer: the flux, its time, the sparkline and the raw minutes all from the
+/// one GOES fetch, so the word and the number the chip prints come from the same file.
+fn xray_now(
+    x: propagation::live::swpc::XrayTrace,
+    event: Option<propagation::flare::FlareEvent>,
+    drap: Option<propagation::flare::DrapGrid>,
+) -> XrayNow {
+    XrayNow {
+        flux: x.now.value,
+        as_of: x.now.at,
+        series: x.series,
+        recent: x.recent,
+        event,
+        drap,
+    }
+}
+
+#[cfg(test)]
+mod xray_now_tests {
+    use super::*;
+
+    /// Every field of `get_xray_now` comes from the one GOES fetch, under the names the UI reads.
+    #[test]
+    fn the_lane_answer_carries_the_sample_the_peaks_and_the_raw_minutes() {
+        let x = propagation::live::swpc::XrayTrace {
+            now: propagation::live::swpc::Sample {
+                value: 2.6e-5,
+                at: 1_000_600,
+            },
+            series: vec![(1_000_200, 4e-5), (1_000_600, 2.6e-5)],
+            recent: vec![(1_000_480, 2e-5), (1_000_540, 2.3e-5), (1_000_600, 2.6e-5)],
+        };
+        let v = serde_json::to_value(xray_now(x, None, None)).unwrap();
+        assert_eq!(v["asOf"], 1_000_600);
+        assert!((v["flux"].as_f64().unwrap() - 2.6e-5).abs() < 1e-9);
+        assert_eq!(v["series"].as_array().unwrap().len(), 2);
+        // The raw minutes keep the dip the peaks lose, oldest first, and end at the sample shown.
+        let recent = v["recent"].as_array().unwrap();
+        assert_eq!(recent.len(), 3);
+        assert_eq!(recent[0][0], 1_000_480);
+        assert_eq!(recent[2][0], v["asOf"]);
+        assert!(v["event"].is_null() && v["drap"].is_null());
     }
 }
 
@@ -14069,10 +15505,10 @@ fn get_scope_row(
     // An absent or unrecognised tag is the DEFAULT, stated here rather than hidden in
     // `from_tag`: a scope that keeps drawing at the shipped window is the right failure for a
     // UI that is out of step with this build, and it is the only failure that cannot surprise
-    // an operator who never opened the control.
+    // an operator who never opened the control. `"hidef"` is the CW scope's zoom FFT.
     let win = window
         .as_deref()
-        .and_then(tempo_core::spectrum::WindowN::from_tag)
+        .and_then(tempo_core::spectrum::ScopeAnalysis::from_tag)
         .unwrap_or_default();
     if let Some(row) = feed.scope_row(lo_hz, hi_hz, win) {
         return Ok(row);
@@ -14086,19 +15522,30 @@ fn get_scope_row(
 /// radio sweeps commits each sweep once instead of scrolling copies of the last one. The span
 /// request, the precedence and the fallbacks are `get_scope_row`'s; see
 /// `SpectrumFeed::scope_frame_after` for the two answers that come back on every poll.
+///
+/// `rf_lo_hz`/`rf_hi_hz`, when both are given, are the absolute RF window the scope is drawing on a
+/// native panadapter row: the standing request an IQ panadapter zooms its rows to
+/// (`SpectrumFeed::request_rf_view`). Absent from an older UI or a Remote page, and then nothing
+/// is asked.
 #[tauri::command(async)]
+#[allow(clippy::too_many_arguments)]
 fn get_scope_frame(
     lo_hz: f32,
     hi_hz: f32,
     window: Option<String>,
     last_seq: u64,
+    rf_lo_hz: Option<f64>,
+    rf_hi_hz: Option<f64>,
     feed: State<'_, tempo_app::engine::SpectrumFeed>,
     state: State<'_, SharedEngine>,
 ) -> Result<Option<tempo_app::dto::SpectrumFrame>, String> {
+    if let (Some(lo), Some(hi)) = (rf_lo_hz, rf_hi_hz) {
+        feed.request_rf_view(lo, hi);
+    }
     // The same default as `get_scope_row`, for the reason given there.
     let win = window
         .as_deref()
-        .and_then(tempo_core::spectrum::WindowN::from_tag)
+        .and_then(tempo_core::spectrum::ScopeAnalysis::from_tag)
         .unwrap_or_default();
     Ok(feed.scope_frame_after(lo_hz, hi_hz, win, last_seq, || spectrum_fallback(&state)))
 }
@@ -14218,6 +15665,11 @@ fn settings_read(
     // From afar the stored keys stay at the shack: blanked, with whether each is saved.
     let saved_at_the_station =
         command_dispatch::withhold_the_shacks_secret_settings(&mut s, afar, watched);
+    // From afar no path on the shack's disk goes: the computer driving it plays JS8's built-in
+    // tones (`client_mode`), and the save from afar keeps the shack's own files.
+    if afar.is_some() {
+        s.js8_sound_files.clear();
+    }
     // The Cloudlog key is write-only and never sent to the frontend. It now serializes while
     // a legacy plaintext key is pending keychain migration (so a save cannot drop it — round
     // 8 F1), so clear it from THIS clone before it leaves the shell; the engine's own copy is
@@ -14283,12 +15735,7 @@ fn reset_settings(
     health: State<'_, SharedHealth>,
     cache: State<'_, PropCache>,
 ) -> Result<AppSnapshot, String> {
-    // A default Settings has an empty roster, which is not a state `load` can ever produce and
-    // not one the radio loop can drive. Establish the same invariants a fresh install gets.
-    let mut fresh = Settings::default();
-    fresh.ensure_radio_profiles();
-    fresh.ensure_distinct_radio_ports();
-    fresh.ensure_routing_targets();
+    let fresh = factory_settings();
     // The ordinary save path in full — its persistence, its feed handling and the process-global
     // state it resets — but with the ROSTER CONTRACT of a restore. Routing a reset through a form
     // save keeps the engine's live roster, so every radio the dialog promised to erase survives it.
@@ -14303,6 +15750,17 @@ fn reset_settings(
         true,
     )
 }
+/// The settings a factory reset puts in place ([`reset_settings`]).
+fn factory_settings() -> Settings {
+    // A default Settings has an empty roster, which is not a state `load` can ever produce and
+    // not one the radio loop can drive. Establish the same invariants a fresh install gets.
+    let mut fresh = Settings::default();
+    fresh.ensure_radio_profiles();
+    fresh.ensure_distinct_radio_ports();
+    fresh.ensure_routing_targets();
+    fresh
+}
+
 /// Apply + persist new settings. Returns the refreshed snapshot.
 ///
 /// Also lazily starts the live network feeds: if this change supplies a real
@@ -14511,11 +15969,6 @@ fn save_and_publish(
                 LOTW_AUTO_SUSPENDED.store(false, std::sync::atomic::Ordering::Relaxed);
                 LOTW_AUTO_ANNOUNCED.store(false, std::sync::atomic::Ordering::Relaxed);
             }
-            // Keep the live DXpedition layer's most-wanted key current (Settings
-            // override, else the build's baked application key).
-            propagation::live::dxped::set_clublog_key(&effective_clublog_key(
-                &settings.clublog_api_key,
-            ));
             // Apply FIRST, then persist the engine's AUTHORITATIVE merged state — apply_settings keeps the
             // LIVE dual-radio roster / active radio / peg / tune (discarding the form's possibly-stale
             // copies), so saving the raw form here would write a roster that diverges from the engine and
@@ -14752,10 +16205,16 @@ mod contest_session_tests {
         })
         .to_string();
         let mut ui_saved = None;
-        let restored = restore_settings_bundle(&engine, text, |ui| {
-            ui_saved = Some(ui);
-            true
-        });
+        let restored = restore_settings_bundle(
+            &engine,
+            text,
+            Default::default,
+            |ui| {
+                ui_saved = Some(ui);
+                true
+            },
+            no_key_change,
+        );
         assert_eq!(
             restored.map(|_| ()),
             Err(tempo_app::engine::SESSION_BUSY.to_string()),
@@ -14770,6 +16229,3150 @@ mod contest_session_tests {
         drop(eng);
         assert_eq!(ui_saved, None, "nor the UI state the backup carries");
         drop(hold);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A bundle exported from afar whose saved profiles are `profiles`, and a station whose saved
+    /// profiles are `station`, after [`keep_the_stations_paths`]: the bundle's profiles by name.
+    fn profiles_kept(
+        profiles: serde_json::Value,
+        station: serde_json::Value,
+    ) -> std::collections::BTreeMap<String, serde_json::Value> {
+        let mut bundle = serde_json::json!({
+            (STATION_PATHS_LEFT_OUT): true,
+            "settings": {},
+            "uiState": { (crate::command_dispatch::PROFILES): profiles.to_string() },
+        });
+        let station_ui: std::collections::BTreeMap<String, String> = [(
+            crate::command_dispatch::PROFILES.to_string(),
+            station.to_string(),
+        )]
+        .into_iter()
+        .collect();
+        keep_the_stations_paths(&mut bundle, &serde_json::json!({}), || station_ui);
+        let kept: Vec<serde_json::Value> = serde_json::from_str(
+            bundle["uiState"][crate::command_dispatch::PROFILES]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        kept.into_iter()
+            .map(|p| {
+                (
+                    p["name"].as_str().unwrap().to_string(),
+                    p["settings"].clone(),
+                )
+            })
+            .collect()
+    }
+
+    /// ★ RESTORING A BACKUP MADE FROM AFAR KEEPS EVERY PROFILE'S VOICE SLOTS: a profile this station
+    /// has no profile of the same name for (a fresh install, a profile deleted), and one whose
+    /// station profile has no voice slots, keep the backup's slots, labels and all, with the
+    /// recording blank. CONTROL: a station profile with the slot gives it its recording.
+    #[test]
+    fn restoring_from_afar_keeps_the_voice_slots_the_station_has_no_recording_for() {
+        let slots = |label: &str| {
+            serde_json::json!([
+                { "slot": 1, "label": label, "file": "", "repeat": true },
+                { "slot": 2, "label": format!("{label} 2"), "file": "" },
+            ])
+        };
+        let kept = profiles_kept(
+            serde_json::json!([
+                { "name": "Portable", "settings": { "voiceMessages": slots("CQ POTA") } },
+                { "name": "Home", "settings": { "voiceMessages": slots("CQ DX") } },
+                { "name": "Field", "settings": { "voiceMessages": slots("CQ FD") } },
+            ]),
+            serde_json::json!([
+                { "name": "Home", "settings": { "mycall": "W9SHK" } },
+                { "name": "Field", "settings": { "voiceMessages": [
+                    { "slot": 2, "label": "x", "file": "C:\\Shack\\fd2.wav" }
+                ] } },
+            ]),
+        );
+        assert_eq!(
+            kept["Portable"]["voiceMessages"],
+            slots("CQ POTA"),
+            "no such profile here"
+        );
+        assert_eq!(
+            kept["Home"]["voiceMessages"],
+            slots("CQ DX"),
+            "no voice slots here"
+        );
+        assert_eq!(
+            kept["Field"]["voiceMessages"],
+            serde_json::json!([
+                { "slot": 1, "label": "CQ FD", "file": "", "repeat": true },
+                { "slot": 2, "label": "CQ FD 2", "file": "C:\\Shack\\fd2.wav" },
+            ]),
+            "CONTROL: the station's recording for its slot"
+        );
+    }
+
+    /// ★ TWO PROFILES, TWO STATIONS' WORTH OF PATHS: each profile in a backup made from afar gets
+    /// the paths of this station's profile of ITS name, never the other's, whatever the order.
+    #[test]
+    fn restoring_from_afar_gives_each_profile_its_own_paths() {
+        let stripped = |name: &str| {
+            serde_json::json!({ "name": name, "settings": {
+                "mycall": "W9SHK",
+                "voiceMessages": [{ "slot": 1, "label": name, "file": "" }],
+            } })
+        };
+        let station = |name: &str, root: &str| {
+            serde_json::json!({ "name": name, "settings": {
+                "tqslPath": format!("{root}\\tqsl.exe"),
+                "js8SoundFiles": { "cq": format!("{root}\\cq.wav") },
+                "voiceMessages": [{ "slot": 1, "label": "?", "file": format!("{root}\\v1.wav") }],
+            } })
+        };
+        let kept = profiles_kept(
+            serde_json::json!([stripped("Alpha"), stripped("Bravo")]),
+            serde_json::json!([station("Bravo", "D:\\B"), station("Alpha", "C:\\A")]),
+        );
+        let paths = |s: &serde_json::Value| {
+            (
+                s["tqslPath"].clone(),
+                s["js8SoundFiles"]["cq"].clone(),
+                s["voiceMessages"][0]["file"].clone(),
+                s["voiceMessages"][0]["label"].clone(),
+            )
+        };
+        assert_eq!(
+            paths(&kept["Alpha"]),
+            (
+                serde_json::json!("C:\\A\\tqsl.exe"),
+                serde_json::json!("C:\\A\\cq.wav"),
+                serde_json::json!("C:\\A\\v1.wav"),
+                serde_json::json!("Alpha"),
+            )
+        );
+        assert_eq!(
+            paths(&kept["Bravo"]),
+            (
+                serde_json::json!("D:\\B\\tqsl.exe"),
+                serde_json::json!("D:\\B\\cq.wav"),
+                serde_json::json!("D:\\B\\v1.wav"),
+                serde_json::json!("Bravo"),
+            )
+        );
+    }
+
+    /// The station's paths, set on `engine`: the TQSL program, a JS8 sound file and F1's
+    /// recording, each under `root`. With the UI state holding a saved profile "Home" that carries
+    /// the same three.
+    fn with_station_paths_set(
+        engine: &SharedEngine,
+        root: &str,
+    ) -> std::collections::BTreeMap<String, String> {
+        let mut s = engine_lock(engine).settings().clone();
+        s.mycall = "W9SHK".into();
+        s.tqsl_path = format!("{root}\\TrustedQSL\\tqsl.exe");
+        s.js8_sound_files
+            .insert("cq".into(), format!("{root}\\Sounds\\cq.wav"));
+        s.voice_messages[0].file = format!("{root}\\voice\\slot1.wav");
+        engine_lock(engine).apply_restored_settings(s);
+        let profiles = serde_json::json!([{
+            "name": "Home",
+            "settings": {
+                "mycall": "W9SHK",
+                "tqslPath": format!("{root}\\TrustedQSL\\tqsl.exe"),
+                "js8SoundFiles": { "cq": format!("{root}\\Sounds\\cq.wav") },
+                "voiceMessages": [{ "slot": 1, "label": "CQ", "file": format!("{root}\\voice\\slot1.wav") }],
+            },
+        }]);
+        [(
+            crate::command_dispatch::PROFILES.to_string(),
+            profiles.to_string(),
+        )]
+        .into_iter()
+        .collect()
+    }
+
+    const FROM_AFAR: crate::command_dispatch::Afar = crate::command_dispatch::Afar {
+        stand_down: 1,
+        starts_voided: 0,
+    };
+
+    /// ★ A BACKUP MADE FROM A COMPUTER DRIVING THE STATION CARRIES NO PATH ON THE STATION'S DISK:
+    /// not the TQSL program, not a JS8 sound file, not a voice-keyer recording, in its settings or
+    /// in a saved profile, and it says it left them out. Each voice slot keeps its label. CONTROL: a
+    /// backup made at the station carries each, by value, and says nothing.
+    #[test]
+    fn a_backup_made_from_afar_leaves_out_the_stations_paths() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("bundle-paths", 0);
+        let ui = with_station_paths_set(&engine, "C:\\Shack");
+        let text = settings_bundle(&engine, ui.clone(), Some(&FROM_AFAR)).unwrap();
+        assert!(!text.contains("Shack"), "no station path from afar: {text}");
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(v[STATION_PATHS_LEFT_OUT], serde_json::json!(true));
+        let profiles: serde_json::Value = serde_json::from_str(
+            v["uiState"][crate::command_dispatch::PROFILES]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        for (whose, s) in [
+            ("settings", &v["settings"]),
+            ("profile", &profiles[0]["settings"]),
+        ] {
+            assert_eq!(
+                s["mycall"],
+                serde_json::json!("W9SHK"),
+                "{whose}: the rest goes"
+            );
+            assert_eq!(s.get("tqslPath"), None, "{whose}");
+            assert_eq!(s.get("js8SoundFiles"), None, "{whose}");
+            assert_eq!(
+                s["voiceMessages"][0]["file"],
+                serde_json::json!(""),
+                "{whose}"
+            );
+            assert_eq!(
+                s["voiceMessages"][0]["label"],
+                serde_json::json!("CQ"),
+                "{whose}"
+            );
+        }
+
+        let text = settings_bundle(&engine, ui, None).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            v.get(STATION_PATHS_LEFT_OUT),
+            None,
+            "CONTROL: at the station"
+        );
+        let profiles: serde_json::Value = serde_json::from_str(
+            v["uiState"][crate::command_dispatch::PROFILES]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        for (whose, s) in [
+            ("settings", &v["settings"]),
+            ("profile", &profiles[0]["settings"]),
+        ] {
+            assert_eq!(
+                (
+                    &s["tqslPath"],
+                    &s["js8SoundFiles"],
+                    &s["voiceMessages"][0]["file"]
+                ),
+                (
+                    &serde_json::json!("C:\\Shack\\TrustedQSL\\tqsl.exe"),
+                    &serde_json::json!({ "cq": "C:\\Shack\\Sounds\\cq.wav" }),
+                    &serde_json::json!("C:\\Shack\\voice\\slot1.wav"),
+                ),
+                "CONTROL: at the station, {whose}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ RESTORING A BACKUP MADE FROM AFAR KEEPS THE STATION'S PATHS, as the station has them at
+    /// the restore (moved since the backup), in its settings and in its saved profile of the same
+    /// name, while the rest of the backup lands. A backup made at the station keeps them too.
+    #[test]
+    fn restoring_a_backup_made_from_afar_keeps_the_stations_paths() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-paths", 0);
+        let ui = with_station_paths_set(&engine, "C:\\Old");
+        let restore = |text: String, station_ui: std::collections::BTreeMap<String, String>| {
+            let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+            v["settings"]["mycall"] = serde_json::json!("W9NEW");
+            let mut saved = None;
+            restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                || station_ui,
+                |ui| {
+                    saved = Some(ui);
+                    true
+                },
+                no_key_change,
+            )
+            .unwrap();
+            let s = engine_lock(&engine).settings().clone();
+            let profiles: serde_json::Value =
+                serde_json::from_str(&saved.unwrap()[crate::command_dispatch::PROFILES]).unwrap();
+            let p = profiles[0]["settings"].clone();
+            (
+                s.mycall,
+                (
+                    s.tqsl_path,
+                    s.js8_sound_files.get("cq").cloned(),
+                    s.voice_messages[0].file.clone(),
+                ),
+                (
+                    p["tqslPath"].clone(),
+                    p["js8SoundFiles"]["cq"].clone(),
+                    p["voiceMessages"][0]["file"].clone(),
+                ),
+            )
+        };
+        let afar = settings_bundle(&engine, ui.clone(), Some(&FROM_AFAR)).unwrap();
+        let local = settings_bundle(&engine, ui, None).unwrap();
+        let now = with_station_paths_set(&engine, "D:\\Now");
+        assert_eq!(
+            restore(afar, now.clone()),
+            (
+                "W9NEW".to_string(),
+                (
+                    "D:\\Now\\TrustedQSL\\tqsl.exe".to_string(),
+                    Some("D:\\Now\\Sounds\\cq.wav".to_string()),
+                    "D:\\Now\\voice\\slot1.wav".to_string()
+                ),
+                (
+                    serde_json::json!("D:\\Now\\TrustedQSL\\tqsl.exe"),
+                    serde_json::json!("D:\\Now\\Sounds\\cq.wav"),
+                    serde_json::json!("D:\\Now\\voice\\slot1.wav")
+                ),
+            ),
+            "the station's own, as it has them now"
+        );
+        with_station_paths_set(&engine, "D:\\Now");
+        assert_eq!(
+            restore(local, now),
+            (
+                "W9NEW".to_string(),
+                (
+                    "D:\\Now\\TrustedQSL\\tqsl.exe".to_string(),
+                    Some("D:\\Now\\Sounds\\cq.wav".to_string()),
+                    "D:\\Now\\voice\\slot1.wav".to_string()
+                ),
+                (
+                    serde_json::json!("D:\\Now\\TrustedQSL\\tqsl.exe"),
+                    serde_json::json!("D:\\Now\\Sounds\\cq.wav"),
+                    serde_json::json!("D:\\Now\\voice\\slot1.wav")
+                ),
+            ),
+            "a backup made at the station keeps the station's paths too"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// What [`restored_at_the_station`] hands back: the restored settings' (TQSL program, JS8 CQ
+    /// sound), the restored saved profiles by name, and the restored settings' voice-keyer slots.
+    type RestoredAtTheStation = (
+        (String, Option<String>),
+        std::collections::BTreeMap<String, serde_json::Value>,
+        Vec<tempo_app::settings::VoiceMessage>,
+    );
+
+    /// A backup made at the station (no `afar`), its settings and each of its saved profiles'
+    /// settings changed by `edit`, with a second profile "Away" this station has none of, restored
+    /// at a station whose paths are under `D:\Now` (`tag` names its store): the restored settings'
+    /// (TQSL program, JS8 CQ sound), the restored saved profiles by name, and the restored
+    /// settings' voice-keyer slots.
+    fn restored_at_the_station(
+        tag: &str,
+        edit: impl Fn(&mut serde_json::Map<String, serde_json::Value>),
+    ) -> RestoredAtTheStation {
+        let (dir, engine) = super::durable_command_tests::engine_on_store(tag, 0);
+        let ui = with_station_paths_set(&engine, "D:\\Now");
+        let mut v: serde_json::Value =
+            serde_json::from_str(&settings_bundle(&engine, ui.clone(), None).unwrap()).unwrap();
+        assert_eq!(v.get(STATION_PATHS_LEFT_OUT), None, "made at the station");
+        edit(v["settings"].as_object_mut().unwrap());
+        let mut profiles: Vec<serde_json::Value> = serde_json::from_str(
+            v["uiState"][crate::command_dispatch::PROFILES]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap();
+        let mut away = profiles[0].clone();
+        away["name"] = serde_json::json!("Away");
+        profiles.push(away);
+        let profiles = each_profile(&serde_json::to_string(&profiles).unwrap(), |_, s| edit(s));
+        v["uiState"][crate::command_dispatch::PROFILES] = serde_json::json!(profiles.unwrap());
+        let mut saved = None;
+        restore_settings_bundle(
+            &engine,
+            v.to_string(),
+            || ui,
+            |ui| {
+                saved = Some(ui);
+                true
+            },
+            no_key_change,
+        )
+        .unwrap();
+        let s = engine_lock(&engine).settings().clone();
+        let profiles: Vec<serde_json::Value> =
+            serde_json::from_str(&saved.unwrap()[crate::command_dispatch::PROFILES]).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        (
+            (s.tqsl_path, s.js8_sound_files.get("cq").cloned()),
+            profiles
+                .into_iter()
+                .map(|p| {
+                    (
+                        p["name"].as_str().unwrap().to_string(),
+                        p["settings"].clone(),
+                    )
+                })
+                .collect(),
+            s.voice_messages,
+        )
+    }
+
+    /// ★ A BACKUP NEVER CHOOSES THE PROGRAM THE STATION RUNS TO SIGN LoTW UPLOADS. A backup made
+    /// at the station (no "paths left out" mark) that names another TQSL program, in its settings
+    /// and in a saved profile, restores with the station's own: in the settings, in the station's
+    /// profile of the same name, and left out of a profile the station has none of (loading it then
+    /// keeps the station's). The rest of the backup still lands (CONTROL).
+    #[test]
+    fn restoring_a_backup_never_takes_its_tqsl_program() {
+        let (own, profiles, _) = restored_at_the_station("restore-tqsl", |s| {
+            s.insert(
+                "tqslPath".into(),
+                serde_json::json!("\\\\elsewhere\\share\\tqsl.exe"),
+            );
+            s.insert("mycall".into(), serde_json::json!("W9NEW"));
+        });
+        assert_eq!(own.0, "D:\\Now\\TrustedQSL\\tqsl.exe", "settings");
+        assert_eq!(
+            profiles["Home"]["tqslPath"],
+            serde_json::json!("D:\\Now\\TrustedQSL\\tqsl.exe"),
+            "the station's profile of the same name"
+        );
+        assert_eq!(
+            profiles["Away"].get("tqslPath"),
+            None,
+            "a profile the station has none of"
+        );
+        assert_eq!(
+            profiles["Away"]["mycall"],
+            serde_json::json!("W9NEW"),
+            "CONTROL: the rest lands"
+        );
+    }
+
+    /// ★ A BACKUP NEVER CHOOSES THE FILES THE STATION PLAYS FOR JS8's SOUNDS: as the TQSL program
+    /// above, a backup made at the station that names other sound files restores with the
+    /// station's own, in the settings and the profiles alike.
+    #[test]
+    fn restoring_a_backup_never_takes_its_js8_sound_files() {
+        let (own, profiles, _) = restored_at_the_station("restore-js8-sounds", |s| {
+            s.insert(
+                "js8SoundFiles".into(),
+                serde_json::json!({ "cq": "\\\\elsewhere\\share\\cq.wav" }),
+            );
+        });
+        assert_eq!(
+            own.1.as_deref(),
+            Some("D:\\Now\\Sounds\\cq.wav"),
+            "settings"
+        );
+        assert_eq!(
+            profiles["Home"]["js8SoundFiles"],
+            serde_json::json!({ "cq": "D:\\Now\\Sounds\\cq.wav" }),
+            "the station's profile of the same name"
+        );
+        assert_eq!(
+            profiles["Away"].get("js8SoundFiles"),
+            None,
+            "a profile the station has none of"
+        );
+    }
+
+    /// ★ A BACKUP THAT CARRIES NO PATHS AT ALL leaves the station's as they are: a missing TQSL
+    /// program or sound-file list is not an empty one.
+    #[test]
+    fn restoring_a_backup_with_no_paths_leaves_the_stations() {
+        let (own, profiles, _) = restored_at_the_station("restore-no-paths", |s| {
+            s.remove("tqslPath");
+            s.remove("js8SoundFiles");
+        });
+        assert_eq!(
+            own,
+            (
+                "D:\\Now\\TrustedQSL\\tqsl.exe".to_string(),
+                Some("D:\\Now\\Sounds\\cq.wav".to_string())
+            ),
+            "settings"
+        );
+        assert_eq!(
+            (
+                &profiles["Home"]["tqslPath"],
+                &profiles["Home"]["js8SoundFiles"]
+            ),
+            (
+                &serde_json::json!("D:\\Now\\TrustedQSL\\tqsl.exe"),
+                &serde_json::json!({ "cq": "D:\\Now\\Sounds\\cq.wav" })
+            ),
+            "the station's profile of the same name"
+        );
+        assert_eq!(
+            (
+                profiles["Away"].get("tqslPath"),
+                profiles["Away"].get("js8SoundFiles")
+            ),
+            (None, None),
+            "a profile the station has none of"
+        );
+    }
+
+    /// A backup made at the station whose saved profile list is `profiles` (as written, a JSON
+    /// text), restored at a station whose paths are under `D:\Now` (`tag` names its store) and
+    /// whose own saved profiles are kept (`station_list`) or not: (the station's own list, the
+    /// list the restore saves).
+    fn profiles_restored_from(
+        tag: &str,
+        profiles: &str,
+        station_list: bool,
+    ) -> (Option<String>, Option<String>) {
+        let (dir, engine) = super::durable_command_tests::engine_on_store(tag, 0);
+        let mut ui = with_station_paths_set(&engine, "D:\\Now");
+        let mut v: serde_json::Value =
+            serde_json::from_str(&settings_bundle(&engine, ui.clone(), None).unwrap()).unwrap();
+        v["uiState"][crate::command_dispatch::PROFILES] = serde_json::json!(profiles);
+        if !station_list {
+            ui.remove(crate::command_dispatch::PROFILES);
+        }
+        let own = ui.get(crate::command_dispatch::PROFILES).cloned();
+        let mut saved = None;
+        restore_settings_bundle(
+            &engine,
+            v.to_string(),
+            || ui,
+            |ui| {
+                saved = Some(ui);
+                true
+            },
+            no_key_change,
+        )
+        .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        (
+            own,
+            saved.unwrap().remove(crate::command_dispatch::PROFILES),
+        )
+    }
+
+    /// ★ A PROFILE LIST THIS BUILD CANNOT READ NEVER LANDS: its station paths could not be put
+    /// back, and the screen's own reader takes lists this one refuses (a number past `f64`, a lone
+    /// surrogate escape, nesting deeper than this reader's limit), so one profile load would hand
+    /// the backup's TQSL program to the station. The restore keeps the station's own list, or none
+    /// where it has none.
+    #[test]
+    fn restoring_a_backup_never_keeps_a_profile_list_it_cannot_read() {
+        let with = |n: &str| {
+            format!(
+                r#"[{{"name":"Home","settings":{{"tqslPath":"\\\\elsewhere\\share\\tqsl.exe","n":{n}}}}}]"#
+            )
+        };
+        for (case, unreadable) in [
+            ("a number past f64", with("1e400")),
+            ("a lone surrogate", with(r#""\ud800""#)),
+            (
+                "nesting past the limit",
+                with(&format!("{}{}", "[".repeat(200), "]".repeat(200))),
+            ),
+        ] {
+            assert!(
+                serde_json::from_str::<serde_json::Value>(&unreadable).is_err(),
+                "{case}: unreadable here"
+            );
+            let (own, saved) = profiles_restored_from("restore-unreadable", &unreadable, true);
+            assert!(own.is_some(), "{case}: the station has a list");
+            assert_eq!(saved, own, "{case}: the station's own list");
+            let (_, saved) = profiles_restored_from("restore-unreadable-none", &unreadable, false);
+            assert_eq!(saved, None, "{case}: the station has no list");
+        }
+    }
+
+    /// CONTROL for the above: a profile list that reads lands, the station's paths put back.
+    #[test]
+    fn restoring_a_backup_lands_a_profile_list_it_can_read() {
+        let readable = r#"[{"name":"Home","settings":{"tqslPath":"\\\\elsewhere\\share\\tqsl.exe","mycall":"W9NEW"}}]"#;
+        let (_, saved) = profiles_restored_from("restore-readable", readable, true);
+        let saved: serde_json::Value = serde_json::from_str(&saved.unwrap()).unwrap();
+        assert_eq!(
+            saved,
+            serde_json::json!([{ "name": "Home", "settings": {
+                "tqslPath": "D:\\Now\\TrustedQSL\\tqsl.exe",
+                "js8SoundFiles": { "cq": "D:\\Now\\Sounds\\cq.wav" },
+                "mycall": "W9NEW",
+            } }])
+        );
+    }
+
+    /// ★ A BACKUP NEVER CHOOSES THE RECORDING A VOICE-KEYER SLOT PLAYS: a backup made at the
+    /// station that names another recording for slot 1 restores with the station's own for that
+    /// slot, in the settings and in the station's profile of the same name, and blank in a profile
+    /// the station has none of. CONTROL: the backup's label for the slot still lands.
+    #[test]
+    fn restoring_a_backup_never_takes_its_voice_recordings() {
+        let (_, profiles, voice) = restored_at_the_station("restore-voice", |s| {
+            s.insert(
+                "voiceMessages".into(),
+                serde_json::json!([
+                    { "slot": 1, "label": "CQ CONTEST", "file": "\\\\elsewhere\\share\\cq.wav" }
+                ]),
+            );
+        });
+        assert_eq!(
+            voice,
+            vec![tempo_app::settings::VoiceMessage {
+                slot: 1,
+                label: "CQ CONTEST".into(),
+                file: "D:\\Now\\voice\\slot1.wav".into(),
+            }],
+            "settings: the station's recording, the backup's label"
+        );
+        assert_eq!(
+            profiles["Home"]["voiceMessages"],
+            serde_json::json!([
+                { "slot": 1, "label": "CQ CONTEST", "file": "D:\\Now\\voice\\slot1.wav" }
+            ]),
+            "the station's profile of the same name"
+        );
+        assert_eq!(
+            profiles["Away"]["voiceMessages"],
+            serde_json::json!([{ "slot": 1, "label": "CQ CONTEST", "file": "" }]),
+            "a profile the station has none of"
+        );
+    }
+
+    /// The station's stored keys, planted (fake): its own Club Log and Cloudlog keys in its
+    /// settings, and each of two saved profiles' own, every one a distinct string under `tag`.
+    /// With the UI state holding a station key (the watch list) and this computer's own (the UI
+    /// scale's cap).
+    fn with_station_keys_set(
+        engine: &SharedEngine,
+        tag: &str,
+    ) -> std::collections::BTreeMap<String, String> {
+        let mut s = engine_lock(engine).settings().clone();
+        s.mycall = "W9SHK".into();
+        s.clublog_api_key = format!("{tag}-TOP-CLUBLOG");
+        s.cloudlog_key = format!("{tag}-TOP-CLOUDLOG");
+        engine_lock(engine).apply_restored_settings(s);
+        let profile = |name: &str| {
+            serde_json::json!({ "name": name, "settings": {
+                "mycall": format!("W9{name}"),
+                "clublogApiKey": format!("{tag}-{name}-CLUBLOG"),
+                "cloudlogKey": format!("{tag}-{name}-CLOUDLOG"),
+            } })
+        };
+        [
+            (
+                crate::command_dispatch::PROFILES.to_string(),
+                serde_json::json!([profile("ALPHA"), profile("BRAVO")]).to_string(),
+            ),
+            ("nexus.watchlist".to_string(), "[\"K1ABC\"]".to_string()),
+            ("nexus-ui-scale-cap".to_string(), "1.5".to_string()),
+        ]
+        .into_iter()
+        .collect()
+    }
+
+    /// The saved profiles a bundle (or a saved UI state) carries, by name, as their settings.
+    fn bundle_profiles(
+        ui: &serde_json::Value,
+    ) -> std::collections::BTreeMap<String, serde_json::Value> {
+        let list: Vec<serde_json::Value> =
+            serde_json::from_str(ui[crate::command_dispatch::PROFILES].as_str().unwrap()).unwrap();
+        list.into_iter()
+            .map(|p| {
+                (
+                    p["name"].as_str().unwrap().to_string(),
+                    p["settings"].clone(),
+                )
+            })
+            .collect()
+    }
+
+    /// ★ NO SETTINGS BACKUP CARRIES A STORED KEY, made at the station or from afar: not the
+    /// station's own Club Log or Cloudlog key, and not one a saved profile holds, anywhere in the
+    /// file. CONTROL: the planted keys are in what the backup is made from, and the rest of each
+    /// profile goes.
+    #[test]
+    fn no_settings_backup_carries_a_stored_key() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("bundle-keys", 0);
+        let ui = with_station_keys_set(&engine, "PLANTED");
+        let source = format!(
+            "{} {}",
+            serde_json::to_string(engine_lock(&engine).settings()).unwrap(),
+            ui[crate::command_dispatch::PROFILES]
+        );
+        assert_eq!(
+            source.matches("PLANTED").count(),
+            6,
+            "CONTROL: planted: {source}"
+        );
+        for afar in [None, Some(&FROM_AFAR)] {
+            let text = settings_bundle(&engine, ui.clone(), afar).unwrap();
+            assert!(
+                !text.contains("PLANTED"),
+                "a stored key in a backup (afar {}): {text}",
+                afar.is_some()
+            );
+            let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+            let profiles = bundle_profiles(&v["uiState"]);
+            assert_eq!(
+                (
+                    &profiles["ALPHA"]["mycall"],
+                    &profiles["BRAVO"]["mycall"],
+                    &v["settings"]["mycall"]
+                ),
+                (
+                    &serde_json::json!("W9ALPHA"),
+                    &serde_json::json!("W9BRAVO"),
+                    &serde_json::json!("W9SHK")
+                ),
+                "CONTROL: the rest goes (afar {})",
+                afar.is_some()
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A SAVED PROFILE LIST THAT DOES NOT READ IS IN NO BACKUP: its keys cannot be taken out of
+    /// it, so it does not go, made at the station or from afar. CONTROL: the watch list goes.
+    #[test]
+    fn a_profile_list_that_does_not_read_is_in_no_backup() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("bundle-unread", 0);
+        let mut ui = with_station_keys_set(&engine, "PLANTED");
+        ui.insert(
+            crate::command_dispatch::PROFILES.into(),
+            "{ \"clublogApiKey\": \"PLANTED-UNREAD\", ".into(),
+        );
+        for afar in [None, Some(&FROM_AFAR)] {
+            let text = settings_bundle(&engine, ui.clone(), afar).unwrap();
+            assert!(!text.contains("PLANTED"), "afar {}: {text}", afar.is_some());
+            let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(
+                (
+                    v["uiState"].get(crate::command_dispatch::PROFILES),
+                    &v["uiState"]["nexus.watchlist"]
+                ),
+                (None, &serde_json::json!("[\"K1ABC\"]")),
+                "afar {}: {text}",
+                afar.is_some()
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A BACKUP MADE FROM AFAR CARRIES ONLY THE STATION'S HALF OF THE UI STATE: this computer's
+    /// own (the UI scale's cap) is not the station's to back up. CONTROL: made at the station, it
+    /// carries both.
+    #[test]
+    fn a_backup_made_from_afar_carries_only_the_stations_ui_state() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("bundle-half", 0);
+        let ui = with_station_keys_set(&engine, "PLANTED");
+        let carried = |afar| {
+            let text = settings_bundle(&engine, ui.clone(), afar).unwrap();
+            let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+            (
+                v["uiState"].get("nexus.watchlist").cloned(),
+                v["uiState"].get("nexus-ui-scale-cap").cloned(),
+            )
+        };
+        assert_eq!(
+            carried(Some(&FROM_AFAR)),
+            (Some(serde_json::json!("[\"K1ABC\"]")), None)
+        );
+        assert_eq!(
+            carried(None),
+            (
+                Some(serde_json::json!("[\"K1ABC\"]")),
+                Some(serde_json::json!("1.5"))
+            ),
+            "CONTROL: at the station"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ RESTORING A BACKUP KEEPS THE STATION'S OWN STORED KEYS: its Club Log and Cloudlog keys,
+    /// and each saved profile's of the same name, whether the backup's profile has them blank or
+    /// leaves them out, made at the station or from afar, while the rest of the backup lands. A
+    /// backup made from afar keeps this computer's own half of the UI state too. CONTROL: a key a
+    /// backup does carry (an older one, written before keys were left out) restores as it is, and a
+    /// profile the station has no namesake for keeps its blank.
+    #[test]
+    fn restoring_a_backup_keeps_the_stations_stored_keys() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-keys", 0);
+        let ui = with_station_keys_set(&engine, "OLD");
+        let afar = settings_bundle(&engine, ui.clone(), Some(&FROM_AFAR)).unwrap();
+        let local = settings_bundle(&engine, ui, None).unwrap();
+        let restore = |text: &str, edit: &dyn Fn(&mut serde_json::Value)| {
+            let station_ui = with_station_keys_set(&engine, "STATION");
+            let mut v: serde_json::Value = serde_json::from_str(text).unwrap();
+            v["settings"]["mycall"] = serde_json::json!("W9NEW");
+            edit(&mut v);
+            let mut saved = None;
+            restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                || station_ui,
+                |ui| {
+                    saved = Some(ui);
+                    true
+                },
+                no_key_change,
+            )
+            .unwrap();
+            let s = engine_lock(&engine).settings().clone();
+            let ui = serde_json::to_value(saved.unwrap()).unwrap();
+            (s, ui)
+        };
+        let keys = |p: &serde_json::Value| {
+            (
+                p.get("clublogApiKey").cloned(),
+                p.get("cloudlogKey").cloned(),
+            )
+        };
+        let station = |name: &str| {
+            (
+                Some(serde_json::json!(format!("STATION-{name}-CLUBLOG"))),
+                Some(serde_json::json!(format!("STATION-{name}-CLOUDLOG"))),
+            )
+        };
+        for (whose, text) in [("afar", &afar), ("local", &local)] {
+            // As exported: the profile keys left out. And blanked, as an older build's read
+            // from afar wrote them.
+            let blank = |v: &mut serde_json::Value| {
+                let mut list: Vec<serde_json::Value> = serde_json::from_str(
+                    v["uiState"][crate::command_dispatch::PROFILES]
+                        .as_str()
+                        .unwrap(),
+                )
+                .unwrap();
+                list[1]["settings"]["clublogApiKey"] = serde_json::json!("");
+                list[1]["settings"]["cloudlogKey"] = serde_json::json!(" ");
+                v["uiState"][crate::command_dispatch::PROFILES] =
+                    serde_json::json!(serde_json::to_string(&list).unwrap());
+                v["settings"]["clublogApiKey"] = serde_json::json!("");
+            };
+            let as_exported = |_: &mut serde_json::Value| {};
+            let edits: [&dyn Fn(&mut serde_json::Value); 2] = [&as_exported, &blank];
+            for edit in edits {
+                let (s, ui) = restore(text, edit);
+                let profiles = bundle_profiles(&ui);
+                assert_eq!(
+                    (
+                        s.mycall.as_str(),
+                        s.clublog_api_key.as_str(),
+                        s.cloudlog_key.as_str()
+                    ),
+                    ("W9NEW", "STATION-TOP-CLUBLOG", "STATION-TOP-CLOUDLOG"),
+                    "{whose}: the station's own keys"
+                );
+                assert_eq!(keys(&profiles["ALPHA"]), station("ALPHA"), "{whose}");
+                assert_eq!(keys(&profiles["BRAVO"]), station("BRAVO"), "{whose}");
+                assert_eq!(
+                    ui["nexus-ui-scale-cap"],
+                    serde_json::json!("1.5"),
+                    "{whose}: this computer's own half"
+                );
+            }
+        }
+
+        // CONTROL: a backup that carries keys restores them; a profile with no namesake here
+        // keeps its blank.
+        let (s, ui) = restore(&local, &|v| {
+            let list = serde_json::json!([
+                { "name": "ALPHA", "settings": { "clublogApiKey": "FILE-ALPHA-CLUBLOG" } },
+                { "name": "CHARLIE", "settings": { "clublogApiKey": "", "cloudlogKey": "" } },
+            ]);
+            v["uiState"][crate::command_dispatch::PROFILES] = serde_json::json!(list.to_string());
+            v["settings"]["clublogApiKey"] = serde_json::json!("FILE-TOP-CLUBLOG");
+        });
+        let profiles = bundle_profiles(&ui);
+        assert_eq!(s.clublog_api_key, "FILE-TOP-CLUBLOG", "CONTROL: carried");
+        assert_eq!(
+            keys(&profiles["ALPHA"]),
+            (
+                Some(serde_json::json!("FILE-ALPHA-CLUBLOG")),
+                station("ALPHA").1
+            ),
+            "CONTROL: carried, the one left out kept"
+        );
+        assert_eq!(
+            keys(&profiles["CHARLIE"]),
+            (Some(serde_json::json!("")), Some(serde_json::json!(""))),
+            "CONTROL: no namesake"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A made-up keychain for a restore's `keychain`: the entries it holds, the accounts a
+    /// restore removed and stored to, in order, and whether it refuses a store (a keychain that
+    /// cannot save). Nothing here reaches the OS keychain.
+    struct FakeKeychain {
+        held: std::collections::BTreeMap<String, String>,
+        forgot: Vec<String>,
+        stored: Vec<String>,
+        refuse_store: bool,
+        refuse_forget: bool,
+    }
+
+    impl FakeKeychain {
+        fn holding(accounts: &[&str]) -> Self {
+            FakeKeychain {
+                held: accounts
+                    .iter()
+                    .map(|a| (a.to_string(), format!("PLANTED-{a}")))
+                    .collect(),
+                forgot: Vec::new(),
+                stored: Vec::new(),
+                refuse_store: false,
+                refuse_forget: false,
+            }
+        }
+        fn change(&mut self, change: KeychainChange) -> Result<bool, String> {
+            match change {
+                KeychainChange::Forget(account) => {
+                    self.forgot.push(account.to_string());
+                    if self.refuse_forget {
+                        return Err("the keychain is locked".into());
+                    }
+                    Ok(self.held.remove(account).is_some())
+                }
+                KeychainChange::Store { account, key } => {
+                    self.stored.push(account.to_string());
+                    if self.refuse_store {
+                        return Err("no keychain here".into());
+                    }
+                    self.held.insert(account.to_string(), key.to_string());
+                    Ok(true)
+                }
+                KeychainChange::Holds(account) => Ok(self.held.contains_key(account)),
+            }
+        }
+    }
+
+    /// Whether the Connections log holds `message` from `connector`.
+    fn connection_log_says(connector: &str, message: &str) -> bool {
+        get_connection_log()
+            .iter()
+            .any(|e| e.connector == connector && e.message == message)
+    }
+
+    /// ★ A RESTORED BACKUP THAT POINTS CLOUDLOG AT ANOTHER ADDRESS REMOVES THE KEY KEPT FOR THE
+    /// STATION'S: the keychain entry goes, the key left in the settings waiting for the keychain
+    /// goes (the engine does not put it back), a saved profile that moves its URL keeps no key,
+    /// and the Connections log says once to enter it again. The scheme, the host, the port and
+    /// the path each move it. CONTROL: the same URL, or the same written another way (case of
+    /// the scheme and host, the scheme's own port, a trailing `/`), removes nothing; the Club Log
+    /// key, sent to one fixed host, is kept either way.
+    #[test]
+    fn a_restored_backup_that_moves_cloudlog_removes_its_key() {
+        const STATION_LOG: &str = "https://log.station.example/cloudlog";
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-cloudlog", 0);
+        let profiles_key = crate::command_dispatch::PROFILES;
+        // The station: its URL, its key waiting for the keychain ("STATION-TOP-CLOUDLOG") and its
+        // profiles' URLs, ALPHA's and BRAVO's own.
+        let station_ui = || {
+            let mut ui = with_station_keys_set(&engine, "STATION");
+            let mut s = engine_lock(&engine).settings().clone();
+            s.cloudlog_url = STATION_LOG.into();
+            engine_lock(&engine).apply_restored_settings(s);
+            let mut list: Vec<serde_json::Value> = serde_json::from_str(&ui[profiles_key]).unwrap();
+            for p in &mut list {
+                let url = format!("{STATION_LOG}/{}", p["name"].as_str().unwrap());
+                p["settings"]["cloudlogUrl"] = serde_json::json!(url);
+            }
+            ui.insert(profiles_key.into(), serde_json::to_string(&list).unwrap());
+            ui
+        };
+        // A backup of the station, its URL and ALPHA's set to `top` and `alpha`.
+        let restore = |top: &str, alpha: &str| {
+            let ui = station_ui();
+            let mut v: serde_json::Value =
+                serde_json::from_str(&settings_bundle(&engine, ui.clone(), None).unwrap()).unwrap();
+            v["settings"]["cloudlogUrl"] = serde_json::json!(top);
+            let mut list: Vec<serde_json::Value> =
+                serde_json::from_str(v["uiState"][profiles_key].as_str().unwrap()).unwrap();
+            for p in &mut list {
+                if p["name"] == "ALPHA" {
+                    p["settings"]["cloudlogUrl"] = serde_json::json!(alpha);
+                }
+            }
+            v["uiState"][profiles_key] = serde_json::json!(serde_json::to_string(&list).unwrap());
+            let mut keychain =
+                FakeKeychain::holding(&[CLOUDLOG_KEYCHAIN_USER, CLUBLOG_KEYCHAIN_USER]);
+            let mut saved = None;
+            restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                || ui,
+                |ui| {
+                    saved = Some(ui);
+                    true
+                },
+                |change| keychain.change(change),
+            )
+            .unwrap();
+            let s = engine_lock(&engine).settings().clone();
+            let profiles = bundle_profiles(&serde_json::to_value(saved.unwrap()).unwrap());
+            (s, profiles, keychain)
+        };
+        let keys = |p: &serde_json::Value| {
+            (
+                p.get("cloudlogKey").cloned(),
+                p.get("clublogApiKey").cloned(),
+            )
+        };
+        let kept = |name: &str| {
+            (
+                Some(serde_json::json!(format!("STATION-{name}-CLOUDLOG"))),
+                Some(serde_json::json!(format!("STATION-{name}-CLUBLOG"))),
+            )
+        };
+        let station_keychain =
+            FakeKeychain::holding(&[CLOUDLOG_KEYCHAIN_USER, CLUBLOG_KEYCHAIN_USER]);
+
+        // CONTROL: the same URLs, as the station writes them and written another way.
+        for (top, alpha) in [
+            (STATION_LOG.to_string(), format!("{STATION_LOG}/ALPHA")),
+            (
+                "  HTTPS://Log.Station.EXAMPLE:443/cloudlog/".to_string(),
+                "https://LOG.station.example/cloudlog/ALPHA//".to_string(),
+            ),
+        ] {
+            let (s, profiles, keychain) = restore(&top, &alpha);
+            assert_eq!(
+                keychain.forgot,
+                Vec::<String>::new(),
+                "CONTROL {top}: nothing removed"
+            );
+            assert_eq!(keychain.held, station_keychain.held, "CONTROL {top}");
+            assert_eq!(
+                (
+                    s.cloudlog_url.as_str(),
+                    s.cloudlog_key.as_str(),
+                    s.clublog_api_key.as_str()
+                ),
+                (top.as_str(), "STATION-TOP-CLOUDLOG", "STATION-TOP-CLUBLOG"),
+                "CONTROL {top}: the keys kept"
+            );
+            assert_eq!(keys(&profiles["ALPHA"]), kept("ALPHA"), "CONTROL {top}");
+            assert_eq!(keys(&profiles["BRAVO"]), kept("BRAVO"), "CONTROL {top}");
+        }
+
+        // Another host, scheme, port or path: the key goes, everywhere it was kept for the station.
+        for top in [
+            "https://log.other.example/cloudlog",
+            "http://log.station.example/cloudlog",
+            "https://log.station.example:8443/cloudlog",
+            "https://log.station.example/wavelog",
+        ] {
+            let alpha = format!("{top}/ALPHA");
+            let (s, profiles, keychain) = restore(top, &alpha);
+            assert_eq!(
+                keychain.forgot,
+                vec![CLOUDLOG_KEYCHAIN_USER.to_string()],
+                "{top}: the Cloudlog entry alone removed"
+            );
+            assert_eq!(
+                keychain.held.keys().collect::<Vec<_>>(),
+                vec![CLUBLOG_KEYCHAIN_USER],
+                "{top}: the Club Log entry kept"
+            );
+            assert_eq!(
+                (
+                    s.cloudlog_url.as_str(),
+                    s.cloudlog_key.as_str(),
+                    s.clublog_api_key.as_str()
+                ),
+                (top, "", "STATION-TOP-CLUBLOG"),
+                "{top}: the URL restored, the waiting key gone, the Club Log key kept"
+            );
+            assert_eq!(
+                keys(&profiles["ALPHA"]),
+                (None, kept("ALPHA").1),
+                "{top}: the profile that moved keeps no Cloudlog key"
+            );
+            assert_eq!(
+                keys(&profiles["BRAVO"]),
+                kept("BRAVO"),
+                "{top}: BRAVO did not move"
+            );
+            assert!(
+                connection_log_says("Cloudlog", CLOUDLOG_KEY_FORGOTTEN),
+                "{top}: the operator is told"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A RESTORED BACKUP THAT POINTS AN ICOM NETWORK RADIO AT ANOTHER ADDRESS REMOVES THAT
+    /// RADIO'S SAVED PASSWORD, and no other radio's: by the radio's id, its host or its port
+    /// moved, or a radio the station does not have. The Connections log names the radio.
+    /// CONTROL: the same addresses, a host written in another case among them, remove nothing.
+    #[test]
+    fn a_restored_backup_that_moves_an_icom_radio_removes_its_password() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-icom", 0);
+        let radio = |id: u32, name: &str, host: &str| tempo_app::settings::RadioProfile {
+            id,
+            name: name.into(),
+            icom_lan_host: host.into(),
+            icom_lan_port: tempo_app::settings::ICOM_LAN_DEFAULT_PORT,
+            ..Default::default()
+        };
+        let mut station = engine_lock(&engine).settings().clone();
+        station.radios = vec![
+            radio(0, "Restore Test IC-705", "192.168.1.20"),
+            radio(1, "Restore Test IC-9700", "Radio-B.local"),
+            // The active radio, so the flat mirror a restore folds into it is none of the two.
+            radio(2, "Restore Test FTDX10", ""),
+        ];
+        station.active_radio = 2;
+        station.sync_flat_from_active();
+        let accounts = [
+            icom_lan_account(0),
+            icom_lan_account(1),
+            icom_lan_account(7),
+        ];
+        let all: Vec<&str> = accounts.iter().map(String::as_str).collect();
+        let restore = |edit: &dyn Fn(&mut Vec<serde_json::Value>)| {
+            engine_lock(&engine).apply_restored_settings(station.clone());
+            let mut v: serde_json::Value =
+                serde_json::from_str(&settings_bundle(&engine, Default::default(), None).unwrap())
+                    .unwrap();
+            let mut radios: Vec<serde_json::Value> =
+                serde_json::from_value(v["settings"]["radios"].clone()).unwrap();
+            edit(&mut radios);
+            v["settings"]["radios"] = serde_json::json!(radios);
+            let mut keychain = FakeKeychain::holding(&all);
+            restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                Default::default,
+                |_| true,
+                |change| keychain.change(change),
+            )
+            .unwrap();
+            keychain.forgot
+        };
+
+        // CONTROL: as the station has them, and radio 1's host in another case.
+        assert_eq!(
+            restore(&|_| {}),
+            Vec::<String>::new(),
+            "CONTROL: as they are"
+        );
+        assert_eq!(
+            restore(&|r| r[1]["icomLanHost"] = serde_json::json!(" radio-b.LOCAL ")),
+            Vec::<String>::new(),
+            "CONTROL: the host in another case"
+        );
+
+        assert_eq!(
+            restore(&|r| r[0]["icomLanHost"] = serde_json::json!("192.168.1.99")),
+            vec![icom_lan_account(0)],
+            "radio 0's host moved: its password alone"
+        );
+        assert!(connection_log_says(
+            "Icom network",
+            &icom_password_forgotten("Restore Test IC-705")
+        ));
+        assert_eq!(
+            restore(&|r| r[1]["icomLanPort"] = serde_json::json!(50002)),
+            vec![icom_lan_account(1)],
+            "radio 1's port moved"
+        );
+        assert_eq!(
+            restore(&|r| {
+                let mut new = r[1].clone();
+                new["id"] = serde_json::json!(7);
+                new["name"] = serde_json::json!("Restore Test IC-7610");
+                r.push(new);
+            }),
+            Vec::<String>::new(),
+            "a radio the station does not have has no address here to move from: kept"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The station's radios for the restore tests below: an IC-705 (id 0) and an IC-9700 (id 1)
+    /// on the network, the operating FTDX10 (id 2, so the flat mirror a restore folds in is none
+    /// of the Icoms) and a serial IC-7300 (id 3) with no network host.
+    fn restore_test_roster() -> Vec<tempo_app::settings::RadioProfile> {
+        let radio = |id: u32, name: &str, host: &str| tempo_app::settings::RadioProfile {
+            id,
+            name: name.into(),
+            icom_lan_host: host.into(),
+            icom_lan_port: tempo_app::settings::ICOM_LAN_DEFAULT_PORT,
+            ..Default::default()
+        };
+        vec![
+            radio(0, "Restore Test IC-705", "192.168.1.20"),
+            radio(1, "Restore Test IC-9700", "radio-b.local"),
+            radio(2, "Restore Test FTDX10", ""),
+            radio(3, "Restore Test IC-7300", ""),
+        ]
+    }
+
+    /// `engine`'s settings with `roster` (the operating radio id 2) and Cloudlog at `cloudlog`.
+    fn station_with(
+        engine: &SharedEngine,
+        roster: Vec<tempo_app::settings::RadioProfile>,
+        cloudlog: &str,
+    ) -> tempo_app::settings::Settings {
+        let mut s = engine_lock(engine).settings().clone();
+        s.radios = roster;
+        s.active_radio = if s.radios.iter().any(|r| r.id == 2) {
+            2
+        } else {
+            0
+        };
+        s.cloudlog_url = cloudlog.into();
+        s.sync_flat_from_active();
+        s
+    }
+
+    /// The keychain accounts the restore tests plant: Cloudlog's and every test radio's.
+    fn restore_test_accounts() -> Vec<String> {
+        let mut all = vec![CLOUDLOG_KEYCHAIN_USER.to_string()];
+        all.extend((0..4).map(icom_lan_account));
+        all
+    }
+
+    /// ★ A RESTORED BACKUP THAT DROPS A NETWORK RADIO FROM THE ROSTER REMOVES ITS SAVED PASSWORD,
+    /// as removing the radio does: a radio added later takes the next free id, which can be the
+    /// dropped one's, and must not send the old password to its own host. The
+    /// Connections log names the radio. CONTROL: the same roster removes nothing, and a dropped
+    /// radio with no network host removes nothing.
+    #[test]
+    fn a_restored_backup_that_drops_an_icom_radio_removes_its_password() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-drop", 0);
+        let station = station_with(&engine, restore_test_roster(), "");
+        let accounts = restore_test_accounts();
+        let all: Vec<&str> = accounts.iter().map(String::as_str).collect();
+        let restore = |keep: &dyn Fn(u64) -> bool| {
+            engine_lock(&engine).apply_restored_settings(station.clone());
+            let mut v: serde_json::Value =
+                serde_json::from_str(&settings_bundle(&engine, Default::default(), None).unwrap())
+                    .unwrap();
+            let radios: Vec<serde_json::Value> =
+                serde_json::from_value(v["settings"]["radios"].clone()).unwrap();
+            v["settings"]["radios"] = serde_json::json!(radios
+                .into_iter()
+                .filter(|r| keep(r["id"].as_u64().unwrap()))
+                .collect::<Vec<_>>());
+            let mut keychain = FakeKeychain::holding(&all);
+            restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                Default::default,
+                |_| true,
+                |change| keychain.change(change),
+            )
+            .unwrap();
+            let ids: Vec<u32> = engine_lock(&engine)
+                .settings()
+                .radios
+                .iter()
+                .map(|r| r.id)
+                .collect();
+            (ids, keychain.forgot)
+        };
+
+        assert_eq!(
+            restore(&|_| true),
+            (vec![0, 1, 2, 3], Vec::<String>::new()),
+            "CONTROL: the same roster"
+        );
+        assert_eq!(
+            restore(&|id| id != 3),
+            (vec![0, 1, 2], vec![icom_lan_account(3)]),
+            "a dropped radio with no network host: its password too, as removing it does"
+        );
+        assert_eq!(
+            restore(&|id| id != 1),
+            (vec![0, 2, 3], vec![icom_lan_account(1)]),
+            "the IC-9700 dropped: its password alone"
+        );
+        assert!(
+            connection_log_says(
+                "Icom network",
+                &icom_password_dropped("Restore Test IC-9700")
+            ),
+            "the operator is told"
+        );
+        assert_eq!(
+            restore(&|id| id == 2),
+            (
+                vec![2],
+                vec![
+                    icom_lan_account(0),
+                    icom_lan_account(1),
+                    icom_lan_account(3)
+                ]
+            ),
+            "every radio dropped, network or not"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A RESTORE REMOVES THE KEYS IT MOVES IN THE SAME HOLD AS IT LANDS THE SETTINGS: no radio
+    /// loop can read the old Icom password for the new host between the two, nor an upload the
+    /// old Cloudlog key for the new URL. Each removal happens while the engine is
+    /// held. CONTROL: a restore refused for a busy logbook removes nothing, though it moves
+    /// Cloudlog, moves a radio's host and drops another.
+    #[test]
+    fn a_restore_removes_the_keys_it_moves_in_the_hold_that_lands_it() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-hold", 3);
+        let station = station_with(
+            &engine,
+            restore_test_roster(),
+            "https://log.station.example/cloudlog",
+        );
+        let accounts = restore_test_accounts();
+        let all: Vec<&str> = accounts.iter().map(String::as_str).collect();
+        let waiting = tempo_app::settings::KeysToConfirm {
+            cloudlog: true,
+            icom_lan: vec![0, 1],
+            ..Default::default()
+        };
+        let restore = |contest: bool| {
+            engine_lock(&engine).apply_restored_settings(station.clone());
+            engine_lock(&engine).set_keys_to_confirm(waiting.clone());
+            let mut v: serde_json::Value =
+                serde_json::from_str(&settings_bundle(&engine, Default::default(), None).unwrap())
+                    .unwrap();
+            v["settings"]["cloudlogUrl"] = serde_json::json!("https://log.other.example/cloudlog");
+            let mut radios: Vec<serde_json::Value> =
+                serde_json::from_value(v["settings"]["radios"].clone()).unwrap();
+            radios[0]["icomLanHost"] = serde_json::json!("192.168.1.99");
+            radios.retain(|r| r["id"] != 1);
+            v["settings"]["radios"] = serde_json::json!(radios);
+            if contest {
+                v["settings"]["fdActive"] = serde_json::json!(true);
+                v["settings"]["fdClass"] = serde_json::json!("1D");
+                v["settings"]["fdSection"] = serde_json::json!("EMA");
+            }
+            let mut keychain = FakeKeychain::holding(&all);
+            let mut in_the_hold = Vec::new();
+            let restored = restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                Default::default,
+                |_| true,
+                |change| {
+                    in_the_hold.push(matches!(
+                        engine.try_lock(),
+                        Err(std::sync::TryLockError::WouldBlock)
+                    ));
+                    keychain.change(change)
+                },
+            )
+            .map(|_| ());
+            let now = engine_lock(&engine).keys_to_confirm().clone();
+            (restored, keychain.forgot, in_the_hold, now)
+        };
+
+        let hold = held_up(&engine, &dir);
+        assert_eq!(
+            restore(true),
+            (
+                Err(tempo_app::engine::SESSION_BUSY.to_string()),
+                Vec::new(),
+                Vec::new(),
+                waiting.clone()
+            ),
+            "CONTROL: refused for the logbook, every key kept, and what waited still waits"
+        );
+        drop(hold);
+
+        assert_eq!(
+            restore(false),
+            (
+                Ok(()),
+                vec![
+                    CLOUDLOG_KEYCHAIN_USER.to_string(),
+                    icom_lan_account(0),
+                    icom_lan_account(1)
+                ],
+                vec![true, true, true],
+                tempo_app::settings::KeysToConfirm::default()
+            ),
+            "Cloudlog moved, radio 0 moved, radio 1 dropped: each removed while the engine is \
+             held, and nothing waits for a key that is gone"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A RESTORE SAYS A KEY WAS REMOVED ONLY WHEN ONE WAS SAVED: a moved radio and a dropped
+    /// radio with no password in the keychain bring no "was removed" line to the Connections log.
+    /// CONTROL: the same restore with both passwords saved says so for each radio.
+    #[test]
+    fn a_restore_says_a_key_was_removed_only_when_one_was_saved() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-said", 0);
+        let restore = |prefix: &str, holding: &[&str]| {
+            let mut roster = restore_test_roster();
+            for r in &mut roster {
+                r.name = format!("{prefix} {}", r.name);
+            }
+            let station = station_with(&engine, roster, "");
+            engine_lock(&engine).apply_restored_settings(station);
+            let mut v: serde_json::Value =
+                serde_json::from_str(&settings_bundle(&engine, Default::default(), None).unwrap())
+                    .unwrap();
+            let mut radios: Vec<serde_json::Value> =
+                serde_json::from_value(v["settings"]["radios"].clone()).unwrap();
+            radios[0]["icomLanHost"] = serde_json::json!("192.168.1.99");
+            radios.retain(|r| r["id"] != 1);
+            v["settings"]["radios"] = serde_json::json!(radios);
+            let mut keychain = FakeKeychain::holding(holding);
+            restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                Default::default,
+                |_| true,
+                |change| keychain.change(change),
+            )
+            .unwrap();
+            assert_eq!(
+                keychain.forgot,
+                vec![icom_lan_account(0), icom_lan_account(1)],
+                "{prefix}: premise: both removals asked for"
+            );
+            (
+                connection_log_says(
+                    "Icom network",
+                    &icom_password_forgotten(&format!("{prefix} Restore Test IC-705")),
+                ),
+                connection_log_says(
+                    "Icom network",
+                    &icom_password_dropped(&format!("{prefix} Restore Test IC-9700")),
+                ),
+            )
+        };
+        assert_eq!(
+            restore("Unsaved", &[]),
+            (false, false),
+            "nothing was saved: nothing said"
+        );
+        let saved = [icom_lan_account(0), icom_lan_account(1)];
+        let saved: Vec<&str> = saved.iter().map(String::as_str).collect();
+        assert_eq!(
+            restore("Saved", &saved),
+            (true, true),
+            "CONTROL: both saved, both said"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ AN OLD BACKUP THAT CARRIES ITS OWN CLOUDLOG KEY, RESTORED WITH ANOTHER URL, PUTS THAT KEY
+    /// IN USE AT ONCE: it goes into the keychain in place of the station's key, which was typed
+    /// for the station's URL, and nothing is left waiting for the next launch. CONTROL: a keychain
+    /// that cannot save removes the station's key and leaves the backup's waiting, as a launch
+    /// does; the same URL keeps the station's key and leaves the backup's waiting, as before.
+    #[test]
+    fn an_old_backup_with_its_own_cloudlog_key_puts_it_in_use_at_once() {
+        const BACKUP_KEY: &str = "PLANTED-BACKUP-OWN-KEY";
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-own-key", 0);
+        let station = station_with(
+            &engine,
+            restore_test_roster(),
+            "https://log.station.example/cloudlog",
+        );
+        let restore = |url: &str, refuse_store: bool| {
+            engine_lock(&engine).apply_restored_settings(station.clone());
+            let mut v: serde_json::Value =
+                serde_json::from_str(&settings_bundle(&engine, Default::default(), None).unwrap())
+                    .unwrap();
+            v["settings"]["cloudlogUrl"] = serde_json::json!(url);
+            v["settings"]["cloudlogKey"] = serde_json::json!(BACKUP_KEY);
+            let mut keychain = FakeKeychain::holding(&[CLOUDLOG_KEYCHAIN_USER]);
+            keychain.refuse_store = refuse_store;
+            restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                Default::default,
+                |_| true,
+                |change| keychain.change(change),
+            )
+            .unwrap();
+            let waiting = engine_lock(&engine).settings().cloudlog_key == BACKUP_KEY;
+            let in_use = keychain
+                .held
+                .get(CLOUDLOG_KEYCHAIN_USER)
+                .map(|k| k == BACKUP_KEY);
+            (keychain.forgot, keychain.stored, in_use, waiting)
+        };
+        let cloudlog = || vec![CLOUDLOG_KEYCHAIN_USER.to_string()];
+
+        assert_eq!(
+            restore("https://log.other.example/cloudlog", false),
+            (Vec::new(), cloudlog(), Some(true), false),
+            "moved: the backup's own key in the keychain at once, nothing left waiting"
+        );
+        assert_eq!(
+            restore("https://log.other.example/cloudlog", true),
+            (cloudlog(), cloudlog(), None, true),
+            "CONTROL: a keychain that cannot save: the station's key removed, the backup's waiting"
+        );
+        assert_eq!(
+            restore("https://log.station.example/cloudlog", false),
+            (Vec::new(), Vec::new(), Some(false), true),
+            "CONTROL: the same URL: the station's key kept, the backup's waiting"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ THE STATION'S OWN PENDING CLOUDLOG KEY IS NEVER TAKEN FOR THE BACKUP'S: a station with no
+    /// Cloudlog URL that still holds a key waiting to move to the keychain, restored from a backup
+    /// that brings a URL and no key, keeps that key held back for the operator. It was typed for
+    /// an address nobody can name, so it is not stored as the backup's key and let go to the
+    /// backup's URL. CONTROL: a backup that does carry its own key puts that key in use at once.
+    #[test]
+    fn a_stations_own_pending_key_is_not_taken_for_the_backups() {
+        use tempo_app::settings::KeysToConfirm;
+        const PENDING: &str = "PLANTED-STATION-PENDING";
+        const BACKUP_KEY: &str = "PLANTED-BACKUP-OWN-KEY";
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-pending", 0);
+        let mut station = station_with(&engine, restore_test_roster(), "");
+        station.cloudlog_key = PENDING.into();
+        let restore = |backup_key: &str| {
+            let mut v: serde_json::Value = {
+                let mut eng = engine_lock(&engine);
+                eng.apply_restored_settings(station.clone());
+                eng.set_keys_to_confirm(KeysToConfirm::default());
+                assert_eq!(
+                    (
+                        eng.settings().cloudlog_key.as_str(),
+                        eng.settings().cloudlog_url.as_str()
+                    ),
+                    (PENDING, ""),
+                    "premise: the station holds the pending key and has no URL"
+                );
+                drop(eng);
+                serde_json::from_str(&settings_bundle(&engine, Default::default(), None).unwrap())
+                    .unwrap()
+            };
+            assert_eq!(
+                v["settings"].get("cloudlogKey").and_then(|k| k.as_str()),
+                None,
+                "premise: the backup carries no key of its own"
+            );
+            v["settings"]["cloudlogUrl"] = serde_json::json!("https://log.backup.example/cloudlog");
+            if !backup_key.is_empty() {
+                v["settings"]["cloudlogKey"] = serde_json::json!(backup_key);
+            }
+            let mut keychain = FakeKeychain::holding(&[]);
+            restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                Default::default,
+                |_| true,
+                |change| keychain.change(change),
+            )
+            .unwrap();
+            let held = engine_lock(&engine).keys_to_confirm().cloudlog;
+            (keychain.stored, held)
+        };
+
+        assert_eq!(
+            restore(""),
+            (Vec::<String>::new(), true),
+            "the station's pending key is not stored as the backup's, and it waits"
+        );
+        assert_eq!(
+            restore(BACKUP_KEY),
+            (vec![CLOUDLOG_KEYCHAIN_USER.to_string()], false),
+            "CONTROL: the backup's own key goes in at once, and nothing waits"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A RESTORE WHILE THE RADIO IS KEYED IS REFUSED, AND CHANGES NOTHING: the restore's hold
+    /// can wait on the system keychain, and the radio loop needs the engine lock to end the over.
+    /// An FT over on the air and the rig keyed at its own mic each refuse it, with the reason; no
+    /// key is removed or stored, the settings and the UI state stay as they were. CONTROL: the
+    /// same restore with nothing keyed goes through and removes the moved key.
+    #[test]
+    fn a_restore_while_the_radio_is_keyed_is_refused_and_changes_nothing() {
+        const STATION_LOG: &str = "https://log.station.example/cloudlog";
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-keyed", 0);
+        let station = station_with(&engine, restore_test_roster(), STATION_LOG);
+        engine_lock(&engine).apply_restored_settings(station);
+        let mut v: serde_json::Value =
+            serde_json::from_str(&settings_bundle(&engine, Default::default(), None).unwrap())
+                .unwrap();
+        v["settings"]["cloudlogUrl"] = serde_json::json!("https://log.other.example/cloudlog");
+        let accounts = restore_test_accounts();
+        let all: Vec<&str> = accounts.iter().map(String::as_str).collect();
+        let restore = || {
+            let mut keychain = FakeKeychain::holding(&all);
+            let mut saved_ui = false;
+            let out = restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                Default::default,
+                |_| {
+                    saved_ui = true;
+                    true
+                },
+                |change| keychain.change(change),
+            )
+            .map(|_| ());
+            let url = engine_lock(&engine).settings().cloudlog_url.clone();
+            (out, keychain.forgot, keychain.stored, saved_ui, url)
+        };
+        let refused = || {
+            (
+                Err(tempo_app::engine::RESTORE_ON_AIR.to_string()),
+                Vec::<String>::new(),
+                Vec::<String>::new(),
+                false,
+                STATION_LOG.to_string(),
+            )
+        };
+
+        engine_lock(&engine).app.set_transmitting(true);
+        assert_eq!(
+            restore(),
+            refused(),
+            "an FT over on the air: refused, nothing changed"
+        );
+        engine_lock(&engine).app.set_transmitting(false);
+        engine_lock(&engine).observe_rig_ptt(true);
+        assert_eq!(
+            restore(),
+            refused(),
+            "the rig keyed at its mic: refused, nothing changed"
+        );
+        engine_lock(&engine).observe_rig_ptt(false);
+        let (out, forgot, _, saved_ui, url) = restore();
+        assert_eq!(
+            (out, forgot, saved_ui, url.as_str()),
+            (
+                Ok(()),
+                vec![CLOUDLOG_KEYCHAIN_USER.to_string()],
+                true,
+                "https://log.other.example/cloudlog"
+            ),
+            "CONTROL: nothing keyed: restored, the moved key removed"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A RESTORE ASKS THE KEYCHAIN WHAT IT HOLDS WITHOUT HOLDING THE ENGINE LOCK: a read that
+    /// waits (an unlock prompt) never keeps the radio loop from ending an over. Each read here
+    /// waits for another thread to take the engine lock, and gets it. The removals stay in the
+    /// hold that lands the restore, before the restored settings go live. CONTROL: what waits for
+    /// the operator is what the reads said.
+    #[test]
+    fn a_restores_keychain_reads_never_hold_the_engine_lock() {
+        use tempo_app::settings::KeysToConfirm;
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-reads", 0);
+        let backup = {
+            let station = station_with(
+                &engine,
+                restore_test_roster(),
+                "https://log.station.example/cloudlog",
+            );
+            engine_lock(&engine).apply_restored_settings(station);
+            settings_bundle(&engine, Default::default(), None).unwrap()
+        };
+        // Fresh settings, with a network radio (id 7) the backup does not have, so the restore
+        // both reads (the addresses this station has none for) and removes (the dropped radio).
+        let mut fresh = station_with(
+            &engine,
+            vec![
+                tempo_app::settings::RadioProfile {
+                    id: 0,
+                    name: "Radio 1".into(),
+                    ..Default::default()
+                },
+                tempo_app::settings::RadioProfile {
+                    id: 7,
+                    name: "Restore Test Dropped".into(),
+                    icom_lan_host: "192.168.1.77".into(),
+                    ..Default::default()
+                },
+            ],
+            "",
+        );
+        fresh.active_radio = 0;
+        fresh.sync_flat_from_active();
+        {
+            let mut eng = engine_lock(&engine);
+            eng.apply_restored_settings(fresh);
+            eng.set_keys_to_confirm(KeysToConfirm::default());
+        }
+        let mut accounts = restore_test_accounts();
+        accounts.push(icom_lan_account(7));
+        let all: Vec<&str> = accounts.iter().map(String::as_str).collect();
+        let mut keychain = FakeKeychain::holding(&all);
+        let (mut reads_free, mut removals_held) = (Vec::new(), Vec::new());
+        restore_settings_bundle(
+            &engine,
+            backup,
+            Default::default,
+            |_| true,
+            |change| {
+                match change {
+                    KeychainChange::Holds(_) => {
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        let other = engine.clone();
+                        std::thread::spawn(move || {
+                            drop(engine_lock(&other));
+                            let _ = tx.send(());
+                        });
+                        reads_free.push(rx.recv_timeout(std::time::Duration::from_secs(2)).is_ok());
+                    }
+                    KeychainChange::Forget(_) => removals_held.push(engine.try_lock().is_err()),
+                    KeychainChange::Store { .. } => {}
+                }
+                keychain.change(change)
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            (reads_free, removals_held),
+            (vec![true; 3], vec![true]),
+            "every read made with the engine lock free; the removal in the hold"
+        );
+        assert_eq!(
+            engine_lock(&engine).keys_to_confirm(),
+            &KeysToConfirm {
+                cloudlog: true,
+                icom_lan: vec![0, 1],
+                ..Default::default()
+            },
+            "CONTROL: each key the reads found waits"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A RESTORE ONTO SETTINGS WITH NO ADDRESS FOR A SERVICE KEEPS ITS KEY, AND HOLDS IT BACK:
+    /// after a reinstall or a reset the station has no Cloudlog URL and its one radio has no
+    /// network host, while the keychain still holds keys it cannot say were typed for the
+    /// addresses the backup brings. Every key stays, and each one saved is held back until the
+    /// operator confirms it, for a radio the station has and one it does not. A radio with no
+    /// network host, and a key that is not saved, wait for nothing. CONTROL: restored again over
+    /// the addresses it now has, a backup that moves them removes the keys, and nothing waits.
+    #[test]
+    fn a_restore_onto_fresh_settings_keeps_every_key_and_holds_it_back() {
+        use tempo_app::settings::KeysToConfirm;
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-fresh", 0);
+        let accounts = restore_test_accounts();
+        let all: Vec<&str> = accounts.iter().map(String::as_str).collect();
+        // The operator's backup, made before the reset.
+        let before = station_with(
+            &engine,
+            restore_test_roster(),
+            "https://log.station.example/cloudlog",
+        );
+        engine_lock(&engine).apply_restored_settings(before);
+        let backup: serde_json::Value =
+            serde_json::from_str(&settings_bundle(&engine, Default::default(), None).unwrap())
+                .unwrap();
+        let restore = |v: &serde_json::Value, holding: &[&str]| {
+            let mut keychain = FakeKeychain::holding(holding);
+            restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                Default::default,
+                |_| true,
+                |change| keychain.change(change),
+            )
+            .unwrap();
+            let waiting = engine_lock(&engine).keys_to_confirm().clone();
+            (keychain.forgot, waiting)
+        };
+        // Fresh: no Cloudlog URL, one radio (id 0, no network host).
+        let fresh = || {
+            let fresh = station_with(
+                &engine,
+                vec![tempo_app::settings::RadioProfile {
+                    id: 0,
+                    name: "Radio 1".into(),
+                    ..Default::default()
+                }],
+                "",
+            );
+            let mut eng = engine_lock(&engine);
+            eng.apply_restored_settings(fresh);
+            eng.set_keys_to_confirm(KeysToConfirm::default());
+        };
+
+        fresh();
+        assert_eq!(
+            restore(&backup, &[]),
+            (Vec::<String>::new(), KeysToConfirm::default()),
+            "CONTROL: nothing saved, nothing waits"
+        );
+        fresh();
+        assert_eq!(
+            restore(&backup, &all),
+            (
+                Vec::<String>::new(),
+                KeysToConfirm {
+                    cloudlog: true,
+                    icom_lan: vec![0, 1],
+                    ..Default::default()
+                }
+            ),
+            "onto fresh settings: every key kept, each saved one held back"
+        );
+        let s = engine_lock(&engine).settings().clone();
+        assert_eq!(
+            (
+                s.cloudlog_url.as_str(),
+                s.radios.iter().map(|r| r.id).collect::<Vec<_>>()
+            ),
+            ("https://log.station.example/cloudlog", vec![0, 1, 2, 3]),
+            "premise: the backup landed"
+        );
+
+        // CONTROL: now the station has the addresses, a backup that moves them removes the keys.
+        let mut moved = backup.clone();
+        moved["settings"]["cloudlogUrl"] = serde_json::json!("https://log.other.example/cloudlog");
+        moved["settings"]["radios"][0]["icomLanHost"] = serde_json::json!("192.168.1.99");
+        moved["settings"]["radios"][1]["icomLanHost"] = serde_json::json!("radio-c.local");
+        assert_eq!(
+            restore(&moved, &all),
+            (
+                vec![
+                    CLOUDLOG_KEYCHAIN_USER.to_string(),
+                    icom_lan_account(0),
+                    icom_lan_account(1)
+                ],
+                KeysToConfirm::default()
+            ),
+            "CONTROL: moved from the station's addresses, removed, and nothing waits"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A KEY WHOSE REMOVAL FAILS IS HELD BACK, NOT LET GO: a restore that moves Cloudlog and a
+    /// radio's address and drops another radio, on a keychain that refuses every removal, leaves
+    /// each of those keys in the keychain, so each waits for the operator in the same notice, and
+    /// none reaches the network or a sign-in. CONTROL: the same restore on a keychain that
+    /// removes them leaves nothing waiting.
+    #[test]
+    fn a_key_whose_removal_fails_stays_held_and_never_reaches_the_network() {
+        use std::sync::atomic::Ordering;
+        use tempo_app::settings::KeysToConfirm;
+        let (dir, engine) = super::durable_command_tests::engine_on_store("forget-fails", 0);
+        let (url, connections, stop) = counting_listener();
+        let station = station_with(
+            &engine,
+            restore_test_roster(),
+            "https://log.station.example/cloudlog",
+        );
+        let accounts = restore_test_accounts();
+        let all: Vec<&str> = accounts.iter().map(String::as_str).collect();
+        let restore = |refuse_forget: bool| {
+            {
+                let mut eng = engine_lock(&engine);
+                eng.apply_restored_settings(station.clone());
+                eng.set_keys_to_confirm(KeysToConfirm::default());
+            }
+            let mut v: serde_json::Value =
+                serde_json::from_str(&settings_bundle(&engine, Default::default(), None).unwrap())
+                    .unwrap();
+            v["settings"]["cloudlogUrl"] = serde_json::json!(url);
+            v["settings"]["cloudlogStationId"] = serde_json::json!("1");
+            let mut radios: Vec<serde_json::Value> =
+                serde_json::from_value(v["settings"]["radios"].clone()).unwrap();
+            radios[0]["icomLanHost"] = serde_json::json!("192.168.1.99");
+            radios.retain(|r| r["id"] != 1);
+            v["settings"]["radios"] = serde_json::json!(radios);
+            let mut keychain = FakeKeychain::holding(&all);
+            keychain.refuse_forget = refuse_forget;
+            restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                Default::default,
+                |_| true,
+                |change| keychain.change(change),
+            )
+            .unwrap();
+            let waiting = engine_lock(&engine).keys_to_confirm().clone();
+            (keychain.forgot, waiting)
+        };
+        let tried = vec![
+            CLOUDLOG_KEYCHAIN_USER.to_string(),
+            icom_lan_account(0),
+            icom_lan_account(1),
+        ];
+
+        assert_eq!(
+            restore(false),
+            (tried.clone(), KeysToConfirm::default()),
+            "CONTROL: removed, so nothing waits"
+        );
+        assert_eq!(
+            restore(true),
+            (
+                tried,
+                KeysToConfirm {
+                    cloudlog: true,
+                    icom_lan: vec![0, 1],
+                    cloudlog_not_removed: true,
+                    icom_lan_not_removed: vec![0, 1],
+                }
+            ),
+            "each removal refused: each key held back, as one whose removal failed"
+        );
+        assert_eq!(
+            keys_to_confirm_in(engine_lock(&engine).settings())
+                .iter()
+                .map(|k| k.radio_id)
+                .collect::<Vec<_>>(),
+            vec![None, Some(0), Some(1)],
+            "the notice asks about each"
+        );
+        let dto = LoggedQso::from(upload_test_record("120000"));
+        let upload = cloudlog_push_qso_impl(&dto, &engine, || {
+            panic!("the Cloudlog key was read while it waits")
+        });
+        let vault = super::icom_lan_password_tests::MapVault::default();
+        vault.set(0, "PLANTED-PASSWORD").unwrap();
+        stop.store(true, Ordering::SeqCst);
+        assert_eq!(
+            (
+                upload.map_err(|e| e.message),
+                icom_lan_password_for_login(&engine, &vault, 0),
+                connections.load(Ordering::SeqCst)
+            ),
+            (
+                Err(CLOUDLOG_KEY_WAITS.to_string()),
+                Err(ICOM_PASSWORD_WAITS.to_string()),
+                0
+            ),
+            "no upload, no sign-in, nothing reached the network"
+        );
+        assert_eq!(
+            answer_key_to_confirm(&engine, Some(1), true, None, no_key_change),
+            Err(ICOM_PASSWORD_OF_NO_RADIO.to_string()),
+            "the dropped radio's password cannot be let go to a later radio of its id"
+        );
+        assert!(
+            engine_lock(&engine).keys_to_confirm().icom_lan_waits(1),
+            "so it still waits"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A contact for the upload tests: an FT8 QSO with K9NEW at `time` (HHMMSS).
+    fn upload_test_record(time: &str) -> tempo_core::logbook::QsoRecord {
+        let mut log = tempo_core::logbook::Logbook::new();
+        log.import_adif(&format!(
+            "<CALL:5>K9NEW<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20260925<TIME_ON:6>{time}<EOR>"
+        ));
+        let mut rec = tempo_core::logbook::QsoRecord::clone(&log.records()[0]);
+        rec.id = None;
+        rec
+    }
+
+    /// A listener on this computer that counts the connections made to it, closing each at once;
+    /// `stop` ends it, and its count is read after.
+    fn counting_listener() -> (
+        String,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let count = std::sync::Arc::new(AtomicUsize::new(0));
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let (c, st) = (count.clone(), stop.clone());
+        std::thread::spawn(move || {
+            while !st.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((conn, _)) => {
+                        c.fetch_add(1, Ordering::SeqCst);
+                        drop(conn);
+                    }
+                    Err(_) => std::thread::sleep(std::time::Duration::from_millis(5)),
+                }
+            }
+        });
+        (url, count, stop)
+    }
+
+    /// ★ A SAVED KEY THAT WAITS FOR THE OPERATOR NEVER REACHES THE NETWORK: a Cloudlog upload
+    /// reads no key and connects nowhere, saying why; the Icom network sign-in reads no password
+    /// and says why. CONTROL: after the operator's Use the same upload connects to the
+    /// instance with the key, and the sign-in gets its password.
+    #[test]
+    fn a_key_that_waits_never_reaches_the_network_until_use() {
+        use std::sync::atomic::Ordering;
+        use tempo_app::settings::KeysToConfirm;
+        let (dir, engine) = super::durable_command_tests::engine_on_store("key-waits", 0);
+        let (url, connections, stop) = counting_listener();
+        {
+            let mut s = station_with(&engine, restore_test_roster(), "");
+            s.cloudlog_url = url;
+            s.cloudlog_station_id = "1".into();
+            let mut eng = engine_lock(&engine);
+            eng.apply_restored_settings(s);
+            eng.set_keys_to_confirm(KeysToConfirm {
+                cloudlog: true,
+                icom_lan: vec![1],
+                ..Default::default()
+            });
+        }
+        let dto = LoggedQso::from(upload_test_record("120000"));
+        let vault = super::icom_lan_password_tests::MapVault::default();
+        vault.set(1, "PLANTED-PASSWORD").unwrap();
+
+        let waiting = cloudlog_push_qso_impl(&dto, &engine, || {
+            panic!("the Cloudlog key was read while it waits")
+        });
+        assert_eq!(
+            waiting.map_err(|e| e.message),
+            Err(CLOUDLOG_KEY_WAITS.to_string()),
+            "the upload says why"
+        );
+        assert_eq!(
+            icom_lan_password_for_login(&engine, &vault, 1),
+            Err(ICOM_PASSWORD_WAITS.to_string()),
+            "the radio does not sign in, and says why"
+        );
+        assert_eq!(
+            connections.load(Ordering::SeqCst),
+            0,
+            "nothing reached the instance"
+        );
+
+        let shown = keys_to_confirm_in(engine_lock(&engine).settings());
+        answer_key_to_confirm(&engine, None, true, Some(&shown[0].address), no_key_change).unwrap();
+        answer_key_to_confirm(&engine, Some(1), true, Some("radio-b.local"), no_key_change)
+            .unwrap();
+        assert_eq!(
+            engine_lock(&engine).keys_to_confirm(),
+            &KeysToConfirm::default(),
+            "Use: nothing waits"
+        );
+        let mut read = false;
+        let _ = cloudlog_push_qso_impl(&dto, &engine, || {
+            read = true;
+            Ok("PLANTED-KEY".into())
+        });
+        stop.store(true, Ordering::SeqCst);
+        assert!(
+            read && connections.load(Ordering::SeqCst) > 0,
+            "CONTROL: after Use the key is read and the upload reaches the instance"
+        );
+        assert_eq!(
+            icom_lan_password_for_login(&engine, &vault, 1),
+            Ok(Some("PLANTED-PASSWORD".to_string())),
+            "CONTROL: after Use the sign-in gets its password"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A RESTORE THAT LANDS WHILE A CLOUDLOG UPLOAD READS ITS KEY STOPS THAT UPLOAD: the key read
+    /// then may be the one kept for the restored address, so it never goes to the address read
+    /// before. Nothing reaches the old address, and the refusal says why. CONTROL: with nothing
+    /// changing meanwhile, the same upload reaches it.
+    #[test]
+    fn a_restore_landing_mid_upload_never_pairs_the_old_address_with_the_new_key() {
+        use std::sync::atomic::Ordering;
+        let (dir, engine) = super::durable_command_tests::engine_on_store("key-mid-send", 0);
+        let (url, connections, stop) = counting_listener();
+        let station = {
+            let mut s = station_with(&engine, restore_test_roster(), "");
+            s.cloudlog_url = url;
+            s.cloudlog_station_id = "1".into();
+            s
+        };
+        engine_lock(&engine).apply_restored_settings(station.clone());
+        let dto = LoggedQso::from(upload_test_record("120000"));
+        let landed = cloudlog_push_qso_impl(&dto, &engine, || {
+            let mut moved = station.clone();
+            moved.cloudlog_url = "https://log.restored.example/cloudlog".into();
+            engine_lock(&engine).apply_restored_settings(moved);
+            Ok("PLANTED-RESTORED-KEY".into())
+        });
+        assert_eq!(
+            (
+                landed.map_err(|e| e.message),
+                connections.load(Ordering::SeqCst)
+            ),
+            (Err(CLOUDLOG_CHANGED_MID_SEND.to_string()), 0),
+            "a restore landed during the read: nothing sent to the old address"
+        );
+
+        engine_lock(&engine).apply_restored_settings(station.clone());
+        let _ = cloudlog_push_qso_impl(&dto, &engine, || Ok("PLANTED-KEY".into()));
+        stop.store(true, Ordering::SeqCst);
+        assert!(
+            connections.load(Ordering::SeqCst) > 0,
+            "CONTROL: nothing changed meanwhile: the upload reaches the instance"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ REMOVE FORGETS A KEY THAT WAITS, and nothing waits for it any more; each answer touches
+    /// its own key alone. CONTROL: a keychain that cannot remove it leaves it waiting (never
+    /// sent), and an answer about a key that does not wait changes nothing.
+    #[test]
+    fn remove_forgets_a_key_that_waits() {
+        use tempo_app::settings::KeysToConfirm;
+        let (dir, engine) = super::durable_command_tests::engine_on_store("key-remove", 0);
+        let waiting = KeysToConfirm {
+            cloudlog: true,
+            icom_lan: vec![1, 2],
+            ..Default::default()
+        };
+        engine_lock(&engine).set_keys_to_confirm(waiting.clone());
+        let now = || engine_lock(&engine).keys_to_confirm().clone();
+
+        assert_eq!(
+            answer_key_to_confirm(&engine, Some(1), false, None, |_| Err("locked".into())),
+            Err("locked".to_string()),
+            "CONTROL: the keychain refused"
+        );
+        assert_eq!(now(), waiting, "CONTROL: so it still waits");
+        answer_key_to_confirm(&engine, Some(5), false, None, no_key_change).unwrap();
+        assert_eq!(now(), waiting, "CONTROL: radio 5's did not wait");
+
+        let accounts = restore_test_accounts();
+        let all: Vec<&str> = accounts.iter().map(String::as_str).collect();
+        let mut keychain = FakeKeychain::holding(&all);
+        answer_key_to_confirm(&engine, Some(1), false, None, |c| keychain.change(c)).unwrap();
+        assert_eq!(
+            (keychain.forgot.clone(), now()),
+            (
+                vec![icom_lan_account(1)],
+                KeysToConfirm {
+                    cloudlog: true,
+                    icom_lan: vec![2],
+                    ..Default::default()
+                }
+            ),
+            "radio 1's removed, and it waits no more"
+        );
+        answer_key_to_confirm(&engine, None, false, None, |c| keychain.change(c)).unwrap();
+        assert_eq!(
+            (keychain.forgot.clone(), now()),
+            (
+                vec![icom_lan_account(1), CLOUDLOG_KEYCHAIN_USER.to_string()],
+                KeysToConfirm {
+                    cloudlog: false,
+                    icom_lan: vec![2],
+                    ..Default::default()
+                }
+            ),
+            "Cloudlog's removed too"
+        );
+        assert!(
+            keychain.held.contains_key(&icom_lan_account(2)),
+            "radio 2's kept"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A notice's Remove of the Cloudlog key that waits, held at its keychain delete while
+    /// `meanwhile` runs on another thread: it lands before the delete when nothing keeps it out,
+    /// and when something does it waits, and the delete goes on after a short while. What the
+    /// Remove answered.
+    fn a_remove_raced_by(
+        engine: &SharedEngine,
+        keychain: &std::sync::Mutex<FakeKeychain>,
+        meanwhile: impl FnOnce() + Send,
+    ) -> Result<(), String> {
+        let (at_delete, held_there) = std::sync::mpsc::channel();
+        let (landed, meanwhile_done) = std::sync::mpsc::channel();
+        std::thread::scope(|s| {
+            let remove = s.spawn(move || {
+                answer_key_to_confirm(engine, None, false, None, |change| {
+                    if matches!(change, KeychainChange::Forget(_)) {
+                        at_delete.send(()).unwrap();
+                        let _ = meanwhile_done.recv_timeout(std::time::Duration::from_millis(400));
+                    }
+                    keychain.lock().unwrap().change(change)
+                })
+            });
+            held_there.recv().unwrap();
+            s.spawn(move || {
+                meanwhile();
+                let _ = landed.send(());
+            });
+            remove.join().unwrap()
+        })
+    }
+
+    /// ★ A REMOVE IN THE NOTICE NEVER DELETES A KEY TYPED IN SETTINGS WHILE IT WAS ON ITS WAY:
+    /// the key the notice asked about is removed, the one typed meanwhile is kept and in use, and
+    /// nothing waits. (Before, the Remove checked the wait, let go, and its delete then took the
+    /// key just typed, while Settings said it was saved.) CONTROL: the Remove did delete once.
+    #[test]
+    fn a_remove_never_deletes_a_key_typed_while_it_was_on_its_way() {
+        use tempo_app::settings::KeysToConfirm;
+        const TYPED: &str = "PLANTED-TYPED-IN-SETTINGS";
+        let (dir, engine) = super::durable_command_tests::engine_on_store("key-race-save", 0);
+        engine_lock(&engine).set_keys_to_confirm(KeysToConfirm {
+            cloudlog: true,
+            ..Default::default()
+        });
+        let keychain = std::sync::Mutex::new(FakeKeychain::holding(&[CLOUDLOG_KEYCHAIN_USER]));
+        a_remove_raced_by(&engine, &keychain, || {
+            key_typed_in_settings(&engine, None, || {
+                keychain
+                    .lock()
+                    .unwrap()
+                    .change(KeychainChange::Store {
+                        account: CLOUDLOG_KEYCHAIN_USER,
+                        key: TYPED,
+                    })
+                    .map(|_| ())
+            })
+            .unwrap()
+        })
+        .unwrap();
+        let kept = keychain.into_inner().unwrap();
+        assert_eq!(
+            (
+                kept.held.get(CLOUDLOG_KEYCHAIN_USER).map(String::as_str),
+                engine_lock(&engine).keys_to_confirm().cloudlog,
+            ),
+            (Some(TYPED), false),
+            "the key typed in Settings is kept, and waits no more"
+        );
+        assert_eq!(
+            kept.forgot,
+            vec![CLOUDLOG_KEYCHAIN_USER.to_string()],
+            "CONTROL: the Remove deleted the key it asked about"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A REMOVE IN THE NOTICE NEVER DELETES THE KEY A RESTORE PUT IN MEANWHILE: a backup that
+    /// moves Cloudlog and carries its own key, restored while a Remove is on its way, keeps that
+    /// key in the keychain. CONTROL: the Remove deleted the station's key it asked about.
+    #[test]
+    fn a_remove_never_deletes_the_key_a_restore_put_in_meanwhile() {
+        use tempo_app::settings::KeysToConfirm;
+        const BACKUP_KEY: &str = "PLANTED-BACKUP-OWN-KEY";
+        let (dir, engine) = super::durable_command_tests::engine_on_store("key-race-restore", 0);
+        let station = station_with(
+            &engine,
+            restore_test_roster(),
+            "https://log.station.example/cloudlog",
+        );
+        engine_lock(&engine).apply_restored_settings(station);
+        let mut v: serde_json::Value =
+            serde_json::from_str(&settings_bundle(&engine, Default::default(), None).unwrap())
+                .unwrap();
+        v["settings"]["cloudlogUrl"] = serde_json::json!("https://log.other.example/cloudlog");
+        v["settings"]["cloudlogKey"] = serde_json::json!(BACKUP_KEY);
+        engine_lock(&engine).set_keys_to_confirm(KeysToConfirm {
+            cloudlog: true,
+            ..Default::default()
+        });
+        let keychain = std::sync::Mutex::new(FakeKeychain::holding(&[CLOUDLOG_KEYCHAIN_USER]));
+        a_remove_raced_by(&engine, &keychain, || {
+            restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                Default::default,
+                |_| true,
+                |change| keychain.lock().unwrap().change(change),
+            )
+            .unwrap();
+        })
+        .unwrap();
+        let kept = keychain.into_inner().unwrap();
+        assert_eq!(
+            kept.held.get(CLOUDLOG_KEYCHAIN_USER).map(String::as_str),
+            Some(BACKUP_KEY),
+            "the backup's own key is kept"
+        );
+        assert_eq!(
+            kept.forgot,
+            vec![CLOUDLOG_KEYCHAIN_USER.to_string()],
+            "CONTROL: the Remove deleted the station's key it asked about"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A REMOVE PRESSED WHILE A SETTINGS SAVE IS ON ITS WAY WAITS FOR IT, THEN FINDS NOTHING
+    /// WAITING: the key typed is kept and nothing is deleted. (A Remove that checked the wait
+    /// before its turn would delete the key just typed.)
+    #[test]
+    fn a_remove_pressed_during_a_save_finds_nothing_waiting() {
+        use tempo_app::settings::KeysToConfirm;
+        const TYPED: &str = "PLANTED-SAVED-FIRST";
+        let (dir, engine) = super::durable_command_tests::engine_on_store("key-race-save-first", 0);
+        engine_lock(&engine).set_keys_to_confirm(KeysToConfirm {
+            cloudlog: true,
+            ..Default::default()
+        });
+        let keychain = std::sync::Mutex::new(FakeKeychain::holding(&[CLOUDLOG_KEYCHAIN_USER]));
+        let (at_write, held_there) = std::sync::mpsc::channel();
+        let (landed, remove_done) = std::sync::mpsc::channel();
+        std::thread::scope(|s| {
+            let (engine, keychain) = (&engine, &keychain);
+            let save = s.spawn(move || {
+                key_typed_in_settings(engine, None, || {
+                    at_write.send(()).unwrap();
+                    let _ = remove_done.recv_timeout(std::time::Duration::from_millis(400));
+                    keychain
+                        .lock()
+                        .unwrap()
+                        .change(KeychainChange::Store {
+                            account: CLOUDLOG_KEYCHAIN_USER,
+                            key: TYPED,
+                        })
+                        .map(|_| ())
+                })
+            });
+            held_there.recv().unwrap();
+            let remove = s.spawn(move || {
+                let r = answer_key_to_confirm(engine, None, false, None, |c| {
+                    keychain.lock().unwrap().change(c)
+                });
+                let _ = landed.send(());
+                r
+            });
+            save.join().unwrap().unwrap();
+            remove.join().unwrap().unwrap();
+        });
+        let kept = keychain.into_inner().unwrap();
+        assert_eq!(
+            (
+                kept.held.get(CLOUDLOG_KEYCHAIN_USER).map(String::as_str),
+                kept.forgot.len(),
+                engine_lock(&engine).keys_to_confirm().cloudlog,
+            ),
+            (Some(TYPED), 0, false),
+            "the key typed is kept, nothing deleted, nothing waits"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A KEY TYPED WHILE A RESTORE BRINGS CLOUDLOG AN ADDRESS THE STATION HAD NONE FOR WAITS FOR
+    /// THAT ADDRESS: the restore asks the keychain only after the save, so it sees the key and
+    /// holds it back, and the key is never sent to the backup's server unasked. (A restore that
+    /// asked the keychain before its turn would see none, and let the typed key go there.)
+    #[test]
+    fn a_key_typed_during_a_restore_to_a_new_address_waits() {
+        use tempo_app::settings::KeysToConfirm;
+        let (dir, engine) = super::durable_command_tests::engine_on_store("key-race-unknown", 0);
+        let station = station_with(&engine, restore_test_roster(), "");
+        engine_lock(&engine).apply_restored_settings(station);
+        let mut v: serde_json::Value =
+            serde_json::from_str(&settings_bundle(&engine, Default::default(), None).unwrap())
+                .unwrap();
+        v["settings"]["cloudlogUrl"] = serde_json::json!("https://log.other.example/cloudlog");
+        engine_lock(&engine).set_keys_to_confirm(KeysToConfirm::default());
+        let keychain = std::sync::Mutex::new(FakeKeychain::holding(&[]));
+        let (at_write, held_there) = std::sync::mpsc::channel();
+        let (landed, restore_done) = std::sync::mpsc::channel();
+        std::thread::scope(|s| {
+            let (engine, keychain, v) = (&engine, &keychain, &v);
+            let save = s.spawn(move || {
+                key_typed_in_settings(engine, None, || {
+                    at_write.send(()).unwrap();
+                    let _ = restore_done.recv_timeout(std::time::Duration::from_millis(400));
+                    keychain
+                        .lock()
+                        .unwrap()
+                        .change(KeychainChange::Store {
+                            account: CLOUDLOG_KEYCHAIN_USER,
+                            key: "PLANTED-TYPED-BEFORE-RESTORE",
+                        })
+                        .map(|_| ())
+                })
+            });
+            held_there.recv().unwrap();
+            s.spawn(move || {
+                restore_settings_bundle(
+                    engine,
+                    v.to_string(),
+                    Default::default,
+                    |_| true,
+                    |c| keychain.lock().unwrap().change(c),
+                )
+                .unwrap();
+                let _ = landed.send(());
+            });
+            save.join().unwrap().unwrap();
+        });
+        assert!(
+            engine_lock(&engine).keys_to_confirm().cloudlog,
+            "the key typed before the restore waits for the backup's address"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ ADDING A RADIO NEVER DELETES THE PASSWORD TYPED FOR IT WHILE ITS LEFTOVER CHECK WAITS ON
+    /// THE KEYCHAIN: the clear of any password left under the new id runs first, and the one
+    /// typed meanwhile lands after it and is kept.
+    #[test]
+    fn adding_a_radio_never_deletes_a_password_typed_meanwhile() {
+        struct SlowVault {
+            map: std::sync::Mutex<std::collections::BTreeMap<u32, String>>,
+            at_clear: std::sync::Mutex<Option<std::sync::mpsc::Sender<()>>>,
+            go: std::sync::Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+        }
+        impl IcomLanVault for SlowVault {
+            fn get(&self, id: u32) -> Result<Option<String>, String> {
+                Ok(self.map.lock().unwrap().get(&id).cloned())
+            }
+            fn set(&self, id: u32, p: &str) -> Result<(), String> {
+                self.map.lock().unwrap().insert(id, p.to_string());
+                Ok(())
+            }
+            fn clear(&self, id: u32) -> Result<(), String> {
+                let first = self.at_clear.lock().unwrap().take();
+                if let Some(tx) = first {
+                    tx.send(()).unwrap();
+                    let go = self.go.lock().unwrap().take();
+                    if let Some(rx) = go {
+                        let _ = rx.recv_timeout(std::time::Duration::from_millis(400));
+                    }
+                }
+                self.map.lock().unwrap().remove(&id);
+                Ok(())
+            }
+        }
+        let (dir, engine) = super::durable_command_tests::engine_on_store("key-race-add-radio", 0);
+        let (tx, at_clear) = std::sync::mpsc::channel();
+        let (landed, go) = std::sync::mpsc::channel();
+        let vault = SlowVault {
+            map: Default::default(),
+            at_clear: std::sync::Mutex::new(Some(tx)),
+            go: std::sync::Mutex::new(Some(go)),
+        };
+        let mut id = 0;
+        std::thread::scope(|s| {
+            let add = s.spawn(|| add_radio_without_a_password(&engine, &vault).map(|_| ()));
+            at_clear.recv().unwrap();
+            id = engine_lock(&engine)
+                .settings()
+                .radios
+                .iter()
+                .map(|r| r.id)
+                .max()
+                .unwrap();
+            let id = id;
+            let vault = &vault;
+            let engine = &engine;
+            s.spawn(move || {
+                key_typed_in_settings(engine, Some(id), || {
+                    icom_lan_set_password(vault, id, "PLANTEDTYPED".to_string())
+                })
+                .unwrap();
+                let _ = landed.send(());
+            });
+            add.join().unwrap().unwrap();
+        });
+        assert_eq!(
+            vault.map.lock().unwrap().get(&id).map(String::as_str),
+            Some("PLANTEDTYPED"),
+            "the password typed for the new radio is kept"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ REMOVING A RADIO AND THE NOTICE'S REMOVE OF ITS PASSWORD TAKE TURNS: with the radio's
+    /// password removal waiting on the keychain, a Remove pressed for that radio in the notice
+    /// waits, then finds nothing waiting, so the password is deleted once and nothing waits.
+    #[test]
+    fn removing_a_radio_and_the_notices_remove_take_turns() {
+        struct SlowVault {
+            map: std::sync::Mutex<std::collections::BTreeMap<u32, String>>,
+            deletes: std::sync::atomic::AtomicUsize,
+            at_clear: std::sync::Mutex<Option<std::sync::mpsc::Sender<()>>>,
+            go: std::sync::Mutex<Option<std::sync::mpsc::Receiver<()>>>,
+        }
+        impl IcomLanVault for SlowVault {
+            fn get(&self, id: u32) -> Result<Option<String>, String> {
+                Ok(self.map.lock().unwrap().get(&id).cloned())
+            }
+            fn set(&self, id: u32, p: &str) -> Result<(), String> {
+                self.map.lock().unwrap().insert(id, p.to_string());
+                Ok(())
+            }
+            fn clear(&self, id: u32) -> Result<(), String> {
+                let first = self.at_clear.lock().unwrap().take();
+                if let Some(tx) = first {
+                    tx.send(()).unwrap();
+                    let go = self.go.lock().unwrap().take();
+                    if let Some(rx) = go {
+                        let _ = rx.recv_timeout(std::time::Duration::from_millis(400));
+                    }
+                }
+                self.deletes
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                self.map.lock().unwrap().remove(&id);
+                Ok(())
+            }
+        }
+        let (dir, engine) = super::durable_command_tests::engine_on_store("key-race-rm-radio", 0);
+        let station = station_with(&engine, restore_test_roster(), "");
+        engine_lock(&engine).apply_restored_settings(station);
+        let (tx, at_clear) = std::sync::mpsc::channel();
+        let (landed, go) = std::sync::mpsc::channel();
+        let vault = SlowVault {
+            map: std::sync::Mutex::new([(1, "PLANTED-RADIO-1".to_string())].into()),
+            deletes: Default::default(),
+            at_clear: std::sync::Mutex::new(Some(tx)),
+            go: std::sync::Mutex::new(Some(go)),
+        };
+        std::thread::scope(|s| {
+            let (engine, vault) = (&engine, &vault);
+            let remove_radio = s.spawn(move || remove_radio_and_its_password(engine, 1, vault));
+            at_clear.recv().unwrap();
+            s.spawn(move || {
+                answer_key_to_confirm(engine, Some(1), false, None, |_| {
+                    vault.clear(1).map(|()| true)
+                })
+                .unwrap();
+                let _ = landed.send(());
+            });
+            remove_radio.join().unwrap().unwrap();
+        });
+        assert_eq!(
+            (
+                vault.deletes.load(std::sync::atomic::Ordering::SeqCst),
+                vault.map.lock().unwrap().get(&1).cloned(),
+                engine_lock(&engine).keys_to_confirm().icom_lan_waits(1),
+            ),
+            (1, None, false),
+            "the password deleted once, by the radio's removal; nothing waits"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ USE CONFIRMS THE ADDRESS THE NOTICE SHOWED, AND NO OTHER: when a restore or a Save moves
+    /// the Cloudlog URL or a radio's network address after the notice asked, Use is refused, the
+    /// key still waits, and the notice asks again about the new address. CONTROL: Use with the
+    /// address shown lets it go.
+    #[test]
+    fn use_confirms_only_the_address_the_notice_showed() {
+        use tempo_app::settings::KeysToConfirm;
+        let (dir, engine) = super::durable_command_tests::engine_on_store("key-shown", 0);
+        {
+            let station = station_with(
+                &engine,
+                restore_test_roster(),
+                "https://log.shown.example/cloudlog",
+            );
+            let mut eng = engine_lock(&engine);
+            eng.apply_restored_settings(station);
+            eng.set_keys_to_confirm(KeysToConfirm {
+                cloudlog: true,
+                icom_lan: vec![1],
+                ..Default::default()
+            });
+        }
+        let shown = keys_to_confirm_in(engine_lock(&engine).settings());
+        assert_eq!(
+            shown.iter().map(|k| k.address.as_str()).collect::<Vec<_>>(),
+            vec!["https://log.shown.example/cloudlog", "radio-b.local"],
+            "premise: the notice shows each address"
+        );
+        {
+            let mut eng = engine_lock(&engine);
+            let mut s = eng.settings().clone();
+            s.cloudlog_url = "https://log.moved.example/cloudlog".into();
+            s.radios[1].icom_lan_host = "radio-moved.local".into();
+            eng.apply_restored_settings(s);
+        }
+        let waiting = || engine_lock(&engine).keys_to_confirm().clone();
+        assert_eq!(
+            (
+                answer_key_to_confirm(&engine, None, true, Some(&shown[0].address), no_key_change),
+                answer_key_to_confirm(
+                    &engine,
+                    Some(1),
+                    true,
+                    Some(&shown[1].address),
+                    no_key_change
+                ),
+                waiting()
+            ),
+            (
+                Err(KEY_ADDRESS_CHANGED.to_string()),
+                Err(KEY_ADDRESS_CHANGED.to_string()),
+                KeysToConfirm {
+                    cloudlog: true,
+                    icom_lan: vec![1],
+                    ..Default::default()
+                }
+            ),
+            "moved since the notice asked: refused, and both still wait"
+        );
+        let now = keys_to_confirm_in(engine_lock(&engine).settings());
+        answer_key_to_confirm(&engine, None, true, Some(&now[0].address), no_key_change).unwrap();
+        answer_key_to_confirm(&engine, Some(1), true, Some(&now[1].address), no_key_change)
+            .unwrap();
+        assert_eq!(
+            waiting(),
+            KeysToConfirm::default(),
+            "CONTROL: Use with the address shown lets each go"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A CONTACT'S CLOUDLOG UPLOAD WAITS ON THE QUEUE WHILE THE KEY DOES: the leg goes back as it
+    /// was, no attempt spent, due again later, and the contact's other services go now. CONTROL:
+    /// with nothing waiting every leg goes now and nothing is put back.
+    #[test]
+    fn a_contacts_cloudlog_upload_waits_on_the_queue_while_the_key_does() {
+        use tempo_app::engine::upload_legs as legs;
+        use tempo_app::settings::KeysToConfirm;
+        let engine: SharedEngine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        let queued = |time: &str| {
+            let mut eng = engine_lock(&engine);
+            eng.log_qso(upload_test_record(time));
+            let mut p = eng.take_pending_uploads().pop().expect("queued");
+            p.attempts = 2;
+            p
+        };
+        let now = 1_000_000;
+
+        let p = queued("120000");
+        assert_eq!(
+            hold_a_waiting_cloudlog_leg(&engine, &p, now),
+            p.legs,
+            "CONTROL: nothing waits, every leg goes"
+        );
+        assert!(
+            engine_lock(&engine).take_pending_uploads().is_empty(),
+            "CONTROL: nothing put back"
+        );
+
+        engine_lock(&engine).set_keys_to_confirm(KeysToConfirm {
+            cloudlog: true,
+            icom_lan: vec![],
+            ..Default::default()
+        });
+        let p = queued("121500");
+        assert_ne!(p.legs & legs::CLOUDLOG, 0, "premise: it owes Cloudlog");
+        assert_eq!(
+            hold_a_waiting_cloudlog_leg(&engine, &p, now),
+            p.legs & !legs::CLOUDLOG,
+            "the other services go now"
+        );
+        let back: Vec<_> = engine_lock(&engine)
+            .take_pending_uploads()
+            .into_iter()
+            .map(|b| (b.rec.call, b.legs, b.attempts, b.retry_after_unix > now))
+            .collect();
+        assert_eq!(
+            back,
+            vec![("K9NEW".to_string(), legs::CLOUDLOG, 2, true)],
+            "Cloudlog's leg waits on the queue, unspent, due later"
+        );
+    }
+
+    /// ★ HELD CATCH-UP CONTACTS SAY NOTHING AND STAY QUEUED: a catch-up contact whose only leg
+    /// left is a Cloudlog upload held back writes no "catch-up: sending" line and still counts
+    /// as queued, put back to come round later. (Their pacing after Use:
+    /// `held_cloudlog_catch_ups_take_no_pacing_slots_and_line_up_after_use`.) CONTROL: with
+    /// nothing waiting, it goes, says so, and counts as sent.
+    #[test]
+    fn held_catch_up_contacts_say_nothing_and_stay_queued() {
+        use tempo_app::engine::{upload_legs as legs, PendingUpload, UploadOrigin};
+        use tempo_app::settings::KeysToConfirm;
+        let engine: SharedEngine = Arc::new(Mutex::new(Engine::new("KD9TAW", "EN52", 0)));
+        let catch_up = |call: &str| {
+            let mut rec = upload_test_record("120000");
+            rec.call = call.into();
+            PendingUpload {
+                rec,
+                origin: UploadOrigin::CatchUp,
+                legs: legs::CLOUDLOG,
+                attempts: 0,
+                retry_after_unix: 0,
+                corrected: false,
+            }
+        };
+        let said = |call: &str| {
+            get_connection_log().iter().any(|e| {
+                e.message
+                    .starts_with(&format!("catch-up: sending an older QSO with {call} "))
+            })
+        };
+        let now = 1_000_000;
+        engine_lock(&engine).set_keys_to_confirm(KeysToConfirm {
+            cloudlog: true,
+            icom_lan: vec![],
+            ..Default::default()
+        });
+        let mut left = 3;
+        let sent = [
+            legs_to_send_now(&engine, &catch_up("K9HLDA"), now, &mut left),
+            legs_to_send_now(&engine, &catch_up("K9HLDB"), now, &mut left),
+        ];
+        assert_eq!(
+            (sent, left, said("K9HLDA"), said("K9HLDB")),
+            ([0, 0], 3, false, false),
+            "held: nothing sent, nothing said, both still queued"
+        );
+        let mut due: Vec<i64> = engine_lock(&engine)
+            .take_pending_uploads()
+            .into_iter()
+            .map(|b| b.retry_after_unix)
+            .collect();
+        due.sort_unstable();
+        assert!(
+            due.len() == 2 && due[0] > now,
+            "put back, both later: {due:?}"
+        );
+
+        engine_lock(&engine).set_keys_to_confirm(KeysToConfirm::default());
+        assert_eq!(
+            (
+                legs_to_send_now(&engine, &catch_up("K9GOES"), now, &mut left),
+                left,
+                said("K9GOES")
+            ),
+            (legs::CLOUDLOG, 2, true),
+            "CONTROL: nothing waits: it goes, says so, and counts as sent"
+        );
+    }
+
+    /// The notice's list: Cloudlog's key with its URL, and each radio's password with its name and
+    /// address, the port named only when it is not the usual one.
+    #[test]
+    fn the_notice_lists_each_key_that_waits_with_its_address() {
+        use tempo_app::settings::KeysToConfirm;
+        let mut s = tempo_app::settings::Settings {
+            cloudlog_url: " https://log.example/ ".into(),
+            radios: restore_test_roster(),
+            ..Default::default()
+        };
+        s.radios[1].icom_lan_port = 50011;
+        s.keys_to_confirm = KeysToConfirm {
+            cloudlog: true,
+            icom_lan: vec![0, 1],
+            ..Default::default()
+        };
+        let key = |radio_id, radio: &str, address: &str| KeyToConfirm {
+            radio_id,
+            radio: radio.into(),
+            address: address.into(),
+            removal_failed: false,
+        };
+        assert_eq!(
+            keys_to_confirm_in(&s),
+            vec![
+                key(None, "", "https://log.example/"),
+                key(Some(0), "Restore Test IC-705", "192.168.1.20"),
+                key(Some(1), "Restore Test IC-9700", "radio-b.local:50011"),
+            ]
+        );
+        s.keys_to_confirm = KeysToConfirm::default();
+        assert_eq!(keys_to_confirm_in(&s), Vec::new(), "CONTROL: none waits");
+    }
+
+    /// ★ THE NOTICE ASKS ABOUT A RADIO'S PASSWORD ONLY ONCE THE RADIO HAS A NETWORK ADDRESS: a
+    /// radio on the roster with no Icom network host cannot sign in, so its password's wait is
+    /// kept but not shown (a radio just added on a computer whose keychain cannot remove
+    /// anything). A radio no longer on the roster is still shown, so it can be removed. CONTROL:
+    /// given a host, the radio is shown, as one whose removal failed.
+    #[test]
+    fn the_notice_shows_a_radios_password_only_once_it_has_a_network_host() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("notice-no-host", 0);
+        let station = station_with(&engine, restore_test_roster(), "");
+        engine_lock(&engine).apply_restored_settings(station);
+        let vault = super::icom_lan_password_tests::LockedVault::default();
+        add_radio_without_a_password(&engine, &vault).unwrap();
+        let shown = || {
+            keys_to_confirm_in(engine_lock(&engine).settings())
+                .into_iter()
+                .map(|k| (k.radio_id, k.address, k.removal_failed))
+                .collect::<Vec<_>>()
+        };
+        let waits = |id| engine_lock(&engine).keys_to_confirm().icom_lan_waits(id);
+        assert_eq!(
+            (waits(4), shown()),
+            (true, vec![]),
+            "the new radio 4 with no host: held back, not shown"
+        );
+        {
+            let mut eng = engine_lock(&engine);
+            let mut keys = eng.keys_to_confirm().clone();
+            keys.icom_lan.push(9);
+            eng.set_keys_to_confirm(keys);
+        }
+        assert_eq!(
+            shown(),
+            vec![(Some(9), String::new(), false)],
+            "a radio no longer on the roster is shown, to be removed"
+        );
+        {
+            let mut eng = engine_lock(&engine);
+            let mut s = eng.settings().clone();
+            s.radios
+                .iter_mut()
+                .find(|r| r.id == 4)
+                .unwrap()
+                .icom_lan_host = "192.168.1.44".into();
+            eng.apply_restored_settings(s);
+        }
+        assert_eq!(
+            shown(),
+            vec![
+                (Some(4), "192.168.1.44".to_string(), true),
+                (Some(9), String::new(), false)
+            ],
+            "CONTROL: with a host, radio 4 is shown, as one whose removal failed"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A KEY KEPT ONLY BECAUSE REMOVING IT FAILED IS NEVER OFFERED FOR USE: a restore that
+    /// moves Cloudlog and a radio's address on a keychain that refuses to remove their keys
+    /// leaves both in the notice as removal failures, and Use with the backup's address is
+    /// refused, so the station's own key never goes there. Remove still works, and the mark goes
+    /// with the wait. CONTROL: a key held back for an address the station had none for (a
+    /// fresh install) is no removal failure, and Use lets it go.
+    #[test]
+    fn a_key_whose_removal_failed_is_never_offered_for_use() {
+        use tempo_app::settings::KeysToConfirm;
+        let (dir, engine) = super::durable_command_tests::engine_on_store("not-removed-use", 0);
+        let station = station_with(
+            &engine,
+            restore_test_roster(),
+            "https://log.station.example/cloudlog",
+        );
+        engine_lock(&engine).apply_restored_settings(station);
+        let mut v: serde_json::Value =
+            serde_json::from_str(&settings_bundle(&engine, Default::default(), None).unwrap())
+                .unwrap();
+        v["settings"]["cloudlogUrl"] = serde_json::json!("https://log.backup.example/cloudlog");
+        v["settings"]["radios"][0]["icomLanHost"] = serde_json::json!("192.168.1.99");
+        let accounts = restore_test_accounts();
+        let all: Vec<&str> = accounts.iter().map(String::as_str).collect();
+        let mut keychain = FakeKeychain::holding(&all);
+        keychain.refuse_forget = true;
+        restore_settings_bundle(
+            &engine,
+            v.to_string(),
+            Default::default,
+            |_| true,
+            |change| keychain.change(change),
+        )
+        .unwrap();
+        let shown = keys_to_confirm_in(engine_lock(&engine).settings());
+        assert_eq!(
+            shown
+                .iter()
+                .map(|k| (k.radio_id, k.address.as_str(), k.removal_failed))
+                .collect::<Vec<_>>(),
+            vec![
+                (None, "https://log.backup.example/cloudlog", true),
+                (Some(0), "192.168.1.99", true)
+            ],
+            "both shown as removal failures, with the backup's addresses"
+        );
+        let waiting = || engine_lock(&engine).keys_to_confirm().clone();
+        let before = waiting();
+        assert_eq!(
+            (
+                answer_key_to_confirm(&engine, None, true, Some(&shown[0].address), no_key_change),
+                answer_key_to_confirm(
+                    &engine,
+                    Some(0),
+                    true,
+                    Some(&shown[1].address),
+                    no_key_change
+                ),
+                waiting() == before
+            ),
+            (
+                Err(KEY_NOT_REMOVED.to_string()),
+                Err(KEY_NOT_REMOVED.to_string()),
+                true
+            ),
+            "Use refused for each, and nothing let go"
+        );
+        let dto = LoggedQso::from(upload_test_record("120000"));
+        assert_eq!(
+            cloudlog_push_qso_impl(&dto, &engine, || panic!("the key was read"))
+                .map_err(|e| e.message),
+            Err(CLOUDLOG_KEY_WAITS.to_string()),
+            "and no upload reads the key"
+        );
+        keychain.refuse_forget = false;
+        answer_key_to_confirm(&engine, None, false, Some(&shown[0].address), |c| {
+            keychain.change(c)
+        })
+        .unwrap();
+        assert_eq!(
+            waiting(),
+            KeysToConfirm {
+                icom_lan: vec![0],
+                icom_lan_not_removed: vec![0],
+                ..Default::default()
+            },
+            "Remove works, and the Cloudlog mark goes with its wait"
+        );
+
+        {
+            let mut eng = engine_lock(&engine);
+            eng.set_keys_to_confirm(KeysToConfirm::default());
+            let mut s = eng.settings().clone();
+            s.cloudlog_url.clear();
+            eng.apply_restored_settings(s);
+        }
+        let mut fresh = FakeKeychain::holding(&all);
+        restore_settings_bundle(
+            &engine,
+            v.to_string(),
+            Default::default,
+            |_| true,
+            |change| fresh.change(change),
+        )
+        .unwrap();
+        let shown = keys_to_confirm_in(engine_lock(&engine).settings());
+        assert_eq!(
+            (shown[0].radio_id, shown[0].removal_failed),
+            (None, false),
+            "CONTROL: held for an address the station had none for: no removal failure"
+        );
+        answer_key_to_confirm(&engine, None, true, Some(&shown[0].address), no_key_change).unwrap();
+        assert!(
+            !engine_lock(&engine).keys_to_confirm().cloudlog,
+            "CONTROL: and Use lets it go"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ THE NOTICE'S REMOVE NEVER HOLDS THE ENGINE LOCK WHILE THE KEYCHAIN DELETES: during a
+    /// keyed over, a delete that waits (an unlock prompt) never keeps the radio loop from ending
+    /// the over. The delete here waits for another thread to take the engine lock, and gets it;
+    /// the key still waits while the delete runs. A delete that fails leaves it waiting.
+    /// CONTROL: a delete that succeeds lets it go.
+    #[test]
+    fn the_notices_remove_never_holds_the_engine_lock() {
+        use tempo_app::settings::KeysToConfirm;
+        let (dir, engine) = super::durable_command_tests::engine_on_store("remove-unlocked", 0);
+        let station = station_with(
+            &engine,
+            restore_test_roster(),
+            "https://log.station.example/cloudlog",
+        );
+        {
+            let mut eng = engine_lock(&engine);
+            eng.apply_restored_settings(station);
+            eng.set_keys_to_confirm(KeysToConfirm {
+                cloudlog: true,
+                icom_lan: vec![1],
+                ..Default::default()
+            });
+            eng.app.set_transmitting(true);
+            assert!(eng.on_air(), "premise: keyed");
+        }
+        let waiting = || engine_lock(&engine).keys_to_confirm().clone();
+        let mut seen = Vec::new();
+        let mut remove = |radio_id: Option<u32>, refuse: bool| {
+            answer_key_to_confirm(&engine, radio_id, false, Some(""), |change| {
+                let (tx, rx) = std::sync::mpsc::channel();
+                let other = engine.clone();
+                std::thread::spawn(move || {
+                    let still = engine_lock(&other).keys_to_confirm().clone();
+                    let _ = tx.send(still);
+                });
+                let got = rx.recv_timeout(std::time::Duration::from_secs(2)).ok();
+                seen.push(got.map(|k| (k.cloudlog, k.icom_lan)));
+                if refuse {
+                    return Err("the keychain is locked".into());
+                }
+                no_keychain_change(change)
+            })
+        };
+        assert_eq!(
+            remove(None, true),
+            Err("the keychain is locked".to_string())
+        );
+        remove(Some(1), false).unwrap();
+        assert_eq!(
+            seen,
+            vec![Some((true, vec![1])), Some((true, vec![1]))],
+            "each delete made with the engine lock free, the key still waiting"
+        );
+        assert_eq!(
+            waiting(),
+            KeysToConfirm {
+                cloudlog: true,
+                ..Default::default()
+            },
+            "the refused delete left Cloudlog's waiting; CONTROL: the radio's delete let it go"
+        );
+        engine_lock(&engine).app.set_transmitting(false);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A RESTORE WHILE TX IS ARMED BETWEEN OVERS, OR WHILE THE RADIO LOOP STILL PLAYS A
+    /// VOICE-KEYER MESSAGE OR APRS FRAME ON ITS OWN, IS REFUSED, AND CHANGES NOTHING: the radio
+    /// loop needs the engine lock to key the next over on time, and to end the loop's own
+    /// transmission, and nothing reports either as keyed. CONTROL: disarmed with no loop
+    /// transmission, the same restore goes through.
+    #[test]
+    fn a_restore_while_tx_is_armed_or_the_loop_transmits_is_refused() {
+        const STATION_LOG: &str = "https://log.station.example/cloudlog";
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-armed", 0);
+        let station = station_with(&engine, restore_test_roster(), STATION_LOG);
+        engine_lock(&engine).apply_restored_settings(station);
+        let mut v: serde_json::Value =
+            serde_json::from_str(&settings_bundle(&engine, Default::default(), None).unwrap())
+                .unwrap();
+        v["settings"]["cloudlogUrl"] = serde_json::json!("https://log.other.example/cloudlog");
+        let accounts = restore_test_accounts();
+        let all: Vec<&str> = accounts.iter().map(String::as_str).collect();
+        let restore = || {
+            let mut keychain = FakeKeychain::holding(&all);
+            let out = restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                Default::default,
+                |_| true,
+                |change| keychain.change(change),
+            )
+            .map(|_| ());
+            let url = engine_lock(&engine).settings().cloudlog_url.clone();
+            (out, keychain.forgot, url)
+        };
+        let refused = || {
+            (
+                Err(tempo_app::engine::RESTORE_ON_AIR.to_string()),
+                Vec::<String>::new(),
+                STATION_LOG.to_string(),
+            )
+        };
+
+        engine_lock(&engine).observe_loop_tx_hold(Some(5000.0));
+        assert!(
+            !engine_lock(&engine).on_air(),
+            "premise: nothing reads as keyed"
+        );
+        assert_eq!(
+            restore(),
+            refused(),
+            "the loop's own transmission: refused, nothing changed"
+        );
+        engine_lock(&engine).observe_loop_tx_hold(None);
+        {
+            let mut eng = engine_lock(&engine);
+            assert_eq!(
+                eng.settings().operating_mode,
+                tempo_app::settings::OperatingMode::Digital,
+                "premise: Digital"
+            );
+            eng.set_tx_enabled(true);
+            assert!(
+                eng.tx_enabled() && !eng.on_air(),
+                "premise: armed, not keyed"
+            );
+        }
+        assert_eq!(
+            restore(),
+            refused(),
+            "TX armed between overs: refused, nothing changed"
+        );
+        engine_lock(&engine).set_tx_enabled(false);
+        assert_eq!(
+            restore(),
+            (
+                Ok(()),
+                vec![CLOUDLOG_KEYCHAIN_USER.to_string()],
+                "https://log.other.example/cloudlog".to_string()
+            ),
+            "CONTROL: disarmed, nothing on the air: restored, the moved key removed"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ HELD CLOUDLOG CATCH-UPS TAKE NO SLOT FROM THE OTHER SERVICES' CATCH-UP: while the key
+    /// waits, held catch-up contacts come round again on a time of their own, and a ClubLog
+    /// catch-up queued meanwhile is due at once, not behind them. When Use lets the key go, the
+    /// held ones take their slots in the catch-up's pacing once, after the ClubLog one, one
+    /// spacing apart. CONTROL: the same with nothing waiting sends at once.
+    #[test]
+    fn held_cloudlog_catch_ups_take_no_pacing_slots_and_line_up_after_use() {
+        use tempo_app::engine::{upload_legs as legs, PendingUpload, UploadOrigin};
+        use tempo_app::settings::KeysToConfirm;
+        let (dir, engine) = super::durable_command_tests::engine_on_store("held-lane", 0);
+        let station = station_with(
+            &engine,
+            restore_test_roster(),
+            "https://log.shown.example/cloudlog",
+        );
+        engine_lock(&engine).apply_restored_settings(station);
+        let catch_up = |call: &str, leg: u8| {
+            let mut rec = upload_test_record("120000");
+            rec.call = call.into();
+            PendingUpload {
+                rec,
+                origin: UploadOrigin::CatchUp,
+                legs: leg,
+                attempts: 0,
+                retry_after_unix: 0,
+                corrected: false,
+            }
+        };
+        let now = now_unix();
+        engine_lock(&engine).set_keys_to_confirm(KeysToConfirm {
+            cloudlog: true,
+            ..Default::default()
+        });
+        let mut left = 3;
+        for call in ["K9HLDA", "K9HLDB"] {
+            assert_eq!(
+                legs_to_send_now(&engine, &catch_up(call, legs::CLOUDLOG), now, &mut left),
+                0,
+                "premise: held"
+            );
+        }
+        let clublog = catch_up("K9CLUB", legs::CLUBLOG);
+        engine_lock(&engine).requeue_catch_up(vec![(clublog.rec, legs::CLUBLOG)]);
+        let due = |legs_of: u8| {
+            let mut eng = engine_lock(&engine);
+            let all = eng.take_pending_uploads();
+            let mut times: Vec<i64> = all
+                .iter()
+                .filter(|p| p.legs == legs_of)
+                .map(|p| p.retry_after_unix)
+                .collect();
+            times.sort_unstable();
+            for p in all {
+                eng.requeue_upload_at(p.rec, p.legs, p.attempts, p.retry_after_unix, p.origin);
+            }
+            times
+        };
+        let clublog_due = due(legs::CLUBLOG)[0];
+        assert!(
+            clublog_due <= now + 2,
+            "the ClubLog catch-up is due at once, not behind the held ones: {clublog_due} vs {now}"
+        );
+        assert!(
+            due(legs::CLOUDLOG).iter().all(|&t| t > now),
+            "held ones come round later"
+        );
+
+        answer_key_to_confirm(
+            &engine,
+            None,
+            true,
+            Some("https://log.shown.example/cloudlog"),
+            no_key_change,
+        )
+        .unwrap();
+        let held = due(legs::CLOUDLOG);
+        assert!(
+            held.len() == 2
+                && held[0] - clublog_due >= tempo_app::engine::CATCHUP_UPLOAD_SPACING_SECS
+                && held[1] - held[0] >= tempo_app::engine::CATCHUP_UPLOAD_SPACING_SECS,
+            "after Use, in line behind the ClubLog one, a spacing apart: {held:?} after {clublog_due}"
+        );
+        let _ = engine_lock(&engine).take_pending_uploads();
+        assert_eq!(
+            legs_to_send_now(&engine, &catch_up("K9GOES", legs::CLOUDLOG), now, &mut left),
+            legs::CLOUDLOG,
+            "CONTROL: nothing waits: it goes"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -14847,11 +19450,15 @@ mod contest_session_tests {
     /// An engine on a store of its own, with the Field Day master left on — the station a launch
     /// resumes Field Day on — and not in Field Day yet.
     fn field_day_left_on(tag: &str) -> (PathBuf, SharedEngine) {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("nexus-resume-{tag}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-resume-{tag}-{nanos}-{}",
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).expect("scratch");
         std::fs::write(dir.join("log.adi"), tempo_core::logbook::adif_header()).expect("log");
         let opened = tempo_app::logstore::open(
@@ -14960,6 +19567,7 @@ fn restart_live_feeds(
         if let Ok(mut b) = spots.lock() {
             *b = tempo_net::cluster::SpotBuffer::default();
         }
+        clear_spot_iota();
         if let Ok(mut b) = live_paths.lock() {
             *b = propagation::LiveSpots::default();
         }
@@ -15078,8 +19686,11 @@ async fn export_selected_log(
 /// a key that becomes public. A backup that silently carried it would revoke the operator's ClubLog
 /// access the first time they shared the file for help.
 ///
-/// A restore therefore does not put it back, and the operator re-enters it. That is the correct
-/// trade: re-typing one key beats a key that stops working for reasons nobody can see.
+/// A restore therefore does not put it back: the station keeps the key it has saved, and a new
+/// computer has the operator re-enter it. That is the correct trade: re-typing one key beats a key
+/// that stops working for reasons nobody can see. Each saved profile's stored keys are left out the
+/// same way ([`redact_profile_for_backup`]), and kept the same way on a restore
+/// ([`keep_the_stations_profile_keys`]).
 ///
 /// The fields are `command_dispatch::SECRET_SETTINGS`, the one list a read from afar blanks and a
 /// save from afar keeps too, so the three cannot drift apart.
@@ -15090,6 +19701,16 @@ fn redact_for_backup(mut settings: serde_json::Value) -> serde_json::Value {
         }
     }
     settings
+}
+
+/// One saved profile's settings without its stored keys (`command_dispatch::SECRET_SETTINGS`), as
+/// [`redact_for_backup`] leaves them out of the station's own. Left out rather than blanked: a
+/// profile loaded with a key left out keeps the key the station has (`mergeProfile`), where a blank
+/// one would clear it.
+fn redact_profile_for_backup(settings: &mut serde_json::Map<String, serde_json::Value>) {
+    for (key, _) in command_dispatch::SECRET_SETTINGS {
+        settings.remove(key);
+    }
 }
 
 /// Drop every key carried by `Settings::unknown` from a serialised Settings object — the keys a
@@ -15138,10 +19759,128 @@ fn strip_unknown_for_backup(
 /// The QSO log is NOT here. It is a separate, much larger file with its own ADIF export, and
 /// silently folding it into a "settings" backup would produce a file operators would hand around
 /// without realising it held every contact they had made.
+///
+/// From afar (a computer driving the station over Remote), the bundle leaves out the paths on the
+/// station's own disk ([`without_station_paths`]), in its settings and in each saved profile, and
+/// says so ([`STATION_PATHS_LEFT_OUT`]): a restore of it at the station keeps the station's own.
+/// It also carries only the station's half of the UI state (`split_ui_state`), and a restore of it
+/// keeps the station's other half. Made at the station, it carries the paths and the whole UI
+/// state as they are, but a restore of any bundle still keeps the station's own paths
+/// ([`with_station_paths`]): those a file never chooses. Either way a saved profile list that does
+/// not read here is left out: its stored keys could not be taken out of it.
 #[tauri::command(async)]
-fn export_settings_bundle(state: State<'_, SharedEngine>) -> Result<String, String> {
+fn export_settings_bundle(
+    state: State<'_, SharedEngine>,
+    afar: Option<command_dispatch::Afar>,
+) -> Result<String, String> {
+    let ui_state = ui_state_read(&ui_state_path(), false).unwrap_or_default();
+    settings_bundle(&state, ui_state, afar.as_ref())
+}
+
+/// The settings that hold a path on the station's own disk: the TQSL program and JS8's sound
+/// files. Each voice-keyer slot's recording (`voiceMessages[].file`) is one too, and goes with
+/// them ([`without_station_paths`]).
+const STATION_PATHS: [&str; 2] = ["tqslPath", "js8SoundFiles"];
+
+/// The name a bundle exported from afar carries, `true`, beside its settings: the station's paths
+/// were left out of it ([`without_station_paths`]), so a restore keeps the station's own
+/// ([`keep_the_stations_paths`]).
+const STATION_PATHS_LEFT_OUT: &str = "stationPathsLeftOut";
+
+/// One settings object (the bundle's own, or a saved profile's) without the station's paths: each
+/// of [`STATION_PATHS`] left out, which a restore and a profile load read as "keep this station's",
+/// and each voice-keyer slot's recording blanked, as a slot is before one is recorded.
+fn without_station_paths(settings: &mut serde_json::Map<String, serde_json::Value>) {
+    for key in STATION_PATHS {
+        settings.remove(key);
+    }
+    if let Some(slots) = settings
+        .get_mut("voiceMessages")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for slot in slots
+            .iter_mut()
+            .filter_map(serde_json::Value::as_object_mut)
+        {
+            slot.insert("file".into(), serde_json::Value::String(String::new()));
+        }
+    }
+}
+
+/// One settings object from any bundle, wherever it was made, with the station's paths put back as
+/// `station` holds them (this station's settings, or its saved profile of the same name): each of
+/// [`STATION_PATHS`], and each voice-keyer slot's recording by slot number. What `station` does not
+/// hold is left out, so loading that profile keeps this station's own. The backup's voice slots are
+/// always kept, labels and all: a slot the station holds no recording for (no profile of that
+/// name here, or one with no voice slots) keeps its recording blank, as a slot is before one is
+/// recorded. ⛔ A path a backup names is never taken: the TQSL program runs with nobody pressing
+/// anything (the automatic LoTW upload), and a file could name any program, or a sound or a
+/// recording on another computer's share.
+fn with_station_paths(
+    settings: &mut serde_json::Map<String, serde_json::Value>,
+    station: Option<&serde_json::Map<String, serde_json::Value>>,
+) {
+    for key in STATION_PATHS {
+        match station.and_then(|s| s.get(key)) {
+            Some(held) => settings.insert(key.into(), held.clone()),
+            None => settings.remove(key),
+        };
+    }
+    let held = station
+        .and_then(|s| s.get("voiceMessages"))
+        .and_then(serde_json::Value::as_array);
+    if let Some(slots) = settings
+        .get_mut("voiceMessages")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for slot in slots
+            .iter_mut()
+            .filter_map(serde_json::Value::as_object_mut)
+        {
+            let file = held
+                .into_iter()
+                .flatten()
+                .find(|h| h.get("slot").is_some() && h.get("slot") == slot.get("slot"))
+                .and_then(|h| h.get("file"))
+                .cloned()
+                .unwrap_or_else(|| serde_json::Value::String(String::new()));
+            slot.insert("file".into(), file);
+        }
+    }
+}
+
+/// The saved profiles `text` with `each(profile name, its settings)` done to every profile. `None`
+/// when `text` does not read as a list.
+fn each_profile(
+    text: &str,
+    mut each: impl FnMut(&str, &mut serde_json::Map<String, serde_json::Value>),
+) -> Option<String> {
+    let mut profiles: Vec<serde_json::Value> = serde_json::from_str(text).ok()?;
+    for profile in &mut profiles {
+        let name = profile
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        if let Some(settings) = profile
+            .get_mut("settings")
+            .and_then(serde_json::Value::as_object_mut)
+        {
+            each(&name, settings);
+        }
+    }
+    serde_json::to_string(&profiles).ok()
+}
+
+/// [`export_settings_bundle`] of `engine`'s settings and the UI state `ui_state`, as asked from
+/// afar or at the station (`afar`).
+fn settings_bundle(
+    engine: &SharedEngine,
+    mut ui_state: std::collections::BTreeMap<String, String>,
+    afar: Option<&command_dispatch::Afar>,
+) -> Result<String, String> {
     let (settings, unknown) = {
-        let eng = engine_lock(&state);
+        let eng = engine_lock(engine);
         (
             // As the settings file stores it, so an older build restores Novice and Advanced as
             // a class it knows rather than refusing the backup (`LicenseClass`).
@@ -15149,10 +19888,29 @@ fn export_settings_bundle(state: State<'_, SharedEngine>) -> Result<String, Stri
             eng.settings().unknown.clone(),
         )
     };
-    let settings = strip_unknown_for_backup(redact_for_backup(settings), &unknown);
-    let ui_state = serde_json::to_value(ui_state_read(&ui_state_path(), false).unwrap_or_default())
-        .map_err(|e| e.to_string())?;
-    let bundle = serde_json::json!({
+    let mut settings = strip_unknown_for_backup(redact_for_backup(settings), &unknown);
+    if afar.is_some() {
+        if let Some(fields) = settings.as_object_mut() {
+            without_station_paths(fields);
+        }
+        // This computer's own half (its UI scale, rail order, pane layout) is not the station's.
+        ui_state = command_dispatch::split_ui_state(ui_state).0;
+    }
+    // Each saved profile goes without its stored keys, and from afar without the station's paths.
+    // A list that does not read here cannot have either left out, so it does not go.
+    if let Some(text) = ui_state.remove(command_dispatch::PROFILES) {
+        let stripped = each_profile(&text, |_, s| {
+            redact_profile_for_backup(s);
+            if afar.is_some() {
+                without_station_paths(s);
+            }
+        });
+        if let Some(stripped) = stripped {
+            ui_state.insert(command_dispatch::PROFILES.into(), stripped);
+        }
+    }
+    let ui_state = serde_json::to_value(ui_state).map_err(|e| e.to_string())?;
+    let mut bundle = serde_json::json!({
         "kind": "nexus-settings-backup",
         // Versioned from the start: a restore that cannot tell which shape it is holding is a
         // restore that will one day quietly write the wrong thing.
@@ -15161,6 +19919,9 @@ fn export_settings_bundle(state: State<'_, SharedEngine>) -> Result<String, Stri
         "settings": settings,
         "uiState": ui_state,
     });
+    if afar.is_some() {
+        bundle[STATION_PATHS_LEFT_OUT] = serde_json::Value::Bool(true);
+    }
     serde_json::to_string_pretty(&bundle).map_err(|e| e.to_string())
 }
 
@@ -15215,17 +19976,138 @@ fn import_settings_bundle(
     text: String,
     state: State<'_, SharedEngine>,
 ) -> Result<AppSnapshot, String> {
-    restore_settings_bundle(&state, text, ui_state_save)
+    restore_settings_bundle(
+        &state,
+        text,
+        || ui_state_read(&ui_state_path(), false).unwrap_or_default(),
+        ui_state_save,
+        change_keychain,
+    )
+}
+
+/// A bundle with the station's own paths put back: in its settings as `station` (this station's
+/// settings) holds them, and in each saved profile as this station's profile of the same name in
+/// `station_ui` holds them ([`with_station_paths`]), for every bundle, whether exported from afar
+/// ([`STATION_PATHS_LEFT_OUT`]) or made at the station. A saved profile list
+/// that does not read here ([`each_profile`]) is replaced by the station's own, or left out where
+/// the station has none: it is never kept as the file has it.
+fn keep_the_stations_paths(
+    bundle: &mut serde_json::Value,
+    station: &serde_json::Value,
+    station_ui: impl FnOnce() -> std::collections::BTreeMap<String, String>,
+) {
+    if let Some(fields) = bundle
+        .get_mut("settings")
+        .and_then(serde_json::Value::as_object_mut)
+    {
+        with_station_paths(fields, station.as_object());
+    }
+    let Some(text) = bundle
+        .get("uiState")
+        .and_then(|ui| ui.get(command_dispatch::PROFILES))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+    else {
+        return;
+    };
+    let station_ui = station_ui();
+    let own = station_ui.get(command_dispatch::PROFILES);
+    let mut held = std::collections::BTreeMap::new();
+    if let Some(own) = own {
+        each_profile(own, |name, s| {
+            held.insert(name.to_string(), s.clone());
+        });
+    }
+    // ⛔ A list that does not read here never lands: its paths could not be put back, and the
+    // screen reads lists this build refuses (a number past `f64`, a lone surrogate escape, deep
+    // nesting). The station's own list stays, or none where it had none.
+    match each_profile(&text, |name, s| with_station_paths(s, held.get(name)))
+        .or_else(|| own.cloned())
+    {
+        Some(kept) => {
+            bundle["uiState"][command_dispatch::PROFILES] = serde_json::Value::String(kept);
+        }
+        None => {
+            if let Some(ui) = bundle
+                .get_mut("uiState")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                ui.remove(command_dispatch::PROFILES);
+            }
+        }
+    }
+}
+
+/// A bundle's saved profiles with each stored key (`command_dispatch::SECRET_SETTINGS`) a profile
+/// has blank or leaves out put back as this station's saved profile of the same name in
+/// `station_ui` holds it: a backup carries none ([`redact_profile_for_backup`]), and restoring one
+/// never clears a key saved here, unless the bundle's profile points Cloudlog at another address
+/// than the station's profile ([`address_moved`]): then its Cloudlog key stays blank, to be typed
+/// again. A key the bundle does carry (one written before keys were left out) restores as it is.
+/// A list that does not read is left as it is.
+fn keep_the_stations_profile_keys(
+    bundle: &mut serde_json::Value,
+    station_ui: &std::collections::BTreeMap<String, String>,
+) {
+    let Some(text) = bundle
+        .get("uiState")
+        .and_then(|ui| ui.get(command_dispatch::PROFILES))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+    else {
+        return;
+    };
+    let mut held = std::collections::BTreeMap::new();
+    if let Some(own) = station_ui.get(command_dispatch::PROFILES) {
+        each_profile(own, |name, s| {
+            held.insert(name.to_string(), s.clone());
+        });
+    }
+    let kept = each_profile(&text, |name, s| {
+        for (key, _) in command_dispatch::SECRET_SETTINGS {
+            let blank = s
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .is_none_or(|k| k.trim().is_empty());
+            let own = held.get(name).and_then(|h| h.get(key));
+            let url = |s: Option<&serde_json::Map<String, serde_json::Value>>| {
+                s.and_then(|s| s.get("cloudlogUrl"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string()
+            };
+            let moved =
+                key == "cloudlogKey" && address_moved(&url(Some(&*s)), &url(held.get(name)));
+            if let (true, Some(own), false) = (blank, own, moved) {
+                s.insert(key.into(), own.clone());
+            }
+        }
+    });
+    if let Some(kept) = kept {
+        bundle["uiState"][command_dispatch::PROFILES] = serde_json::Value::String(kept);
+    }
 }
 
 /// [`import_settings_bundle`] on `engine`, the UI state the bundle carries handed to `save_ui`
-/// ([`ui_state_save`]) once the restore goes through.
+/// ([`ui_state_save`]) once the restore goes through. `station_ui` reads this station's own UI
+/// state: its saved profiles' paths ([`keep_the_stations_paths`]) and keys, and for a bundle
+/// exported from afar its other half. `keychain` makes one
+/// change to the keychain ([`change_keychain`]): a restore that points Cloudlog or an
+/// Icom network radio at another address than the station's, or drops an Icom network radio,
+/// removes the key kept for it, in the hold that lands the restore ([`forget_moved_keys`]);
+/// whether it holds a key is asked before that hold. A restore while the radio is keyed is
+/// refused ([`tempo_app::engine::RESTORE_ON_AIR`]), and nothing changes.
 fn restore_settings_bundle(
     engine: &SharedEngine,
     text: String,
+    station_ui: impl FnOnce() -> std::collections::BTreeMap<String, String>,
     save_ui: impl FnOnce(std::collections::BTreeMap<String, String>) -> bool,
+    keychain: impl FnMut(KeychainChange) -> Result<bool, String>,
 ) -> Result<AppSnapshot, String> {
-    let v: serde_json::Value =
+    // A Remove on its way finishes first ([`take_turn`]).
+    let turn = engine_lock(engine).key_changes();
+    let _turn = take_turn(&turn);
+    let mut v: serde_json::Value =
         serde_json::from_str(&text).map_err(|_| "That file is not a Nexus settings backup.")?;
     if v.get("kind").and_then(|k| k.as_str()) != Some("nexus-settings-backup") {
         return Err("That file is not a Nexus settings backup.".to_string());
@@ -15240,19 +20122,143 @@ fn restore_settings_bundle(
         }
         None => return Err("That backup is missing its format version.".to_string()),
     }
-    let settings = settings_from_bundle(v.get("settings").cloned().unwrap_or_default())?;
+    let mut own = engine_lock(engine).settings().clone();
+    let station = serde_json::to_value(own.for_storage()).map_err(|e| e.to_string())?;
+    let station_ui = station_ui();
+    let from_afar = v.get(STATION_PATHS_LEFT_OUT) == Some(&serde_json::Value::Bool(true));
+    keep_the_stations_paths(&mut v, &station, || station_ui.clone());
+    keep_the_stations_profile_keys(&mut v, &station_ui);
+    let mut settings = settings_from_bundle(v.get("settings").cloned().unwrap_or_default())?;
+    // Where uploads start is kept beside the log, never in the settings, so a restore leaves it as
+    // it is. A backup an earlier build of that change wrote may carry one in its settings: it
+    // fills a service that has none beside the log, once the restore has gone through.
+    let carried = tempo_app::station::UploadStart::left_in(&settings);
+    settings.qrz_logbook_upload_from = None;
+    settings.clublog_upload_from = None;
+    settings.eqsl_upload_from = None;
+    // The backup's own Cloudlog key (an old backup's), read before the station's is kept in
+    // below: the station's own key, kept, is never taken for the backup's.
+    let backup_key = settings.cloudlog_key.trim().to_string();
+    // A backup carries no stored key (`redact_for_backup`): one it has blank or leaves out stays
+    // as this station has it, except a Cloudlog key when the backup points Cloudlog at another
+    // address: the station's key never goes to a server the backup names.
+    let cloudlog_moved = address_moved(&settings.cloudlog_url, &own.cloudlog_url);
+    for (key, field) in command_dispatch::SECRET_SETTINGS {
+        let moved = key == "cloudlogKey" && cloudlog_moved;
+        if field(&mut settings).trim().is_empty() && !moved {
+            field(&mut settings).clone_from(field(&mut own));
+        }
+    }
+    // ...nor does the one the engine holds waiting to move to the keychain, which every apply
+    // keeps. A key the backup does carry (an old one) is the backup's own, and stays.
+    let forget_pending_cloudlog_key = cloudlog_moved && settings.cloudlog_key.trim().is_empty();
+    // A backup that brings a Cloudlog address where this station had none: whatever key the
+    // keychain holds was typed for an address it cannot name, so it waits for the operator.
+    let cloudlog_unknown =
+        !settings.cloudlog_url.trim().is_empty() && own.cloudlog_url.trim().is_empty();
+    // An old backup's own key, for the address it moves Cloudlog to (or brings it to): it goes
+    // into the keychain in the hold, in place of the station's, rather than waiting for the next
+    // launch. It was the key for that address, so it waits for nothing.
+    let backup_cloudlog_key =
+        Some(backup_key).filter(|key| (cloudlog_moved || cloudlog_unknown) && !key.is_empty());
+    // The station's own key still waiting to move to the keychain: in the unknown case it was
+    // typed for an address nobody can name, as the keychain's is, so it waits too.
+    let station_key_pending = !own.cloudlog_key.trim().is_empty();
+    // Whether the keychain holds a saved key for each address this station had none for, asked
+    // before the hold: a keychain can wait on an unlock prompt, and the radio loop needs the
+    // engine lock to end an over. A keychain that cannot say is taken to hold it: it waits, and
+    // is not sent. The answers only add waits, so a station that changes meanwhile loses none.
+    let mut keychain = keychain;
+    let mut holds = |account: &str| !matches!(keychain(KeychainChange::Holds(account)), Ok(false));
+    let cloudlog_unknown_waits =
+        cloudlog_unknown && (station_key_pending || holds(CLOUDLOG_KEYCHAIN_USER));
+    // The radios the restore brings a network address where this station had none, with a
+    // password saved for them.
+    let unknown_held: Vec<u32> = settings
+        .radios
+        .iter()
+        .filter(|r| icom_address_unknown(r, own.radios.iter().find(|p| p.id == r.id)))
+        .map(|r| r.id)
+        .filter(|&id| holds(&icom_lan_account(id)))
+        .collect();
     // The bundle is the authority, including for the roster -- see `apply_restored_settings`.
     // The panel's save path is deliberately NOT reused here: it keeps the engine's live roster,
     // which is right for a form and wrong for a restore. A bundle that opens a contest session
     // opens it as a Save does, its rows read first, and a logbook too busy to read them refuses
     // the restore whole: nothing below runs, the UI state included.
     tempo_app::engine::restore_with_session_rows(engine, settings, |eng| {
+        if forget_pending_cloudlog_key {
+            eng.forget_pending_cloudlog_key();
+        }
+        // The keys kept for an address the restore moved away from, and the passwords of the
+        // network radios it dropped, go in this hold, before the restored settings go live: the
+        // radio loop never reads an old password for a new address. A refused restore never gets
+        // here, and keeps every key.
+        let landed = &eng.settings().radios;
+        let moved: Vec<(u32, String)> = landed
+            .iter()
+            .filter(|r| icom_address_moved(r, own.radios.iter().find(|p| p.id == r.id)))
+            .map(|r| (r.id, r.name.clone()))
+            .collect();
+        // A radio the restore dropped is removed as `remove_radio` removes one, whatever its
+        // connection: a radio added later takes the next free id, which can be this one's.
+        let dropped: Vec<(u32, String)> = own
+            .radios
+            .iter()
+            .filter(|p| landed.iter().all(|r| r.id != p.id))
+            .map(|p| (p.id, p.name.clone()))
+            .collect();
+        let cloudlog_key = backup_cloudlog_key.as_deref();
+        let (stored, failed) = forget_moved_keys(
+            cloudlog_moved,
+            cloudlog_key,
+            &moved,
+            &dropped,
+            &mut keychain,
+        );
+        if stored {
+            // In the keychain now: nothing left waiting to move there.
+            eng.forget_pending_cloudlog_key();
+        }
+        // What waits for the operator now: what waited before, less every key removed or
+        // replaced here, and each saved key for an address this station had none for (asked
+        // before the hold, above).
+        // ⛔ A removal that failed left its key in the keychain: that key waits too (fail closed),
+        // never let go because its removal was asked for.
+        // ⛔ ...and it was saved for the station's old address (or a radio dropped), so it can
+        // only be removed, never confirmed for the backup's.
+        let mut keys = eng.keys_to_confirm().clone();
+        let still_held = |account: &str| failed.iter().any(|f| f == account);
+        keys.cloudlog = !(cloudlog_moved || stored) && (keys.cloudlog || cloudlog_unknown_waits);
+        if still_held(CLOUDLOG_KEYCHAIN_USER) {
+            keys.hold_not_removed(None);
+        }
+        keys.icom_lan.retain(|&id| {
+            still_held(&icom_lan_account(id))
+                || !moved.iter().chain(&dropped).any(|(gone, _)| *gone == id)
+        });
+        for (id, _) in moved.iter().chain(&dropped) {
+            if still_held(&icom_lan_account(*id)) {
+                keys.hold_not_removed(Some(*id));
+            }
+        }
+        for id in unknown_held {
+            if !keys.icom_lan_waits(id) {
+                keys.icom_lan.push(id);
+            }
+        }
+        eng.set_keys_to_confirm(keys);
         // UI state is best-effort: a bundle whose settings are good but whose ui-state is not
         // should still restore the radios. The half that failed is named rather than swallowed.
         if let Some(ui) = v.get("uiState").cloned() {
-            if let Ok(map) =
+            if let Ok(mut map) =
                 serde_json::from_value::<std::collections::BTreeMap<String, String>>(ui)
             {
+                // A backup made from afar carries the station's half alone: this station keeps
+                // its own other half.
+                if from_afar {
+                    map = command_dispatch::join_ui_state(map, station_ui);
+                }
                 save_ui(map);
             }
         }
@@ -15271,8 +20277,559 @@ fn restore_settings_bundle(
         persist_routing_to_base(eng.settings());
         Ok(())
     })??;
+    if carried != Default::default() {
+        if let Err(e) =
+            tempo_app::upload_start::update(&shared_data_dir(), |s| *s = s.fill_from(carried))
+        {
+            tempo_core::applog::warn(
+                "uploads",
+                &format!("couldn't keep the backup's start point for uploads: {e}"),
+            );
+        }
+    }
     let snap = { engine_lock(engine).snapshot() };
     Ok(snap)
+}
+
+/// A service's address as a restore compares it ([`address_moved`]): the spaces around it, any
+/// trailing `/`, the case of the scheme and the host, and the scheme's own port (`:80` for http,
+/// `:443` for https) make no difference. The path keeps its case, as a server may.
+fn service_address(url: &str) -> (String, String, String) {
+    let url = url.trim().trim_end_matches('/');
+    let (scheme, rest) = url
+        .split_once("://")
+        .map_or((String::new(), url), |(s, r)| (s.to_ascii_lowercase(), r));
+    let (host, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let mut host = host.to_ascii_lowercase();
+    let own_port = match scheme.as_str() {
+        "http" => Some(":80"),
+        "https" => Some(":443"),
+        _ => None,
+    };
+    if let Some(bare) = own_port.and_then(|p| host.strip_suffix(p)) {
+        host = bare.to_string();
+    }
+    (scheme, host, path.to_string())
+}
+
+/// Whether a restored backup points a service at another address than the station's
+/// ([`service_address`]), so the key kept here for the station's must not go there. A backup with
+/// no address for it moves nothing: then it is sent nowhere. Nor does a station with no address
+/// for it (a fresh install, or reset settings): the key the keychain still holds is kept, but it
+/// cannot say which address it was typed for, so it waits for the operator
+/// ([`tempo_app::settings::Settings::keys_to_confirm`]).
+fn address_moved(restored: &str, station: &str) -> bool {
+    !restored.trim().is_empty()
+        && !station.trim().is_empty()
+        && service_address(restored) != service_address(station)
+}
+
+/// Whether a restore brings a radio a network address where this station had none for it: no such
+/// radio, or one with no network host (a fresh install or reset settings). The password the
+/// keychain holds for its id cannot say which address it was typed for.
+fn icom_address_unknown(
+    restored: &tempo_app::settings::RadioProfile,
+    station: Option<&tempo_app::settings::RadioProfile>,
+) -> bool {
+    !restored.icom_lan_host.trim().is_empty()
+        && station.is_none_or(|s| s.icom_lan_host.trim().is_empty())
+}
+
+/// Whether a restored radio's Icom network address (host, any case, and port) is another than the
+/// station's radio of the same id has. A radio with no network host moves nothing, nor does one
+/// the station has no network host for or no such radio at all: that one's saved password waits
+/// for the operator instead ([`icom_address_unknown`]).
+fn icom_address_moved(
+    restored: &tempo_app::settings::RadioProfile,
+    station: Option<&tempo_app::settings::RadioProfile>,
+) -> bool {
+    let host = restored.icom_lan_host.trim();
+    !host.is_empty()
+        && station.is_some_and(|s| {
+            let own = s.icom_lan_host.trim();
+            !own.is_empty()
+                && (!own.eq_ignore_ascii_case(host) || s.icom_lan_port != restored.icom_lan_port)
+        })
+}
+
+/// In a restore's hold: remove the Cloudlog key (`cloudlog_moved`), each radio's Icom network
+/// password (`radios`, id and name) kept for the station's address, and the password of each radio
+/// the restore dropped (`dropped`), through `keychain`, and say once in the Connections log what
+/// to enter again, for a key that was saved. A removal that fails says so instead. A backup's own
+/// Cloudlog key (`cloudlog_key`, an old backup's) takes the station's place in the keychain
+/// instead of being removed. What came of it: whether that key went in, and each account whose
+/// removal failed (its key is still in the keychain, so the caller holds it back).
+fn forget_moved_keys(
+    cloudlog_moved: bool,
+    cloudlog_key: Option<&str>,
+    radios: &[(u32, String)],
+    dropped: &[(u32, String)],
+    mut keychain: impl FnMut(KeychainChange) -> Result<bool, String>,
+) -> (bool, Vec<String>) {
+    let mut failed = Vec::new();
+    let account = CLOUDLOG_KEYCHAIN_USER;
+    let stored =
+        cloudlog_key.is_some_and(
+            |key| match keychain(KeychainChange::Store { account, key }) {
+                Ok(_) => {
+                    conn_log("Cloudlog", "info", CLOUDLOG_KEY_FROM_BACKUP);
+                    true
+                }
+                Err(e) => {
+                    conn_log(
+                        "Cloudlog",
+                        "error",
+                        format!(
+                            "The restored backup carries its own Cloudlog/Wavelog API key, but it \
+                         could not be saved to the system keychain ({e}). Nexus tries again at \
+                         the next launch."
+                        ),
+                    );
+                    false
+                }
+            },
+        );
+    if cloudlog_moved && !stored {
+        match keychain(KeychainChange::Forget(account)) {
+            Ok(true) => conn_log("Cloudlog", "info", CLOUDLOG_KEY_FORGOTTEN),
+            Ok(false) => {}
+            Err(e) => {
+                failed.push(account.to_string());
+                conn_log(
+                    "Cloudlog",
+                    "error",
+                    format!(
+                        "The restored backup points Cloudlog/Wavelog at a different address, but \
+                         the API key saved here could not be removed ({e}). It is not sent: \
+                         choose Remove in the notice at the top of the window."
+                    ),
+                );
+            }
+        }
+    }
+    for (id, name) in radios {
+        let account = icom_lan_account(*id);
+        match keychain(KeychainChange::Forget(&account)) {
+            Ok(true) => conn_log("Icom network", "info", icom_password_forgotten(name)),
+            Ok(false) => {}
+            Err(e) => {
+                failed.push(account);
+                conn_log(
+                    "Icom network",
+                    "error",
+                    format!(
+                        "The restored backup points {name} at a different network address, but \
+                         its saved network password could not be removed ({e}). It is not \
+                         used: choose Remove in the notice at the top of the window."
+                    ),
+                );
+            }
+        }
+    }
+    for (id, name) in dropped {
+        let account = icom_lan_account(*id);
+        match keychain(KeychainChange::Forget(&account)) {
+            Ok(true) => conn_log("Icom network", "info", icom_password_dropped(name)),
+            Ok(false) => {}
+            Err(e) => {
+                failed.push(account);
+                conn_log(
+                    "Icom network",
+                    "error",
+                    format!(
+                        "The restored backup has no radio {name}, but its saved network \
+                         password could not be removed ({e}). It is not used: choose Remove in \
+                         the notice at the top of the window."
+                    ),
+                );
+            }
+        }
+    }
+    (stored, failed)
+}
+
+/// What the Connections log says after a restore removed the Cloudlog key ([`forget_moved_keys`]).
+const CLOUDLOG_KEY_FORGOTTEN: &str = "The restored backup points Cloudlog/Wavelog at a different \
+     address, so the API key saved here was removed. Enter the key for that address in Settings.";
+
+/// What the Connections log says after a restore put an old backup's own Cloudlog key in the
+/// keychain ([`forget_moved_keys`]).
+const CLOUDLOG_KEY_FROM_BACKUP: &str =
+    "The restored backup points Cloudlog/Wavelog at a different \
+     address and carries its own API key, so that key is now the one saved here.";
+
+/// What the Connections log says after a restore removed radio `name`'s Icom network password.
+fn icom_password_forgotten(name: &str) -> String {
+    format!(
+        "The restored backup points {name} at a different network address, so its saved network \
+         password was removed. Enter it again in Settings."
+    )
+}
+
+/// What the Connections log says after a restore dropped radio `name` from the roster and removed
+/// its Icom network password.
+fn icom_password_dropped(name: &str) -> String {
+    format!(
+        "The restored backup has no radio {name}, so its saved network password was removed. \
+         Enter it again in Settings if you add the radio back."
+    )
+}
+
+/// One change a restore makes to the keychain ([`change_keychain`]).
+enum KeychainChange<'a> {
+    /// Remove the entry under this account.
+    Forget(&'a str),
+    /// Keep `key` under `account`, in place of what is there.
+    Store { account: &'a str, key: &'a str },
+    /// Whether an entry is there (the answer says nothing about it).
+    Holds(&'a str),
+}
+
+/// A restore's `keychain` in a test whose backup moves no address: it is never called.
+#[cfg(test)]
+fn no_key_change(change: KeychainChange) -> Result<bool, String> {
+    let (KeychainChange::Forget(account)
+    | KeychainChange::Store { account, .. }
+    | KeychainChange::Holds(account)) = change;
+    panic!("a restore that moves no address changed the keychain entry {account}")
+}
+
+/// Make `change` to the OS keychain (service "tempo"), as the Settings buttons do. Whether an
+/// entry was there to remove; a stored key is always `true`.
+fn change_keychain(change: KeychainChange) -> Result<bool, String> {
+    let (KeychainChange::Forget(account)
+    | KeychainChange::Store { account, .. }
+    | KeychainChange::Holds(account)) = change;
+    let entry = keyring::Entry::new(LOTW_KEYCHAIN_SERVICE, account)
+        .map_err(|e| format!("couldn't open the system keychain: {e}"))?;
+    match change {
+        KeychainChange::Forget(_) => match entry.delete_credential() {
+            Ok(()) => Ok(true),
+            Err(keyring::Error::NoEntry) => Ok(false),
+            Err(e) => Err(format!("couldn't clear the system keychain: {e}")),
+        },
+        KeychainChange::Store { key, .. } => entry
+            .set_password(key)
+            .map(|()| true)
+            .map_err(|e| format!("couldn't save to the system keychain: {e}")),
+        // Read and dropped at once: only whether it is there leaves this arm.
+        KeychainChange::Holds(_) => match entry.get_password() {
+            Ok(_) => Ok(true),
+            Err(keyring::Error::NoEntry) => Ok(false),
+            Err(e) => Err(format!("couldn't read the system keychain: {e}")),
+        },
+    }
+}
+
+/// What the Connections log and a refused upload say while the Cloudlog key waits for the
+/// operator ([`tempo_app::settings::Settings::keys_to_confirm`]).
+const CLOUDLOG_KEY_WAITS: &str = "Cloudlog/Wavelog uploads wait: a settings restore set this \
+     address, and the API key saved here may be for another. Choose Use or Remove in the notice \
+     at the top of the window.";
+
+/// Why Use is refused for the saved password of a radio no longer on the roster.
+const ICOM_PASSWORD_OF_NO_RADIO: &str = "That radio is no longer on the roster, so its saved \
+     network password can only be removed: choose Remove.";
+
+/// What an Icom network radio says when it does not sign in because its password waits for the
+/// operator ([`tempo_app::settings::Settings::keys_to_confirm`]).
+const ICOM_PASSWORD_WAITS: &str = "Not signed in: a settings restore set this radio's address, \
+     and the network password saved here may be for another. Choose Use or Remove in the notice \
+     at the top of the window.";
+
+/// Why a Cloudlog request was not sent when the settings it was built from changed while its key
+/// was being read (a restore that landed then).
+const CLOUDLOG_CHANGED_MID_SEND: &str = "The Cloudlog/Wavelog settings changed while this was \
+     being sent, so nothing was sent. It goes with the new settings next time.";
+
+/// Where a Cloudlog request goes and the key it carries: the URL and the station profile id
+/// (trimmed), read with the wait in one hold, then the key through `read`, unless it waits for the
+/// operator ([`tempo_app::settings::Settings::keys_to_confirm`]): then nothing is read, and the
+/// refusal says why. The keychain is read with the engine lock released, so the address and the
+/// wait are read again after it, in one hold: a restore that landed in between refuses the
+/// request, and an old address is never paired with a key now kept for another. Every read of
+/// the Cloudlog key that is sent goes through here.
+fn cloudlog_key_to_send(
+    engine: &SharedEngine,
+    read: impl FnOnce() -> Result<String, String>,
+) -> Result<(String, String, String), String> {
+    let target = || {
+        let eng = engine_lock(engine);
+        let s = eng.settings();
+        (
+            s.cloudlog_url.trim().to_string(),
+            s.cloudlog_station_id.trim().to_string(),
+            s.keys_to_confirm.cloudlog,
+        )
+    };
+    let (url, station_id, waits) = target();
+    if waits {
+        return Err(CLOUDLOG_KEY_WAITS.to_string());
+    }
+    let key = read()?;
+    match target() {
+        (_, _, true) => Err(CLOUDLOG_KEY_WAITS.to_string()),
+        (u, id, false) if u != url || id != station_id => {
+            Err(CLOUDLOG_CHANGED_MID_SEND.to_string())
+        }
+        _ => Ok((url, station_id, key)),
+    }
+}
+
+/// The Cloudlog key in the system keychain; empty when none is saved.
+fn cloudlog_key_from_keychain() -> Result<String, String> {
+    Ok(cloudlog_keychain()?.get_password().unwrap_or_default())
+}
+
+/// Radio `radio_id`'s Icom network password for its sign-in, from `vault`, unless it waits for the
+/// operator ([`tempo_app::settings::Settings::keys_to_confirm`]): then nothing is read, and the
+/// radio says why. The reason a sign-in gets none never carries the password.
+///
+/// It takes the engine lock: the radio loop opens a radio with that lock released, the open
+/// blocking for seconds, so asking here cannot wait on itself.
+fn icom_lan_password_for_login(
+    engine: &SharedEngine,
+    vault: &dyn IcomLanVault,
+    radio_id: u32,
+) -> Result<Option<String>, String> {
+    if engine_lock(engine)
+        .keys_to_confirm()
+        .icom_lan_waits(radio_id)
+    {
+        return Err(ICOM_PASSWORD_WAITS.to_string());
+    }
+    vault.get(radio_id).map_err(|why| {
+        format!("Nexus could not read this radio's password from the system keychain ({why})")
+    })
+}
+
+/// One saved key that waits for the operator, as the notice shows it: Cloudlog's
+/// (`radio_id: None`) or radio `radio_id`'s Icom network password, with the radio's name and the
+/// address it would go to, and whether it waits only because removing it failed
+/// (`removal_failed`: it can only be removed). Never the key, and nothing about it.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KeyToConfirm {
+    radio_id: Option<u32>,
+    radio: String,
+    address: String,
+    removal_failed: bool,
+}
+
+/// The saved keys that wait for the operator in `s`, for the notice. A radio on the roster with
+/// no Icom network host is left out: nothing can sign in with its password until it has one, so
+/// its wait is kept but there is nothing to ask yet. A radio no longer on the roster is listed,
+/// so its password can be removed.
+fn keys_to_confirm_in(s: &Settings) -> Vec<KeyToConfirm> {
+    let keys = &s.keys_to_confirm;
+    let cloudlog = keys.cloudlog.then(|| KeyToConfirm {
+        radio_id: None,
+        radio: String::new(),
+        address: s.cloudlog_url.trim().to_string(),
+        removal_failed: keys.not_removed(None),
+    });
+    let radios = keys.icom_lan.iter().filter_map(|&id| {
+        let radio = s.radios.iter().find(|r| r.id == id);
+        let port = radio.map_or(0, |r| r.icom_lan_port);
+        let host = radio.map_or("", |r| r.icom_lan_host.trim());
+        if radio.is_some() && host.is_empty() {
+            return None;
+        }
+        Some(KeyToConfirm {
+            radio_id: Some(id),
+            radio: radio.map_or_else(|| format!("Radio {id}"), |r| r.name.clone()),
+            address: if port == 0 || port == tempo_app::settings::ICOM_LAN_DEFAULT_PORT {
+                host.to_string()
+            } else {
+                format!("{host}:{port}")
+            },
+            removal_failed: keys.not_removed(Some(id)),
+        })
+    });
+    cloudlog.into_iter().chain(radios).collect()
+}
+
+/// Why Use is refused when the address a key waits for is no longer the one the notice showed.
+const KEY_ADDRESS_CHANGED: &str = "That address changed since the notice asked, so nothing was \
+     let go. Check the notice again, then choose.";
+
+/// Why Use is refused for a key kept only because removing it failed: it was typed for another
+/// address, or for a radio no longer on the roster.
+const KEY_NOT_REMOVED: &str = "Removing this saved key failed, and it was saved for another \
+     address, so it can only be removed: choose Remove.";
+
+/// The operator's answer about a saved key that waits ([`keys_to_confirm_in`]): Use
+/// (`use_it`) lets it go to the address it waits for, which must be `shown`, the address the
+/// notice asked about (a restore or a Save may have moved it since; `None` for a key typed again,
+/// which is the key for whatever address is set); Remove forgets it from the
+/// keychain, through `keychain`. Either way it waits no more, and that is saved. A Remove the
+/// keychain refuses leaves it waiting, so it is still never sent. A key that does not wait is left
+/// alone. A key kept only because its removal failed can only be removed from the notice.
+///
+/// ⛔ The keychain is asked with the engine lock RELEASED: a delete can wait on an unlock prompt,
+/// and the radio loop needs that lock to end an over. The key waits throughout, so nothing is let
+/// go meanwhile; the wait is dropped only once the delete has succeeded. A Remove holds its
+/// [`take_turn`] from the check to the dropped wait, so a key typed or restored meanwhile
+/// lands after it, never before its delete. Use asks no keychain, so it takes no turn (and
+/// [`key_typed_again`], which answers Use inside a Settings save's turn, may call it).
+fn answer_key_to_confirm(
+    engine: &SharedEngine,
+    radio_id: Option<u32>,
+    use_it: bool,
+    shown: Option<&str>,
+    mut keychain: impl FnMut(KeychainChange) -> Result<bool, String>,
+) -> Result<(), String> {
+    let turn = (!use_it).then(|| engine_lock(engine).key_changes());
+    let _turn = turn.as_deref().map(take_turn);
+    {
+        let mut eng = engine_lock(engine);
+        let keys = eng.keys_to_confirm();
+        let waits = radio_id.map_or(keys.cloudlog, |id| keys.icom_lan_waits(id));
+        if !waits {
+            return Ok(());
+        }
+        // A radio no longer on the roster has no address to confirm a password for, and a radio
+        // added later takes the next free id, which can be its: its password can only be removed.
+        if let (true, Some(id)) = (use_it, radio_id) {
+            if eng.settings().radios.iter().all(|r| r.id != id) {
+                return Err(ICOM_PASSWORD_OF_NO_RADIO.to_string());
+            }
+        }
+        if let (true, Some(shown)) = (use_it, shown) {
+            // A key whose removal failed was saved for another address: never confirmed for this
+            // one. (Typed again, it is the new key, and `shown` is `None`.)
+            if keys.not_removed(radio_id) {
+                return Err(KEY_NOT_REMOVED.to_string());
+            }
+            // Use confirms the address the operator was shown, and no other.
+            if !keys_to_confirm_in(eng.settings())
+                .iter()
+                .any(|k| k.radio_id == radio_id && k.address == shown)
+            {
+                return Err(KEY_ADDRESS_CHANGED.to_string());
+            }
+        }
+        if use_it {
+            stop_waiting(&mut eng, radio_id);
+            return Ok(());
+        }
+    }
+    let account = radio_id.map_or_else(|| CLOUDLOG_KEYCHAIN_USER.to_string(), icom_lan_account);
+    keychain(KeychainChange::Forget(&account))?;
+    stop_waiting(&mut engine_lock(engine), radio_id);
+    Ok(())
+}
+
+/// Take the turn for one change at a time to the saved keys a notice can ask about
+/// ([`keys_to_confirm_in`]): a Settings save or clear with the answer it gives
+/// ([`key_typed_in_settings`]), a notice's Remove from its check that the key waits to the wait it
+/// drops ([`answer_key_to_confirm`]), a restore ([`restore_settings_bundle`]), and adding or
+/// removing a radio ([`add_radio_without_a_password`], [`remove_radio_and_its_password`]), which
+/// clear a radio's password. Without it a Remove or a clear that had checked, then let go to
+/// delete, deleted the key typed or restored in between: the operator was told it was saved, and
+/// the service had none.
+///
+/// The turn is the engine's own ([`tempo_app::engine::Engine::key_changes`]), fetched in a brief
+/// engine-lock hold that ends before it is taken. ⛔ Taken with the engine lock RELEASED, and the
+/// engine lock only ever taken inside it, so the two never wait on each other. It may be held
+/// across a keychain call that waits on an unlock prompt: only the commands above take it, and
+/// they all run off the UI thread, so a second one waits for the prompt (as the keychain itself
+/// would) and nothing else does. It guards no data, so a holder that panicked leaves nothing
+/// torn: the next one takes its turn.
+fn take_turn(turn: &std::sync::Mutex<()>) -> std::sync::MutexGuard<'_, ()> {
+    turn.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// [`answer_key_to_confirm`]'s last step, in one hold: this key waits no more, and that is saved.
+fn stop_waiting(eng: &mut Engine, radio_id: Option<u32>) {
+    let mut keys = eng.keys_to_confirm().clone();
+    match radio_id {
+        None => keys.cloudlog = false,
+        Some(id) => keys.icom_lan.retain(|&r| r != id),
+    }
+    eng.set_keys_to_confirm(keys);
+    if radio_id.is_none() {
+        CLOUDLOG_WAIT_SAID.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: saving the answer about a saved key failed: {e}")
+    });
+}
+
+/// Whether the Connections log has said, since the Cloudlog key last stopped waiting, that the
+/// uploads wait ([`hold_a_waiting_cloudlog_leg`]): once, not once per contact.
+static CLOUDLOG_WAIT_SAID: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// How long a contact's Cloudlog upload waits on the queue before it is looked at again, while the
+/// key waits for the operator.
+const CLOUDLOG_WAIT_RECHECK_SECS: i64 = 60;
+
+/// A queued contact's Cloudlog leg, held back while the Cloudlog key waits for the operator: put
+/// back on the queue as it is, no attempt spent, and not sent, to be looked at again in a minute.
+/// A catch-up contact takes no slot in the catch-up's pacing while it waits, so the other
+/// services' catch-up goes on at its pace; when the key stops waiting, the held ones are put back
+/// in line once ([`tempo_app::engine::Engine::set_keys_to_confirm`]), so they still go one at a
+/// time. The legs left to send now.
+fn hold_a_waiting_cloudlog_leg(
+    engine: &SharedEngine,
+    p: &tempo_app::engine::PendingUpload,
+    now_unix: i64,
+) -> u8 {
+    use tempo_app::engine::upload_legs::CLOUDLOG;
+    let mut eng = engine_lock(engine);
+    if p.legs & CLOUDLOG == 0 || !eng.keys_to_confirm().cloudlog {
+        return p.legs;
+    }
+    eng.requeue_upload_at(
+        p.rec.clone(),
+        CLOUDLOG,
+        p.attempts,
+        now_unix + CLOUDLOG_WAIT_RECHECK_SECS,
+        p.origin,
+    );
+    if !CLOUDLOG_WAIT_SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        conn_log("Cloudlog", "info", CLOUDLOG_KEY_WAITS);
+    }
+    p.legs & !CLOUDLOG
+}
+
+/// A due record's legs for the upload worker to send now: a Cloudlog leg whose key waits held back
+/// first ([`hold_a_waiting_cloudlog_leg`]); then, for a catch-up record with a leg left to send,
+/// one Connections log line per leg saying it goes, `catchup_left` counting the record as sent. A
+/// record held back whole sends nothing, says nothing and is still queued.
+fn legs_to_send_now(
+    engine: &SharedEngine,
+    p: &tempo_app::engine::PendingUpload,
+    now_unix: i64,
+    catchup_left: &mut usize,
+) -> u8 {
+    let legs = hold_a_waiting_cloudlog_leg(engine, p, now_unix);
+    if legs != 0 && p.origin == tempo_app::engine::UploadOrigin::CatchUp {
+        *catchup_left = catchup_left.saturating_sub(1);
+        // #290: filed under the service the record is actually owed to. This
+        // said "ClubLog" outright, which was the only sweep there was — an eQSL
+        // catch-up would have reported its whole run under ClubLog's name.
+        // `catchup_left` counts RECORDS, so a record owing two legs says the
+        // same remaining count on both lines, which is what is left to send.
+        for (_, service) in UPLOAD_LEG_SERVICES
+            .iter()
+            .filter(|(leg, _)| legs & leg != 0)
+        {
+            conn_log(
+                service,
+                "info",
+                format!(
+                    "catch-up: sending an older QSO with {} — {catchup_left} still \
+                     queued, one every {}s so {service} isn't flooded",
+                    p.rec.call,
+                    tempo_app::engine::CATCHUP_UPLOAD_SPACING_SECS,
+                ),
+            );
+        }
+    }
+    legs
 }
 
 /// Distinct operators present in the log (#25). Empty for a single-op station, which is what
@@ -18086,6 +23643,7 @@ fn set_unassisted_mode(
         if let Ok(mut b) = spots.lock() {
             *b = tempo_net::cluster::SpotBuffer::default();
         }
+        clear_spot_iota();
     }
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: failed to persist unassisted-mode toggle: {e}")
@@ -18287,7 +23845,7 @@ struct RttyScopeDto {
 /// Receive-only: it reads what the decode thread pushed and changes nothing.
 #[tauri::command]
 async fn get_rtty_scope(state: State<'_, SharedEngine>) -> Result<RttyScopeDto, String> {
-    with_engine(&state, |eng| {
+    with_engine(&state, |mut eng| {
         let s = eng.rtty_scope();
         RttyScopeDto {
             live: s.live,
@@ -19641,6 +25199,27 @@ fn sstv_auto_disarm(state: State<'_, SharedEngine>) -> Result<SstvStateDto, Stri
     Ok(sstv_state_dto(&eng))
 }
 
+/// The operator left a receive screen (RTTY, PSK, JTTY, SSTV, APRS) for another section: stop
+/// the decoder that opening it started, unless something still needs it — and, while a computer
+/// driving the station is attached, stop nothing until it has gone. RX only — see
+/// [`tempo_app::engine::Engine::leave_decoder_screen`]. The SSTV picture viewer, open in its own
+/// window here, keeps the SSTV screen in the section; this refreshes that from the window itself
+/// before deciding. Returns whether the decoder is still running on its screen's arm, so the
+/// caller asks again at the next section change.
+#[tauri::command(async)]
+fn leave_decoder_screen(
+    app: tauri::AppHandle,
+    state: State<'_, SharedEngine>,
+    screen: tempo_app::engine::decoder_screens::DecoderScreen,
+) -> Result<bool, String> {
+    let viewer_open = app
+        .get_webview_window(&panel_label(SSTV_VIEWER_SLUG, Instance::Main))
+        .is_some();
+    let mut eng = engine_lock(&state);
+    eng.set_sstv_viewer_open(viewer_open);
+    Ok(eng.leave_decoder_screen(screen))
+}
+
 /// Start decoding an SSTV picture NOW, in the mode the operator named, without
 /// waiting for a VIS header (#202).
 ///
@@ -20043,14 +25622,60 @@ fn write_peg_lock(state: &SharedEngine, on: bool) -> tempo_app::settings::writer
 /// snapshot — the switcher then shows the new radio.
 #[tauri::command(async)]
 fn add_radio(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
-    let mut eng = engine_lock(&state);
-    eng.add_radio();
+    add_radio_without_a_password(&state, &OsKeychain)
+}
+
+/// [`add_radio`] with the radio's Icom network passwords in `vault`. A new radio never has a
+/// password, so one `vault` still holds under its id (a removal that failed before such a
+/// password was held back) is removed. Until it is, it waits for the operator as a held-back key
+/// does ([`tempo_app::settings::Settings::keys_to_confirm`]), and a removal that fails leaves it
+/// waiting: the new radio never signs in with it. The keychain is asked with the engine lock
+/// released, since it can wait on an unlock prompt, and in this change's turn ([`take_turn`]), so
+/// a password typed for the new radio meanwhile lands after the clear, never before it.
+fn add_radio_without_a_password(
+    engine: &SharedEngine,
+    vault: &dyn IcomLanVault,
+) -> Result<AppSnapshot, String> {
+    let turn = engine_lock(engine).key_changes();
+    let _turn = take_turn(&turn);
+    let id = {
+        let mut eng = engine_lock(engine);
+        let id = eng.add_radio();
+        let mut keys = eng.keys_to_confirm().clone();
+        keys.icom_lan.push(id);
+        eng.set_keys_to_confirm(keys);
+        persist_settings(eng.settings().clone(), |e| {
+            eprintln!("tempo: add_radio save failed: {e}")
+        });
+        // Mirror the new radio into the base config, or a THIRD radio added from a per-radio
+        // window is invisible to the launch picker forever — see `persist_roster_to_base`.
+        persist_roster_to_base(&eng.settings().radios);
+        id
+    };
+    let cleared = vault.clear(id);
+    let mut eng = engine_lock(engine);
+    let mut keys = eng.keys_to_confirm().clone();
+    match cleared {
+        Ok(()) => keys.icom_lan.retain(|&r| r != id),
+        // A password left under a new radio's id was saved for a radio removed before: it can
+        // only be removed.
+        Err(e) => {
+            keys.hold_not_removed(Some(id));
+            conn_log(
+                "Icom network",
+                "error",
+                format!(
+                    "couldn't check that the new radio {id} has no saved network password \
+                     ({e}). None is used: once the radio has a network address, choose Remove \
+                     in the notice at the top of the window."
+                ),
+            );
+        }
+    }
+    eng.set_keys_to_confirm(keys);
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: add_radio save failed: {e}")
     });
-    // Mirror the new radio into the base config, or a THIRD radio added from a per-radio window is
-    // invisible to the launch picker forever — see `persist_roster_to_base`.
-    persist_roster_to_base(&eng.settings().radios);
     Ok(eng.snapshot())
 }
 
@@ -20063,22 +25688,66 @@ fn add_radio(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
 /// card, but auto band-routing can change the active radio behind an open panel.
 #[tauri::command(async)]
 fn remove_radio(state: State<'_, SharedEngine>, id: u32) -> Result<AppSnapshot, String> {
-    let mut eng = engine_lock(&state);
-    if !eng.remove_radio(id) {
-        return Err(
-            "Can't remove this radio: it's your operating radio (make another one active \
-             first) or the only radio on the roster."
-                .into(),
-        );
+    remove_radio_and_its_password(&state, id, &OsKeychain)
+}
+
+/// [`remove_radio`] with the radios' Icom network passwords in `vault`: the radio's password goes
+/// with it. Until `vault` has removed it, it waits for the operator as a held-back key does
+/// ([`tempo_app::settings::Settings::keys_to_confirm`]), so a radio added meanwhile never takes
+/// its id; a removal that fails leaves it waiting, so it is never let go. The keychain is asked
+/// with the engine lock released, since it can wait on an unlock prompt, and in this change's turn
+/// ([`take_turn`]), so the notice's Remove of the same password waits for it. A failure is
+/// reported, never the password.
+fn remove_radio_and_its_password(
+    engine: &SharedEngine,
+    id: u32,
+    vault: &dyn IcomLanVault,
+) -> Result<AppSnapshot, String> {
+    let turn = engine_lock(engine).key_changes();
+    let _turn = take_turn(&turn);
+    {
+        let mut eng = engine_lock(engine);
+        if !eng.remove_radio(id) {
+            return Err(
+                "Can't remove this radio: it's your operating radio (make another one active \
+                 first) or the only radio on the roster."
+                    .into(),
+            );
+        }
+        let mut keys = eng.keys_to_confirm().clone();
+        if !keys.icom_lan_waits(id) {
+            keys.icom_lan.push(id);
+            eng.set_keys_to_confirm(keys);
+        }
+        persist_settings(eng.settings().clone(), |e| {
+            eprintln!("tempo: remove_radio save failed: {e}")
+        });
+        // …and out of the base config too, else the picker keeps offering a radio that no longer
+        // exists.
+        persist_roster_to_base(&eng.settings().radios);
+        persist_routing_to_base(eng.settings());
     }
+    let removed = vault.clear(id);
+    let mut eng = engine_lock(engine);
+    let mut keys = eng.keys_to_confirm().clone();
+    match removed {
+        Ok(()) => keys.icom_lan.retain(|&r| r != id),
+        Err(e) => {
+            keys.hold_not_removed(Some(id));
+            conn_log(
+                "Icom network",
+                "error",
+                format!(
+                    "couldn't remove radio {id}'s network password ({e}). It is not used: \
+                     choose Remove in the notice at the top of the window."
+                ),
+            );
+        }
+    }
+    eng.set_keys_to_confirm(keys);
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: remove_radio save failed: {e}")
     });
-    // …and out of the base config too, else the picker keeps offering a radio that no longer exists.
-    persist_roster_to_base(&eng.settings().radios);
-    persist_routing_to_base(eng.settings());
-    // …and its Icom network password out of the keychain.
-    icom_lan_forget_removed(&OsKeychain, id);
     Ok(eng.snapshot())
 }
 
@@ -20184,6 +25853,35 @@ fn set_radio_switch_policy(
     Ok(eng.snapshot())
 }
 
+/// The first-run wizard's experience answer (also Settings ▸ Station ▸ Your experience), and the
+/// ONE write path for it: narrow for `set_radio_switch_policy`'s stale-snapshot reason, and
+/// `Engine::apply_settings` keeps the live value. Returns the snapshot.
+#[tauri::command(async)]
+fn set_experience_level(
+    state: State<'_, SharedEngine>,
+    level: tempo_app::settings::ExperienceLevel,
+) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    let s = eng.set_experience_level(level);
+    persist_settings(s.clone(), |e| {
+        eprintln!("tempo: set_experience_level save failed: {e}")
+    });
+    Ok(eng.snapshot())
+}
+
+/// The first-run setup wizard was finished or skipped: record it beside the station's settings so it
+/// never opens by itself again, whatever happens to the WebView's storage. The ONE write path for
+/// `Settings::setup_wizard_seen`. Returns the snapshot.
+#[tauri::command(async)]
+fn mark_setup_wizard_seen(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    let s = eng.mark_setup_wizard_seen();
+    persist_settings(s.clone(), |e| {
+        eprintln!("tempo: mark_setup_wizard_seen save failed: {e}")
+    });
+    Ok(eng.snapshot())
+}
+
 /// Where a `(band, mode class)` WOULD route right now, as the radio's id + name — the Settings rule
 /// editor's "test" affordance. Read-only: it never moves a rig.
 #[tauri::command(async)]
@@ -20202,6 +25900,52 @@ fn route_preview(
         .map(|p| p.name.clone())
         .unwrap_or_else(|| format!("Radio {}", id + 1));
     Ok(RoutePreview { radio: id, name })
+}
+
+/// [`route_preview`] for the radio setup's UNSAVED routing (`draft`): the same routing function,
+/// asked of a copy of the settings with the draft laid over it. Read-only: it stores nothing and
+/// moves no rig.
+#[tauri::command(async)]
+fn route_preview_draft(
+    state: State<'_, SharedEngine>,
+    draft: tempo_app::settings::RoutingDraft,
+    band: String,
+    mode: tempo_app::settings::RouteMode,
+) -> Result<RoutePreview, String> {
+    let eng = engine_lock(&state);
+    let id = eng.route_preview_draft(&draft, &band, mode);
+    let name = eng
+        .settings()
+        .radios
+        .iter()
+        .find(|p| p.id == id)
+        .map(|p| p.name.clone())
+        .unwrap_or_else(|| format!("Radio {}", id + 1));
+    Ok(RoutePreview { radio: id, name })
+}
+
+/// Test CAT for a radio that is NOT the one in use (the radio setup): a read-only look at the
+/// radio monitor's next reading of it. Selects, switches and keys nothing, and sends the radio
+/// nothing (`tempo_app::engine::radio_probe`). The radio in use answers `inUse`: `test_cat` is its
+/// probe.
+#[tauri::command]
+async fn test_radio_cat(
+    state: State<'_, SharedEngine>,
+    id: u32,
+) -> Result<tempo_app::engine::radio_probe::RadioCatProbe, String> {
+    let engine = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        // Ten seconds: a monitor that misses reads reports "not answering" after its third miss,
+        // and a slow daemon-backed read is allowed 2.5 s.
+        tempo_app::engine::radio_probe::probe_radio_read_only(
+            &engine,
+            id,
+            std::time::Duration::from_secs(10),
+            std::time::Duration::from_millis(150),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /// The answer to "where would 2 m FM go?" — the resolved radio, named so the operator recognizes it.
@@ -22276,6 +28020,10 @@ fn set_psk_macros(
 /// progress with the main window's while it is open (`tempo_app::engine::contest_entry`).
 pub(crate) const CONTEST_LOGGER_SLUG: &str = "contestlog";
 
+/// The received-picture viewer's panel slug (`SstvViewer.tsx`'s `SSTV_VIEWER_PANEL`): the SSTV
+/// screen in a window of its own, which keeps that screen in the section (`leave_decoder_screen`).
+const SSTV_VIEWER_SLUG: &str = "sstvviewer";
+
 /// The contest screen window's panel slug: the main window's Contest screen below its log line
 /// (the contest switch, the controls, the club board, the scoreboard, the bonuses and the log),
 /// popped out to a monitor of its own. The main window keeps the log line and the last contacts
@@ -22516,6 +28264,13 @@ async fn open_panel_window(
     if slug == CONTEST_LOGGER_SLUG && matches!(inst, Instance::Main) {
         share_the_contest_entry(&app);
     }
+    // THE SSTV PICTURE VIEWER keeps the SSTV screen in its section while it is open (the station
+    // does not stop that receiver behind it), from here to its `Destroyed` event.
+    if slug == SSTV_VIEWER_SLUG && matches!(inst, Instance::Main) {
+        if let Some(engine) = app.try_state::<SharedEngine>() {
+            engine_lock(&engine).set_sstv_viewer_open(true);
+        }
+    }
     if let Some(side) = docked_side {
         // Re-pin to the edge of the current work area (best-effort; ignore if unmapped) so a
         // resolution change since last session can't strand it off-screen.
@@ -22753,6 +28508,12 @@ struct LogQsoOutcome {
     /// must not claim "Logged QSO" over one: the bool was being discarded here, so the
     /// toast said success for a write that never happened.
     logged: bool,
+    /// The station logged or held: not always the one shown, since a press while a new station
+    /// is shown can log the contact set aside behind it, so the toast names it.
+    call: Option<String>,
+    /// The press found that station's offer already waiting in the popup and held nothing new,
+    /// so the toast says so rather than "Logged".
+    already_waiting: bool,
     snapshot: AppSnapshot,
 }
 
@@ -22760,9 +28521,11 @@ struct LogQsoOutcome {
 #[tauri::command(async)]
 fn log_current_qso(state: State<'_, SharedEngine>) -> Result<LogQsoOutcome, String> {
     let mut eng = engine_lock(&state);
-    let logged = eng.log_current_qso();
+    let press = eng.log_current_qso_press();
     Ok(LogQsoOutcome {
-        logged,
+        logged: press.is_some(),
+        already_waiting: press.as_ref().is_some_and(|p| p.already_waiting),
+        call: press.map(|p| p.call),
         snapshot: eng.snapshot(),
     })
 }
@@ -22780,11 +28543,13 @@ const PENDING_LOG_MOVED_ON: &str = "pendingLogMovedOn";
 /// Confirm-and-log the contact the prompt-to-log popup is showing. `record` is the
 /// (possibly edited) contact and `expected_key` the snapshot's `pendingQsoLogKey` it was
 /// shown with. Returns the refreshed snapshot, whose `pendingLog` is the next held contact.
+/// `iota_offer` is the IOTA offer the operator took in the popup, if any ([`get_iota_offer`]).
 #[tauri::command]
 async fn confirm_pending_log(
     state: State<'_, SharedEngine>,
     record: LoggedQso,
     expected_key: Option<String>,
+    iota_offer: Option<tempo_core::logbook::offer::IotaOffer>,
 ) -> Result<AppSnapshot, String> {
     let engine = Arc::clone(&state);
     durable_command(move || {
@@ -22794,7 +28559,7 @@ async fn confirm_pending_log(
             // is confirming cannot be allowed to log one (review R2).
             let key = expected_key.unwrap_or_default();
             let prop_mode_was = eng.settings().log_prop_mode.clone();
-            if !eng.confirm_pending_log(&key, record.into()) {
+            if !eng.confirm_pending_log_with_offer(&key, record.into(), iota_offer.as_ref()) {
                 return Err(PENDING_LOG_MOVED_ON.into());
             }
             // The popup's propagation mode is remembered for the next contact
@@ -22830,6 +28595,7 @@ fn discard_pending_log(
 /// `state_source` is where the form's STATE came from ("operator", "callbook" or "park"; see
 /// [`tempo_app::engine::StateSource`]); absent is the operator's. A park or summit the record
 /// carries is placed here, before the Engine lock ([`ota_park_places`]).
+/// `iota_offer` is the IOTA offer the operator took on the form, if any ([`get_iota_offer`]).
 #[tauri::command]
 async fn log_qso(
     state: State<'_, SharedEngine>,
@@ -22837,6 +28603,7 @@ async fn log_qso(
     parks: State<'_, SharedParks>,
     record: LoggedQso,
     state_source: Option<String>,
+    iota_offer: Option<tempo_core::logbook::offer::IotaOffer>,
 ) -> Result<AppSnapshot, String> {
     let engine = Arc::clone(&state);
     let call = record.call.clone();
@@ -22853,7 +28620,13 @@ async fn log_qso(
     let (snap, wav) = durable_command(move || {
         let mut eng = engine_lock(&engine);
         eng.with_log_tickets(|eng| {
-            eng.log_form_qso(record.into(), source, park_places);
+            let mut rec: tempo_core::logbook::QsoRecord = record.into();
+            // The IOTA offer the operator took on the form ([`get_iota_offer`]): written into an
+            // empty field only, and held back from uploads until they touch it.
+            if let Some(offer) = &iota_offer {
+                tempo_core::logbook::offer::accept_iota_offer(&mut rec, offer);
+            }
+            eng.log_form_qso(rec, source, park_places);
             // Per-QSO WAV (off by default): grab the recent RX audio under the lock; write it
             // to disk below, after releasing the lock, so the snapshot poll never waits on I/O.
             let wav = eng.settings().save_qso_wav.then(|| eng.recent_rx_pcm());
@@ -23280,7 +29053,7 @@ async fn mark_qsl_card(
         };
         let (after, durability) = tempo_app::logwrite::until_written(|| {
             change_found(&engine, &found, "mark_qsl_card", |id| {
-                vec![tempo_core::logbook::LogOp::MarkQslCard { id, received }]
+                vec![tempo_app::logwrite::qsl_card(id, received)]
             })
         });
         (changed_row(after), durability)
@@ -23498,6 +29271,19 @@ async fn get_call_stats(
         })
     })
     .await
+}
+
+/// One award's status ([`log_folds::award_status`]): entities worked, confirmed, submitted and
+/// granted, and one contact per entity ready to submit — the newest confirmed one where `newest`,
+/// else the oldest. Read-only: marking the list Submitted is a Bulk edit the operator confirms.
+#[tauri::command]
+async fn get_award_status(
+    state: State<'_, SharedEngine>,
+    award: propagation::award_status::AwardKind,
+    newest: bool,
+) -> Result<propagation::award_status::AwardStatus, String> {
+    let engine = state.inner().clone();
+    log_folds::off_the_runtime(move || log_folds::award_status(&engine, award, newest)).await
 }
 
 /// The whole-log DXCC chart: every current entity × every DXCC band, by mode class, from the
@@ -23805,6 +29591,11 @@ struct SpotRow {
     /// Seconds since the spot was received; -1 if unknown (no receive stamp).
     age_secs: i64,
     comment: String,
+    /// The IOTA island group the comment names, when it names exactly one
+    /// ([`propagation::iota::in_comment`]) — the Spots board's IOTA chip, and the same reading the
+    /// Needed board scores the spot's New IOTA by.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    iota: Option<String>,
     /// True when the operator's license class may TRANSMIT at this spot's frequency in
     /// its mode (privileges::tx_allowed; `Open` class ⇒ always true). Drives the Spots
     /// panel's "my privileges" filter — computed here so the legal band data has ONE
@@ -23980,6 +29771,7 @@ fn program_spot_row(
         spotter: String::new(),
         corroborators: Vec::new(),
         age_secs: (now - spot.heard_unix).max(0),
+        iota: propagation::iota::in_comment(&spot.text),
         comment: spot.text,
         licensed,
         // A program is no voice on a continent: never hidden by the locality filter.
@@ -24063,10 +29855,7 @@ fn read_spots_with(
     } else {
         spots.lock().map_err(|_| ())
     } {
-        Ok(buf) => buf.recent_within(
-            std::time::Instant::now(),
-            std::time::Duration::from_secs(1200),
-        ),
+        Ok(buf) => buf.recent_within(std::time::Instant::now(), SPOTS_WINDOW),
         Err(_) => return Err("applicationBusy".into()),
     };
     // Take the engine lock ONLY long enough to snapshot what the rows need: the license class,
@@ -24257,6 +30046,7 @@ fn read_spots_with(
                 spotter: cs.spotter.clone(),
                 corroborators: cs.corroborators.clone(),
                 age_secs,
+                iota: propagation::iota::in_comment(&cs.comment),
                 comment: cs.comment.clone(),
                 licensed,
                 spotter_local: {
@@ -24442,6 +30232,8 @@ fn cluster_spot_heards(
                 )),
                 grid: None,     // cluster/RBN spots carry no grid…
                 us_state: None, // …and `get_need_alerts` fills the FCC state hint in
+                // The island group the spotter named, if the comment names exactly one.
+                iota: propagation::iota::in_comment(&cs.comment),
             });
         }
     }
@@ -24825,7 +30617,7 @@ fn qrz_access(engine: &SharedEngine) -> Result<QrzAccess, String> {
     let owncall = engine_lock(engine).settings().mycall.trim().to_string();
     let key = qrz_logbook_keychain()?.get_password().map_err(|_| {
         "No QRZ Logbook API key stored — this is the per-logbook key from logbook.qrz.com \
-         (Settings ▸ Logging & Connectors ▸ Confirmations ▸ QRZ), not your QRZ password."
+         (Settings ▸ Services ▸ Confirmations ▸ QRZ), not your QRZ password."
             .to_string()
     })?;
     Ok(QrzAccess {
@@ -25602,6 +31394,175 @@ fn ambiguous_activation_note(candidates: &[(String, String)]) -> String {
     )
 }
 
+/// The IOTA island group each heard station is on, for the New IOTA need, where its own evidence
+/// named none: the group a callbook lookup this session answered for exactly that call
+/// ([`callbook_iota_for_call`]). A spot comment's group, already on the row, is kept: it describes
+/// this activation, the callbook the licensee's record. `lookup` is that answer for a call — the
+/// session's on the board and in Pounce, a test's own in a test. `known` is the island-group list's
+/// check ([`iota_list::known`]): with the list held, a reference it lacks is a misreading, not an
+/// island, and raises no need; without it every reference of the right shape counts.
+fn place_iotas(
+    heard: &mut [propagation::Heard],
+    lookup: impl Fn(&str) -> Option<String>,
+    known: impl Fn(&str) -> bool,
+) {
+    for h in heard.iter_mut() {
+        if h.iota.is_none() {
+            h.iota = lookup(&h.call);
+        }
+        if h.iota.as_deref().is_some_and(|r| !known(r)) {
+            h.iota = None;
+        }
+    }
+}
+
+/// The IOTA group each callbook lookup this session answered with, by the call asked for — the
+/// heard side of the New IOTA need for a station no spot comment placed ([`place_iotas`]). Only an
+/// answer that is the asked call's own record and a plain call: a lookup of `W1ABC/P` answers with
+/// the licensee's home, not where they are (the log's callbook fill keeps the same rule). Bounded;
+/// in memory only, as the engine's own callbook answers are.
+static CALLBOOK_IOTA: std::sync::LazyLock<
+    std::sync::RwLock<std::collections::VecDeque<(String, String)>>,
+> = std::sync::LazyLock::new(Default::default);
+const CALLBOOK_IOTA_CAP: usize = 512;
+
+fn note_callbook_iota(call: &str, answer: &tempo_core::logbook::callbook::CallbookAnswer) {
+    let call = call.trim().to_ascii_uppercase();
+    if call.is_empty() {
+        return;
+    }
+    let iota = answer
+        .iota
+        .as_deref()
+        .and_then(propagation::iota::canonical)
+        .filter(|_| !call.contains('/') && answer.call.trim().eq_ignore_ascii_case(&call));
+    let Ok(mut kept) = CALLBOOK_IOTA.write() else {
+        return;
+    };
+    kept.retain(|(c, _)| *c != call);
+    if let Some(iota) = iota {
+        if kept.len() >= CALLBOOK_IOTA_CAP {
+            kept.pop_front();
+        }
+        kept.push_back((call, iota));
+    }
+}
+
+fn callbook_iota_for_call(call: &str) -> Option<String> {
+    let call = call.trim().to_ascii_uppercase();
+    CALLBOOK_IOTA
+        .read()
+        .ok()?
+        .iter()
+        .rev()
+        .find(|(c, _)| *c == call)
+        .map(|(_, i)| i.clone())
+}
+
+/// How far back the Spots board shows a spot, and the log-time IOTA offer reads one.
+const SPOTS_WINDOW: std::time::Duration = std::time::Duration::from_secs(1200);
+
+/// Every IOTA group a cluster spot's comment named, by the call spotted and when the spot came in:
+/// the log-time offer's spot side. Kept beside the spot buffer because that buffer merges every spot
+/// of one call within a couple of kHz into one row and keeps only the newest comment, so two spots
+/// of one station on one band naming different groups would read as one. Only spots that name a
+/// group are kept, for [`SPOTS_WINDOW`]; emptied with the spot buffer ([`clear_spot_iota`]).
+#[derive(Default)]
+struct SpotIotaLog {
+    named: std::collections::VecDeque<(std::time::Instant, String, String)>,
+}
+
+/// A memory ceiling only: far above the IOTA-naming spots one window holds.
+const SPOT_IOTA_CAP: usize = 4096;
+
+impl SpotIotaLog {
+    /// Keep the group `spot`'s comment names, if it names one, as heard at `at`.
+    fn note(&mut self, at: std::time::Instant, spot: &tempo_net::cluster::ClusterSpot) {
+        while self
+            .named
+            .front()
+            .is_some_and(|(t, _, _)| at.saturating_duration_since(*t) > SPOTS_WINDOW)
+        {
+            self.named.pop_front();
+        }
+        let Some(r) = propagation::iota::in_comment(&spot.comment) else {
+            return;
+        };
+        if self.named.len() >= SPOT_IOTA_CAP {
+            self.named.pop_front();
+        }
+        self.named
+            .push_back((at, spot.dx_call.trim().to_ascii_uppercase(), r));
+    }
+
+    /// The group every spot of exactly `call` within [`SPOTS_WINDOW`] of `now` names, or none
+    /// when none names one or any two name different groups (an old trip's re-spot, or a typo,
+    /// is not this activation; the comment parser refuses a comment naming two groups the same
+    /// way).
+    fn group_for(&self, now: std::time::Instant, call: &str) -> Option<String> {
+        let call = call.trim();
+        let mut named: Option<&String> = None;
+        for (_, _, r) in self.named.iter().filter(|(t, c, _)| {
+            now.saturating_duration_since(*t) <= SPOTS_WINDOW && c.eq_ignore_ascii_case(call)
+        }) {
+            match named {
+                Some(n) if n != r => return None,
+                Some(_) => {}
+                None => named = Some(r),
+            }
+        }
+        named.cloned()
+    }
+}
+
+static SPOT_IOTA: std::sync::LazyLock<std::sync::Mutex<SpotIotaLog>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Keep the group a cluster spot just pushed into the spot buffer names ([`SpotIotaLog`]).
+fn note_spot_iota(spot: &tempo_net::cluster::ClusterSpot) {
+    if let Ok(mut log) = SPOT_IOTA.lock() {
+        log.note(std::time::Instant::now(), spot);
+    }
+}
+
+/// Forget every spot's group, with the spot buffer it sits beside.
+fn clear_spot_iota() {
+    if let Ok(mut log) = SPOT_IOTA.lock() {
+        *log = SpotIotaLog::default();
+    }
+}
+
+/// What IOTA reference to OFFER the contact the log form, or the confirm-before-log popup, holds
+/// for `call` (`tempo_core::logbook::offer::iota_offer`; operator decision, 2026-10-27): the group
+/// the spot comments for that call name (the Spots board's window, never in an unassisted contest
+/// entry), else the group a callbook lookup this session answered for exactly that call. Nothing
+/// when the form already holds a reference (`held`), and with the island list held, nothing it
+/// lacks. An offer writes nothing: the operator takes it, and `log_qso` / `confirm_pending_log`
+/// then write it, held back from uploads until the operator touches it.
+#[tauri::command(async)]
+fn get_iota_offer(
+    state: State<'_, SharedEngine>,
+    call: String,
+    held: Option<String>,
+) -> Option<tempo_core::logbook::offer::IotaOffer> {
+    let spot_iota = if unassisted() {
+        None
+    } else {
+        SPOT_IOTA
+            .lock()
+            .ok()
+            .and_then(|log| log.group_for(std::time::Instant::now(), &call))
+    };
+    let answer = engine_lock(&state).callbook_answer(&call).cloned();
+    tempo_core::logbook::offer::iota_offer(
+        &call,
+        held.as_deref(),
+        spot_iota.as_deref(),
+        answer.as_ref(),
+        Some(&iota_list::known),
+    )
+}
+
 /// The US state each heard station is scored in for Worked All States. An activator live at a
 /// park or summit (`live`, the hunter feed's current rows) is where that is: a contact hunted there
 /// logs the park's state ([`ota_park_places`]), so its need is the park's whatever its licence or
@@ -25782,6 +31743,7 @@ fn read_need_alerts(
         .map(|cache| live_ota_spots(&cache, now).cloned().collect())
         .unwrap_or_default();
     place_heards(&mut heard, &live_spots, &needs, fcc_state_for_call);
+    place_iotas(&mut heard, callbook_iota_for_call, iota_list::known);
     let mut alerts = propagation::rank_needs(&heard, &*needs, &needs.slots());
     // The Confirm (worked-but-unconfirmed / LoTW opportunity) tier is opt-out. This is
     // the ONE seam both surfaces share — the Needed board and the decode/roster chips
@@ -27008,7 +32970,8 @@ fn hrdlog_stamp(result: &str) -> (bool, ConnDetail) {
         "authFail" => (
             false,
             conn_detail!(
-                "HRDLog would not accept the upload code — check it in Settings ▸ Connectors."
+                "HRDLog would not accept the upload code — check it in Settings ▸ Services ▸ \
+                 Confirmations ▸ HRDLog."
             ),
         ),
         "unknown" => (
@@ -27038,7 +33001,7 @@ fn wrl_stamp(result: &str) -> (bool, ConnDetail) {
             false,
             conn_detail!(
                 "World Radio League would not accept the API key — check it in Settings ▸ \
-                 Connectors."
+                 Services ▸ Confirmations ▸ World Radio League."
             ),
         ),
         "pending" => (
@@ -27118,7 +33081,8 @@ fn cloudlog_stamp(class: propagation::live::cloudlog::CloudlogFailure) -> ConnDe
         F::NotConfigured => conn_detail!(
             "nothing was sent — the Cloudlog instance URL, API key or station profile id is \
              missing, or the URL is not https:// (plain http:// is for an address on your own \
-             network only). Set them in Settings ▸ Connectors."
+             network only). Set them in Settings ▸ Services ▸ Confirmations ▸ \
+             Cloudlog / Wavelog."
         ),
         F::Unreachable => conn_detail!(
             "the upload never reached the instance — check the URL and the network, and \
@@ -27126,12 +33090,14 @@ fn cloudlog_stamp(class: propagation::live::cloudlog::CloudlogFailure) -> ConnDe
              connection log has the exact message."
         ),
         F::Credentials => conn_detail!(
-            "the instance rejected the API key — check it in Settings ▸ Connectors, and that \
+            "the instance rejected the API key — check it in Settings ▸ Services ▸ \
+             Confirmations ▸ Cloudlog / Wavelog, and that \
              it is not a read-only key."
         ),
         F::NotAnApi => conn_detail!(
             "the URL answered, but not as a Cloudlog/Wavelog QSO API — check the instance URL \
-             in Settings ▸ Connectors (Nexus appends /index.php/api/qso itself)."
+             in Settings ▸ Services ▸ Confirmations ▸ Cloudlog / Wavelog (Nexus appends \
+             /index.php/api/qso itself)."
         ),
         F::RecordRefused => conn_detail!(
             "the instance took the request and refused to file the QSO — usually a station \
@@ -27685,29 +33651,49 @@ fn icom_lan_set_password(
     vault.set(radio_id, &password)
 }
 
-/// After a radio profile is removed, its Icom network password goes with it. A failure is
-/// reported, never the password.
-fn icom_lan_forget_removed(vault: &dyn IcomLanVault, radio_id: u32) {
-    if let Err(e) = vault.clear(radio_id) {
-        conn_log(
-            "Icom network",
-            "err",
-            format!("couldn't remove radio {radio_id}'s network password: {e}"),
-        );
-    }
-}
-
 /// Store (or, with an empty string, clear) a radio profile's Icom network password in the OS
 /// keychain. Write-only: it is never read back to the UI.
-#[tauri::command]
-fn set_icom_lan_password(radio_id: u32, password: String) -> Result<(), String> {
-    icom_lan_set_password(&OsKeychain, radio_id, password)
+#[tauri::command(async)]
+fn set_icom_lan_password(
+    state: State<'_, SharedEngine>,
+    radio_id: u32,
+    password: String,
+) -> Result<(), String> {
+    key_typed_in_settings(&state, Some(radio_id), || {
+        icom_lan_set_password(&OsKeychain, radio_id, password)
+    })
 }
 
 /// Remove a radio profile's Icom network password from the OS keychain (idempotent).
-#[tauri::command]
-fn clear_icom_lan_password(radio_id: u32) -> Result<(), String> {
-    OsKeychain.clear(radio_id)
+#[tauri::command(async)]
+fn clear_icom_lan_password(state: State<'_, SharedEngine>, radio_id: u32) -> Result<(), String> {
+    key_typed_in_settings(&state, Some(radio_id), || OsKeychain.clear(radio_id))
+}
+
+/// A key the operator typed or cleared in Settings answers whether the saved one may go to the
+/// address it waits for ([`tempo_app::settings::Settings::keys_to_confirm`]): Cloudlog's
+/// (`None`) or radio `radio_id`'s. Nothing changes for a key that did not wait.
+fn key_typed_again(engine: &SharedEngine, radio_id: Option<u32>) {
+    let _ = answer_key_to_confirm(engine, radio_id, true, None, no_keychain_change);
+}
+
+/// A key typed or cleared in Settings for Cloudlog (`None`) or radio `radio_id`: `write` changes
+/// the keychain, and once it has, the key answers for itself ([`key_typed_again`]).
+fn key_typed_in_settings(
+    engine: &SharedEngine,
+    radio_id: Option<u32>,
+    write: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    let turn = engine_lock(engine).key_changes();
+    let _turn = take_turn(&turn);
+    write()?;
+    key_typed_again(engine, radio_id);
+    Ok(())
+}
+
+/// An answer that touches no keychain entry ([`key_typed_again`]): asked for none.
+fn no_keychain_change(_: KeychainChange) -> Result<bool, String> {
+    Ok(false)
 }
 
 /// Whether a radio profile has an Icom network password saved. Says only yes or no.
@@ -27732,7 +33718,7 @@ mod icom_lan_password_tests {
     const PASSWORD: &str = "not-a-password";
 
     #[derive(Default)]
-    struct MapVault(Mutex<BTreeMap<u32, String>>);
+    pub(super) struct MapVault(Mutex<BTreeMap<u32, String>>);
 
     impl IcomLanVault for MapVault {
         fn get(&self, radio_id: u32) -> Result<Option<String>, String> {
@@ -27819,32 +33805,129 @@ mod icom_lan_password_tests {
         assert_eq!(vault.get(1).unwrap(), None, "an empty password clears it");
     }
 
-    /// ⭐ DELETING THE PROFILE CLEARS ITS ENTRY, and only its own. The command does it on every
-    /// successful removal.
+    /// A vault that cannot remove anything (a locked keychain): it reads and stores as
+    /// [`MapVault`] does.
+    #[derive(Default)]
+    pub(super) struct LockedVault(MapVault);
+
+    impl IcomLanVault for LockedVault {
+        fn get(&self, radio_id: u32) -> Result<Option<String>, String> {
+            self.0.get(radio_id)
+        }
+        fn set(&self, radio_id: u32, password: &str) -> Result<(), String> {
+            self.0.set(radio_id, password)
+        }
+        fn clear(&self, _radio_id: u32) -> Result<(), String> {
+            Err("the keychain is locked".into())
+        }
+    }
+
+    /// An engine whose roster is radios 0, 1 and 2, operating radio 0, with nothing waiting.
+    fn roster_engine(tag: &str) -> (std::path::PathBuf, SharedEngine) {
+        let (dir, engine) = super::durable_command_tests::engine_on_store(tag, 0);
+        {
+            let mut eng = engine_lock(&engine);
+            let mut s = eng.settings().clone();
+            s.radios = (0..3)
+                .map(|id| tempo_app::settings::RadioProfile {
+                    id,
+                    name: format!("Roster Test {id}"),
+                    ..Default::default()
+                })
+                .collect();
+            s.active_radio = 0;
+            s.sync_flat_from_active();
+            eng.apply_restored_settings(s);
+            eng.set_keys_to_confirm(Default::default());
+        }
+        (dir, engine)
+    }
+
+    /// ⭐ REMOVING A RADIO REMOVES ITS PASSWORD, and only its own, and only a removal that
+    /// happened does. ★ A KEYCHAIN THAT CANNOT REMOVE IT LEAVES IT HELD BACK: the password waits
+    /// in the notice and is never used, and a radio added later never takes its id. CONTROL: a
+    /// keychain that removes it leaves nothing waiting.
     #[test]
-    fn removing_a_radio_profile_forgets_its_password() {
+    fn removing_a_radio_forgets_its_password_or_holds_it_back() {
+        let (dir, engine) = roster_engine("remove-radio-vault");
+        let waiting = || engine_lock(&engine).keys_to_confirm().icom_lan.clone();
         let vault = MapVault::default();
         vault.set(1, PASSWORD).unwrap();
         vault.set(2, "another-fake").unwrap();
-        icom_lan_forget_removed(&vault, 1);
-        assert_eq!(vault.get(1).unwrap(), None);
-        assert_eq!(
-            vault.get(2).unwrap().as_deref(),
-            Some("another-fake"),
-            "the other radio's stays"
-        );
-        // The command: a removal that went ahead forgets the password, after it persisted.
-        let src = include_str!("lib.rs");
-        let body = &src[src.find("fn remove_radio(").expect("the command")..];
-        let body = &body[..body.find("\n}\n").expect("its end")];
-        let refused = body.find("return Err(").expect("the refusal");
-        let forget = body
-            .find("icom_lan_forget_removed(&OsKeychain, id)")
-            .expect("the forget");
         assert!(
-            refused < forget,
-            "only a removal that happened forgets the password"
+            remove_radio_and_its_password(&engine, 0, &vault).is_err(),
+            "premise: the operating radio is refused"
         );
+        assert_eq!(
+            waiting(),
+            Vec::<u32>::new(),
+            "a refused removal holds nothing"
+        );
+
+        remove_radio_and_its_password(&engine, 1, &vault).unwrap();
+        assert_eq!(
+            (
+                vault.get(1).unwrap(),
+                vault.get(2).unwrap().as_deref(),
+                waiting()
+            ),
+            (None, Some("another-fake"), vec![]),
+            "CONTROL: its password removed, the other radio's kept, nothing waits"
+        );
+
+        let locked = LockedVault::default();
+        locked.set(2, "another-fake").unwrap();
+        remove_radio_and_its_password(&engine, 2, &locked).unwrap();
+        assert_eq!(
+            waiting(),
+            vec![2],
+            "the keychain refused: the password stays held back"
+        );
+        assert_eq!(
+            icom_lan_password_for_login(&engine, &locked, 2),
+            Err(ICOM_PASSWORD_WAITS.to_string()),
+            "and is never used"
+        );
+        add_radio_without_a_password(&engine, &vault).unwrap();
+        let ids: Vec<u32> = engine_lock(&engine)
+            .settings()
+            .radios
+            .iter()
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(
+            (ids, waiting()),
+            (vec![0, 3], vec![2]),
+            "a radio added then takes a fresh id, and inherits no wait"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ A NEW RADIO NEVER HAS A PASSWORD: one the keychain still holds under its id (an old
+    /// removal that failed) is removed when the radio is added, and while the keychain cannot
+    /// remove it, it waits and is never used. CONTROL: removed, nothing waits.
+    #[test]
+    fn a_new_radio_never_inherits_a_password() {
+        let (dir, engine) = roster_engine("add-radio-vault");
+        let waiting = || engine_lock(&engine).keys_to_confirm().icom_lan.clone();
+        let vault = MapVault::default();
+        vault.set(3, "PLANTED-ORPHAN").unwrap();
+        add_radio_without_a_password(&engine, &vault).unwrap();
+        assert_eq!(
+            (vault.get(3).unwrap(), waiting()),
+            (None, vec![]),
+            "CONTROL: the new radio 3's leftover password removed, nothing waits"
+        );
+
+        let locked = LockedVault::default();
+        locked.set(4, "PLANTED-ORPHAN").unwrap();
+        add_radio_without_a_password(&engine, &locked).unwrap();
+        assert_eq!(
+            (waiting(), icom_lan_password_for_login(&engine, &locked, 4)),
+            (vec![4], Err(ICOM_PASSWORD_WAITS.to_string())),
+            "the keychain refused: radio 4's leftover password waits and is never used"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
@@ -27901,12 +33984,7 @@ fn clear_lotw_password() -> Result<(), String> {
 ///
 /// Only the legs that leave a per-QSO upload stamp can be swept (`StationCore::unsent_legs`
 /// holds that list and why), so HRDLog, N3FJP, Cloudlog and WRL have no saver calling this.
-fn catch_up_failed_uploads(
-    state: &State<'_, SharedEngine>,
-    leg: u8,
-    service: &'static str,
-    lead_in: &str,
-) {
+fn catch_up_failed_uploads(state: &SharedEngine, leg: u8, service: &'static str, lead_in: &str) {
     // The pick reads the logbook store, so it runs with the engine lock released: the queue's
     // room and the log's rows are taken under it, and the contacts picked are queued under it
     // again (a record the queue has filled up past meanwhile stays unsent for the next sweep).
@@ -27914,7 +33992,22 @@ fn catch_up_failed_uploads(
         let eng = engine_lock(state);
         (eng.log_rows(), eng.catch_up_room())
     };
-    let stale = match tempo_app::station::catch_up_records(&rows, leg, room) {
+    // Where each service's uploads start is kept beside the shared log, so every window honours
+    // the same answer. One that cannot be read sends nothing old: that answer may be "no".
+    let start = match tempo_app::upload_start::read(&shared_data_dir()) {
+        Ok(start) => start,
+        Err(e) => {
+            conn_log(
+                service,
+                "error",
+                format!(
+                    "{lead_in} — where uploads to {service} start could not be read ({e}), so                      no older contact is sent now; send one from the Logbook"
+                ),
+            );
+            return;
+        }
+    };
+    let stale = match tempo_app::station::catch_up_records(&rows, leg, room, start) {
         Ok(stale) => stale,
         Err(e) => {
             conn_log(
@@ -27944,11 +34037,236 @@ fn catch_up_failed_uploads(
     );
 }
 
+/// Move the start points an earlier build of this change wrote into this window's settings file
+/// beside the shared log (`dir`), where every window reads them, keeping each service's earliest
+/// of the two, and clear them from the settings, whose next save then drops the key. A move that
+/// fails leaves them in the settings, saved with them, for the next launch to try again.
+fn move_upload_start_beside_the_log(settings: &mut Settings, dir: &Path) {
+    let left = tempo_app::station::UploadStart::left_in(settings);
+    if left == Default::default() {
+        return;
+    }
+    match tempo_app::upload_start::update(dir, |s| *s = s.keep_earliest(left)) {
+        Ok(_) => {
+            settings.qrz_logbook_upload_from = None;
+            settings.clublog_upload_from = None;
+            settings.eqsl_upload_from = None;
+            tempo_core::applog::info(
+                "uploads",
+                "moved where uploads start from this window's settings to beside the log",
+            );
+        }
+        Err(e) => tempo_core::applog::warn(
+            "uploads",
+            &format!("couldn't move where uploads start to beside the log: {e}"),
+        ),
+    }
+}
+
+/// The first login saved for QRZ Logbook, ClubLog or eQSL: where its automatic uploads start,
+/// set BEFORE the upload is turned on and the catch-up runs, so nothing older than the answer is
+/// ever queued. The start points are kept beside the shared log ([`tempo_app::upload_start`]), so
+/// the answer holds in every window that shares the log: the base window, each radio's window and
+/// a hand-named profile. `first` is whether no login was stored before this save (read before it
+/// was written); a login saved over one changes nothing. `send_old` is the operator's answer to
+/// "Send N contacts not yet sent to <service>?": `Some(true)`, "Send them", clears the start point;
+/// `Some(false)`, "Only contacts made from now on" (also what Escape and a dialog that cannot open
+/// answer), sets it to now or keeps an earlier one. `None` is no question asked (the count could
+/// not be read): no start point, as before. Returns whether the save's catch-up may run: not when
+/// a "from now on" could not be kept, so this save sends nothing old.
+fn start_uploads_for_login(
+    state: &SharedEngine,
+    leg: u8,
+    service: &'static str,
+    first: bool,
+    send_old: Option<bool>,
+) -> bool {
+    let Some(send_old) = send_old.filter(|_| first) else {
+        return true;
+    };
+    if !engine_lock(state).login_question_applies(leg) {
+        return true;
+    }
+    let now = now_unix().max(0) as u64;
+    match tempo_app::upload_start::update(&shared_data_dir(), |s| s.answer(leg, send_old, now)) {
+        Ok((before, after)) => {
+            if let Some(from) = after.of_leg(leg) {
+                engine_lock(state).drop_waiting_before(leg, from);
+            }
+            if before != after && !send_old {
+                conn_log(
+                    service,
+                    "info",
+                    format!(
+                        "only contacts made from now on are sent to {service} automatically; \
+                         send an older one from the Logbook"
+                    ),
+                );
+            }
+            true
+        }
+        Err(e) => {
+            conn_log(
+                service,
+                "error",
+                format!("couldn't keep where uploads to {service} start: {e}"),
+            );
+            if send_old {
+                return true;
+            }
+            // The answer could not be kept: this save sends nothing older than now all the same.
+            engine_lock(state).drop_waiting_before(leg, now);
+            false
+        }
+    }
+}
+
+/// Whether a login is stored in the keychain `entry`, for the first login's question. Only a
+/// genuine "no entry" is a no: a keychain that cannot be read is an error, never a first login. A
+/// stored value that is not readable text is still a stored login (and its bytes are never shown).
+/// The secret itself is read and dropped here, as [`keychain_has`] does.
+fn login_stored(entry: &keyring::Entry) -> Result<bool, keyring::Error> {
+    match entry.get_password() {
+        Ok(_) | Err(keyring::Error::BadEncoding(_)) => Ok(true),
+        Err(keyring::Error::NoEntry) => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+/// QRZ Logbook, ClubLog or eQSL, as a login save names it.
+#[derive(Clone, Copy)]
+struct UploadLogin {
+    leg: u8,
+    service: &'static str,
+    toggle: UploadToggle,
+    /// The Connections log's line once the login is in the keychain.
+    saved: &'static str,
+    /// What the catch-up's log line starts with.
+    lead_in: &'static str,
+}
+
+/// ⛔ A login save for QRZ Logbook, ClubLog or eQSL, in the one order that keeps the first login's
+/// answer: whether a login was `stored` is read BEFORE `store` writes the new one (read after, every
+/// login looks stored and the answer is ignored), and the start point is set BEFORE the upload is
+/// turned on and its catch-up runs (after, the old log is already on its way). A keychain that
+/// cannot be read is no first login: the error is logged, and the save goes on as it always did.
+fn save_upload_login(
+    engine: &SharedEngine,
+    login: UploadLogin,
+    stored: impl FnOnce() -> Result<bool, keyring::Error>,
+    store: impl FnOnce() -> Result<(), String>,
+    send_old: Option<bool>,
+) -> Result<(), String> {
+    let first = match stored() {
+        Ok(stored) => !stored,
+        Err(e) => {
+            conn_log(
+                login.service,
+                "error",
+                format!(
+                    "couldn't read the system keychain: {e}; the login is saved as one already \
+                     stored, and uploads go on as before"
+                ),
+            );
+            false
+        }
+    };
+    store()?;
+    conn_log(login.service, "ok", login.saved);
+    let catch_up = start_uploads_for_login(engine, login.leg, login.service, first, send_old);
+    set_upload_toggle(engine, login.toggle, true);
+    if catch_up {
+        catch_up_failed_uploads(engine, login.leg, login.service, login.lead_in);
+    }
+    Ok(())
+}
+
+/// The service a login question is about, by its name on the wire: its upload leg, the keychain
+/// user its login is kept under, and its name in the Connections log.
+fn backlog_service(service: &str) -> Result<(u8, &'static str, &'static str), String> {
+    use tempo_app::engine::upload_legs;
+    match service {
+        "qrz" => Ok((upload_legs::QRZ, QRZ_LOGBOOK_KEYCHAIN_USER, "QRZ Logbook")),
+        "clublog" => Ok((upload_legs::CLUBLOG, CLUBLOG_KEYCHAIN_USER, "ClubLog")),
+        "eqsl" => Ok((upload_legs::EQSL, EQSL_KEYCHAIN_USER, "eQSL")),
+        other => Err(format!("no upload service called {other:?}")),
+    }
+}
+
+/// What saving a login for `service` ("qrz", "clublog" or "eqsl") would ask first: `None` when the
+/// save asks nothing (see [`backlog_question`]), else how many logged contacts have not been sent
+/// there. Asked by Settings before it saves the login; it says only whether a login is stored,
+/// never anything of it.
+#[tauri::command]
+async fn upload_backlog(
+    service: String,
+    state: State<'_, SharedEngine>,
+) -> Result<Option<usize>, String> {
+    let (leg, user, name) = backlog_service(&service)?;
+    let engine = state.inner().clone();
+    log_folds::off_the_runtime(move || {
+        let entry = keyring::Entry::new(LOTW_KEYCHAIN_SERVICE, user)
+            .map_err(|e| format!("couldn't open the system keychain: {e}"))?;
+        backlog_question(
+            &engine,
+            leg,
+            name,
+            login_stored(&entry),
+            tempo_app::station::backlog_count,
+        )
+    })
+    .await
+}
+
+/// [`upload_backlog`] once the keychain is read: no question (`None`) when a login is `stored` or
+/// the service's upload switch is already on; an error, so no question either, when the keychain
+/// cannot be read (the save then goes on as before, see [`save_upload_login`]); else the `count`.
+/// A log that cannot be counted is an error too, and logged: nothing is asked, and the save then
+/// sets no start point and sends as before (review L3), never a start point the operator was not
+/// asked about.
+fn backlog_question(
+    engine: &SharedEngine,
+    leg: u8,
+    service: &'static str,
+    stored: Result<bool, keyring::Error>,
+    count: impl FnOnce(&tempo_app::logstore::LogRows, u8) -> Result<usize, String>,
+) -> Result<Option<usize>, String> {
+    if stored.map_err(|e| format!("couldn't read the system keychain: {e}"))? {
+        return Ok(None);
+    }
+    let rows = {
+        let eng = engine_lock(engine);
+        if !eng.login_question_applies(leg) {
+            return Ok(None);
+        }
+        eng.log_rows()
+    };
+    match count(&rows, leg) {
+        Ok(n) => Ok(Some(n)),
+        Err(e) => {
+            conn_log(
+                service,
+                "error",
+                format!(
+                    "couldn't count the contacts not yet sent to {service}: {e}; nothing is \
+                     asked, and saving the login sends them as before"
+                ),
+            );
+            Err(format!("couldn't read the logbook: {e}"))
+        }
+    }
+}
+
 /// Store (or, if empty, clear) the eQSL website password in the OS keychain.
 /// Write-only, like the LoTW counterpart. Saving also switches eQSL auto-upload
-/// ON (entering the credential is the intent).
+/// ON (entering the credential is the intent). The first password saved asks first what becomes of
+/// the contacts never sent there (`send_old`, see [`start_uploads_for_login`]).
 #[tauri::command(async)]
-fn set_eqsl_password(password: String, state: State<'_, SharedEngine>) -> Result<(), String> {
+fn set_eqsl_password(
+    password: String,
+    send_old: Option<bool>,
+    state: State<'_, SharedEngine>,
+) -> Result<(), String> {
     let entry = eqsl_keychain()?;
     if password.is_empty() {
         clear_keychain_entry(&entry)?;
@@ -27956,18 +34274,23 @@ fn set_eqsl_password(password: String, state: State<'_, SharedEngine>) -> Result
         set_upload_toggle(&state, UploadToggle::Eqsl, false);
         return Ok(());
     }
-    entry
-        .set_password(&password)
-        .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
-    conn_log("eQSL", "ok", "password saved to the OS keychain");
-    set_upload_toggle(&state, UploadToggle::Eqsl, true);
-    catch_up_failed_uploads(
+    save_upload_login(
         &state,
-        tempo_app::engine::upload_legs::EQSL,
-        "eQSL",
-        "password saved",
-    );
-    Ok(())
+        UploadLogin {
+            leg: tempo_app::engine::upload_legs::EQSL,
+            service: "eQSL",
+            toggle: UploadToggle::Eqsl,
+            saved: "password saved to the OS keychain",
+            lead_in: "password saved",
+        },
+        || login_stored(&entry),
+        || {
+            entry
+                .set_password(&password)
+                .map_err(|e| format!("couldn't save to the system keychain: {e}"))
+        },
+        send_old,
+    )
 }
 
 /// Remove the stored eQSL password from the OS keychain (idempotent).
@@ -28071,9 +34394,15 @@ fn entered_credential(raw: &str) -> &str {
 /// Store (or, if empty, clear) the QRZ **Logbook API key** (distinct from the XML
 /// password) in the OS keychain. Write-only. Saving a key also switches QRZ
 /// auto-upload ON: entering the key IS the intent ("upload my QSOs to QRZ") —
-/// previously the separate toggle silently stayed off and nothing uploaded.
+/// previously the separate toggle silently stayed off and nothing uploaded. The first key saved
+/// asks first what becomes of the contacts never sent there (`send_old`, see
+/// [`start_uploads_for_login`]).
 #[tauri::command(async)]
-fn set_qrz_logbook_key(key: String, state: State<'_, SharedEngine>) -> Result<(), String> {
+fn set_qrz_logbook_key(
+    key: String,
+    send_old: Option<bool>,
+    state: State<'_, SharedEngine>,
+) -> Result<(), String> {
     let key = entered_credential(&key); // #224
     let entry = qrz_logbook_keychain()?;
     // #291: a different key can unlock a different book, so the owner learned for the old one
@@ -28090,18 +34419,23 @@ fn set_qrz_logbook_key(key: String, state: State<'_, SharedEngine>) -> Result<()
         set_upload_toggle(&state, UploadToggle::Qrz, false);
         return Ok(());
     }
-    entry
-        .set_password(key)
-        .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
-    conn_log("QRZ Logbook", "ok", "API key saved to the OS keychain");
-    set_upload_toggle(&state, UploadToggle::Qrz, true);
-    catch_up_failed_uploads(
+    save_upload_login(
         &state,
-        tempo_app::engine::upload_legs::QRZ,
-        "QRZ Logbook",
-        "API key saved",
-    );
-    Ok(())
+        UploadLogin {
+            leg: tempo_app::engine::upload_legs::QRZ,
+            service: "QRZ Logbook",
+            toggle: UploadToggle::Qrz,
+            saved: "API key saved to the OS keychain",
+            lead_in: "API key saved",
+        },
+        || login_stored(&entry),
+        || {
+            entry
+                .set_password(key)
+                .map_err(|e| format!("couldn't save to the system keychain: {e}"))
+        },
+        send_old,
+    )
 }
 
 /// Which connector's auto-upload toggle to flip alongside its credential.
@@ -28122,7 +34456,7 @@ enum UploadToggle {
 /// NEVER `apply_settings` — that resets the operating mode and drops queued TX,
 /// and a credential save mid-QSO must not kill the QSO. No-op when already in
 /// the requested state.
-fn set_upload_toggle(state: &State<'_, SharedEngine>, which: UploadToggle, on: bool) {
+fn set_upload_toggle(state: &SharedEngine, which: UploadToggle, on: bool) {
     {
         let mut eng = engine_lock(state);
         let (connector, already) = {
@@ -28179,29 +34513,49 @@ fn clear_qrz_logbook_key(state: State<'_, SharedEngine>) -> Result<(), String> {
 /// keychain — write-only, kept out of settings.json at rest like every other
 /// credential. Unlike QRZ, saving does NOT flip the upload toggle: Cloudlog also
 /// needs a URL + station-profile id, so the operator enables it explicitly.
-#[tauri::command]
-fn set_cloudlog_key(key: String) -> Result<(), String> {
+#[tauri::command(async)]
+fn set_cloudlog_key(state: State<'_, SharedEngine>, key: String) -> Result<(), String> {
     let entry = cloudlog_keychain()?;
-    if key.trim().is_empty() {
-        clear_keychain_entry(&entry)?;
-        conn_log("Cloudlog", "info", "API key cleared from the OS keychain");
-        return Ok(());
-    }
-    entry
-        .set_password(key.trim())
-        .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
-    conn_log("Cloudlog", "ok", "API key saved to the OS keychain");
-    Ok(())
+    key_typed_in_settings(&state, None, || {
+        if key.trim().is_empty() {
+            clear_keychain_entry(&entry)?;
+            conn_log("Cloudlog", "info", "API key cleared from the OS keychain");
+            return Ok(());
+        }
+        entry
+            .set_password(key.trim())
+            .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
+        conn_log("Cloudlog", "ok", "API key saved to the OS keychain");
+        Ok(())
+    })
+}
+
+/// The saved keys that wait for the operator ([`keys_to_confirm_in`]), for the notice.
+#[tauri::command(async)]
+fn keys_to_confirm(state: State<'_, SharedEngine>) -> Vec<KeyToConfirm> {
+    keys_to_confirm_in(engine_lock(&state).settings())
+}
+
+/// The operator's Use or Remove on a saved key that waits ([`answer_key_to_confirm`]).
+#[tauri::command(async)]
+fn answer_saved_key(
+    state: State<'_, SharedEngine>,
+    radio_id: Option<u32>,
+    use_it: bool,
+    address: String,
+) -> Result<(), String> {
+    answer_key_to_confirm(&state, radio_id, use_it, Some(&address), change_keychain)
 }
 
 /// Remove the stored Cloudlog/Wavelog API key from the OS keychain (idempotent).
-#[tauri::command]
-fn clear_cloudlog_key() -> Result<(), String> {
-    let r = clear_keychain_entry(&cloudlog_keychain()?);
-    if r.is_ok() {
+#[tauri::command(async)]
+fn clear_cloudlog_key(state: State<'_, SharedEngine>) -> Result<(), String> {
+    let entry = cloudlog_keychain()?;
+    key_typed_in_settings(&state, None, || {
+        clear_keychain_entry(&entry)?;
         conn_log("Cloudlog", "info", "API key cleared from the OS keychain");
-    }
-    r
+        Ok(())
+    })
 }
 
 /// `RcvdSince` safety margin: eQSL does not document the timezone of this filter,
@@ -28367,20 +34721,25 @@ fn download_lotw_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     )
 }
 
-/// What `fetch` brings back that is not LoTW's report file.
+/// What to say about a `body` from `fetch` that is not LoTW's report file.
 ///
-/// ⚠️ DO NOT BLAME THE CREDENTIALS HERE — the exact sibling of the eQSL guard, and the same
-/// reasoning. `fetch_report` has already returned a body, so the login worked; a wrong password
-/// fails earlier with its own message. eQSL demonstrated the failure mode on 2026-08-28: it
-/// changed the wording its download opens with, the structural check started rejecting good
-/// files, and operators were told to re-enter passwords that were provably correct because their
-/// UPLOADS were still landing. LoTW can change its wording the same way, and it is the one that
-/// carries award credit, so it should not be the place we find this out again.
-fn lotw_not_a_report() -> String {
-    "LoTW answered, but the download was not the report file it should have been. Your \
-     username and password are fine — this is not a login problem. LoTW may be \
-     returning an error page, or may be down for maintenance. Try again shortly, and \
-     if it keeps happening please report it."
+/// LoTW answers a wrong username or password with its sign-in page, HTTP 200, so that page is
+/// told apart by its words ([`tempo_core::lotw::is_login_refused`]) and called what it is.
+///
+/// ⚠️ ANY OTHER PAGE IS NOT BLAMED ON THE CREDENTIALS — the sibling of the eQSL guard, and the
+/// same reasoning. eQSL demonstrated the failure mode on 2026-08-28: it changed the wording its
+/// download opens with, the structural check started rejecting good files, and operators were
+/// told to re-enter passwords that were provably correct because their UPLOADS were still
+/// landing. LoTW can change its wording the same way. Nor are the credentials vouched for: an
+/// unrecognised page says nothing about them either way.
+fn lotw_not_a_report(body: &str) -> String {
+    if tempo_core::lotw::is_login_refused(body) {
+        return "LoTW did not accept your username or password. Check the LoTW username and \
+                password in Settings (your LoTW website login)."
+            .to_string();
+    }
+    "LoTW answered with a page that isn't a report. LoTW may be showing an error page, or may \
+     be down for maintenance. Try again shortly, and if it keeps happening please report it."
         .to_string()
 }
 
@@ -28495,7 +34854,7 @@ fn lotw_since_cursor(
     }; // `query` + `url` (both hold the password) dropped here
 
     if !tempo_core::lotw::is_lotw_adif(&body) {
-        return Err(lotw_not_a_report());
+        return Err(lotw_not_a_report(&body));
     }
 
     // Merge via the shared reconcile path, then advance the cursor only on a real
@@ -28607,7 +34966,7 @@ fn lotw_history_by_year(
             &query, year, newest, oldest,
         )) {
             Ok(b) if !tempo_core::lotw::is_lotw_adif(&b) => {
-                return Err(stopped(lotw_not_a_report(), &result))
+                return Err(stopped(lotw_not_a_report(&b), &result))
             }
             // A year cut off before its end marker is not in: what it holds would be merged, and
             // the place moved past what it lost.
@@ -29082,13 +35441,43 @@ fn download_eqsl_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     let password = eqsl_keychain()?
         .get_password()
         .map_err(|_| "No eQSL password stored — set it in Settings.".to_string())?;
+    download_eqsl_report_on(
+        state,
+        username,
+        qth_nickname,
+        since,
+        password,
+        now_unix(),
+        &|url| propagation::live::eqsl::fetch_inbox(url),
+        &|updated| {
+            persist_settings(updated, |e| {
+                eprintln!("tempo: failed to persist eQSL cursor: {e}")
+            });
+        },
+    )
+}
+
+/// [`download_eqsl_report_impl`] with the account and cursor as Settings held them, the password,
+/// the clock (`now`), eQSL (`fetch`, both steps) and the settings file (`persist`, handed the
+/// cursor's change to save, under the Engine lock) supplied.
+#[allow(clippy::too_many_arguments)]
+fn download_eqsl_report_on(
+    state: &SharedEngine,
+    username: String,
+    qth_nickname: String,
+    since: String,
+    password: String,
+    now: i64,
+    fetch: &dyn Fn(&str) -> Result<String, String>,
+    persist: &dyn Fn(Settings),
+) -> Result<LotwSyncResult, String> {
     let used_username = username.clone();
     let used_nickname = qth_nickname.clone();
     // Candidate next cursor: this sync's start, floored to the minute and rolled
     // back by the margin (eQSL's RcvdSince timezone is unstated — over-fetch so we
     // never skip records). Captured BEFORE the fetch so nothing arriving during it
     // is missed next time.
-    let next_cursor = tempo_core::eqsl::format_rcvd_since(now_unix() - EQSL_RCVD_MARGIN_SECS);
+    let next_cursor = tempo_core::eqsl::format_rcvd_since(now - EQSL_RCVD_MARGIN_SECS);
 
     // Build the URL, fetch (two GETs), and drop the secret-bearing values after.
     let body = {
@@ -29101,7 +35490,7 @@ fn download_eqsl_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
             qth_nickname: Some(qth_nickname).filter(|n| !n.is_empty()),
         };
         let url = tempo_core::eqsl::build_inbox_url(&query);
-        propagation::live::eqsl::fetch_inbox(&url)?
+        fetch(&url)?
     }; // `query` + `url` (both hold the password) dropped here
 
     if !tempo_core::eqsl::is_eqsl_adif(&body) {
@@ -29135,10 +35524,7 @@ fn download_eqsl_report_impl(state: &SharedEngine) -> Result<LotwSyncResult, Str
     {
         let mut eng = engine_lock(state);
         if eqsl_cursor_may_advance(eng.settings(), &body, &used_username, &used_nickname) {
-            let updated = eng.set_eqsl_cursor(next_cursor);
-            persist_settings(updated, |e| {
-                eprintln!("tempo: failed to persist eQSL cursor: {e}")
-            });
+            persist(eng.set_eqsl_cursor(next_cursor));
         }
     }
     // On disk before the sync says so — off the lock, on the blocking pool.
@@ -29233,7 +35619,7 @@ use screen_reason::ScreenReason;
 /// No key stored. Not a service failure at all, and the remedy is a Settings field.
 const QRZ_SYNC_NO_KEY: ConnDetail = conn_detail!(
     "no QRZ Logbook API key is stored — this is the per-logbook key from logbook.qrz.com \
-     (Settings ▸ Logging & Connectors ▸ Confirmations ▸ QRZ), not the QRZ password."
+     (Settings ▸ Services ▸ Confirmations ▸ QRZ), not the QRZ password."
 );
 /// The sync never got an answer. D#181's lesson: a transport failure is not a credential
 /// failure, and sending the operator to check their key is exactly the wrong misdirection.
@@ -29254,8 +35640,8 @@ const QRZ_SYNC_NOT_SAVED: ConnDetail = conn_detail!(
 );
 /// QRZ answered and refused. The class; never QRZ's wording, which is the leak.
 const QRZ_SYNC_REFUSED: ConnDetail = conn_detail!(
-    "QRZ took the request and refused it — check the Logbook API key in Settings ▸ Logbook & \
-     QSL. This session's connection log has QRZ's own wording."
+    "QRZ took the request and refused it — check the Logbook API key in Settings ▸ Services ▸ \
+     Confirmations ▸ QRZ. This session's connection log has QRZ's own wording."
 );
 
 /// One stored secret a request to a logging service carried, and what stands in for it in the
@@ -29275,29 +35661,9 @@ fn service_words_without_secrets(words: &str, echoed: &[Echoed<'_>], withheld: &
     let scrubbed = echoed.iter().fold(words.to_string(), |text, e| {
         tempo_core::qrz_correct::scrub_secret(&text, e.secret, e.marker)
     });
-    let folded = |text: &str| -> String {
-        text.chars()
-            .filter(char::is_ascii_alphanumeric)
-            .map(|c| c.to_ascii_lowercase())
-            .collect()
-    };
-    let shown = folded(&scrubbed);
+    let shown = alnum_folded(&scrubbed);
     let still_shown = echoed.iter().any(|e| {
-        // The secret's letters and digits, and those of its percent-encoded form (a `-` as `2d`).
-        let plain = folded(e.secret);
-        let encoded: String = e
-            .secret
-            .trim()
-            .bytes()
-            .map(|b| {
-                if b.is_ascii_alphanumeric() {
-                    (b.to_ascii_lowercase() as char).to_string()
-                } else {
-                    format!("{b:02x}")
-                }
-            })
-            .collect();
-        [plain, encoded]
+        folded_secret_forms(e.secret)
             .iter()
             .any(|k| !k.is_empty() && shown.contains(k.as_str()))
     });
@@ -29306,6 +35672,32 @@ fn service_words_without_secrets(words: &str, echoed: &[Echoed<'_>], withheld: &
     } else {
         scrubbed
     }
+}
+
+/// `text`'s letters and digits, lower-cased: the form [`service_words_without_secrets`] looks
+/// for a secret in, whatever case or separators the service wrote it with.
+fn alnum_folded(text: &str) -> String {
+    text.chars()
+        .filter(char::is_ascii_alphanumeric)
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
+/// A secret as [`alnum_folded`] text would show it: its letters and digits, and those of its
+/// percent-encoded form (a `-` as `2d`).
+fn folded_secret_forms(secret: &str) -> [String; 2] {
+    let encoded = secret
+        .trim()
+        .bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() {
+                (b.to_ascii_lowercase() as char).to_string()
+            } else {
+                format!("{b:02x}")
+            }
+        })
+        .collect();
+    [alnum_folded(secret), encoded]
 }
 
 /// What the operator is told instead of QRZ's words when they still show the Logbook API key.
@@ -29381,7 +35773,7 @@ fn sync_qrz_since(
             detail: QRZ_SYNC_NO_KEY,
             message: ScreenReason::new(
                 "No QRZ Logbook API key stored — this is the per-logbook key from \
-                 logbook.qrz.com (Settings ▸ Logging & Connectors ▸ Confirmations ▸ QRZ), NOT your \
+                 logbook.qrz.com (Settings ▸ Services ▸ Confirmations ▸ QRZ), NOT your \
                  QRZ password."
                     .to_string(),
             ),
@@ -29931,7 +36323,9 @@ fn callbook_answer(
 /// this call on any path, the FT auto-log included, takes it into its empty fields. As for the
 /// name, the lookup already happened; the logging path never makes one.
 fn note_lookup_answer(engine: &SharedEngine, call: &str, dto: &tempo_app::dto::QrzLookupDto) {
-    engine_lock(engine).note_callbook_answer(call, callbook_answer(dto));
+    let answer = callbook_answer(dto);
+    note_callbook_iota(call, &answer);
+    engine_lock(engine).note_callbook_answer(call, answer);
 }
 
 /// What [`callbook_lookup_live`] answers when every callbook it asked holds no such call — the one
@@ -30774,8 +37168,69 @@ mod upload_record_tests {
         }
         let launch = body(src, "start_on_the_logbook");
         assert!(launch.contains("wire_country_resolvers(&mut eng);"));
-        assert!(launch.contains("adif_record_own_log(&log_queries::sent(rec.clone()))"));
+        assert!(launch.contains("dxkeeper_push_async(host, base, uploads, dxkeeper_adif(&rec));"));
+        assert!(body(src, "dxkeeper_adif").contains("log_queries::sent(rec.clone())"));
         assert_eq!(launch.matches("dxkeeper_push_async(").count(), 1);
+    }
+
+    /// DXKeeper gets the operator's own record, private note included, but never a grid kept for
+    /// the distance and the map only (`tempo_core::logbook::counted_grid`): DXKeeper counts it
+    /// toward VUCC and can upload the contact itself (operator decision, 2026-10-27). A grid with
+    /// the callbook's mark alone (a callsign lookup, Update from callbook) is sent as before.
+    #[test]
+    fn dxkeeper_never_gets_a_map_only_grid() {
+        let parse = |adif: &str| tempo_core::logbook::parse_adif(adif).remove(0);
+        let map_only = parse(
+            "<CALL:4>W1AW<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20261027<TIME_ON:6>120000\
+             <GRIDSQUARE:6>FN31pr<NOTES:4>mine<APP_NEXUS_CALLBOOK_FILLED:10>GRIDSQUARE\
+             <APP_NEXUS_MAP_ONLY_GRID:1>Y<EOR>",
+        );
+        assert!(
+            tempo_core::logbook::callbook::is_map_only_grid(&map_only),
+            "premise"
+        );
+        let sent = super::dxkeeper_adif(&map_only);
+        assert!(!sent.contains("<GRIDSQUARE:"), "{sent}");
+        assert!(!sent.contains("APP_NEXUS_MAP_ONLY_GRID"), "{sent}");
+        assert!(
+            sent.contains("<NOTES:4>mine"),
+            "still their own record: {sent}"
+        );
+        let todays = parse(
+            "<CALL:4>W1AW<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20261027<TIME_ON:6>120000\
+             <GRIDSQUARE:6>FN31pr<APP_NEXUS_CALLBOOK_FILLED:10>GRIDSQUARE<EOR>",
+        );
+        assert!(super::dxkeeper_adif(&todays).contains("<GRIDSQUARE:6>FN31pr"));
+    }
+
+    /// Nor an IOTA reference taken from a log-time offer the operator has not confirmed: DXKeeper
+    /// can upload it to LoTW and the other services. One the operator typed, and an older
+    /// callbook-filled one, are sent as before.
+    #[test]
+    fn dxkeeper_never_gets_a_held_iota() {
+        let parse = |adif: &str| tempo_core::logbook::parse_adif(adif).remove(0);
+        let held = parse(
+            "<CALL:4>IA5X<BAND:3>20m<MODE:2>CW<QSO_DATE:8>20261027<TIME_ON:6>120000\
+             <IOTA:6>EU-028<NOTES:4>mine<APP_NEXUS_OFFER_HELD:4>IOTA<EOR>",
+        );
+        assert!(tempo_core::logbook::offer::withhold_iota(&held), "premise");
+        let sent = super::dxkeeper_adif(&held);
+        assert!(!sent.contains("<IOTA:"), "{sent}");
+        assert!(!sent.contains("APP_NEXUS_OFFER_HELD"), "{sent}");
+        assert!(
+            sent.contains("<NOTES:4>mine"),
+            "still their own record: {sent}"
+        );
+        let typed = parse(
+            "<CALL:4>IA5X<BAND:3>20m<MODE:2>CW<QSO_DATE:8>20261027<TIME_ON:6>120000\
+             <IOTA:6>EU-028<EOR>",
+        );
+        assert!(super::dxkeeper_adif(&typed).contains("<IOTA:6>EU-028"));
+        let older = parse(
+            "<CALL:4>IA5X<BAND:3>20m<MODE:2>CW<QSO_DATE:8>20261027<TIME_ON:6>120000\
+             <IOTA:6>EU-025<APP_NEXUS_CALLBOOK_FILLED:4>IOTA<EOR>",
+        );
+        assert!(super::dxkeeper_adif(&older).contains("<IOTA:6>EU-025"));
     }
 }
 
@@ -30940,7 +37395,7 @@ static QRZ_CORRECT_MISS: std::sync::Mutex<Option<tempo_core::qrz::QrzMissRecover
 /// and to nothing else — never to `conn_log`, never into an error, never into a stamp.
 fn qrz_correct_key() -> Result<String, String> {
     qrz_logbook_keychain()?.get_password().map_err(|_| {
-        "No QRZ Logbook API key stored — set it in Settings ▸ Logging & Connectors ▸ \
+        "No QRZ Logbook API key stored — set it in Settings ▸ Services ▸ \
          Confirmations ▸ QRZ."
             .to_string()
     })
@@ -31067,9 +37522,14 @@ async fn qrz_correct_undo_miss() -> Result<String, String> {
 /// Store (or, if empty, clear) the ClubLog **Application Password** in the OS
 /// keychain. Also re-arms ClubLog auto-push (a credential change clears the 403
 /// suspend latch). Write-only. Saving also switches ClubLog auto-upload ON
-/// (entering the credential is the intent).
+/// (entering the credential is the intent). The first app-password saved asks first what becomes
+/// of the contacts never sent there (`send_old`, see [`start_uploads_for_login`]).
 #[tauri::command(async)]
-fn set_clublog_password(password: String, state: State<'_, SharedEngine>) -> Result<(), String> {
+fn set_clublog_password(
+    password: String,
+    send_old: Option<bool>,
+    state: State<'_, SharedEngine>,
+) -> Result<(), String> {
     let entry = clublog_keychain()?;
     if password.is_empty() {
         // Clearing = "turn ClubLog off": drop the credential AND the toggle. The
@@ -31088,22 +37548,27 @@ fn set_clublog_password(password: String, state: State<'_, SharedEngine>) -> Res
     // no-credentials announce latch, so the next dry spell is announced again.
     CLUBLOG_SUSPENDED.store(false, std::sync::atomic::Ordering::Relaxed);
     CLUBLOG_NO_CREDS_ANNOUNCED.store(false, std::sync::atomic::Ordering::Relaxed);
-    entry
-        .set_password(&password)
-        .map_err(|e| format!("couldn't save to the system keychain: {e}"))?;
-    conn_log("ClubLog", "ok", "app-password saved to the OS keychain");
-    set_upload_toggle(&state, UploadToggle::Clublog, true);
     // CATCH-UP (F4MQS): entering the credential the QSOs were failing on is the moment to
     // re-send them. Without this, every QSO logged before the password was stored stayed
-    // un-uploaded with nothing to flag it. Now AFTER the toggle, not before — see
+    // un-uploaded with nothing to flag it. The catch-up runs AFTER the toggle, not before — see
     // `catch_up_failed_uploads`: a record drained in the gap would lose the leg silently.
-    catch_up_failed_uploads(
+    save_upload_login(
         &state,
-        tempo_app::engine::upload_legs::CLUBLOG,
-        "ClubLog",
-        "app-password saved",
-    );
-    Ok(())
+        UploadLogin {
+            leg: tempo_app::engine::upload_legs::CLUBLOG,
+            service: "ClubLog",
+            toggle: UploadToggle::Clublog,
+            saved: "app-password saved to the OS keychain",
+            lead_in: "app-password saved",
+        },
+        || login_stored(&entry),
+        || {
+            entry
+                .set_password(&password)
+                .map_err(|e| format!("couldn't save to the system keychain: {e}"))
+        },
+        send_old,
+    )
 }
 
 /// Remove the stored ClubLog app-password from the OS keychain (idempotent);
@@ -31930,6 +38395,14 @@ fn hrd_send_connected(addr: &str, bytes: &[u8]) -> bool {
     !matches!(sock.take_error(), Ok(Some(_)) | Err(_))
 }
 
+/// The record DXKeeper is sent for `rec`: the operator's own, private note included (the push's
+/// comment says why), its `COUNTRY` the one its DXCC number gives it ([`log_queries::sent`]), and
+/// never a grid for the distance and the map only, which DXKeeper would count and could upload
+/// (`adif_record_own_logger`).
+fn dxkeeper_adif(rec: &tempo_core::logbook::QsoRecord) -> String {
+    tempo_core::logbook::adif_record_own_logger(&log_queries::sent(rec.clone()))
+}
+
 fn dxkeeper_push_async(host: String, base_port: u16, uploads: bool, adif: String) {
     std::thread::spawn(move || {
         match tempo_net::dxkeeper::push_qso(&host, base_port, &adif, uploads) {
@@ -31981,16 +38454,19 @@ struct CloudlogStationDto {
 async fn cloudlog_station_info(
     state: State<'_, SharedEngine>,
 ) -> Result<Vec<CloudlogStationDto>, String> {
-    let url = {
-        let eng = engine_lock(&state);
-        eng.settings().cloudlog_url.trim().to_string()
-    };
-    if url.is_empty() {
+    if engine_lock(&state)
+        .settings()
+        .cloudlog_url
+        .trim()
+        .is_empty()
+    {
         return Err("Set your Cloudlog/Wavelog URL in Settings first.".to_string());
     }
-    let key = cloudlog_keychain()?
-        .get_password()
-        .map_err(|_| "No Cloudlog/Wavelog API key stored — set it in Settings.".to_string())?;
+    let (url, _, key) = cloudlog_key_to_send(&state, || {
+        cloudlog_keychain()?
+            .get_password()
+            .map_err(|_| "No Cloudlog/Wavelog API key stored — set it in Settings.".to_string())
+    })?;
     // Blocking HTTP off the async executor (the push impls' rule), and the destination check
     // with it: for a plain-http name it is a lookup. The key moves in and dies with the closure.
     let found = tauri::async_runtime::spawn_blocking(move || {
@@ -32029,26 +38505,16 @@ async fn cloudlog_station_info(
 fn cloudlog_push_qso_impl(
     dto: &LoggedQso,
     engine: &SharedEngine,
+    read_key: impl FnOnce() -> Result<String, String>,
 ) -> Result<String, propagation::live::cloudlog::CloudlogError> {
     use propagation::live::cloudlog::{CloudlogError, CloudlogFailure};
-    let (url, station_id) = {
-        let eng = engine_lock(engine);
-        let s = eng.settings();
-        (
-            s.cloudlog_url.trim().to_string(),
-            s.cloudlog_station_id.trim().to_string(),
-        )
-    };
-    let key = cloudlog_keychain()
-        .map_err(|e| CloudlogError {
+    let (url, station_id, key) =
+        cloudlog_key_to_send(engine, read_key).map_err(|message| CloudlogError {
             class: CloudlogFailure::NotConfigured,
-            message: e,
+            message,
             status: None,
-        })?
-        .get_password()
-        .unwrap_or_default()
-        .trim()
-        .to_string();
+        })?;
+    let key = key.trim().to_string();
     if url.is_empty() {
         return Err(CloudlogError {
             class: CloudlogFailure::NotConfigured,
@@ -32183,9 +38649,9 @@ fn cloudlog_refusal_line(
         F::Refused => "the instance refused the upload",
     };
     Some(format!(
-        "not retrying the QSO with {call}: {why}. Fix it in Settings ▸ Logging & Connectors ▸ \
-         Cloudlog / Wavelog. This contact is not sent again on its own — to add it afterwards, \
-         use Logbook ▸ Export ADIF and import the file into Wavelog or Cloudlog"
+        "not retrying the QSO with {call}: {why}. Fix it in Settings ▸ Services ▸ \
+         Confirmations ▸ Cloudlog / Wavelog. This contact is not sent again on its own — to add \
+         it afterwards, use Logbook ▸ Export ADIF and import the file into Wavelog or Cloudlog"
     ))
 }
 
@@ -32540,36 +39006,37 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
         }
     }
     if cloudlog_on && owed & legs::CLOUDLOG != 0 {
-        let (part, ok, detail, transient) = match cloudlog_push_qso_impl(&dto, engine) {
-            Ok(_) => {
-                conn_log("Cloudlog", "ok", format!("auto-forward {call}"));
-                ("Cloudlog ✓".to_string(), true, conn_detail!(""), false)
-            }
-            Err(e) => {
-                conn_log(
-                    "Cloudlog",
-                    "error",
-                    format!("auto-forward {call} — {}", e.message),
-                );
-                // The class and the status only — `e.message` is the instance's, and stays on
-                // screen.
-                diag_upload_failure("Cloudlog", cloudlog_class_name(e.class), e.status, &dto);
-                // #226: only a failure that can clear on its own is retried. A refusal (a
-                // callsign where the location number goes, a bad key, a URL that is not the
-                // API) was retried up to the budget and failed the same way every time; it is
-                // said once, with the way back, and dropped.
-                let refusal = cloudlog_refusal_line(e.class, &call);
-                if let Some(line) = &refusal {
-                    conn_log("Cloudlog", "error", line.clone());
+        let (part, ok, detail, transient) =
+            match cloudlog_push_qso_impl(&dto, engine, cloudlog_key_from_keychain) {
+                Ok(_) => {
+                    conn_log("Cloudlog", "ok", format!("auto-forward {call}"));
+                    ("Cloudlog ✓".to_string(), true, conn_detail!(""), false)
                 }
-                (
-                    format!("Cloudlog ✗ {}", e.message),
-                    false,
-                    cloudlog_stamp(e.class),
-                    refusal.is_none(),
-                )
-            }
-        };
+                Err(e) => {
+                    conn_log(
+                        "Cloudlog",
+                        "error",
+                        format!("auto-forward {call} — {}", e.message),
+                    );
+                    // The class and the status only — `e.message` is the instance's, and stays on
+                    // screen.
+                    diag_upload_failure("Cloudlog", cloudlog_class_name(e.class), e.status, &dto);
+                    // #226: only a failure that can clear on its own is retried. A refusal (a
+                    // callsign where the location number goes, a bad key, a URL that is not the
+                    // API) was retried up to the budget and failed the same way every time; it is
+                    // said once, with the way back, and dropped.
+                    let refusal = cloudlog_refusal_line(e.class, &call);
+                    if let Some(line) = &refusal {
+                        conn_log("Cloudlog", "error", line.clone());
+                    }
+                    (
+                        format!("Cloudlog ✗ {}", e.message),
+                        false,
+                        cloudlog_stamp(e.class),
+                        refusal.is_none(),
+                    )
+                }
+            };
         // Same as HRDLog above: no per-QSO stamp, so this is the only health signal.
         //
         // ⛔ The persisted detail is Nexus's own sentence, never the instance's. Cloudlog is
@@ -32878,7 +39345,6 @@ fn build_connect_board(
     prop: &PropCache,
     kp: &KpForecastCache,
 ) -> Option<tempo_app::connect_web::ConnectBoardData> {
-    use tempo_app::connect_web::{ConnectBand, ConnectBoardData, ConnectOpening};
     // One bounded clone under each lock; everything else is built off-lock.
     let snap = prop.lock().ok()?.as_ref().map(|(_, p)| p.clone())?;
     let (call, grid) = {
@@ -32894,11 +39360,42 @@ fn build_connect_board(
         .ok()
         .and_then(|g| g.as_ref().map(|(_, f)| f.clone()))
         .and_then(|f| f.peak_ahead().cloned());
-    Some(ConnectBoardData {
+    Some(connect_board(snap, call, grid, peak, now_unix()))
+}
+
+/// The TV summary page's payload from one propagation snapshot, the station, and the Kp
+/// forecast's peak, for `now` ([`build_connect_board`] gathers them under their locks).
+fn connect_board(
+    mut snap: propagation::PropagationSnapshot,
+    call: String,
+    grid: String,
+    peak: Option<propagation::KpPoint>,
+    now: i64,
+) -> tempo_app::connect_web::ConnectBoardData {
+    use tempo_app::connect_web::{ConnectBand, ConnectBoardData, ConnectOpening};
+    // The cached snapshot is served at any age: its storm and flare lines speak only while the
+    // Kp or X-ray they rest on may speak for now, as on the desktop (`get_propagation`).
+    let stamps = snap.space_wx.stamps;
+    // Its band advice, as `get_propagation` serves it, once the model may not speak.
+    if !stamps.model_usable(now) {
+        served_without_model(&mut snap, &call, &grid);
+    }
+    // A number is shown only while it may speak for now: a stand-in or an old reading is a dash,
+    // as on the gauges (this page has no dimmed ink to age one in).
+    let speaks = |k: propagation::model::WxKey| stamps.usable(k, now);
+    let wx_now = propagation::SpaceWx {
+        sfi: snap.space_wx.sfi,
+        ssn: None,
+        kp: snap.space_wx.kp,
+        a_index: snap.space_wx.a_index,
+        xray_long: snap.space_wx.xray_long,
+    }
+    .speaking_now(&stamps, now);
+    ConnectBoardData {
+        banners: propagation::PropAdvisor::new(&call, &grid).banners(&wx_now),
         call,
         grid,
         headline: snap.advisory.headline.clone(),
-        banners: snap.advisory.banners.clone(),
         bands: snap
             .advisory
             .bands
@@ -32923,16 +39420,22 @@ fn build_connect_board(
                 is_new: o.is_new,
             })
             .collect(),
-        sfi: snap.space_wx.sfi,
-        kp: snap.space_wx.kp,
-        a_index: snap.space_wx.a_index,
-        xray_class: snap.space_wx.xray_class.clone(),
-        insights: snap.insights.iter().map(|i| i.plain.clone()).collect(),
+        sfi: speaks(propagation::model::WxKey::Sfi).then_some(snap.space_wx.sfi),
+        kp: speaks(propagation::model::WxKey::Kp).then_some(snap.space_wx.kp),
+        a_index: speaks(propagation::model::WxKey::A).then_some(snap.space_wx.a_index),
+        xray_class: speaks(propagation::model::WxKey::Xray)
+            .then(|| snap.space_wx.xray_class.clone()),
+        insights: snap
+            .insights
+            .iter()
+            .filter(|i| propagation::insight_speaks_now(i, &stamps, now))
+            .map(|i| i.plain.clone())
+            .collect(),
         kp_peak_ahead: peak.as_ref().map(|p| p.kp),
         kp_peak_unix: peak.as_ref().map(|p| p.time_unix),
         source: snap.source.clone(),
         as_of_unix: snap.as_of,
-    })
+    }
 }
 
 /// The app handle the TV page's closures read at call time. Set once in `.setup()`;
@@ -32999,15 +39502,21 @@ fn tv_rpc(cmd: &str, args: &str) -> tempo_app::connect_web::RpcOutcome {
             "get_kp_forecast" => ok(get_kp_forecast(app.state()).await),
             "get_solar_indices" => ok(get_solar_indices(app.state()).await),
             "get_band_outlook" => ok(get_band_outlook(app.state(), app.state()).await),
+            "get_path_regions" => ok(get_path_regions(app.state(), app.state(), app.state()).await),
             "get_path_outlook" => {
                 let grid = v
                     .get("grid")
                     .and_then(|x| x.as_str())
                     .unwrap_or("")
                     .to_string();
-                ok(get_path_outlook(grid, app.state(), app.state()).await)
+                ok(
+                    get_path_outlook(grid, app.state(), app.state(), app.state(), app.state())
+                        .await,
+                )
             }
-            "get_getting_out" => ok(get_getting_out(app.state(), app.state()).await),
+            "get_getting_out" => {
+                ok(get_getting_out(tv_getting_out_since(&v), app.state(), app.state()).await)
+            }
             "get_dxped_windows" => {
                 let days = v.get("days").and_then(|x| x.as_u64()).map(|d| d as u32);
                 ok(get_dxped_windows(app.state(), app.state(), days).await)
@@ -34213,6 +40722,23 @@ fn fd_club_export(state: State<'_, SharedEngine>, format: String) -> Result<Stri
 #[tauri::command(async)]
 fn fd_club_log_newest(state: State<'_, SharedEngine>) -> Option<tempo_app::dto::FdClubLogDto> {
     engine_lock(&state).fd_club_log_newest()
+}
+
+/// ⭐ **Merge a laptop's contest file into the host's club log**, as that laptop's sync would have
+/// merged it, recorded as from position `posid` — the host's "Import a laptop's file…"
+/// ([`tempo_app::engine::Engine::fd_club_import`]). `text` is the file the host's screen read.
+/// `Err` with the sentence to show when this Nexus is not hosting or the position cannot be used.
+///
+/// ⛔ Not one of Remote's operations: a club change is refused from afar, and the button refuses a
+/// press that comes through a stream.
+#[tauri::command(async)]
+fn fd_club_import(
+    state: State<'_, SharedEngine>,
+    text: String,
+    posid: String,
+) -> Result<tempo_app::dto::FdClubImportDto, String> {
+    // The file is read with the Engine lock let go: the lock is taken only to check and to merge.
+    tempo_app::engine::fd_club_import_in(&state, &text, &posid)
 }
 
 /// What the host's Give button did: the position given, or why nothing changed.
@@ -35539,8 +42065,10 @@ mod repeater_search_tests {
 
         let mut refused = Fixture::new(Ok(HEARHAM_EN52));
         refused.token = "rbuapp_refused".into();
-        refused.repeaterbook =
-            Err("RepeaterBook: token rejected — check the token in Settings ▸ Integrations".into());
+        refused.repeaterbook = Err(
+            "RepeaterBook: token rejected — check the token in Settings ▸ Services ▸ Confirmations"
+                .into(),
+        );
         let r = refused.search(EN52).expect("a refused token");
         assert_eq!(rows(&r), EN52_MACHINES);
         assert_eq!(lists(&r), [("hearham".to_string(), false)]);
@@ -35833,11 +42361,15 @@ mod radioprog_file_tests {
 
     /// A unique scratch directory; the name carries the test's own label.
     fn scratch(label: &str) -> PathBuf {
+        static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!("nexus-radioprog-{label}-{nanos}"));
+        let dir = std::env::temp_dir().join(format!(
+            "nexus-radioprog-{label}-{nanos}-{}",
+            N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).expect("scratch dir");
         dir
     }
@@ -36963,8 +43495,9 @@ struct UpdateInfo {
 /// stamped into the binary (`tauri::utils::platform::bundle_type`).
 ///
 /// ⚠️ THE PACKAGE DECIDES, NOT WHETHER A CHECK SUCCEEDS. The manifest (`latest.json`, built in
-/// release.yml) carries three installers: the NSIS setup under `windows-x86_64`, the AppImage
-/// under `linux-x86_64` and the macOS app under `darwin-aarch64`. The plugin looks up
+/// release.yml) carries four installers: the NSIS setup under `windows-x86_64`, the AppImage
+/// under `linux-x86_64`, and the macOS app under `darwin-aarch64` (Apple Silicon) and
+/// `darwin-x86_64` (Intel), each Mac asking for its own architecture's. The plugin looks up
 /// `linux-x86_64-deb` and then the bare `linux-x86_64`, so on a PC's .deb the check found the
 /// AppImage, downloaded it, and Install failed every time: the plugin installs over a .deb only
 /// from a .deb (`InvalidUpdaterFormat`). The .deb packages (the PC one and both Pi ones) are
@@ -37384,6 +43917,30 @@ fn open_external_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
     }
     app.opener()
         .open_url(url, None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
+/// The most a QSL label sheet may be: a few thousand labels' markup, with room to spare.
+const QSL_LABELS_MAX_BYTES: usize = 8 << 20;
+
+/// Open a sheet of QSL labels (an HTML page the Logbook's Cards to send built) in this computer's
+/// browser, which prints it at the label sheet's own size. Written to ONE file in the app's own
+/// cache folder — this user's, never a shared temporary folder another account could plant a
+/// link in — and replaced on every print. The page is the window's own markup; it reads and
+/// changes no contact. The webview has no print dialog of its own on every platform, and the
+/// browser's honours the sheet's page size and zero margins.
+#[tauri::command]
+fn open_qsl_labels(app: tauri::AppHandle, html: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    if html.len() > QSL_LABELS_MAX_BYTES {
+        return Err("the label sheet is too large to print in one go".to_string());
+    }
+    let dir = app.path().app_cache_dir().map_err(|e| e.to_string())?;
+    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    let path = dir.join("qsl-labels.html");
+    std::fs::write(&path, html).map_err(|e| e.to_string())?;
+    app.opener()
+        .open_path(path.to_string_lossy().to_string(), None::<&str>)
         .map_err(|e| e.to_string())
 }
 
@@ -37829,8 +44386,13 @@ fn install_panic_logger() {
         // `info` renders payload + location; the applog redactor scrubs it either way.
         tempo_core::applog::error("panic", &format!("at {where_}: {info}"));
         // Error level flushes, but a panic can be followed immediately by an abort, so make
-        // the wait explicit rather than relying on the writer getting a slice first.
-        tempo_core::applog::flush();
+        // the wait explicit rather than relying on the writer getting a slice first. TX SAFETY:
+        // not on a transmit session's driver, whose stops go out the moment this hook returns
+        // (it catches its own panic, so no abort follows): the line is queued, and the writer
+        // flushes an error line as soon as it has it.
+        if !tempo_net::on_a_transmit_driver() {
+            tempo_core::applog::flush();
+        }
         // ★ THE STARTUP-SILENCE CATCH. A panic BEFORE the main window exists is the shape the
         // operator experiences as "I double-click it and nothing happens" — and in tauri
         // 2.11.2 that is exactly where a WebView2 failure lands, because windows are created
@@ -37937,6 +44499,7 @@ pub fn run() {
     }
 
     let mut settings = Settings::load(&settings_path());
+    move_upload_start_beside_the_log(&mut settings, &shared_data_dir());
     // The DEBUG tier, as early as the settings are known — a diagnostic session must capture
     // the startup it was turned on for, not just what came after.
     tempo_core::applog::set_debug(settings.diag_debug_log);
@@ -38176,83 +44739,7 @@ pub fn run() {
     let receive_audio = rx_tap.receive_audio();
 
     #[cfg(feature = "radio")]
-    let mut radio_cfg = tempo_audio::service::RadioConfig {
-        on_active_profile_change: None,
-        // The SAME feed the UI reads (registered as managed state below) and the tee the
-        // rx-dsp thread drains. The waterfall row is produced on that thread, not on the radio
-        // loop, so blocking CAT can no longer starve it — see tempo-audio/src/rxtap.rs.
-        spectrum_feed: spectrum_feed.clone(),
-        rx_tap: rx_tap.clone(),
-        capture_radio_id: Some(settings.active_radio),
-        meter_feed: meter_feed.clone(),
-        ptt_method: settings.ptt_method.clone(),
-        // The operator's D1/D2/D3 choice, from the ACTIVE radio's profile. Without this the
-        // picker is decorative: the setting saved, the UI moved, the CI-V command supported it,
-        // and nothing carried the value into the backend (found by issue triage, same day).
-        icom_data_mode: settings
-            .radios
-            .iter()
-            .find(|r| r.id == settings.active_radio)
-            .map(|r| r.icom_data_mode)
-            .unwrap_or(settings.icom_data_mode),
-        // …and its transmit audio source for CAT PTT (#381), from the same profile, so the
-        // startup transport keys as the one every tick after it derives from settings.
-        tx_audio_source: settings
-            .radios
-            .iter()
-            .find(|r| r.id == settings.active_radio)
-            .map(|r| r.tx_audio_source.clone())
-            .unwrap_or_else(|| settings.tx_audio_source.clone()),
-        rig_model: settings.rig_model,
-        // The operator's name for the active radio, so the STARTUP CAT line names it. Without
-        // this the first line of every log said "model 1042" while every later line said
-        // "Yeasu" — the same radio under two names, in the file we hand to a stranger.
-        radio_label: settings
-            .radios
-            .iter()
-            .find(|r| r.id == settings.active_radio)
-            .map(|r| {
-                if r.name.trim().is_empty() {
-                    r.rig_model_name.clone()
-                } else if r.rig_model_name.trim().is_empty() {
-                    r.name.clone()
-                } else {
-                    format!("{} — {} (model {})", r.name, r.rig_model_name, r.rig_model)
-                }
-            })
-            .unwrap_or_default(),
-        // Seeded here rather than waiting for the first settings tick: the launch of rigctld is
-        // itself what keys an undeclared RTS-wired cable, so a tick later is too late (#44).
-        cat_rts_keys_ptt: settings.cat_rts_keys_ptt,
-        serial_port: settings.serial_port.clone(),
-        baud: settings.baud,
-        rig_conn: settings.rig_conn.clone(),
-        rig_addr: settings.rig_addr.clone(),
-        omnirig_slot: settings.omnirig_slot,
-        rigctld_port: settings.rigctld_port,
-        icom_native_cat: settings.icom_native_cat,
-        flex_native_cat: settings.flex_native_cat,
-        flex_radio_ip: settings.flex_radio_ip.clone(),
-        flex_native_unbenched: settings.flex_native_unbenched,
-        icom_lan_host: settings.icom_lan_host.clone(),
-        icom_lan_user: settings.icom_lan_user.clone(),
-        icom_lan_port: settings.icom_lan_port,
-        radio_id: settings.active_radio,
-        broker_self_port: if settings.cat_broker {
-            Some(settings.cat_broker_port)
-        } else {
-            None
-        },
-        dial_hz: settings.dial_hz(),
-        mode: settings.rig_mode(), // DATA submode (PKTUSB/…) for FT8, not voice USB
-        wsjtx_udp: settings.wsjtx_udp,
-        wsjtx_addr: settings.wsjtx_udp_addr.clone(),
-        pskreporter: settings.pskreporter,
-        audio_in: settings.audio_in.clone(),
-        audio_out: settings.audio_out.clone(),
-        tx_level: settings.tx_level,
-        rx_gain: settings.rx_gain,
-    };
+    let mut radio_cfg = radio_config_for(&settings, &spectrum_feed, &rx_tap, &meter_feed);
 
     // The engine boots on the native source; restore a persisted Companion choice
     // below (best-effort — a failed UDP bind falls back to native).
@@ -38360,6 +44847,20 @@ pub fn run() {
     if region_enabled {
         start_pskr_region_feed(&region_paths, &cluster_call, &region_grid);
     }
+    // The log-time path grader: a contact being logged takes the route the path card graded for
+    // its station, as new fields only, and never an antenna field. It reads
+    // what `path_grades` already holds (it runs under the Engine lock); the record's own
+    // MY_GRIDSQUARE, which the log funnel has stamped by then, names the operator's end.
+    {
+        let live = live_paths.clone();
+        let region = region_paths.0.clone();
+        engine_lock(&engine)
+            .set_path_grader(move |rec, late| path_grades::at_log(rec, "", &live, &region, late));
+    }
+    // The display-only grading of the existing log (a first pass two minutes after launch, then
+    // whenever the log has changed).
+    #[cfg(feature = "radio")]
+    path_grades::start_grader(engine.clone());
     // Record the LOGIN IDENTITY the feeds were started under, so a later Settings rename
     // knows to tear them down and reconnect (topics/login are call-bound). Built the same
     // way the comparison in `apply_and_persist` is: a seed in any other shape reads as a
@@ -38367,14 +44868,10 @@ pub fn run() {
     if let Ok(mut c) = PREV_FEED_CALL.lock() {
         *c = tempo_net::cluster::login_call(&cluster_call, &cluster_ssid);
     }
-    // Feed the live DXpedition layer the ClubLog key (most-wanted ranks). Pushed,
-    // not pulled — keeps the propagation crate decoupled from settings IO.
-    {
-        let eng = engine_lock(&engine);
-        propagation::live::dxped::set_clublog_key(&effective_clublog_key(
-            &eng.settings().clublog_api_key,
-        ));
-    }
+    // The live DXpedition layer keeps ClubLog's answers here between runs, so a restart does
+    // not ask ClubLog again before its schedule says so. Shared by every profile, like cty.dat.
+    // Disk only, and before the warm-up below asks anything.
+    propagation::live::dxped::set_cache_dir(&shared_data_dir());
     // Warm the DXpedition plan cache in the background so the Needed board's
     // expedition tagging works from launch — without it the cache stays cold until
     // the operator first opens Connect/DXpeditions.
@@ -38687,6 +45184,9 @@ fn start_on_the_logbook(
             std::thread::sleep(std::time::Duration::from_secs(subsec_jitter(120)));
             maybe_kick_tle_refresh(false);
         });
+        // The IOTA island-group list: the copy that shipped or a newer download, checked for an
+        // update when a month old; none while the operator has it off (`iota_list`).
+        iota_list::load_at_startup();
         // LoTW-user marks: restore the persisted ARRL activity list (if the
         // operator ever fetched it) and wire the recency-windowed resolver.
         if let Ok(csv) = std::fs::read_to_string(lotw_users_path()) {
@@ -39199,28 +45699,13 @@ fn start_on_the_logbook(
                     eng.requeue_upload_at(p.rec, p.legs, p.attempts, p.retry_after_unix, p.origin);
                     continue;
                 }
-                if p.origin == tempo_app::engine::UploadOrigin::CatchUp {
-                    catchup_left = catchup_left.saturating_sub(1);
-                    // #290: filed under the service the record is actually owed to. This
-                    // said "ClubLog" outright, which was the only sweep there was — an eQSL
-                    // catch-up would have reported its whole run under ClubLog's name.
-                    // `catchup_left` counts RECORDS, so a record owing two legs says the
-                    // same remaining count on both lines, which is what is left to send.
-                    for (_, service) in UPLOAD_LEG_SERVICES
-                        .iter()
-                        .filter(|(leg, _)| p.legs & leg != 0)
-                    {
-                        conn_log(
-                            service,
-                            "info",
-                            format!(
-                                "catch-up: sending an older QSO with {} — {catchup_left} still \
-                                 queued, one every {}s so {service} isn't flooded",
-                                p.rec.call,
-                                tempo_app::engine::CATCHUP_UPLOAD_SPACING_SECS,
-                            ),
-                        );
-                    }
+                // A Cloudlog key the operator has yet to confirm for this address: that leg
+                // waits on the queue, unspent, and the rest go now.
+                let legs = legs_to_send_now(&push_engine, &p, now_unix, &mut catchup_left);
+                if legs == 0 {
+                    // Nothing else owed: nothing goes anywhere, DXKeeper included, which saw
+                    // this contact the first time it came round.
+                    continue;
                 }
                 let rec = p.rec.clone();
                 // DXKeeper is deliberately OUTSIDE the legs/retry machinery: it never
@@ -39238,12 +45723,7 @@ fn start_on_the_logbook(
                     // vs a service or a broadcast — flip this one word if the operator wants it
                     // drawn elsewhere. Its COUNTRY is the one its DXCC number gives it, as
                     // every service's is (`log_queries::sent`).
-                    dxkeeper_push_async(
-                        host,
-                        base,
-                        uploads,
-                        tempo_core::logbook::adif_record_own_log(&log_queries::sent(rec.clone())),
-                    );
+                    dxkeeper_push_async(host, base, uploads, dxkeeper_adif(&rec));
                 }
                 let failed = auto_push_one(
                     &push_engine,
@@ -39257,7 +45737,7 @@ fn start_on_the_logbook(
                         n3fjp_on,
                         cloudlog_on,
                     },
-                    p.legs,
+                    legs,
                 );
                 let capped = cap_hrdlog_retries(failed, p.attempts);
                 if capped != failed {
@@ -39275,7 +45755,7 @@ fn start_on_the_logbook(
                 // good. A contact contest mode held stays in its file until it owes nothing, so
                 // a quit part-way through the paced release sends the rest at the next launch.
                 // `failed` before the HRDLog cap: a leg that cap gives up on is retried then.
-                let done = p.legs & !failed;
+                let done = legs & !failed;
                 if done != 0 {
                     engine_lock_result(&push_engine)
                         .unwrap_or_else(|e| e.into_inner())
@@ -39364,8 +45844,9 @@ fn start_on_the_logbook(
         tempo_audio::rigctld_proc::init_orphan_ledger(config_dir_for(None).join("daemon-pids"));
         // The Icom network client reads a radio's password from the keychain at the moment it
         // logs in, through this source; nothing else hands it the password.
-        tempo_audio::icomlan::set_credential_source(std::sync::Arc::new(|radio_id| {
-            OsKeychain.get(radio_id)
+        let login_engine = engine.clone();
+        tempo_audio::icomlan::set_credential_source(std::sync::Arc::new(move |radio_id| {
+            icom_lan_password_for_login(&login_engine, &OsKeychain, radio_id)
         }));
         let radio_engine = engine.clone();
         std::thread::spawn(move || {
@@ -39974,6 +46455,15 @@ fn finish_launch(handle: tauri::AppHandle, d: BuildDeps, rest: LaunchRest) {
         // The last note. The relay delivers it, then ends when this sender drops.
         let _ = notes.send(SplashNote::Opening);
     }
+    // The app's version, for the radio loop to name Nexus with on PSK Reporter. The package's,
+    // which is tauri.conf.json's (stamped with a tester build's suffix) and what `app_version`
+    // shows; not this crate's CARGO_PKG_VERSION, which a stamped suffix never reaches.
+    #[cfg(feature = "radio")]
+    let rest = {
+        let mut rest = rest;
+        rest.radio_cfg.app_version = handle.package_info().version.to_string();
+        rest
+    };
     let started = start_on_the_logbook(&d, logbook_store, rest);
     if let Err(why) = started {
         stop_for_no_log(&why);
@@ -40047,6 +46537,8 @@ fn finish_launch(handle: tauri::AppHandle, d: BuildDeps, rest: LaunchRest) {
             }
         });
     }
+    // The APRS cockpit's ISS channel: the ISS's position, for the engine's Doppler correction.
+    aprs_iss_doppler::spawn(d.engine.clone());
     // Nexus's needed spots for a TCI radio's own panadapter: read from the Needed board's list
     // while the radio in use has its "Spots on the SDR panadapter" on (`tci_spots`).
     #[cfg(feature = "radio")]
@@ -40363,6 +46855,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         reveal_diag_log,
         recordings_location,
         sstv_delete_image,
+        sstv_delete_images,
         reveal_recordings,
         reveal_sstv_gallery,
         shack_files::shack_file_list,
@@ -40378,6 +46871,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         set_title_bar_theme,
         open_dxped_page,
         open_external_url,
+        open_qsl_labels,
         os_notify,
         app_version,
         radio_launch_info,
@@ -40507,6 +47001,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         sstv_manual_rx,
         sstv_auto_arm,
         sstv_auto_disarm,
+        leave_decoder_screen,
         get_sstv_state,
         sstv_send,
         sstv_stop,
@@ -40610,7 +47105,11 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         set_routing_rules,
         set_default_radio,
         set_radio_switch_policy,
+        set_experience_level,
+        mark_setup_wizard_seen,
         route_preview,
+        route_preview_draft,
+        test_radio_cat,
         update_radio_profile,
         set_tune,
         atu_tune,
@@ -40637,6 +47136,9 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         resume_chat_cq,
         notify_erase,
         qrz_test_connection,
+        connector_checks::lotw_test_connection,
+        connector_checks::eqsl_test_connection,
+        connector_checks::clublog_test_connection,
         set_hunt_target,
         clear_hunt_target,
         fd_log_manual,
@@ -40660,6 +47162,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         fd_club_export,
         fd_club_log_newest,
         fd_club_give_position,
+        fd_club_import,
         fd_club_remove_position,
         fd_club_allow_back,
         fd_scoreboard_status,
@@ -40699,6 +47202,8 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         street_map::street_map_updates,
         street_map::street_map_info,
         street_map::street_map_install_file,
+        js8_sounds::pick_js8_sound_file,
+        js8_sounds::play_js8_sound,
         set_area,
         qso_resend,
         clear_dx_call,
@@ -40720,6 +47225,8 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         log_by_id::edit_qso_by_id,
         log_by_id::mark_qsl_sent_by_id,
         log_by_id::mark_qsl_card_by_id,
+        log_by_id::queue_qsl_card_by_id,
+        log_by_id::qsl_card_queue,
         log_by_id::set_sat_tag_by_id,
         log_by_id::set_dxcc_by_id,
         log_by_id::delete_qso_by_id,
@@ -40736,6 +47243,8 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         log_tools::bulk_edit_apply,
         log_tools::check_logbook,
         log_tools::apply_log_fixes,
+        log_tools::log_grid_offers,
+        log_tools::log_grid_fill,
         callbook_update::callbook_update_preview,
         callbook_update::callbook_update_start,
         callbook_update::callbook_update_status,
@@ -40744,6 +47253,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         log_queries::ask_log,
         purge_log,
         get_awards,
+        get_award_status,
         get_call_stats,
         get_dxcc_chart,
         get_what_to_qsl,
@@ -40783,8 +47293,11 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         open_download_page,
         update_route,
         set_qrz_logbook_key,
+        upload_backlog,
         clear_qrz_logbook_key,
         set_cloudlog_key,
+        keys_to_confirm,
+        answer_saved_key,
         clear_cloudlog_key,
         qrz_push_qso,
         qrz_correct_preview,
@@ -40804,6 +47317,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         get_ota_spots,
         get_ota_map_spots,
         get_kp_forecast,
+        arrival_outlook::get_arrival_outlook,
         get_solar_indices,
         connect_web_status,
         search_parks,
@@ -40840,6 +47354,10 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         click_tci_spot,
         get_propagation,
         get_path_outlook,
+        get_path_regions,
+        log_path_grades,
+        contact_path_day,
+        path_grading_status,
         get_band_outlook,
         get_getting_out,
         get_aurora,
@@ -40856,6 +47374,10 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         freq_markers::remove_freq_marker,
         freq_markers::freq_marker_qsy,
         get_lotw_users_status,
+        iota_list::get_iota_list_status,
+        iota_list::set_iota_list_enabled,
+        iota_list::get_iota_groups,
+        get_iota_offer,
         fetch_lotw_users,
         get_fcc_states_status,
         fetch_fcc_states,
@@ -40976,6 +47498,8 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
             }
             // The TV page's asset + RPC closures read this at call time (see TV_APP).
             let _ = TV_APP.set(app.handle().clone());
+            // The IOTA list tells the windows when a background download changes it.
+            iota_list::set_app(app.handle().clone());
             // Probe the display's physical density HERE, on the main thread, where GDK is safe
             // to call. The frontend reads the cached answer through `display_metrics` and uses
             // it to seed the UI scale cap on a first launch only. No-op off Linux.
@@ -41069,6 +47593,13 @@ fn build_app(d: BuildDeps) -> tauri::Result<tauri::App> {
                 if window.label() == panel_label(CONTEST_LOGGER_SLUG, Instance::Main) {
                     if let Some(engine) = window.app_handle().try_state::<SharedEngine>() {
                         engine_lock(&engine).contest_entry_share(false);
+                    }
+                }
+                // The SSTV picture viewer is gone: the SSTV screen no longer shows anywhere but
+                // its own screen.
+                if window.label() == panel_label(SSTV_VIEWER_SLUG, Instance::Main) {
+                    if let Some(engine) = window.app_handle().try_state::<SharedEngine>() {
+                        engine_lock(&engine).set_sstv_viewer_open(false);
                     }
                 }
             }
@@ -43061,6 +49592,55 @@ mod tests {
         }
     }
 
+    /// The SSTV picture viewer keeps the SSTV screen in its section from the moment its window is
+    /// built to its `Destroyed` event (the engine's flag the decoders' held-leave poll reads; the
+    /// leave command itself also reads the live window). The contest logger's test, below, is the
+    /// pattern.
+    #[test]
+    fn the_sstv_viewer_keeps_its_screen_from_its_open_to_its_destroy() {
+        let src = include_str!("lib.rs");
+        let body = |sig: &str| -> String {
+            let rest = src
+                .split_once(sig)
+                .unwrap_or_else(|| panic!("{sig} is defined"))
+                .1;
+            rest[..rest.find("\n}\n").expect("the end of the function")].to_string()
+        };
+        let open = body("\nasync fn open_panel_window(");
+        let built = open.find("builder.build()").expect("the window is built");
+        let kept = open
+            .find("set_sstv_viewer_open(true)")
+            .expect("opening the viewer keeps the SSTV screen");
+        assert!(built < kept, "only once the window exists");
+        assert!(
+            open[..kept].contains("slug == SSTV_VIEWER_SLUG"),
+            "only the viewer's window"
+        );
+        let build = body("\nfn build_app(");
+        let destroyed = build
+            .find("WindowEvent::Destroyed")
+            .expect("the app handles a window's Destroyed event");
+        let after = &build[destroyed..];
+        let label = after
+            .find("panel_label(SSTV_VIEWER_SLUG, Instance::Main)")
+            .expect("the viewer's own window");
+        assert!(
+            after[label..].contains("set_sstv_viewer_open(false)"),
+            "the viewer window's Destroyed event ends it"
+        );
+        let leave = body("\nfn leave_decoder_screen(");
+        let refreshed = leave
+            .find("set_sstv_viewer_open(")
+            .expect("the command refreshes the viewer from its window");
+        let decided = leave
+            .find(".leave_decoder_screen(")
+            .expect("the command asks the engine");
+        assert!(
+            refreshed < decided,
+            "the command reads the live window before deciding"
+        );
+    }
+
     /// ⭐ THE CONTEST LOGGER WINDOW: its strip shares the contact in progress only if the put is
     /// REGISTERED, the sharing starts when that window is built and ends when it is destroyed,
     /// and all three log commands log through the engine's claim (`contest_log_entry`) — the one
@@ -43331,6 +49911,51 @@ mod tests {
         assert!(
             !remote.contains("give_position"),
             "Remote must not reach the Give button's command"
+        );
+    }
+
+    /// ⭐ The host's "Import a laptop's file…" reaches the engine only if its command is REGISTERED
+    /// and goes through `engine::fd_club_import_in`, and no Remote dispatcher names either: a club
+    /// change is refused from afar. POSITIVE CONTROL: the dispatchers read here do name the engine
+    /// calls they make.
+    #[test]
+    fn the_club_import_command_is_registered_and_not_remote() {
+        let src = include_str!("lib.rs");
+        let list = src
+            .split_once("tauri::generate_handler![")
+            .expect("the handler list")
+            .1
+            .split_once("])")
+            .expect("the end of the handler list")
+            .0;
+        assert!(
+            list.lines().any(|l| l.trim() == "fd_club_import,"),
+            "fd_club_import is not registered — the Import button would fail at runtime"
+        );
+        let body = src
+            .split_once("\nfn fd_club_import(")
+            .expect("the command exists")
+            .1
+            .split_once("\n}\n")
+            .expect("the end of the command")
+            .0;
+        assert!(
+            body.contains("engine::fd_club_import_in(&state, &text, &posid)"),
+            "{body}"
+        );
+        let remote = [
+            include_str!("remote_service/operations.rs"),
+            include_str!("remote_service/operations/station.rs"),
+        ]
+        .concat();
+        assert!(
+            remote.contains(".poll_remote_transmit(")
+                && remote.contains(".remote_monitor_observation("),
+            "the control: the dispatchers read here are the ones that reach the engine"
+        );
+        assert!(
+            !remote.contains("club_import"),
+            "Remote must not reach the Import button's command"
         );
     }
 
@@ -46502,8 +53127,8 @@ mod tests {
         tle_merge_imports, tle_merged_elements, tle_record_aliases, tle_seed, tle_seed_floor,
         tle_seed_path, tle_set_currency, view_passes, write_json_atomic, write_qso_wav_in,
         AssistanceEvent, AssistanceSourceState, SatBird, SatTrackDto, SatTrackLoss, SatTrackRun,
-        SatnogsFetchState, SharedEngine, TleFlightGuard, TleSnapshot, SAT_TRACK, SAT_TRACK_GEN,
-        TLE_ACT_STALE_DAYS, TLE_FETCHING, TLE_STALE_LINE_DAYS,
+        SatnogsFetchState, SharedEngine, SpotIotaLog, TleFlightGuard, TleSnapshot, SAT_TRACK,
+        SAT_TRACK_GEN, SPOTS_WINDOW, TLE_ACT_STALE_DAYS, TLE_FETCHING, TLE_STALE_LINE_DAYS,
     };
 
     /// A scratch file path unique to this test process (std-only — no tempfile
@@ -46653,6 +53278,793 @@ mod tests {
             lines: 256,
             fsk_id: None,
         }
+    }
+
+    /// A gallery folder with `names` in it as pictures, an index naming them, and an engine holding
+    /// the same entries — the state the batch delete starts from.
+    fn batch_gallery(
+        label: &str,
+        names: &[&str],
+    ) -> (std::path::PathBuf, tempo_app::engine::Engine) {
+        let dir = scratch(label);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut entries = Vec::new();
+        for (i, n) in names.iter().enumerate() {
+            let p = dir.join(n);
+            std::fs::write(&p, b"PNG-not-really").unwrap();
+            entries.push(entry(&p, &format!("2026-10-30T10:0{i}:00Z")));
+        }
+        std::fs::write(
+            dir.join("gallery.json"),
+            serde_json::to_string(&entries).unwrap(),
+        )
+        .unwrap();
+        let mut eng = tempo_app::engine::Engine::new("N0CALL", "EN52", 0);
+        eng.load_sstv_gallery(entries);
+        (dir, eng)
+    }
+
+    /// The batch delete takes the Engine lock itself, so hand it the engine behind a mutex and
+    /// take it back afterwards for the assertions.
+    fn delete_batch(
+        eng: &mut tempo_app::engine::Engine,
+        dir: &std::path::Path,
+        paths: &[String],
+    ) -> Vec<super::SstvDeleteFailure> {
+        let engine = std::sync::Mutex::new(std::mem::replace(
+            eng,
+            tempo_app::engine::Engine::new("N0CALL", "EN52", 0),
+        ));
+        let failed = super::delete_sstv_gallery_images(&engine, dir, paths);
+        *eng = engine.into_inner().unwrap();
+        failed
+    }
+
+    /// The single delete takes the Engine lock itself too; the same hand-over as [`delete_batch`].
+    fn delete_one(
+        eng: &mut tempo_app::engine::Engine,
+        dir: &std::path::Path,
+        path: &str,
+    ) -> Result<(), String> {
+        let engine = std::sync::Mutex::new(std::mem::replace(
+            eng,
+            tempo_app::engine::Engine::new("N0CALL", "EN52", 0),
+        ));
+        let got = super::delete_sstv_gallery_image(&engine, dir, path);
+        *eng = engine.into_inner().unwrap();
+        got
+    }
+
+    /// Whether another thread could take the Engine lock while `delete` was writing gallery.json.
+    /// The seam holds the write back and, in the meantime, asks a second thread for the lock, as
+    /// the radio loop or a Stop TX would.
+    fn engine_was_free_during_the_gallery_write(
+        engine: &std::sync::Arc<std::sync::Mutex<tempo_app::engine::Engine>>,
+        delete: impl FnOnce(),
+    ) -> bool {
+        let free = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let taker = std::sync::Arc::new(std::sync::Mutex::new(None));
+        {
+            let (engine, free, taker) = (engine.clone(), free.clone(), taker.clone());
+            tempo_app::sstv_gallery::before_next_write(move || {
+                let (got_tx, got_rx) = std::sync::mpsc::channel();
+                let t = std::thread::spawn(move || {
+                    let _e = engine_lock(&engine);
+                    let _ = got_tx.send(());
+                });
+                let got = got_rx
+                    .recv_timeout(std::time::Duration::from_secs(2))
+                    .is_ok();
+                *free.lock().unwrap() = Some(got);
+                *taker.lock().unwrap() = Some(t);
+            });
+        }
+        delete();
+        let t = taker.lock().unwrap().take();
+        t.expect("the gallery write ran").join().unwrap();
+        let got = free.lock().unwrap().take();
+        got.expect("the seam ran")
+    }
+
+    /// ⛔ The radio loop takes the Engine lock every tick and Stop TX takes it too, and the gallery
+    /// folder can be a slow OneDrive or network folder. Neither delete may hold the lock while it
+    /// writes gallery.json.
+    #[test]
+    fn the_engine_lock_is_free_while_a_gallery_delete_writes_gallery_json() {
+        let names = [
+            "20261030T100000Z_scottie1.png",
+            "20261030T100100Z_robot36.png",
+        ];
+        let (dir, eng) = batch_gallery("sstv-write-off-lock", &names);
+        let engine = std::sync::Arc::new(std::sync::Mutex::new(eng));
+        let one = dir.join(names[0]).to_string_lossy().into_owned();
+        let two = dir.join(names[1]).to_string_lossy().into_owned();
+        assert!(
+            engine_was_free_during_the_gallery_write(&engine, || {
+                assert_eq!(
+                    super::delete_sstv_gallery_image(&engine, &dir, &one),
+                    Ok(())
+                );
+            }),
+            "the single delete's gallery.json write must not hold the Engine lock"
+        );
+        assert_eq!(index_paths(&dir), vec![two.clone()], "and it landed");
+        assert!(
+            engine_was_free_during_the_gallery_write(&engine, || {
+                assert_eq!(
+                    super::delete_sstv_gallery_images(&engine, &dir, std::slice::from_ref(&two)),
+                    vec![]
+                );
+            }),
+            "the batch delete's gallery.json write must not hold the Engine lock"
+        );
+        assert_eq!(index_paths(&dir), Vec::<String>::new(), "and it landed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Records each step at which a delete touches the gallery folder, and whether another thread
+    /// (the radio loop, a Stop TX) could have taken the Engine lock at that moment.
+    fn record_gallery_disk_work(
+        engine: &std::sync::Arc<std::sync::Mutex<tempo_app::engine::Engine>>,
+    ) -> std::rc::Rc<std::cell::RefCell<Vec<(&'static str, bool)>>> {
+        let steps = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let (engine, seen) = (engine.clone(), steps.clone());
+        super::ON_GALLERY_DISK_WORK.with(|h| {
+            *h.borrow_mut() = Some(Box::new(move |step| {
+                let engine = engine.clone();
+                let free = std::thread::spawn(move || engine.try_lock().is_ok())
+                    .join()
+                    .unwrap();
+                seen.borrow_mut().push((step, free));
+            }));
+        });
+        steps
+    }
+
+    /// ⛔ The gallery folder can be a slow OneDrive or network folder, where every file lookup is a
+    /// round trip, and the radio loop and Stop TX wait on the Engine lock. Neither delete may hold
+    /// the lock while it resolves the gallery's pictures, removes a file or reads the folder back:
+    /// a delete clicked during an over must never hold off the unkey.
+    #[test]
+    fn the_engine_lock_is_free_while_a_gallery_delete_reads_and_removes_files() {
+        let names = [
+            "20261030T100000Z_scottie1.png",
+            "20261030T100100Z_robot36.png",
+            "20261030T100200Z_pd120.png",
+        ];
+        let (dir, eng) = batch_gallery("sstv-disk-off-lock", &names);
+        let engine = std::sync::Arc::new(std::sync::Mutex::new(eng));
+        let paths: Vec<String> = names
+            .iter()
+            .map(|n| dir.join(n).to_string_lossy().into_owned())
+            .collect();
+        let steps = record_gallery_disk_work(&engine);
+
+        assert_eq!(
+            super::delete_sstv_gallery_image(&engine, &dir, &paths[0]),
+            Ok(())
+        );
+        assert_eq!(
+            steps.take(),
+            vec![("membership", true), ("unlink", true), ("reconcile", true)],
+            "the single delete's file work must not hold the Engine lock"
+        );
+        assert_eq!(
+            super::delete_sstv_gallery_images(&engine, &dir, &paths[1..]),
+            vec![]
+        );
+        assert_eq!(
+            steps.take(),
+            vec![
+                ("membership", true),
+                ("unlink", true),
+                ("unlink", true),
+                ("reconcile", true)
+            ],
+            "the batch delete's file work must not hold the Engine lock"
+        );
+        super::ON_GALLERY_DISK_WORK.with(|h| h.borrow_mut().take());
+
+        assert_eq!(index_paths(&dir), Vec::<String>::new());
+        assert!(engine_lock(&engine).sstv_gallery().is_empty());
+        assert!(names.iter().all(|n| !dir.join(n).exists()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The folder is read with the Engine lock released, so the decoder can finish a picture while
+    /// a delete reads it. That picture must keep everything the decoder knew (its FSK ID, its
+    /// frequency), and the deleted one must stay gone. Applying the folder read wholesale would
+    /// lose the arrival, or keep only a bare re-adopted copy of it.
+    #[test]
+    fn a_picture_received_while_a_gallery_delete_reads_the_folder_keeps_its_fsk_id() {
+        let names = [
+            "20261030T100000Z_scottie1.png",
+            "20261030T100100Z_robot36.png",
+        ];
+        for batch in [false, true] {
+            let (dir, eng) = batch_gallery(&format!("sstv-read-arrival-{batch}"), &names);
+            let engine = std::sync::Arc::new(std::sync::Mutex::new(eng));
+            let arrival = dir
+                .join("20261030T100500Z_pd120.png")
+                .to_string_lossy()
+                .into_owned();
+            {
+                let (engine, arrival) = (engine.clone(), arrival.clone());
+                super::ON_GALLERY_DISK_WORK.with(|h| {
+                    *h.borrow_mut() = Some(Box::new(move |step| {
+                        if step != "reconcile" {
+                            return;
+                        }
+                        // What the decode thread does for a finished picture and its FSK ID.
+                        std::fs::write(&arrival, b"PNG-not-really").unwrap();
+                        let mut e = engine_lock(&engine);
+                        let mut got = entry(std::path::Path::new(&arrival), "2026-10-30T10:05:00Z");
+                        got.freq_mhz = 14.233;
+                        e.push_sstv_gallery(got);
+                        e.set_sstv_gallery_fsk_id(&arrival, "K1ABC".into());
+                    }));
+                });
+            }
+            let gone = dir.join(names[0]).to_string_lossy().into_owned();
+            let kept = dir.join(names[1]).to_string_lossy().into_owned();
+            if batch {
+                assert_eq!(
+                    super::delete_sstv_gallery_images(&engine, &dir, std::slice::from_ref(&gone)),
+                    vec![]
+                );
+            } else {
+                assert_eq!(
+                    super::delete_sstv_gallery_image(&engine, &dir, &gone),
+                    Ok(())
+                );
+            }
+            super::ON_GALLERY_DISK_WORK.with(|h| h.borrow_mut().take());
+
+            let text = std::fs::read_to_string(dir.join("gallery.json")).unwrap();
+            let on_disk: Vec<tempo_app::dto::SstvGalleryEntry> =
+                serde_json::from_str(&text).unwrap();
+            let in_memory = engine_lock(&engine).sstv_gallery().to_vec();
+            for (label, gallery) in [("on disk", &on_disk), ("in memory", &in_memory)] {
+                let paths: Vec<&str> = gallery.iter().map(|e| e.path.as_str()).collect();
+                assert_eq!(
+                    paths,
+                    vec![kept.as_str(), arrival.as_str()],
+                    "batch {batch}, {label}: the arrival is kept and the deleted picture stays deleted"
+                );
+                assert_eq!(
+                    gallery[1].fsk_id.as_deref(),
+                    Some("K1ABC"),
+                    "batch {batch}, {label}: the arrival keeps its FSK ID"
+                );
+                assert_eq!(gallery[1].freq_mhz, 14.233, "batch {batch}, {label}");
+            }
+            assert!(!dir.join(names[0]).exists());
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// Two deletes at once must not resurrect a picture. A delete reads the folder with the Engine
+    /// lock released and then adopts files its copy did not list; a picture received after that
+    /// copy and deleted by a second delete before the first relocks would come back as an entry
+    /// with no file. So deletes run one at a time: a second delete (B) waits while the first (A)
+    /// is between its copy and its relock, and the picture B deletes stays deleted.
+    #[test]
+    fn a_second_gallery_delete_waits_for_the_first_and_its_picture_stays_deleted() {
+        let names = [
+            "20261030T100000Z_scottie1.png",
+            "20261030T100100Z_robot36.png",
+        ];
+        let (dir, eng) = batch_gallery("sstv-two-deletes", &names);
+        let engine = std::sync::Arc::new(std::sync::Mutex::new(eng));
+        let a = dir.join(names[0]).to_string_lossy().into_owned();
+        let z = dir
+            .join("20261030T100500Z_pd120.png")
+            .to_string_lossy()
+            .into_owned();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let b_ran_while_a_was_parked = std::rc::Rc::new(std::cell::Cell::new(None));
+        let b_thread = std::rc::Rc::new(std::cell::RefCell::new(None));
+        {
+            let (engine, dir, z) = (engine.clone(), dir.clone(), z.clone());
+            let (seen, b_thread) = (b_ran_while_a_was_parked.clone(), b_thread.clone());
+            super::ON_GALLERY_DISK_WORK.with(|h| {
+                *h.borrow_mut() = Some(Box::new(move |step| {
+                    if step != "reconcile" {
+                        return;
+                    }
+                    // A has its copy and has not read the folder. The decoder finishes Z...
+                    std::fs::write(&z, b"PNG-not-really").unwrap();
+                    engine_lock(&engine)
+                        .push_sstv_gallery(entry(std::path::Path::new(&z), "2026-10-30T10:05:00Z"));
+                    // ...and B deletes it from another thread.
+                    let (engine, dir, z, done_tx) =
+                        (engine.clone(), dir.clone(), z.clone(), done_tx.clone());
+                    *b_thread.borrow_mut() = Some(std::thread::spawn(move || {
+                        let got = super::delete_sstv_gallery_image(&engine, &dir, &z);
+                        // Only a signal; nobody listens once A has moved on.
+                        let _ = done_tx.send(());
+                        got
+                    }));
+                    seen.set(Some(
+                        done_rx
+                            .recv_timeout(std::time::Duration::from_secs(1))
+                            .is_ok(),
+                    ));
+                }));
+            });
+        }
+        assert_eq!(super::delete_sstv_gallery_image(&engine, &dir, &a), Ok(()));
+        super::ON_GALLERY_DISK_WORK.with(|h| h.borrow_mut().take());
+        assert_eq!(
+            b_ran_while_a_was_parked.get(),
+            Some(false),
+            "the second delete must wait while the first is between its copy and its relock"
+        );
+        let b_thread = b_thread.borrow_mut().take().unwrap();
+        assert_eq!(b_thread.join().unwrap(), Ok(()), "B's delete then runs");
+
+        let kept = dir.join(names[1]).to_string_lossy().into_owned();
+        let mem: Vec<String> = engine_lock(&engine)
+            .sstv_gallery()
+            .iter()
+            .map(|e| e.path.clone())
+            .collect();
+        assert_eq!(mem, vec![kept.clone()], "in memory");
+        assert_eq!(index_paths(&dir), vec![kept], "on disk");
+        assert!(!std::path::Path::new(&z).exists(), "B removed Z's file");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The adoption takes only files the delete's copy did not list. A picture the copy listed and
+    /// the gallery no longer has at the relock was removed by another delete in between, and must
+    /// not come back, even though the folder read still saw its file.
+    #[test]
+    fn a_picture_another_delete_removed_during_the_folder_read_does_not_come_back() {
+        let names = [
+            "20261030T100000Z_scottie1.png",
+            "20261030T100100Z_robot36.png",
+            "20261030T100200Z_pd120.png",
+        ];
+        let (dir, eng) = batch_gallery("sstv-listed-removed", &names);
+        let engine = std::sync::Arc::new(std::sync::Mutex::new(eng));
+        let x = dir.join(names[0]).to_string_lossy().into_owned();
+        let y = dir.join(names[1]).to_string_lossy().into_owned();
+        {
+            let (engine, y) = (engine.clone(), y.clone());
+            super::ON_GALLERY_DISK_WORK.with(|h| {
+                *h.borrow_mut() = Some(Box::new(move |step| {
+                    if step == "reconcile" {
+                        // The other delete's relock; its unlink lands after this read.
+                        engine_lock(&engine).remove_sstv_gallery(&y);
+                    }
+                }));
+            });
+        }
+        assert_eq!(super::delete_sstv_gallery_image(&engine, &dir, &x), Ok(()));
+        super::ON_GALLERY_DISK_WORK.with(|h| h.borrow_mut().take());
+        std::fs::remove_file(&y).unwrap();
+        let c = dir.join(names[2]).to_string_lossy().into_owned();
+        let mem: Vec<String> = engine_lock(&engine)
+            .sstv_gallery()
+            .iter()
+            .map(|e| e.path.clone())
+            .collect();
+        assert_eq!(mem, vec![c.clone()], "in memory");
+        assert_eq!(index_paths(&dir), vec![c], "on disk");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn index_paths(dir: &std::path::Path) -> Vec<String> {
+        let text = std::fs::read_to_string(dir.join("gallery.json")).unwrap();
+        serde_json::from_str::<Vec<tempo_app::dto::SstvGalleryEntry>>(&text)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.path)
+            .collect()
+    }
+
+    /// "Delete selected" removes exactly the pictures asked for, keeps the rest, and rewrites
+    /// gallery.json once for the whole batch.
+    #[test]
+    fn the_batch_delete_removes_exactly_the_selected_pictures_and_writes_the_index_once() {
+        let names = [
+            "20261030T100000Z_scottie1.png",
+            "20261030T100100Z_robot36.png",
+            "20261030T100200Z_pd120.png",
+        ];
+        let (dir, mut eng) = batch_gallery("sstv-batch", &names);
+        let gone: Vec<String> = [names[0], names[2]]
+            .iter()
+            .map(|n| dir.join(n).to_string_lossy().into_owned())
+            .collect();
+        let kept = dir.join(names[1]).to_string_lossy().into_owned();
+
+        super::SSTV_INDEX_WRITES.with(|n| n.set(0));
+        let failed = delete_batch(&mut eng, &dir, &gone);
+
+        assert_eq!(
+            failed,
+            vec![],
+            "every selected picture was inside the folder"
+        );
+        assert!(!dir.join(names[0]).exists() && !dir.join(names[2]).exists());
+        assert!(
+            dir.join(names[1]).exists(),
+            "an unselected picture must stay"
+        );
+        assert_eq!(index_paths(&dir), vec![kept.clone()], "the index on disk");
+        let in_memory: Vec<String> = eng.sstv_gallery().iter().map(|e| e.path.clone()).collect();
+        assert_eq!(in_memory, vec![kept], "and the gallery the UI reads");
+        assert_eq!(
+            super::SSTV_INDEX_WRITES.with(|n| n.get()),
+            1,
+            "two pictures deleted, one index rewrite"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⛔ The negative control: a path outside the gallery folder is refused and the file stays,
+    /// and so is one that walks out with `..`. The pictures that were inside are still deleted,
+    /// and the refusals come back with their reasons.
+    #[test]
+    fn the_batch_delete_refuses_a_path_outside_the_gallery_and_reports_each_failure() {
+        let names = [
+            "20261030T100000Z_scottie1.png",
+            "20261030T100100Z_robot36.png",
+        ];
+        let (dir, mut eng) = batch_gallery("sstv-batch-out", &names);
+        let outside_dir = scratch("sstv-batch-outside");
+        let _ = std::fs::remove_dir_all(&outside_dir);
+        std::fs::create_dir_all(&outside_dir).unwrap();
+        let outside = outside_dir.join("not-a-picture.txt");
+        std::fs::write(&outside, b"keep me").unwrap();
+        let walk_out = dir
+            .join("..")
+            .join(outside_dir.file_name().unwrap())
+            .join("not-a-picture.txt");
+        let inside = dir.join(names[0]).to_string_lossy().into_owned();
+        let missing = dir.join("never-there.png").to_string_lossy().into_owned();
+        let paths = vec![
+            outside.to_string_lossy().into_owned(),
+            inside.clone(),
+            walk_out.to_string_lossy().into_owned(),
+            missing.clone(),
+        ];
+
+        super::SSTV_INDEX_WRITES.with(|n| n.set(0));
+        let failed = delete_batch(&mut eng, &dir, &paths);
+
+        assert!(
+            outside.exists(),
+            "a file outside the gallery folder must never be deleted"
+        );
+        assert!(
+            !dir.join(names[0]).exists(),
+            "the picture that was inside is deleted"
+        );
+        assert!(dir.join(names[1]).exists(), "the unselected one stays");
+        let failed_paths: Vec<&str> = failed.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(
+            failed_paths,
+            vec![paths[0].as_str(), paths[2].as_str(), missing.as_str()],
+            "each failure, in the order asked"
+        );
+        assert_eq!(
+            failed[0].reason,
+            "That file is not in the SSTV gallery folder"
+        );
+        assert_eq!(
+            failed[1].reason,
+            "That file is not in the SSTV gallery folder"
+        );
+        assert!(
+            failed[2].reason.starts_with("Could not find"),
+            "{}",
+            failed[2].reason
+        );
+        assert_eq!(
+            index_paths(&dir),
+            vec![dir.join(names[1]).to_string_lossy().into_owned()]
+        );
+        assert_eq!(super::SSTV_INDEX_WRITES.with(|n| n.get()), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&outside_dir);
+    }
+
+    /// Nothing removed, nothing rewritten: a batch that deleted no picture leaves the index alone.
+    #[test]
+    fn a_batch_that_deletes_nothing_leaves_the_index_alone() {
+        let names = ["20261030T100000Z_scottie1.png"];
+        let (dir, mut eng) = batch_gallery("sstv-batch-none", &names);
+        let before = std::fs::read_to_string(dir.join("gallery.json")).unwrap();
+        super::SSTV_INDEX_WRITES.with(|n| n.set(0));
+        let failed = delete_batch(
+            &mut eng,
+            &dir,
+            &[dir.join("gone.png").to_string_lossy().into_owned()],
+        );
+        assert_eq!(failed.len(), 1);
+        assert_eq!(super::SSTV_INDEX_WRITES.with(|n| n.get()), 0);
+        assert_eq!(
+            std::fs::read_to_string(dir.join("gallery.json")).unwrap(),
+            before
+        );
+        assert!(dir.join(names[0]).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⛔ Inside the folder is not enough: only a picture the gallery lists can be deleted. An
+    /// operator's own file kept in the folder and the gallery's index itself are refused and stay;
+    /// the real picture in the same batch is still deleted.
+    #[test]
+    fn the_batch_delete_refuses_a_file_in_the_folder_that_is_not_a_gallery_picture() {
+        let names = ["20261030T100000Z_scottie1.png"];
+        let (dir, mut eng) = batch_gallery("sstv-batch-member", &names);
+        let notes = dir.join("notes.txt");
+        std::fs::write(&notes, b"the operator's notes").unwrap();
+        let index = dir.join("gallery.json");
+        let picture = dir.join(names[0]);
+        let paths: Vec<String> = [&notes, &index, &picture]
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+
+        let failed = delete_batch(&mut eng, &dir, &paths);
+
+        assert!(notes.exists(), "a file the gallery does not list must stay");
+        assert!(index.exists(), "the gallery index must stay");
+        assert!(!picture.exists(), "the gallery picture is deleted");
+        let failed_paths: Vec<&str> = failed.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(failed_paths, vec![paths[0].as_str(), paths[1].as_str()]);
+        for f in &failed {
+            assert_eq!(f.reason, "That file is not a picture in the SSTV gallery");
+        }
+        assert_eq!(index_paths(&dir), Vec::<String>::new());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The single delete makes the same refusal, through the same check, and still deletes a
+    /// picture the gallery lists.
+    #[test]
+    fn the_single_delete_refuses_a_file_in_the_folder_that_is_not_a_gallery_picture() {
+        let names = ["20261030T100000Z_scottie1.png"];
+        let (dir, mut eng) = batch_gallery("sstv-single-member", &names);
+        let notes = dir.join("notes.txt");
+        std::fs::write(&notes, b"the operator's notes").unwrap();
+        let index = dir.join("gallery.json");
+
+        for refused in [&notes, &index] {
+            let got = delete_one(&mut eng, &dir, &refused.to_string_lossy());
+            assert_eq!(
+                got,
+                Err("That file is not a picture in the SSTV gallery".to_string())
+            );
+            assert!(refused.exists(), "{} must stay", refused.display());
+        }
+        let picture = dir.join(names[0]);
+        assert_eq!(
+            delete_one(&mut eng, &dir, &picture.to_string_lossy()),
+            Ok(())
+        );
+        assert!(!picture.exists(), "the gallery picture is deleted");
+        assert!(eng.sstv_gallery().is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The same picture asked for twice is deleted once and is not reported as a failure.
+    #[test]
+    fn a_duplicate_path_in_the_gallery_batch_is_harmless() {
+        let names = [
+            "20261030T100000Z_scottie1.png",
+            "20261030T100100Z_robot36.png",
+        ];
+        let (dir, mut eng) = batch_gallery("sstv-batch-dup", &names);
+        let twice = dir.join(names[0]).to_string_lossy().into_owned();
+
+        let failed = delete_batch(&mut eng, &dir, &[twice.clone(), twice]);
+
+        assert_eq!(failed, vec![]);
+        assert!(!dir.join(names[0]).exists());
+        assert!(dir.join(names[1]).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The batch delete lets go of the Engine while it unlinks, so the decoder can finish a picture
+    /// in between. That picture must come through with everything the decoder knew about it (its
+    /// FSK ID here; frequency and line count likewise), and the picture the batch removed must not
+    /// come back. Writing back the gallery as it stood before the unlinks would lose the FSK ID:
+    /// the arrival would survive only because the folder scan re-adopts its file, bare.
+    #[test]
+    fn a_picture_received_during_a_gallery_batch_delete_keeps_its_fsk_id_and_the_deleted_one_stays_gone(
+    ) {
+        let names = ["20261030T100000Z_scottie1.png"];
+        let (dir, mut eng) = batch_gallery("sstv-batch-arrival", &names);
+        let arrival = dir.join("20261030T100500Z_robot36.png");
+        let arrival_path = arrival.to_string_lossy().into_owned();
+        {
+            let arrival_path = arrival_path.clone();
+            super::BEFORE_BATCH_RELOCK.with(|h| {
+                *h.borrow_mut() = Some(Box::new(move |engine| {
+                    // What the decode thread does for a finished picture and its trailing FSK ID.
+                    std::fs::write(&arrival_path, b"PNG-not-really").unwrap();
+                    let mut e = engine.lock().unwrap();
+                    let mut got =
+                        entry(std::path::Path::new(&arrival_path), "2026-10-30T10:05:00Z");
+                    got.freq_mhz = 14.233;
+                    e.push_sstv_gallery(got);
+                    e.set_sstv_gallery_fsk_id(&arrival_path, "K1ABC".into());
+                }));
+            });
+        }
+
+        let gone = dir.join(names[0]).to_string_lossy().into_owned();
+        let failed = delete_batch(&mut eng, &dir, std::slice::from_ref(&gone));
+
+        assert_eq!(failed, vec![]);
+        let text = std::fs::read_to_string(dir.join("gallery.json")).unwrap();
+        let on_disk: Vec<tempo_app::dto::SstvGalleryEntry> = serde_json::from_str(&text).unwrap();
+        for (label, gallery) in [
+            ("on disk", on_disk.as_slice()),
+            ("in memory", eng.sstv_gallery()),
+        ] {
+            let paths: Vec<&str> = gallery.iter().map(|e| e.path.as_str()).collect();
+            assert_eq!(
+                paths,
+                vec![arrival_path.as_str()],
+                "{label}: the arrival is kept and the deleted picture stays deleted"
+            );
+            assert_eq!(
+                gallery[0].fsk_id.as_deref(),
+                Some("K1ABC"),
+                "{label}: the arrival keeps its FSK ID"
+            );
+            assert_eq!(gallery[0].freq_mhz, 14.233, "{label}: and its frequency");
+        }
+        assert!(!dir.join(names[0]).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Two builds can share one gallery folder. The index rewrite must not write through another
+    /// writer's scratch file (the fixed name earlier builds use): two writes in one file can be
+    /// published as a mix of both, which loads as an empty gallery.
+    #[test]
+    fn a_gallery_delete_leaves_another_writers_scratch_file_alone() {
+        let names = ["20261030T100000Z_scottie1.png"];
+        let (dir, mut eng) = batch_gallery("sstv-other-writer", &names);
+        let theirs = dir.join("gallery.json.tmp");
+        std::fs::write(&theirs, "[{\"path\":").unwrap();
+        let picture = dir.join(names[0]).to_string_lossy().into_owned();
+        assert_eq!(delete_one(&mut eng, &dir, &picture), Ok(()));
+        assert_eq!(
+            std::fs::read_to_string(&theirs).ok().as_deref(),
+            Some("[{\"path\":"),
+            "another writer's half-written scratch file must not be overwritten or moved"
+        );
+        assert_eq!(
+            index_paths(&dir),
+            Vec::<String>::new(),
+            "this rewrite still landed"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A symbolic link is never a gallery picture, whatever it is named and wherever it points:
+    /// the folder scan does not adopt one, an index entry that is one drops out, and a delete that
+    /// names one (or names the file a listed link points at) is refused with both files left.
+    #[cfg(unix)]
+    #[test]
+    fn a_symbolic_link_in_the_gallery_folder_is_never_a_picture() {
+        let names = ["20261030T100000Z_scottie1.png"];
+        let (dir, mut eng) = batch_gallery("sstv-symlink", &names);
+        let picture = dir.join(names[0]);
+        let notes = dir.join("notes.txt");
+        std::fs::write(&notes, b"the operator's notes").unwrap();
+        // A link named like a picture pointing at a listed picture, one pointing at the notes,
+        // and a dangling one.
+        let to_picture = dir.join("20261030T100100Z_robot36.png");
+        let to_notes = dir.join("20261030T100200Z_pd120.png");
+        let dangling = dir.join("20261030T100300Z_martin1.bmp");
+        std::os::unix::fs::symlink(&picture, &to_picture).unwrap();
+        std::os::unix::fs::symlink(&notes, &to_notes).unwrap();
+        std::os::unix::fs::symlink(dir.join("gone.png"), &dangling).unwrap();
+
+        // The folder scan adopts the real picture only.
+        let adopted: Vec<String> = reconcile_gallery(&dir, Vec::new())
+            .into_iter()
+            .map(|e| e.path)
+            .collect();
+        assert_eq!(adopted, vec![picture.to_string_lossy().into_owned()]);
+
+        // An index that already lists a link drops it.
+        let mut listed = eng.sstv_gallery().to_vec();
+        listed.push(entry(&to_notes, "2026-10-30T10:02:00Z"));
+        let kept: Vec<String> = reconcile_gallery(&dir, listed.clone())
+            .into_iter()
+            .map(|e| e.path)
+            .collect();
+        assert_eq!(kept, vec![picture.to_string_lossy().into_owned()]);
+
+        // Delete: a link that points at a listed picture is refused, and neither goes.
+        eng.load_sstv_gallery(listed);
+        let not_a_picture = Err("That file is not a picture in the SSTV gallery".to_string());
+        assert_eq!(
+            delete_one(&mut eng, &dir, &to_picture.to_string_lossy()),
+            not_a_picture
+        );
+        assert!(
+            picture.is_file(),
+            "the picture the link points at must stay"
+        );
+        assert!(
+            std::fs::symlink_metadata(&to_picture).is_ok(),
+            "and so does the link"
+        );
+        // A listed link does not make the file it points at a picture.
+        assert_eq!(
+            delete_one(&mut eng, &dir, &notes.to_string_lossy()),
+            not_a_picture
+        );
+        assert!(notes.is_file(), "the operator's notes must stay");
+        // Positive control: the real picture still deletes.
+        assert_eq!(
+            delete_one(&mut eng, &dir, &picture.to_string_lossy()),
+            Ok(())
+        );
+        assert!(!picture.exists());
+        assert!(
+            index_paths(&dir).is_empty(),
+            "no link is listed after the rewrite: {:?}",
+            index_paths(&dir)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A picture the OS will not let go of stays listed, on disk and in memory, while the others in
+    /// the batch are removed from both: gallery.json always matches the folder.
+    #[cfg(unix)]
+    #[test]
+    fn a_gallery_picture_that_cannot_be_deleted_stays_in_the_index_while_the_rest_go() {
+        use std::os::unix::fs::PermissionsExt;
+        let names = ["20261030T100000Z_scottie1.png"];
+        let (dir, mut eng) = batch_gallery("sstv-batch-stuck", &names);
+        let held = dir.join("held");
+        std::fs::create_dir_all(&held).unwrap();
+        let stuck = held.join("20261030T100100Z_robot36.png");
+        std::fs::write(&stuck, b"PNG-not-really").unwrap();
+        let mut entries = eng.sstv_gallery().to_vec();
+        entries.push(entry(&stuck, "2026-10-30T10:01:00Z"));
+        eng.load_sstv_gallery(entries);
+        std::fs::set_permissions(&held, std::fs::Permissions::from_mode(0o555)).unwrap();
+        // Root ignores the read-only folder, so there is nothing to refuse there.
+        if std::fs::write(held.join("probe"), b"").is_ok() {
+            eprintln!("skipped: running as root, a read-only folder refuses nothing");
+            let _ = std::fs::set_permissions(&held, std::fs::Permissions::from_mode(0o755));
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        let gone = dir.join(names[0]).to_string_lossy().into_owned();
+        let stuck_path = stuck.to_string_lossy().into_owned();
+
+        let failed = delete_batch(&mut eng, &dir, &[gone.clone(), stuck_path.clone()]);
+        let _ = std::fs::set_permissions(&held, std::fs::Permissions::from_mode(0o755));
+
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed[0].path, stuck_path);
+        assert!(
+            failed[0].reason.starts_with("Could not delete"),
+            "{}",
+            failed[0].reason
+        );
+        assert!(stuck.exists() && !dir.join(names[0]).exists());
+        assert_eq!(
+            index_paths(&dir),
+            vec![stuck_path.clone()],
+            "the index on disk"
+        );
+        let in_memory: Vec<String> = eng.sstv_gallery().iter().map(|e| e.path.clone()).collect();
+        assert_eq!(in_memory, vec![stuck_path], "and the gallery the UI reads");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// ISSUE #23, first half: deleting a `.bmp` by hand left a thumbnail over nothing, because the
@@ -47164,12 +54576,195 @@ mod tests {
         );
     }
 
+    /// The log-time offer's spot side: the group EVERY spot of exactly this call within the
+    /// Spots board's window names, none when any two name different groups, and never another
+    /// call's. Two spots of one station on one band merge into one row of the spot buffer, which
+    /// keeps only the newest comment; the offer still sees both.
+    #[test]
+    fn the_offer_takes_the_one_group_the_calls_spots_name() {
+        use tempo_net::cluster::{ClusterSpot, SpotBuffer};
+        let mk = |call: &str, freq_khz: f64, comment: &str| ClusterSpot {
+            spotter: "W3LPL".into(),
+            dx_call: call.into(),
+            freq_khz,
+            comment: comment.into(),
+            time_utc: None,
+            received_unix: 0,
+            corroborators: Vec::new(),
+            rbn: false,
+        };
+        let t0 = std::time::Instant::now();
+        let spots = [
+            mk("IA5X", 14025.0, "IOTA EU-028 up 1"),
+            mk("IA5X", 7025.0, "loud"),
+            mk("IA5X/P", 21025.0, "IOTA EU-031"),
+            mk("IT9ABC", 14030.0, "IOTA EU-025"),
+            mk("IT9ABC", 21030.0, "op from EU-017"),
+            // Same band, half a kHz apart: one row in the buffer, two groups named.
+            mk("IA5Y", 14025.0, "IOTA EU-028"),
+            mk("IA5Y", 14025.5, "IOTA EU-031"),
+        ];
+        let mut buf = SpotBuffer::new(100);
+        let mut log = SpotIotaLog::default();
+        for sp in &spots {
+            buf.push_at(t0, sp.clone());
+            log.note(t0, sp);
+        }
+        let rows = buf.recent_within(t0, SPOTS_WINDOW);
+        assert_eq!(
+            rows.iter().filter(|r| r.dx_call == "IA5Y").count(),
+            1,
+            "premise: the buffer merged IA5Y's two spots into one row"
+        );
+        assert!(
+            rows.iter()
+                .any(|r| r.dx_call == "IA5Y" && r.comment == "IOTA EU-031"),
+            "premise: that row keeps only the newest comment, which alone would offer EU-031"
+        );
+        assert_eq!(log.group_for(t0, "ia5x").as_deref(), Some("EU-028"));
+        assert_eq!(log.group_for(t0, "IA5X/P").as_deref(), Some("EU-031"));
+        assert_eq!(
+            log.group_for(t0, "IA5Y"),
+            None,
+            "two groups on one band name neither"
+        );
+        assert_eq!(log.group_for(t0, "IT9ABC"), None, "two groups name neither");
+        assert_eq!(log.group_for(t0, "K1ABC"), None);
+        // Past the Spots board's window a spot no longer counts, for or against.
+        let later = t0 + SPOTS_WINDOW + std::time::Duration::from_secs(1);
+        assert_eq!(log.group_for(later, "IA5X"), None);
+        log.note(later, &mk("IA5Y", 14025.0, "IOTA EU-031"));
+        assert_eq!(log.group_for(later, "IA5Y").as_deref(), Some("EU-031"));
+        assert_eq!(log.named.len(), 1, "older spots are let go");
+    }
+
+    /// The spot side of the offer is fed, emptied and read where no test reaches: the two
+    /// cluster feeds (network threads), the callsign restart and the unassisted toggle (the
+    /// spot buffer's two resets), and the Tauri command. So the source is read: each feed notes
+    /// every spot it keeps, after the unassisted gate and beside the buffer push; each reset of
+    /// the spot buffer empties the log with it; and the offer reads the log.
+    #[test]
+    fn the_spot_iota_log_is_fed_emptied_and_read_where_the_spots_are() {
+        let src = include_str!("lib.rs");
+        let body = |name: &str| -> &str {
+            let start = src
+                .find(&format!("\nfn {name}("))
+                .unwrap_or_else(|| panic!("no fn {name}"));
+            let len = src[start..].find("\n}\n").expect("its end");
+            &src[start..start + len]
+        };
+        for feed in ["start_cluster_feed", "start_human_cluster_feed"] {
+            let b = body(feed);
+            let gate = b
+                .find("if unassisted() {")
+                .unwrap_or_else(|| panic!("{feed} gate"));
+            let noted = b
+                .find("note_spot_iota(")
+                .unwrap_or_else(|| panic!("{feed} must note each spot's group"));
+            let pushed = b.find(".push_ranked(").expect("the buffer push");
+            assert!(gate < noted && noted < pushed, "{feed}: gate, note, push");
+            assert_eq!(b.matches("note_spot_iota(").count(), 1, "{feed}");
+        }
+        for reset in ["restart_live_feeds", "set_unassisted_mode"] {
+            let b = body(reset);
+            let cleared = b.find("SpotBuffer::default();").expect("the buffer reset");
+            let after = &b[cleared..];
+            let iota = after
+                .find("clear_spot_iota();")
+                .unwrap_or_else(|| panic!("{reset} must empty the spot IOTA log"));
+            assert!(
+                !after[..iota].contains("\n    }\n"),
+                "{reset}: emptied in the same block as the buffer"
+            );
+        }
+        let offer = body("get_iota_offer");
+        assert!(offer.contains("SPOT_IOTA"), "the offer reads the spot log");
+        assert!(offer.contains(".group_for(std::time::Instant::now(), &call)"));
+        assert!(offer.contains("spot_iota.as_deref()"));
+    }
+
     /// The evidence ranking is the locality question the board asks OF THAT BAND, and
     /// nothing else — a rank that disagreed with the gate would evict the wrong voice.
     ///
     /// The band is the load-bearing part: the same skimmer is rank 2 on 2 m and rank 1
     /// on 6 m, because `near_me_radius_km` is 800 km on one and 250 km on the other and
     /// the gate counts by that radius, not by the widest one.
+    #[test]
+    fn a_spot_comment_and_a_callbook_answer_place_the_station_on_its_island() {
+        use tempo_net::cluster::{ClusterSpot, SpotBuffer};
+        let mk = |call: &str, comment: &str| ClusterSpot {
+            spotter: "W3LPL".into(),
+            dx_call: call.into(),
+            freq_khz: 14025.0,
+            comment: comment.into(),
+            time_utc: None,
+            received_unix: 0,
+            corroborators: Vec::new(),
+            rbn: false,
+        };
+        let mut buf = SpotBuffer::new(100);
+        buf.push(mk("IA5X", "IOTA EU-028 up 1"));
+        buf.push(mk("IT9ABC", "loud"));
+        let recent = buf.recent_within(
+            std::time::Instant::now(),
+            std::time::Duration::from_secs(900),
+        );
+        let mut heard = cluster_spot_heards(
+            &recent,
+            propagation::geo::maidenhead_to_latlon("EN52"),
+            "KD9TAW",
+            tempo_app::settings::LicenseClass::Extra,
+        );
+        let iota_of = |heard: &[propagation::Heard], call: &str| {
+            heard
+                .iter()
+                .find(|h| h.call == call)
+                .and_then(|h| h.iota.clone())
+        };
+        assert_eq!(iota_of(&heard, "IA5X").as_deref(), Some("EU-028"));
+        assert_eq!(iota_of(&heard, "IT9ABC"), None);
+        // A callbook answer fills a station the comment did not place — and never replaces a
+        // group the comment named.
+        let lookup =
+            |call: &str| (call == "IT9ABC" || call == "IA5X").then(|| "EU-025".to_string());
+        crate::place_iotas(&mut heard, lookup, |_| true);
+        assert_eq!(iota_of(&heard, "IT9ABC").as_deref(), Some("EU-025"));
+        assert_eq!(iota_of(&heard, "IA5X").as_deref(), Some("EU-028"));
+        // With the island list held, a group it lacks is no island: no need is raised on it.
+        crate::place_iotas(&mut heard, lookup, |r| r != "EU-028");
+        assert_eq!(iota_of(&heard, "IA5X"), None);
+        assert_eq!(iota_of(&heard, "IT9ABC").as_deref(), Some("EU-025"));
+    }
+
+    /// The session's callbook answers place a station only by its own plain call: a stroked call's
+    /// answer is the licensee's home, and an answer that is another call's record says nothing.
+    #[test]
+    fn a_callbook_island_counts_only_for_its_own_plain_call() {
+        let answer = |call: &str| tempo_core::logbook::callbook::CallbookAnswer {
+            call: call.into(),
+            iota: Some("oc-146".into()),
+            ..Default::default()
+        };
+        crate::note_callbook_iota("vk9xx", &answer("VK9XX"));
+        crate::note_callbook_iota("VK9YY/P", &answer("VK9YY/P"));
+        crate::note_callbook_iota("VK9ZZ", &answer("VK9ZY"));
+        assert_eq!(
+            crate::callbook_iota_for_call("VK9XX").as_deref(),
+            Some("OC-146")
+        );
+        assert_eq!(crate::callbook_iota_for_call("VK9YY/P"), None);
+        assert_eq!(crate::callbook_iota_for_call("VK9ZZ"), None);
+        // A later answer with no island forgets the earlier one.
+        crate::note_callbook_iota(
+            "VK9XX",
+            &tempo_core::logbook::callbook::CallbookAnswer {
+                call: "VK9XX".into(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(crate::callbook_iota_for_call("VK9XX"), None);
+    }
+
     #[test]
     fn spotter_evidence_rank_matches_the_gates_it_feeds() {
         let en52 = propagation::geo::maidenhead_to_latlon("EN52");
@@ -47631,7 +55226,7 @@ mod tests {
         "contests::parse_contest_rss",
         "dxped::cached_active_calls",
         "dxped::call_matches",
-        "dxped::set_clublog_key",
+        "dxped::set_cache_dir",
         "lotw_users::parse_user_activity",
         "tle::parse_mirror_manifest",
         "tle::tle_bird_ok",
@@ -47762,6 +55357,77 @@ mod tests {
         }
         offenders.dedup();
         offenders
+    }
+
+    /// A logged contact takes each space-weather number only when it is a reading, each with its
+    /// own stamp (the engine judges the stamps against the contact's time): the Kp and its sample
+    /// time, NOAA's daily A with its day (never the Kp-derived estimate), the SFI and when it was
+    /// measured. A stand-in gives `None`, so the field is left off.
+    #[test]
+    fn a_contact_takes_only_measured_space_weather() {
+        let now = 1_761_800_000;
+        let wx = propagation::SpaceWx {
+            sfi: 89.0,
+            ssn: None,
+            kp: 0.67,
+            a_index: 4.0,
+            xray_long: 2.1e-7,
+        };
+        let all = propagation::model::SpaceWxStamps {
+            sfi_at: Some(now - 6 * 3600),
+            kp_at: Some(now - 360),
+            xray_at: Some(now - 240),
+            a_day: Some(now / 86_400 * 86_400 - 86_400),
+        };
+        let u = |t: i64| t as u64;
+        let day = now / 86_400 * 86_400;
+        let table = [(day - 2 * 86_400, 7.0), (day - 86_400, 4.0)];
+        assert_eq!(
+            crate::space_wx_for_log(&wx, &all, &table),
+            (
+                Some((0.67, u(now - 360))),
+                vec![(7.0, u(day - 2 * 86_400)), (4.0, u(day - 86_400))],
+                Some((89.0, u(now - 6 * 3600)))
+            )
+        );
+        // Every number a stand-in: nothing.
+        let none = propagation::model::SpaceWxStamps::default();
+        assert_eq!(
+            crate::space_wx_for_log(&wx, &none, &[]),
+            (None, vec![], None)
+        );
+    }
+
+    /// The polar-cap edge sits at a MEASURED Kp only: none on a cold cache, none on a snapshot
+    /// whose Kp is the stand-in, the reading when it is one.
+    #[test]
+    fn the_pca_edge_needs_a_measured_kp() {
+        let mut snap = propagation::offline(1_761_800_000, "K1ABC", "FN31").space_wx;
+        snap.kp = 2.0; // the stand-in a failed fetch leaves
+        let now = 1_761_800_000;
+        assert_eq!(crate::pca_kp(None, now), None, "cold cache");
+        assert_eq!(crate::pca_kp(Some(&snap), now), None, "stand-in Kp");
+        snap.kp = 5.33;
+        snap.stamps.kp_at = Some(1_761_799_700);
+        assert_eq!(crate::pca_kp(Some(&snap), now), Some(5.33_f32 as f64));
+        // A cached snapshot's measured Kp from two hours ago places no edge.
+        snap.stamps.kp_at = Some(now - 2 * 3600);
+        assert_eq!(crate::pca_kp(Some(&snap), now), None, "an hours-old Kp");
+    }
+
+    /// A KC2G set served after a failed refetch is older by the time since it was fetched.
+    #[test]
+    fn a_stale_kc2g_set_ages() {
+        let st = propagation::MufStation {
+            lat: 40.0,
+            lon: -105.0,
+            muf_mhz: Some(18.0),
+            fof2_mhz: Some(6.0),
+            age_secs: 300,
+            confidence: None,
+        };
+        let aged = crate::kc2g_aged(&[st], 3600);
+        assert_eq!(aged[0].age_secs, 3900);
     }
 
     /// A command body runs on a runtime WORKER — an `async fn`, or a sync fn under
@@ -53323,6 +60989,128 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// What eQSL's transport hands back for a step-1 `page` that is not the built page, as
+    /// [`propagation::live::eqsl::fetch_inbox`] maps it.
+    fn eqsl_step1_answer(page: &str) -> Result<String, String> {
+        tempo_core::eqsl::not_built_answer(page)
+            .map(str::to_string)
+            .map_err(str::to_string)
+    }
+
+    const EQSL_NO_ENTRIES: &str = "<html><body>You have no log entries</body></html>";
+    const EQSL_REFUSED: &str = "<html><H3>Error: No such Username/Password found</H3></html>";
+    const EQSL_UNKNOWN_PAGE: &str = "<html><body>eQSL is down for maintenance.</body></html>";
+
+    /// eQSL answers a whole-InBox check of an account with no cards with "You have no log
+    /// entries". That is the InBox, empty: the check reads it, holding nothing, as it reads LoTW's
+    /// empty history. Controls: a refused login and an unknown page still fail the check.
+    #[test]
+    fn an_eqsl_inbox_with_no_log_entries_checks_empty() {
+        let (dir, engine, _) = check_scene("check-eqsl-no-entries");
+        let checks = crate::ConfirmationChecks::default();
+        let session = checks.start("main");
+        let fetched = |page: &'static str| {
+            crate::checked_and_held(
+                &checks,
+                session,
+                tempo_core::reconcile::check::Channel::Eqsl,
+                || crate::eqsl_check_on(&engine, &test_eqsl(), &|_| eqsl_step1_answer(page)),
+            )
+        };
+        let empty = fetched(EQSL_NO_ENTRIES).expect("an empty InBox checks");
+        assert_eq!((empty.records, empty.lines.len()), (0, 0));
+        for page in [EQSL_REFUSED, EQSL_UNKNOWN_PAGE] {
+            assert_eq!(
+                fetched(page).map(|dto| dto.records),
+                Err(eqsl_step1_answer(page).unwrap_err()),
+                "{page}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// One eQSL download of `page`'s answer for the account K2DEF syncs as, from the cursor
+    /// `202610010000`, with every settings change it saves kept in `saved`.
+    fn eqsl_synced(
+        engine: &SharedEngine,
+        answer: Result<String, String>,
+        saved: &std::cell::RefCell<Vec<crate::Settings>>,
+    ) -> Result<crate::LotwSyncResult, String> {
+        {
+            let mut eng = engine.lock().unwrap();
+            let s = crate::Settings {
+                eqsl_username: "k2def-test".into(),
+                eqsl_qth_nickname: "Home".into(),
+                ..eng.settings().clone()
+            };
+            eng.apply_settings(s);
+            eng.set_eqsl_cursor("202610010000".into());
+        }
+        crate::download_eqsl_report_on(
+            engine,
+            "k2def-test".into(),
+            "Home".into(),
+            "202610010000".into(),
+            "not-a-password".into(),
+            CHECKED_AT as i64,
+            &|url| {
+                assert!(url.ends_with("&RcvdSince=202610010000"), "from the cursor");
+                answer.clone()
+            },
+            &|s| saved.borrow_mut().push(s),
+        )
+    }
+
+    /// ★ A download with nothing new since the cursor is a sync that found nothing, not an error.
+    /// eQSL answers it with "You have no log entries" where it would otherwise build the file, and
+    /// it ends the way a download of an InBox file holding no cards ends: no new confirmations,
+    /// and the cursor moved to this sync's start less the margin, once and saved. Controls: a
+    /// refused login and an unknown page fail with their own words and leave the cursor alone.
+    #[test]
+    fn an_eqsl_download_with_nothing_new_succeeds_and_moves_the_cursor_once() {
+        let (dir, engine) = store_holding(
+            "eqsl-nothing-new",
+            &tempo_core::logbook::parse_adif(&check_row("W1AW", "20m", "FT8", "180000", "")),
+        );
+        let moved_to =
+            tempo_core::eqsl::format_rcvd_since(CHECKED_AT as i64 - crate::EQSL_RCVD_MARGIN_SECS);
+        let ended = |answer: Result<String, String>| {
+            let saved = std::cell::RefCell::new(Vec::new());
+            let synced = eqsl_synced(&engine, answer, &saved)
+                .map(|r| (r.newly_confirmed, r.newly_confirmed_any, r.orphans.len()));
+            let saved: Vec<String> = saved
+                .into_inner()
+                .into_iter()
+                .map(|s| s.eqsl_last_sync)
+                .collect();
+            let held = engine.lock().unwrap().settings().eqsl_last_sync.clone();
+            (synced, saved, held)
+        };
+        let nothing_new = ended(eqsl_step1_answer(EQSL_NO_ENTRIES));
+        assert_eq!(
+            nothing_new,
+            (Ok((0, 0, 0)), vec![moved_to.clone()], moved_to.clone()),
+            "eQSL's \"no log entries\""
+        );
+        assert_eq!(
+            ended(Ok(eqsl_answer(&[]))),
+            nothing_new,
+            "control: the same as an InBox file holding no cards"
+        );
+        for page in [EQSL_REFUSED, EQSL_UNKNOWN_PAGE] {
+            assert_eq!(
+                ended(eqsl_step1_answer(page)),
+                (
+                    Err(eqsl_step1_answer(page).unwrap_err()),
+                    vec![],
+                    "202610010000".to_string()
+                ),
+                "control: {page}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Logbook ▸ Check confirmations reaches the backend only through its four commands, each
     /// DEFINED as an `async fn` — so none runs on the UI thread, and the census scans above read
     /// every one of them — and REGISTERED: a name missing from `generate_handler!` fails at
@@ -54365,6 +62153,154 @@ mod tests {
         assert_eq!(park_of("DL1ABC", "CW"), None);
     }
 
+    /// The board as the command reads it, every outside feed empty, with ONE kept needs model
+    /// across reads (`kept`), as the app keeps one for its whole run.
+    fn own_radio_board(
+        engine: &SharedEngine,
+        kept: &crate::Tally<(), propagation::LogNeeds>,
+    ) -> Vec<propagation::NeedAlert> {
+        use std::sync::{Arc, Mutex};
+        let live: crate::SharedLivePaths = Arc::new(Mutex::new(propagation::LiveSpots::default()));
+        let region =
+            crate::SharedRegionPaths(Arc::new(Mutex::new(propagation::LiveSpots::default())));
+        let spots: crate::SharedSpots =
+            Arc::new(Mutex::new(tempo_net::cluster::SpotBuffer::default()));
+        let ota: crate::SharedOtaSpots = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        crate::read_need_alerts(engine_lock(engine), kept, &live, &region, &spots, &ota)
+            .expect("the board reads")
+    }
+
+    fn tags_on(
+        alerts: &[propagation::NeedAlert],
+        call: &str,
+        band: &str,
+    ) -> Vec<propagation::NeedTag> {
+        alerts
+            .iter()
+            .filter(|a| a.call == call && a.band == band)
+            .flat_map(|a| a.tags.clone())
+            .collect()
+    }
+
+    /// Field report (1.21.0): a station heard on 12 m FT8 in FL02 kept its GRID pill after two
+    /// 12 m contacts with it. Logging a contact in that grid on that band must clear it on the
+    /// next read of the board, through the kept needs model the app holds across reads.
+    #[test]
+    fn a_contact_in_the_heard_grid_clears_the_grid_need_on_that_band() {
+        use propagation::NeedTag::NewGrid;
+        use std::sync::{Arc, Mutex};
+        let mut e = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(tempo_app::dto::Tier::Ft8);
+        e.set_frequency(24.915, "12m", "USB");
+        let slot = crate::now_unix() as u64 / 15;
+        e.hear_for_test("CQ CO6XX FL02", -5, slot);
+        let engine: SharedEngine = Arc::new(Mutex::new(e));
+        let kept = crate::Tally::default();
+        let before = own_radio_board(&engine, &kept);
+        assert!(
+            tags_on(&before, "CO6XX", "12m").contains(&NewGrid),
+            "premise: FL02 is new on 12 m: {before:?}"
+        );
+        let mut rec = pass_qso("CO6XX", "FL02gm", "12m", 24.915);
+        rec.mode = "FT8".into();
+        rec.when_unix = crate::now_unix() as u64;
+        engine_lock(&engine).log_qso(rec);
+        let after = own_radio_board(&engine, &kept);
+        assert!(
+            !tags_on(&after, "CO6XX", "12m").contains(&NewGrid),
+            "FL02 is worked on 12 m now: {after:?}"
+        );
+    }
+
+    /// Every other per-contact need pill on the same path — new one, zone, band, mode — clears
+    /// on the next read once the contact that fills it is logged. Each step logs one contact
+    /// and asserts both what it filled (gone) and what it did not (still there).
+    #[test]
+    fn each_need_pill_clears_on_the_next_read_once_its_contact_is_logged() {
+        use propagation::NeedTag::{NewBand, NewEntity, NewGrid, NewMode, NewZone};
+        use std::sync::{Arc, Mutex};
+        let mut e = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(tempo_app::dto::Tier::Ft8);
+        e.set_frequency(24.915, "12m", "USB");
+        e.hear_for_test("CQ CO6XX FL02", -5, crate::now_unix() as u64 / 15);
+        let engine: SharedEngine = Arc::new(Mutex::new(e));
+        let kept = crate::Tally::default();
+        let log = |band: &str, mode: &str, grid: &str| {
+            let mut rec = pass_qso("CO6XX", grid, band, 24.915);
+            rec.mode = mode.into();
+            rec.when_unix = crate::now_unix() as u64;
+            engine_lock(&engine).log_qso(rec);
+        };
+        let tags = || tags_on(&own_radio_board(&engine, &kept), "CO6XX", "12m");
+
+        let t = tags();
+        assert!(
+            t.contains(&NewEntity) && t.contains(&NewZone) && t.contains(&NewGrid),
+            "{t:?}"
+        );
+        // Cuba on 10 m FT4, in another grid: the entity is worked, nothing on 12 m is.
+        log("10m", "FT4", "FL20");
+        let t = tags();
+        assert!(!t.contains(&NewEntity), "{t:?}");
+        assert!(
+            t.contains(&NewBand) && t.contains(&NewZone) && t.contains(&NewGrid),
+            "{t:?}"
+        );
+        // 12 m FT4 in FL02: band, zone and grid are worked on 12 m; FT8 is still a new mode.
+        log("12m", "FT4", "FL02");
+        let t = tags();
+        assert!(
+            !t.contains(&NewBand) && !t.contains(&NewZone) && !t.contains(&NewGrid),
+            "{t:?}"
+        );
+        assert!(
+            t.contains(&NewMode),
+            "FT8 has never been worked with Cuba: {t:?}"
+        );
+        // 12 m FT8: the mode clears too.
+        log("12m", "FT8", "FL02");
+        let t = tags();
+        assert!(!t.contains(&NewMode), "{t:?}");
+    }
+
+    /// The same, with the contact made and logged the way the operator makes it: a double-click
+    /// on the CQ, the report back, and Log QSO.
+    #[test]
+    fn a_contact_logged_from_the_sequencer_clears_the_grid_need() {
+        use propagation::NeedTag::NewGrid;
+        use std::sync::{Arc, Mutex};
+        let mut e = tempo_app::engine::Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(tempo_app::dto::Tier::Ft8);
+        e.set_frequency(24.915, "12m", "USB");
+        let mut s = e.settings().clone();
+        s.prompt_to_log = false;
+        e.apply_settings(s);
+        let slot = crate::now_unix() as u64 / 15;
+        e.hear_for_test("CQ CO6XX FL02", -5, slot);
+        let engine: SharedEngine = Arc::new(Mutex::new(e));
+        let kept = crate::Tally::default();
+        assert!(tags_on(&own_radio_board(&engine, &kept), "CO6XX", "12m").contains(&NewGrid));
+        {
+            let mut e = engine_lock(&engine);
+            e.call_station_ctx("CO6XX", Some("FL02"), Some("CQ CO6XX FL02"), Some(-5), None)
+                .expect("called");
+            e.hear_for_test("KD9TAW CO6XX +16", 16, slot + 2);
+            assert!(e.log_current_qso(), "premise: the contact logs");
+        }
+        let log = engine.lock().unwrap().stored_log();
+        let rec = log.iter().find(|r| r.call == "CO6XX").expect("logged");
+        assert_eq!(
+            (rec.band.as_str(), rec.mode.as_str(), rec.grid.as_deref()),
+            ("12m", "FT8", Some("FL02")),
+            "premise: the contact carries the grid the station sent"
+        );
+        let after = own_radio_board(&engine, &kept);
+        assert!(
+            !tags_on(&after, "CO6XX", "12m").contains(&NewGrid),
+            "FL02 is worked on 12 m now: {after:?}"
+        );
+    }
+
     /// ⭐ A LIVE ACTIVATOR IN A STATE THE LOG STILL NEEDS IS A NEW STATE ON BOTH PATHS (operator,
     /// 2026-10-06). An activator the cluster, the skimmers or the radio also hears is that row, and
     /// the feed's own row for the same call, band and mode is then dropped as a duplicate. So the
@@ -54442,6 +62378,7 @@ mod tests {
             evidence: None,
             grid: None,
             us_state: state.map(|st| (st.into(), Grid)),
+            iota: None,
         };
         let live = |call: &str, states: &[&str]| {
             let mut sp = ota_spot(call, "US-0001");
@@ -54498,6 +62435,7 @@ mod tests {
             evidence: None,
             grid: None,
             us_state: None,
+            iota: None,
         };
         let mut park = ota_spot("KL7ACT", "US-0001");
         park.states = codes(&["US-WA"]);
@@ -57678,6 +65616,67 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// LoTW's answer to a wrong username or password: its sign-in page, sent with HTTP 200 in
+    /// place of the report.
+    const LOTW_SIGN_IN_PAGE: &str = "<html><title>ARRL's Logbook of The World</title><body>\
+        <p>Log on to Logbook of The World -- LoTW</p>\
+        <p class=\"error\">Username/password incorrect</p></body></html>";
+
+    /// A wrong LoTW password is called one. LoTW answers it with its sign-in page, HTTP 200, so
+    /// the download used to say the username and password were fine.
+    #[test]
+    fn a_wrong_lotw_password_is_called_one_on_a_first_download() {
+        let (dir, engine) = sweep_scene("lotw-sign-in-first");
+        let mut lotw = LargeLotw::scene();
+        lotw.years.insert(2026, LOTW_SIGN_IN_PAGE.to_string());
+        let saved = std::cell::RefCell::new(Vec::new());
+        let e = fetch_lotw(&engine, &lotw, &saved).expect_err("the login is refused");
+        assert!(
+            e.contains("LoTW did not accept your username or password"),
+            "{e}"
+        );
+        assert!(!e.contains("are fine"), "{e}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The same on a download from a cursor.
+    #[test]
+    fn a_wrong_lotw_password_is_called_one_on_a_later_download() {
+        let (dir, engine) = sweep_scene("lotw-sign-in-later");
+        let mut lotw = LargeLotw::scene();
+        let saved = std::cell::RefCell::new(Vec::new());
+        fetch_lotw(&engine, &lotw, &saved).expect("the first download");
+        lotw.since_answer = LOTW_SIGN_IN_PAGE.to_string();
+        let e = fetch_lotw(&engine, &lotw, &saved).expect_err("the login is refused");
+        assert!(
+            e.contains("LoTW did not accept your username or password"),
+            "{e}"
+        );
+        assert!(!e.contains("are fine"), "{e}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Control: a page that is neither the report nor the sign-in page is not called a wrong
+    /// password, and the credentials are not vouched for either.
+    #[test]
+    fn a_lotw_page_that_is_not_a_report_blames_neither_way() {
+        let (dir, engine) = sweep_scene("lotw-not-a-report");
+        let mut lotw = LargeLotw::scene();
+        lotw.years.insert(
+            2026,
+            "<html><body>Down for maintenance</body></html>".to_string(),
+        );
+        let saved = std::cell::RefCell::new(Vec::new());
+        let e = fetch_lotw(&engine, &lotw, &saved).expect_err("not a report");
+        assert!(
+            e.contains("LoTW answered with a page that isn't a report"),
+            "{e}"
+        );
+        assert!(!e.contains("are fine"), "{e}");
+        assert!(!e.contains("did not accept"), "{e}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A year whose download stops before LoTW's end marker is not in: its place is not passed.
     #[test]
     fn a_year_cut_short_is_not_passed() {
@@ -58396,6 +66395,36 @@ mod secrets_toward_remote_tests {
         );
     }
 
+    /// ⛔ No path on the station's disk crosses to a computer driving it: a read from afar carries
+    /// none of the station's JS8 sound files (that computer plays the built-in tones), and the save
+    /// from afar keeps them as the shack has them. CONTROL: the shack's own read carries them.
+    #[test]
+    fn a_settings_read_from_afar_carries_no_station_sound_file() {
+        let afar = command_dispatch::Afar {
+            stand_down: 1,
+            starts_voided: 0,
+        };
+        let mut shack = station();
+        shack
+            .js8_sound_files
+            .insert("cq".into(), "C:\\Shack\\Sounds\\cq.wav".into());
+        let read = serde_json::to_value(settings_read(&shack, Some(&afar), false)).unwrap();
+        assert_eq!(read["js8SoundFiles"], serde_json::json!({}), "from afar");
+        assert!(!read.to_string().contains("cq.wav"), "from afar: {read}");
+        let own = serde_json::to_value(settings_read(&shack, None, false)).unwrap();
+        assert_eq!(
+            own["js8SoundFiles"],
+            serde_json::json!({ "cq": "C:\\Shack\\Sounds\\cq.wav" }),
+            "CONTROL: at the shack"
+        );
+        let mut save = settings_read(&shack, Some(&afar), false).settings;
+        command_dispatch::keep_the_shacks_settings(&shack, &mut save, Some(&afar));
+        assert_eq!(
+            save.js8_sound_files, shack.js8_sound_files,
+            "a save from afar keeps the station's"
+        );
+    }
+
     /// ⛔ While a stream watches the station's screen, the settings read that screen makes (the real
     /// `get_settings`, with no `afar`, run as the command lane runs it) carries no stored key in any
     /// form, and says by value which the station has saved. CONTROL: before the stream opens and
@@ -58656,5 +66685,691 @@ mod secrets_toward_remote_tests {
             tempo_core::clublog::ClubLogResult::Duplicate,
             "CONTROL"
         );
+    }
+}
+
+/// The first login's question ("Send N contacts not yet sent to <service>?") is the station's to
+/// answer: the answer rides on the login's own save, which another computer driving the station
+/// cannot make, and so is the count it is asked from.
+#[cfg(test)]
+mod upload_backlog_tests {
+    use tempo_app::engine::upload_legs;
+    use tempo_client::classes::{class_of, Class};
+
+    #[test]
+    fn only_the_station_answers_the_first_logins_question() {
+        for command in [
+            "set_qrz_logbook_key",
+            "set_clublog_password",
+            "set_eqsl_password",
+            "upload_backlog",
+        ] {
+            assert_eq!(class_of(command), Some(Class::RefusedHere), "{command}");
+        }
+    }
+
+    #[test]
+    fn the_question_is_asked_of_the_three_services_with_an_upload_record() {
+        assert_eq!(
+            super::backlog_service("qrz"),
+            Ok((
+                upload_legs::QRZ,
+                super::QRZ_LOGBOOK_KEYCHAIN_USER,
+                "QRZ Logbook"
+            ))
+        );
+        assert_eq!(
+            super::backlog_service("clublog"),
+            Ok((
+                upload_legs::CLUBLOG,
+                super::CLUBLOG_KEYCHAIN_USER,
+                "ClubLog"
+            ))
+        );
+        assert_eq!(
+            super::backlog_service("eqsl"),
+            Ok((upload_legs::EQSL, super::EQSL_KEYCHAIN_USER, "eQSL"))
+        );
+        assert!(super::backlog_service("hrdlog").is_err());
+    }
+
+    /// Three contacts from 2019, as an import from another program brings them: sent nowhere.
+    const OLD_LOG: &str = "<EOH>\n\
+        <CALL:5>W1OLD<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20190601<TIME_ON:6>120000<EOR>\n\
+        <CALL:5>W2OLD<BAND:3>40m<MODE:2>CW<QSO_DATE:8>20190602<TIME_ON:6>120000<EOR>\n\
+        <CALL:5>W3OLD<BAND:3>20m<MODE:3>SSB<QSO_DATE:8>20190603<TIME_ON:6>120000<EOR>\n";
+
+    const QRZ: super::UploadLogin = super::UploadLogin {
+        leg: upload_legs::QRZ,
+        service: "QRZ Logbook",
+        toggle: super::UploadToggle::Qrz,
+        saved: "API key saved to the OS keychain",
+        lead_in: "API key saved",
+    };
+
+    fn station(log: &str) -> super::SharedEngine {
+        let mut e = super::Engine::new("K2DEF", "FN31", 0);
+        e.import_adif(log);
+        std::sync::Arc::new(std::sync::Mutex::new(e))
+    }
+
+    /// A keychain as the OS keeps one: a read sees a login only once the write has stored it.
+    struct Keychain(std::cell::Cell<bool>);
+
+    impl Keychain {
+        fn stored(&self) -> Result<bool, keyring::Error> {
+            Ok(self.0.get())
+        }
+        fn store(&self) -> Result<(), String> {
+            self.0.set(true);
+            Ok(())
+        }
+    }
+
+    /// Save a QRZ key through the setters' own sequence; what it queued to send, by call and leg.
+    fn save(
+        engine: &super::SharedEngine,
+        keychain: &Keychain,
+        send_old: Option<bool>,
+    ) -> Vec<(String, u8)> {
+        super::save_upload_login(
+            engine,
+            QRZ,
+            || keychain.stored(),
+            || keychain.store(),
+            send_old,
+        )
+        .expect("the login is saved");
+        super::engine_lock(engine)
+            .take_pending_uploads()
+            .into_iter()
+            .map(|p| (p.rec.call, p.legs))
+            .collect()
+    }
+
+    /// QRZ's start point as every window reads it: beside the shared log. The engine is the window
+    /// asking, and holds none of its own.
+    fn qrz_from(_engine: &super::SharedEngine) -> Option<u64> {
+        kept().qrz
+    }
+
+    /// The start points kept beside the shared log.
+    fn kept() -> tempo_app::station::UploadStart {
+        tempo_app::upload_start::read(&super::shared_data_dir()).expect("readable")
+    }
+
+    /// Whether anything about start points was ever written beside the log.
+    fn nothing_written() -> bool {
+        let dir = super::shared_data_dir();
+        !dir.join(tempo_app::upload_start::FILE_NAME).exists()
+            && !dir.join(tempo_app::upload_start::LOCK_NAME).exists()
+    }
+
+    /// The real count, as `upload_backlog` asks it.
+    fn ask(
+        engine: &super::SharedEngine,
+        stored: Result<bool, keyring::Error>,
+    ) -> Result<Option<usize>, String> {
+        super::backlog_question(
+            engine,
+            upload_legs::QRZ,
+            "QRZ Logbook",
+            stored,
+            tempo_app::station::backlog_count,
+        )
+    }
+
+    fn old_log() -> Vec<(String, u8)> {
+        ["W1OLD", "W2OLD", "W3OLD"]
+            .iter()
+            .map(|c| (c.to_string(), upload_legs::QRZ))
+            .collect()
+    }
+
+    /// ⛔ THE SETTER'S ORDER. A first key saved with the default answer: whether a login was stored
+    /// is read before the key is written (read after, the save looks like one over a stored key and
+    /// the old log goes), and the start point is set before the upload is turned on and the
+    /// catch-up runs (after, the switch is already on, or the old log is already queued). "Send
+    /// them" is the positive control: the same save, the catch-up sends the whole old log.
+    #[test]
+    fn a_first_key_saved_sets_its_start_point_before_anything_is_sent() {
+        let before = super::now_unix().max(0) as u64;
+        let engine = station(OLD_LOG);
+        let keychain = Keychain(std::cell::Cell::new(false));
+        assert!(nothing_written(), "premise");
+        assert_eq!(
+            save(&engine, &keychain, Some(false)),
+            vec![],
+            "nothing old is sent"
+        );
+        let from = qrz_from(&engine).expect("a start point");
+        assert!(from >= before && from <= super::now_unix().max(0) as u64);
+        assert!(
+            super::engine_lock(&engine).settings().qrz_logbook_upload,
+            "QRZ is on"
+        );
+
+        std::fs::remove_file(super::shared_data_dir().join(tempo_app::upload_start::FILE_NAME))
+            .expect("premise: written");
+        let control = station(OLD_LOG);
+        let keychain = Keychain(std::cell::Cell::new(false));
+        assert_eq!(save(&control, &keychain, Some(true)), old_log());
+        assert_eq!(qrz_from(&control), None);
+    }
+
+    /// ⛔ M4. A keychain that cannot be read is no first login: no start point, and the save goes
+    /// on exactly as before, its catch-up sending every contact not yet sent.
+    #[test]
+    fn a_keychain_that_cannot_be_read_is_no_first_login() {
+        let engine = station(OLD_LOG);
+        let stored = || -> Result<bool, keyring::Error> {
+            Err(keyring::Error::NoStorageAccess(
+                "the keychain is locked".into(),
+            ))
+        };
+        let wrote = std::cell::Cell::new(false);
+        super::save_upload_login(
+            &engine,
+            QRZ,
+            stored,
+            || {
+                wrote.set(true);
+                Ok(())
+            },
+            None,
+        )
+        .expect("the login is saved");
+        assert!(wrote.get(), "the key is still written");
+        assert_eq!(qrz_from(&engine), None, "no start point");
+        let sent: Vec<(String, u8)> = super::engine_lock(&engine)
+            .take_pending_uploads()
+            .into_iter()
+            .map(|p| (p.rec.call, p.legs))
+            .collect();
+        assert_eq!(sent, old_log(), "the catch-up sends as before");
+        assert!(nothing_written(), "and nothing is written beside the log");
+
+        assert_eq!(
+            ask(
+                &engine,
+                Err(keyring::Error::PlatformFailure("denied".into()))
+            )
+            .map_err(|e| e.starts_with("couldn't read the system keychain")),
+            Err(true),
+            "and nothing is asked"
+        );
+    }
+
+    /// ⛔ M4. Only the keychain's genuine "no entry" is no login. Any other error is an error, and a
+    /// stored value that is not readable text is still a stored login. A mock credential, never the
+    /// OS keychain.
+    #[test]
+    fn only_a_genuine_no_entry_is_no_login() {
+        use keyring::mock::MockCredential;
+        let entry = keyring::Entry::new_with_credential(Box::new(MockCredential::default()));
+        let mock = || -> &MockCredential { entry.get_credential().downcast_ref().expect("a mock") };
+        assert!(matches!(super::login_stored(&entry), Ok(false)));
+        mock().set_error(keyring::Error::NoStorageAccess("locked".into()));
+        assert!(matches!(
+            super::login_stored(&entry),
+            Err(keyring::Error::NoStorageAccess(_))
+        ));
+        mock().set_error(keyring::Error::PlatformFailure("denied".into()));
+        assert!(matches!(
+            super::login_stored(&entry),
+            Err(keyring::Error::PlatformFailure(_))
+        ));
+        entry
+            .set_password("FAKE-LOGIN")
+            .expect("the mock stores it");
+        assert!(matches!(super::login_stored(&entry), Ok(true)));
+        mock().set_error(keyring::Error::BadEncoding(vec![0xff]));
+        assert!(matches!(super::login_stored(&entry), Ok(true)));
+    }
+
+    /// What Settings asks before a save: nothing over a stored login, nothing with the upload
+    /// switch already on (operator ruling "Skip the question", where the save then sends as
+    /// before), else the count.
+    #[test]
+    fn the_question_is_asked_only_of_a_first_login_with_the_upload_off() {
+        let engine = station(OLD_LOG);
+        let ask = |stored| ask(&engine, Ok(stored));
+        assert_eq!(ask(true), Ok(None));
+        assert_eq!(ask(false), Ok(Some(3)));
+        super::engine_lock(&engine).set_upload_toggles(Some(true), None, None);
+        assert_eq!(ask(false), Ok(None));
+
+        let keychain = Keychain(std::cell::Cell::new(false));
+        assert_eq!(save(&engine, &keychain, None), old_log(), "sent as before");
+        assert_eq!(qrz_from(&engine), None);
+        assert!(nothing_written(), "and nothing is written beside the log");
+    }
+
+    /// Operator ruling "Set it silently": a first key saved with nothing waiting starts QRZ's
+    /// uploads from then, so a log imported afterwards and the key saved again send nothing old.
+    #[test]
+    fn a_log_imported_after_the_first_key_is_not_sent_by_a_later_save() {
+        let engine = station("<EOH>\n");
+        let keychain = Keychain(std::cell::Cell::new(false));
+        assert_eq!(
+            ask(&engine, keychain.stored()),
+            Ok(Some(0)),
+            "premise: nothing waiting, so Settings asks nothing and answers from now on"
+        );
+        assert_eq!(save(&engine, &keychain, Some(false)), vec![]);
+        assert!(qrz_from(&engine).is_some());
+        // Imported as Import ADIF does, outside the Engine lock.
+        let mut e = std::sync::Arc::into_inner(engine)
+            .expect("one owner")
+            .into_inner()
+            .expect("not poisoned");
+        let (added, ..) = e.import_adif(OLD_LOG);
+        assert_eq!(added, 3);
+        let engine = std::sync::Arc::new(std::sync::Mutex::new(e));
+        assert_eq!(
+            save(&engine, &keychain, None),
+            vec![],
+            "nothing old is sent"
+        );
+    }
+
+    /// ⛔ H1: a factory reset keeps the answer. It turns the uploads off and keeps the logins, and
+    /// saving the stored key again (how QRZ comes back on) sends nothing old.
+    #[test]
+    fn a_factory_reset_keeps_the_answer() {
+        let engine = station(OLD_LOG);
+        let keychain = Keychain(std::cell::Cell::new(false));
+        assert_eq!(save(&engine, &keychain, Some(false)), vec![]);
+        let answered = qrz_from(&engine).expect("premise: answered");
+        super::engine_lock(&engine).apply_restored_settings(super::factory_settings());
+        assert!(
+            !super::engine_lock(&engine).settings().qrz_logbook_upload,
+            "premise: the reset turned QRZ off"
+        );
+        assert_eq!(qrz_from(&engine), Some(answered));
+        assert_eq!(
+            save(&engine, &keychain, None),
+            vec![],
+            "nothing old is sent"
+        );
+    }
+
+    /// ⛔ H1, through the backup's own restore: an answer given after the backup was made survives
+    /// restoring it, and the stored key saved again sends nothing old.
+    #[test]
+    fn restoring_an_older_backup_keeps_the_answer() {
+        let engine = station(OLD_LOG);
+        let older = super::engine_lock(&engine).settings().clone();
+        let keychain = Keychain(std::cell::Cell::new(false));
+        assert_eq!(save(&engine, &keychain, Some(false)), vec![]);
+        let answered = qrz_from(&engine).expect("premise: answered");
+        let text = serde_json::json!({
+            "kind": "nexus-settings-backup",
+            "schema": 1,
+            "settings": older,
+        })
+        .to_string();
+        super::restore_settings_bundle(
+            &engine,
+            text,
+            Default::default,
+            |_| true,
+            super::no_key_change,
+        )
+        .expect("restored");
+        assert!(
+            !super::engine_lock(&engine).settings().qrz_logbook_upload,
+            "premise: the backup's switch is off"
+        );
+        assert_eq!(qrz_from(&engine), Some(answered));
+        assert_eq!(
+            save(&engine, &keychain, None),
+            vec![],
+            "nothing old is sent"
+        );
+    }
+
+    // ─── H2: one answer for every window sharing the log ────────────────────────────────────
+
+    /// A window of its own on the same log: its own engine and its own `settings` (each profile
+    /// window keeps its own settings file), the log's contacts the same, and the same data folder.
+    fn window(settings: super::Settings) -> super::SharedEngine {
+        let mut e = super::Engine::with_settings(settings);
+        e.import_adif(OLD_LOG);
+        std::sync::Arc::new(std::sync::Mutex::new(e))
+    }
+
+    /// ⛔ H2. Two radio windows on one log: "Only contacts made from now on" answered in window A,
+    /// then the stored key saved again in window B (how a reset or a switched-off upload comes back
+    /// on). B was seeded before the answer, so its own settings know nothing of it, and nothing old
+    /// is sent from B either.
+    #[test]
+    fn an_answer_in_one_window_holds_in_another() {
+        let a = station(OLD_LOG);
+        let seeded = super::engine_lock(&a).settings().clone();
+        let b = window(seeded);
+        let keychain = Keychain(std::cell::Cell::new(false));
+        assert_eq!(
+            save(&a, &keychain, Some(false)),
+            vec![],
+            "premise: window A"
+        );
+        assert!(qrz_from(&a).is_some(), "premise: answered");
+        assert_eq!(
+            super::engine_lock(&b).settings().qrz_logbook_upload_from,
+            None,
+            "window B's settings hold no start point"
+        );
+        assert_eq!(
+            save(&b, &keychain, None),
+            vec![],
+            "nothing old is sent from window B"
+        );
+    }
+
+    /// ⛔ H2. The base window after leaving multi-radio mode reads its own settings file, which no
+    /// radio window wrote the answer into, and still sends nothing old.
+    ///
+    /// The radio window runs on a thread of its own. Every window in a test process saves under the
+    /// one profile the process started with, so a radio window on this thread would save its
+    /// settings (on the writer's thread, a moment later) into the very file the base window reads.
+    /// A test build keeps each thread's files in a folder of its own (`test_dirs`), which gives the
+    /// radio window a settings file of its own, as its `tempo-r<id>` folder does in the app; a
+    /// data-folder pointer there names this thread's data folder, so both share the one log.
+    #[test]
+    fn the_base_window_after_multi_radio_honours_the_answer() {
+        let log_folder = super::shared_data_dir();
+        let keychain = std::thread::spawn(move || {
+            super::write_data_dir_pointer_in(&super::config_dir_for(None), &log_folder)
+                .expect("premise: the radio window shares the log");
+            let radio = station(OLD_LOG);
+            let keychain = Keychain(std::cell::Cell::new(false));
+            assert_eq!(save(&radio, &keychain, Some(false)), vec![]);
+            // Its settings on the disk before its folder goes with the thread.
+            let radio_file = super::config_dir_for(None).join("settings.json");
+            assert!(matches!(
+                super::SettingsWriter::of(&radio_file).flush(std::time::Duration::from_secs(10)),
+                tempo_app::settings::writer::Flushed::Saved
+            ));
+            keychain
+        })
+        .join()
+        .expect("the radio window saved");
+        assert!(kept().qrz.is_some(), "premise: answered beside the log");
+        let base_file = super::config_dir_for(None).join("settings.json");
+        assert!(
+            !base_file.exists(),
+            "premise: nothing wrote the base settings"
+        );
+        let base = window(super::Settings::load(&base_file));
+        assert_eq!(save(&base, &keychain, None), vec![], "nothing old is sent");
+    }
+
+    /// ⛔ H2. A radio profile created after the answer seeds its settings from the base file, which
+    /// holds no start point, and still sends nothing old.
+    #[test]
+    fn a_radio_profile_created_after_the_answer_honours_it() {
+        let base = station(OLD_LOG);
+        let keychain = Keychain(std::cell::Cell::new(false));
+        assert_eq!(save(&base, &keychain, Some(false)), vec![]);
+        // The base window's own settings file, as its save just persisted it.
+        let base_file = super::config_dir_for(None).join("settings.json");
+        assert!(matches!(
+            super::SettingsWriter::of(&base_file).flush(std::time::Duration::from_secs(10)),
+            tempo_app::settings::writer::Flushed::Saved
+        ));
+        let profile_file = super::config_dir_for(Some("r2")).join("settings.json");
+        std::fs::create_dir_all(profile_file.parent().unwrap()).unwrap();
+        std::fs::copy(&base_file, &profile_file).expect("seeded as a first launch seeds it");
+        assert!(
+            !std::fs::read_to_string(&profile_file)
+                .unwrap()
+                .contains("UploadFrom"),
+            "premise: the seed carries no start point"
+        );
+        let mut seeded = super::Settings::load(&profile_file);
+        seeded.qrz_logbook_upload = false;
+        let profile = window(seeded);
+        assert_eq!(
+            save(&profile, &keychain, None),
+            vec![],
+            "nothing old is sent"
+        );
+    }
+
+    /// When window A answered, in these tests: 2020-09-13, after the old log's 2019 contacts.
+    const EARLY: u64 = 1_600_000_000;
+
+    /// A contact made after `EARLY` and long before now, never sent anywhere.
+    const MID_QSO: &str =
+        "<CALL:5>K4MID<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20210101<TIME_ON:6>120000<EOR>\n";
+
+    /// Window A answered "from now on" at `EARLY`, and its login was cleared since.
+    fn answered_early_in_another_window() {
+        tempo_app::upload_start::update(&super::shared_data_dir(), |s| {
+            s.answer(upload_legs::QRZ, false, EARLY)
+        })
+        .expect("written");
+    }
+
+    /// ⛔ Operator ruling "Keep the earlier point", across windows: window A answered at `EARLY`,
+    /// the login was cleared, and window B's first login answered "from now on" again. A's earlier
+    /// point is kept, so the contact made between the two answers is still sent; the older log not.
+    #[test]
+    fn a_second_from_now_on_in_another_window_keeps_the_earlier_point() {
+        answered_early_in_another_window();
+        let b = station(&format!("{OLD_LOG}{MID_QSO}"));
+        let keychain = Keychain(std::cell::Cell::new(false));
+        assert_eq!(
+            save(&b, &keychain, Some(false)),
+            vec![("K4MID".to_string(), upload_legs::QRZ)]
+        );
+        assert_eq!(qrz_from(&b), Some(EARLY));
+    }
+
+    /// ⛔ Review L2: a second first login answered "Send them" clears the earlier start point,
+    /// for every window, and the old log is sent.
+    #[test]
+    fn send_them_on_a_second_login_clears_the_earlier_point() {
+        answered_early_in_another_window();
+        let b = station(OLD_LOG);
+        let keychain = Keychain(std::cell::Cell::new(false));
+        assert_eq!(save(&b, &keychain, Some(true)), old_log());
+        assert_eq!(kept(), tempo_app::station::UploadStart::default());
+    }
+
+    /// ⛔ Review L3: a log that cannot be counted asks nothing and says so in the Connections log,
+    /// and the save then sets no start point: it sends as before, as no question was asked.
+    #[test]
+    fn a_log_that_cannot_be_counted_sets_no_start_point() {
+        let engine = station(OLD_LOG);
+        let asked = super::backlog_question(
+            &engine,
+            upload_legs::QRZ,
+            "QRZ Logbook",
+            Ok(false),
+            |_, _| Err("disk I/O error".to_string()),
+        );
+        assert_eq!(
+            asked,
+            Err("couldn't read the logbook: disk I/O error".into())
+        );
+        assert!(
+            super::get_connection_log()
+                .iter()
+                .any(|e| e.connector == "QRZ Logbook"
+                    && e.level == "error"
+                    && e.message
+                        == "couldn't count the contacts not yet sent to QRZ Logbook: disk I/O \
+                        error; nothing is asked, and saving the login sends them as before"),
+            "logged"
+        );
+        // The settings page passes no answer when the count failed.
+        let keychain = Keychain(std::cell::Cell::new(false));
+        assert_eq!(save(&engine, &keychain, None), old_log(), "sent as before");
+        assert!(nothing_written(), "no start point set silently");
+    }
+
+    /// A start point an earlier build left in a window's settings file moves beside the log, each
+    /// service keeping the earliest of every window's, and leaves the settings.
+    #[test]
+    fn start_points_left_in_settings_move_beside_the_log() {
+        let dir = super::shared_data_dir();
+        let mut none = super::Settings::default();
+        super::move_upload_start_beside_the_log(&mut none, &dir);
+        assert!(
+            nothing_written(),
+            "no start point anywhere: nothing written"
+        );
+
+        let mut r1 = super::Settings {
+            qrz_logbook_upload_from: Some(EARLY + 100),
+            eqsl_upload_from: Some(EARLY),
+            ..super::Settings::default()
+        };
+        super::move_upload_start_beside_the_log(&mut r1, &dir);
+        let mut base = super::Settings {
+            qrz_logbook_upload_from: Some(EARLY),
+            ..super::Settings::default()
+        };
+        super::move_upload_start_beside_the_log(&mut base, &dir);
+        assert_eq!(
+            kept(),
+            tempo_app::station::UploadStart {
+                qrz: Some(EARLY),
+                clublog: None,
+                eqsl: Some(EARLY),
+            }
+        );
+        for s in [&r1, &base] {
+            assert_eq!(
+                tempo_app::station::UploadStart::left_in(s),
+                Default::default()
+            );
+        }
+    }
+
+    /// A settings backup never moves the start points beside the log; one an earlier build wrote
+    /// with a start point in it fills only a service that has none there.
+    #[test]
+    fn a_backup_carrying_a_start_point_fills_only_where_none_is_kept() {
+        answered_early_in_another_window();
+        let engine = station(OLD_LOG);
+        let mut carried = super::engine_lock(&engine).settings().clone();
+        carried.qrz_logbook_upload_from = Some(1);
+        carried.clublog_upload_from = Some(EARLY + 5);
+        let text = serde_json::json!({
+            "kind": "nexus-settings-backup",
+            "schema": 1,
+            "settings": carried,
+        })
+        .to_string();
+        super::restore_settings_bundle(
+            &engine,
+            text,
+            Default::default,
+            |_| true,
+            super::no_key_change,
+        )
+        .expect("restored");
+        assert_eq!(
+            kept(),
+            tempo_app::station::UploadStart {
+                qrz: Some(EARLY),
+                clublog: Some(EARLY + 5),
+                eqsl: None,
+            }
+        );
+        assert_eq!(
+            tempo_app::station::UploadStart::left_in(super::engine_lock(&engine).settings()),
+            Default::default(),
+            "and the window's settings hold none"
+        );
+    }
+}
+
+#[cfg(test)]
+mod getting_out_since_tests {
+    //! Getting Out's Start fresh `since`, from the screen to the station's filter. At the end of the
+    //! file: the registration tests read the FIRST `generate_handler!` in lib.rs as the app's list,
+    //! so a test's own handler list must come after it.
+    use super::*;
+    use crate::command_dispatch::{tauri_runner, Runner};
+    use serde_json::{json, Value};
+
+    /// A report of the operator heard by `rx` at `time`.
+    fn heard_me(rx: &str, grid: &str, time: i64) -> propagation::PathSpot {
+        propagation::PathSpot {
+            time,
+            tx_call: "W9XYZ".to_string(),
+            tx_grid: Some("EN52".to_string()),
+            rx_call: rx.to_string(),
+            rx_grid: Some(grid.to_string()),
+            band: propagation::Band::B20,
+            mode: Some("FT8".to_string()),
+            snr: Some(-12.0),
+            freq_mhz: None,
+        }
+    }
+
+    /// The `since` a screen sends reaches the station's filter through the real command handler:
+    /// with it only the later receiver counts, without it both do.
+    #[test]
+    fn the_command_counts_from_the_since_it_is_sent() {
+        let engine: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        let now = now_unix();
+        let live: SharedLivePaths = Arc::new(Mutex::new(propagation::LiveSpots::default()));
+        {
+            let mut b = live.lock().unwrap();
+            b.push(heard_me("VK3AA", "QF22", now - 600));
+            b.push(heard_me("DL1AA", "JN58", now - 60));
+        }
+        let app = tauri::test::mock_builder()
+            .manage(engine)
+            .manage(live)
+            .invoke_handler(tauri::generate_handler![get_getting_out])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("a mock app");
+        let _main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("a main window");
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let ask = |args: Value| -> Vec<String> {
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                "get_getting_out".to_string(),
+                args,
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            let said = answered
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the handler answered")
+                .expect("an answer");
+            let mut calls: Vec<String> = said["reports"]
+                .as_array()
+                .expect("reports")
+                .iter()
+                .map(|r| r["call"].as_str().unwrap_or_default().to_string())
+                .collect();
+            calls.sort();
+            calls
+        };
+        assert_eq!(ask(json!({ "since": now - 300 })), ["DL1AA"]);
+        assert_eq!(ask(json!({})), ["DL1AA", "VK3AA"], "no start: every report");
+    }
+
+    /// The TV page reads the same key.
+    #[test]
+    fn the_tv_page_reads_since_from_its_arguments() {
+        assert_eq!(
+            tv_getting_out_since(&json!({ "since": 1_793_369_130_i64 })),
+            Some(1_793_369_130)
+        );
+        assert_eq!(tv_getting_out_since(&json!({})), None);
+        assert_eq!(tv_getting_out_since(&Value::Null), None);
     }
 }
