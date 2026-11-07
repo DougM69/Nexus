@@ -5,11 +5,15 @@
 //
 // These are READOUTS, not transmit controls: nothing here keys, gates or stops anything.
 import { useRef, useState } from 'react'
-import type { KeyboardEvent, PointerEvent } from 'react'
+import type { KeyboardEvent, MutableRefObject, PointerEvent } from 'react'
 import type { RadioStatus } from '../types'
 import { isOnAir } from '../types'
 import { t } from '../i18n'
 import { fmtTempC, useUnits } from '../units'
+import { useTxMeterStyle } from '../txMeterStyle'
+import { NEEDLE_KEYS, TxNeedles, type NeedleKey, type NeedleRow } from './TxNeedles'
+import { useFocusReturn } from '../focusReturn'
+import { Dialog } from './ui/Dialog'
 
 /** The rig's own meter names, as they are printed on a radio's front panel — technical tokens
  *  exactly as a mode name is, gathered here so the catalog guard reads them as the deliberate
@@ -153,14 +157,41 @@ export interface TxMeterControls {
  *  while receiving, so it is shown whenever a reading exists and takes no part in the ⊘ logic. */
 type TempRow = { key: 'rigTemp' | 'ampTemp'; label: string; title: string; frac: number; value: string }
 
+/** A TxMeters panel's memory across overs, as refs (never state: retention must never itself cause a
+ *  render). See `TxMeters`' comments at each use. */
+export interface TxMeterMemory {
+  lastRows: MutableRefObject<MeterRow[]>
+  seen: MutableRefObject<Set<MeterKey>>
+  everRead: MutableRefObject<boolean>
+  overJudged: MutableRefObject<boolean>
+  keyedOnce: MutableRefObject<boolean>
+}
+
+/** A fresh memory, for a panel of its own or for two panels to share (TxMetersCell). */
+export function useTxMeterMemory(): TxMeterMemory {
+  const lastRows = useRef<MeterRow[]>([])
+  const seen = useRef(new Set<MeterKey>())
+  const everRead = useRef(false)
+  const overJudged = useRef(false)
+  const keyedOnce = useRef(false)
+  return { lastRows, seen, everRead, overJudged, keyedOnce }
+}
+
 export function TxMeters({
   radio,
   pinned = false,
-  inline = false,
+  inline: inlineProp = false,
+  strip = false,
   controls,
+  memory,
 }: {
   radio: RadioStatus
   pinned?: boolean
+  /** What this panel remembers across overs (the held last readings, which meters the rig has
+   *  reported, whether it has keyed), shared with another panel of the same radio: Operate's cell and
+   *  its larger dialog pass one (`useTxMeterMemory`), so a dialog opened between overs holds the
+   *  readings the cell holds. Absent, the panel keeps its own. */
+  memory?: TxMeterMemory
   /** The COMP row's controls; see [`TxMeterControls`]. */
   controls?: TxMeterControls
   /** Inline telemetry-cell variant (the Operate strip): pinned semantics — always
@@ -168,11 +199,16 @@ export function TxMeters({
    *  FIXED-WIDTH cell, so the TX cycle causes zero geometry change at zero
    *  vertical cost (the 722ef273 anti-bounce ruling without the dead row). */
   inline?: boolean
+  /** The TX strip's cell (Phone and CW, the compact dock): the inline variant's semantics, laid
+   *  out in at most two rows that grow sideways, so the strip is never taller than its buttons. */
+  strip?: boolean
 }) {
+  const inline = inlineProp || strip
   // Retain the last live readings so the pinned strip has something to show between overs.
   // A plain ref (not state): the poll re-renders us anyway, and retention must never
   // itself cause a render. Unconditional hook — declared before any early return.
-  const lastRows = useRef<MeterRow[]>([])
+  const own = useTxMeterMemory()
+  const { lastRows, seen, everRead, overJudged, keyedOnce } = memory ?? own
   // ⭐ WHICH METERS THIS RIG ACTUALLY HAS, and whether we are yet in a position to say.
   //
   // These fields are populated ONLY while transmitting, so a blank row means two different
@@ -180,16 +216,25 @@ export function TxMeters({
   // and after one, a meter that stayed silent through it is one the radio does not report.
   // Telling those apart is the whole reason the row can carry a ⊘ at all — a mark hung on
   // the first case would be writing a radio off for never having been asked.
-  const seen = useRef(new Set<MeterKey>())
-  const everRead = useRef(false)
+  // (`seen`, `everRead`, in `useTxMeterMemory`.)
   // The verdict is due only once an over that read something has ENDED. The keyed poll reads
   // one meter per 150 ms, so 150 ms into the first over ALC/Po/COMP are meters not yet asked,
-  // not meters the rig lacks, and a ⊘ hung on them then would flash and go as they arrive.
-  const overJudged = useRef(false)
-  // Has the rig keyed since this panel mounted? The Operate cell gives every meter its slot
-  // from that moment on (below).
-  const keyedOnce = useRef(false)
+  // not meters the rig lacks, and a ⊘ hung on them then would flash and go as they arrive
+  // (`overJudged`). Has the rig keyed since this panel mounted (`keyedOnce`)? The Operate cell gives
+  // every meter its slot from that moment on (below).
   const units = useUnits()
+  // #343: Settings ▸ Workspace ▸ TX meters. Needle draws PO, ALC and SWR as needles (TxNeedles) in
+  // place of their bars; COMP and the temperatures stay bars. Bars is the default.
+  const needle = useTxMeterStyle() === 'needle'
+  // The radio's ALC zone as it came with the last ALC reading. The engine sends the zone with each
+  // ALC reading and clears both on unkey, and an over's first polls read other meters before ALC,
+  // so the live value says "default scale" between overs and for the start of each over. The bars
+  // never see that (their held rows were zoned while live); the needle face, which draws the zone
+  // as arcs at every moment, keeps it here. ⚠️ It belongs in `useTxMeterMemory` beside the rest
+  // (with TxNeedles' held peaks), so the larger dialog sharing the cell's memory has it too; that
+  // move is a follow-up of its own. Until then the dialog draws the default arcs until it reads ALC.
+  const alcZone = useRef(1)
+  if (radio.txAlc != null) alcZone.current = radio.txAlcZone ?? 1
   // The processor level while a drag is in flight: the marker follows the pointer at once.
   const [dragPct, setDragPct] = useState<number | null>(null)
   // The level last set here, held on the marker until the radio's reported level moves. Mid-over
@@ -430,7 +475,7 @@ export function TxMeters({
   // `inline` keeps the compact geometry THROUGH a key-down: that cell is fixed-width chrome
   // in the Operate strip and the anti-bounce ruling is that the TX cycle costs it nothing.
   const compact = inline || !live
-  const variant = `${compact ? ' pinned' : ''}${inline ? ' inline' : ''}`
+  const variant = `${compact ? ' pinned' : ''}${inline ? ' inline' : ''}${strip ? ' strip' : ''}`
   const shown = live || lastRows.current.length === 0 ? rows : lastRows.current
 
   // ⛔ THE FOUR-ROWS-ALWAYS CONTRACT IS THE DOCK'S, AND IT DOES NOT REACH THIS CELL.
@@ -453,7 +498,12 @@ export function TxMeters({
   // meters that had read, in an `auto-fit` grid: the poll reads one meter per 150 ms, so the
   // first over showed SWR alone and that one bar spanned the whole cell, then shrank to a third
   // as the others arrived. Four slots in two rows is the height a four-meter rig already had.
-  if (inline && !keyedOnce.current) {
+  // …EXCEPT IN THE TX STRIP (`strip`, Phone and CW from md up): there the meters are the dock's, moved,
+  // and Phone's COMP row carries the processor level, PROC and the TX bandwidth, which an operator sets
+  // BEFORE the first over. So the strip keeps the dock's four slots from the start, in the compact
+  // geometry, without the hint line (a cell of its own in the strip's two rows); the rows' dashes
+  // and their titles say the same until a reading arrives.
+  if (inline && !strip && !keyedOnce.current) {
     return (
       <div className={`ph-txmeters${variant} idle`} role="group" aria-label={t('meters.tx.aria')}>
         <span className="ph-txmeters-hint">{t('meters.tx.idle', { when: TX_METERS_WHEN })}</span>
@@ -463,11 +513,22 @@ export function TxMeters({
   }
   return (
     <div
-      className={`ph-txmeters${variant}${!live && pin ? ' idle' : ''}`}
+      className={`ph-txmeters${variant}${!live && pin ? ' idle' : ''}${needle ? ' needle' : ''}`}
       role="group"
       aria-label={t('meters.tx.aria')}
     >
-      {shown.map((r) => {
+      {needle && (
+        <TxNeedles
+          rows={rows.filter((r): r is NeedleRow => isNeedle(r.key))}
+          live={live}
+          swrVerified={radio.swrScaleVerified === true}
+          alcZoneTop={alcZone.current}
+          unreported={overJudged.current ? NEEDLE_KEYS.filter((k) => !seen.current.has(k)) : []}
+        />
+      )}
+      {/* With needles, Operate's fixed-width cell has room for the three faces only, so its COMP slot
+          goes (FT does not use the speech processor); everywhere else COMP stays a bar beside them. */}
+      {shown.filter((r) => !needle || (!isNeedle(r.key) && !(r.key === 'comp' && inline && !strip))).map((r) => {
         const slider = r.key === 'comp' && levelPct != null
         const hasCtl = r.key === 'comp' && (slider || procOn != null || bwSteps.length > 1)
         return (
@@ -531,5 +592,68 @@ export function TxMeters({
         <span className="ph-txmeters-hint">{t('meters.tx.idle', { when: TX_METERS_WHEN })}</span>
       )}
     </div>
+  )
+}
+
+const isNeedle = (k: MeterKey): k is NeedleKey => (NEEDLE_KEYS as readonly string[]).includes(k)
+
+/** #446: OPERATE'S TELEMETRY CELL, WHICH OPENS LARGER. The cell (`.cq-telemetry`) is fixed-width
+ *  chrome, so its bars are small; a click on it, or Enter or Space with it focused, opens a dialog
+ *  with the same live meters at full size, from the same `radio` on every poll. Close closes it, and
+ *  the keyboard goes back to the cell (`useFocusReturn`).
+ *
+ *  ⚠️ ESCAPE IS ALSO STOP TX on this screen (`useEscStop`, a window listener), and the dialog is opened
+ *  to watch an over. So it never says Escape "closes" it: it says Escape stops transmitting, and the
+ *  visible Close is the way to close it without a stop. Esc-as-stop is not weakened for it.
+ *
+ *  A READOUT, like the cell: the dialog's meters take no `controls`, so Close is its one control and
+ *  nothing in it keys, stops or sets anything, and the cell keeps its id-free place in the strip (no pane vocabulary). The
+ *  opener is the cell's own wrapper — a block filling the cell, so the cell's geometry is what it
+ *  was. The dialog box is `ui/Dialog`'s own (its portaled box is the sanctioned raw-unit exception);
+ *  only how the meters sit inside it is styled here (`.txmeters-large`).
+ *
+ *  The dialog's panel shares the cell's memory (`useTxMeterMemory`): live while keyed, and between
+ *  overs the same held last readings the cell shows, however late it is opened. */
+export function TxMetersCell({ radio }: { radio: RadioStatus }) {
+  const [open, setOpen] = useState(false)
+  // One memory for the cell and the dialog: opened between overs, the dialog holds the readings the
+  // cell holds, so the two never disagree.
+  const memory = useTxMeterMemory()
+  const returnFocus = useFocusReturn(open)
+  return (
+    <>
+      <div
+        className="txmeters-open"
+        role="button"
+        tabIndex={0}
+        aria-haspopup="dialog"
+        aria-label={t('meters.tx.enlarge.aria')}
+        title={t('meters.tx.enlarge.aria')}
+        onClick={() => setOpen(true)}
+        onKeyDown={(e) => {
+          if (e.key !== 'Enter' && e.key !== ' ') return
+          e.preventDefault()
+          setOpen(true)
+        }}
+      >
+        <TxMeters radio={radio} inline memory={memory} />
+      </div>
+      <Dialog
+        open={open}
+        onOpenChange={setOpen}
+        title={t('meters.tx.enlarge.title')}
+        description={t('meters.tx.enlarge.desc')}
+        onCloseAutoFocus={returnFocus}
+      >
+        <div className="txmeters-large">
+          <TxMeters radio={radio} pinned memory={memory} />
+        </div>
+        <div className="txmeters-actions">
+          <button type="button" className="export-btn" aria-label={t('meters.tx.enlarge.close')} onClick={() => setOpen(false)}>
+            ✕ {t('meters.tx.enlarge.close')}
+          </button>
+        </div>
+      </Dialog>
+    </>
   )
 }

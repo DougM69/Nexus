@@ -8,7 +8,16 @@ use crate::dto::SourceKind;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+pub mod station_profiles;
 pub mod writer;
+
+pub use station_profiles::{
+    StationProfile, HOME_STATION_PROFILE, STATION_CALL_CHANGED_LATE_REPLY_DROPPED,
+    STATION_CALL_CHANGED_TX_REFUSED, STATION_PROFILE_CALL_TX_REFUSED,
+    STATION_PROFILE_JS8_QUEUED_REFUSED, STATION_PROFILE_JTTY_PROMPT_REFUSED,
+    STATION_PROFILE_RESTORE_REFUSED, STATION_PROFILE_SWITCH_REFUSED,
+    STATION_PROFILE_UNLOGGED_REFUSED,
+};
 
 /// What kind of operating the active section is doing — the per-section rig-mode
 /// policy. **Digital** OBEYS the rig (max compatibility; FT8/FT4 live in an audio
@@ -575,14 +584,23 @@ pub fn native_civ_reachable(rig_model: u32, rig_conn: &str, rig_addr: &str) -> b
 pub const FLEX_CLIENT_RIGS: [u32; 2] = [2036, 23005];
 
 /// Could Nexus's own Flex client serve this radio — a FlexRadio profile with the radio's own
-/// address set? The client talks to the radio itself (`flex_radio_ip`, the SmartSDR API's port
-/// 4992), so the profile's CAT connection and address do not enter into it.
+/// address set, on a connection that does not hand the radio to another driver first? The client
+/// talks to the radio itself (`flex_radio_ip`, the SmartSDR API's port 4992), so the profile's
+/// rigctld address does not enter into it, and it serves Serial and Network alike. But OmniRig, the
+/// Icom network connection and TCI each start their own driver before the Flex client is ever asked
+/// (`tempo_audio::service::spawn_cat_daemon`), so on those the client never runs, and neither does
+/// its DAX audio: that radio transmits from the sound card.
 ///
 /// ⭐ THE SINGLE SOURCE OF TRUTH for the daemon choice (`tempo_audio::service` asks this), for
-/// the same reason [`native_civ_reachable`] is one. Not gated on the operator's `flex_native_cat`
-/// opt-in: that is the separate "is it switched on" question.
-pub fn flex_client_reachable(rig_model: u32, flex_radio_ip: &str) -> bool {
-    FLEX_CLIENT_RIGS.contains(&rig_model) && !flex_radio_ip.trim().is_empty()
+/// the same reason [`native_civ_reachable`] is one, and for where the radio's transmit audio goes
+/// ([`tx_audio_on_sound_card`]), so the two cannot disagree. Not gated on the operator's
+/// `flex_native_cat` opt-in: that is the separate "is it switched on" question.
+pub fn flex_client_reachable(rig_model: u32, rig_conn: &str, flex_radio_ip: &str) -> bool {
+    FLEX_CLIENT_RIGS.contains(&rig_model)
+        && !flex_radio_ip.trim().is_empty()
+        && !rig_conn_is_omnirig(rig_conn)
+        && !rig_conn_is_icom_lan(rig_conn)
+        && !rig_conn_is_tci(rig_conn)
 }
 
 /// Is this rig driven over the radio's own network connection, by Nexus's Icom network client
@@ -767,7 +785,7 @@ pub fn tx_audio_on_sound_card(r: &TxAudioRoute) -> bool {
     let icom_lan = rig_conn_is_icom_lan(r.rig_conn);
     let tci = tci_reachable(r.rig_model, r.rig_conn, r.tci_host, r.tci_port) && r.tci_audio;
     let flex = r.flex_native_cat
-        && flex_client_reachable(r.rig_model, r.flex_radio_ip)
+        && flex_client_reachable(r.rig_model, r.rig_conn, r.flex_radio_ip)
         && r.flex_native_audio;
     !(icom_lan || tci || flex)
 }
@@ -2396,14 +2414,24 @@ pub struct Settings {
     /// fallback the RTS/DTR PTT line uses).
     #[serde(default)]
     pub rtty_fsk_port: String,
-    /// RTTY baud rate — true 45.45 by default (never integerized to 45); 75.0 is the
-    /// other common amateur rate. Drives the TX bit clock AND the RX demodulator.
+    /// RTTY baud rate — true 45.45 by default (never integerized to 45); 50 and 75 are
+    /// the other amateur rates the Settings list offers. Drives the TX bit clock AND the
+    /// RX demodulator.
     #[serde(default = "default_rtty_baud")]
     pub rtty_baud: f64,
     /// RTTY mark/space shift in Hz (170 = the HF standard). Drives the TX tone pair
     /// (AFSK space = 2125 + shift) AND the RX demodulator.
     #[serde(default = "default_rtty_shift_hz")]
     pub rtty_shift_hz: u32,
+    /// The LOWER audio tone of the AFSK/decoder tone pair (Hz); the other sits `rtty_shift_hz`
+    /// above it. 2125 (the 2125/2295 standard) by default; 1275 puts a 170 Hz pair at
+    /// 1275/1445. It is where the decoder AND the AFSK transmitter sit until the operator nets
+    /// on the waterfall — a net still moves both for the session (`Engine::rtty_center_hz`).
+    /// The low tone rather than "the mark": which of the two is mark depends on the sideband
+    /// and Reverse ([`Settings::rtty_tone_swap`]), and a stored mark would swap with them.
+    /// READ IT THROUGH [`Settings::rtty_low_tone`], which applies its 300–2700 Hz range.
+    #[serde(default = "default_rtty_low_tone_hz")]
+    pub rtty_low_tone_hz: u32,
     /// Reverse the mark/space sense (TX tones + RX demod): the "work an upside-down
     /// station" control. The sideband is NOT this field's job — that is
     /// [`Settings::rtty_afsk_sideband`], which swaps the tones itself, so a rig on USB keeps
@@ -2665,6 +2693,39 @@ pub struct Settings {
     #[serde(default = "default_sdrconnect_follow")]
     pub sdrconnect_follow: String,
 
+    /// Listen for the contacts FreeDV's own app logs (its "QSO Logging", WSJT-X protocol) on
+    /// `127.0.0.1:freedv_log_port`, and put each in the log as a FreeDV contact
+    /// ([`crate::freedv`]). ON by default (the operator's call, 2026-10-13): FreeDV sends nothing
+    /// there until its logging is pointed at this port, and the port is bound to this computer
+    /// alone. Receive only: nothing it reads can key or tune the radio. The container default
+    /// applies, so a file written before this field existed comes up ON.
+    pub freedv_log: bool,
+    /// UDP port on 127.0.0.1 for FreeDV's logged contacts. 2239, NOT 2237: 2237 is where Nexus
+    /// sends its own WSJT-X telemetry and where GridTracker and JTAlert listen. 0 = not listening.
+    ///
+    /// Since the contact port takes every program's logged contacts ([`crate::log_intake`]), this
+    /// switch and port are "Accept contacts other programs log": the persisted names stay, so a
+    /// FreeDV operator's settings mean what they meant. A port Nexus itself sends to (its WSJT-X
+    /// UDP, HRD or N1MM target) is refused with a sentence rather than bound.
+    pub freedv_log_port: u16,
+    /// "Accept from devices on my network": bind the contact port on every adapter, and take
+    /// contacts from private network addresses as well as this computer (the S.A.T. satellite
+    /// tracker, a second PC). OFF by default: Windows asks once whether Nexus may use the network,
+    /// and the port is this computer's alone until the operator says otherwise. A public address
+    /// is never taken ([`crate::log_intake::Admission`]).
+    pub log_intake_lan: bool,
+    /// The one network address allowed to send contacts while [`Self::log_intake_lan`] is on
+    /// (the S.A.T.'s); empty = any private address. This computer is always allowed.
+    pub log_intake_peer: String,
+    /// Listen for FreeDV's callsign broadcast (FreeDV 2.4) and list the calls it hears in the
+    /// Phone screen's FreeDV pane ([`crate::freedv`]). OFF by default: the listener joins
+    /// FreeDV's group on every adapter (dropping anything not from this computer), and Windows
+    /// may ask once whether Nexus may use the network, so it starts only when the operator asks
+    /// for it in the pane or in Settings.
+    pub freedv_heard: bool,
+    /// UDP port of FreeDV's callsign broadcast (FreeDV's default 7177). 0 = not listening.
+    pub freedv_heard_port: u16,
+
     /// A FlexRadio's IP address for the SmartSDR Ethernet API (port 4992), used by the native
     /// panadapter worker. Distinct from the CAT `rig_addr` (which for the SmartSDR-CAT model 2036
     /// points at the *PC's* CAT port, not the radio). Empty = no native Flex scope.
@@ -2798,6 +2859,16 @@ pub struct Settings {
     /// that has no key: the field's own `#[serde(default)]` is what reads a missing key as `Act`.
     #[serde(default)]
     pub radio_switch_policy: RadioSwitchPolicy,
+    /// "My station" profiles: Home, a portable kit, a club call ([`station_profiles`]). Empty
+    /// until the operator makes one, and then not written at all, so a station that never does
+    /// keeps the file it had. One writer each: the profile verbs, never a whole save
+    /// (`Engine::apply_settings` keeps the live list and active id).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub station_profiles: Vec<StationProfile>,
+    /// The id of the profile the station is on; the flat call, grid, state and power are its.
+    /// Empty with no profiles.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub active_station_profile: String,
 
     // --- network (WSJT-X parity) ---
     /// Emit the WSJT-X-compatible UDP protocol (for JTAlert/GridTracker/loggers).
@@ -2806,6 +2877,13 @@ pub struct Settings {
     /// OR MANY, comma-separated — `127.0.0.1:2237, 129.212.188.3:2237` feeds a local tool and
     /// a remote contest scorer at once, which WSJT-X's single sink cannot.
     pub wsjtx_udp_addr: String,
+    /// ⛔ Take a Reply, a FreeText or a Location from another computer
+    /// (`tempo_net::server::refused_from_other_computer`). OFF by default: a program sending from
+    /// loopback needs no leave, and any other can then not arm TX, choose what goes out or move
+    /// the grid. A UDP source address can be forged, so this trusts
+    /// whoever can reach the port. Never moved by a save from afar, a restore or a profile.
+    #[serde(default)]
+    pub wsjtx_udp_accept_other_computers: bool,
     /// Append every decode to a WSJT-X-format `ALL.TXT` decode log in the app data dir —
     /// the running record loggers/GridTracker tail.
     ///
@@ -3005,6 +3083,22 @@ pub struct Settings {
     pub audio_in: String,
     /// Output (playback) device name. Empty = system default output.
     pub audio_out: String,
+    /// The USB model (`vendor:product`, as Linux's `/proc/asound/card<N>/usbid` gives it) of the
+    /// sound card each TX audio device was on when the operator chose it, by the device's name as
+    /// saved (the flat `audio_out` and every radio's). Linux only, and only a USB card's: empty
+    /// elsewhere and in settings from before it existed, which keep the guard as it was.
+    ///
+    /// ⛔ TX-SAFETY: an ALSA card id is given in the order the cards were found, so a reboot can
+    /// hand the radio's codec's id (`CODEC`) to a headphone DAC on the same chip family and the
+    /// codec `CODEC_1`. The saved name then names the headphones, and the headphone monitor and the
+    /// app's sounds would be let onto the radio's codec. The guard refuses every card of this model
+    /// as well (`tempo_audio::notify_sound::tx_audio_device_owners`). Written only by
+    /// `tempo_audio::notify_sound::tx_card_models_after` when a save chooses a TX device, never
+    /// from a form's values, so a later save can never record the swapped card as the radio's. A
+    /// form can only name a device the operator picked in it with "", asking for its card to be
+    /// read at that save, as any pick is.
+    #[serde(default)]
+    pub tx_card_models: std::collections::BTreeMap<String, String>,
     /// Microphone device for RECORDING voice-keyer messages. Empty (default) = keep
     /// today's behavior: record from `audio_in`, the shared capture input. But on a
     /// typical digital setup that input is the RIG's RX codec / DAX, so recording a
@@ -3392,6 +3486,13 @@ pub struct Settings {
     /// arm is unaffected — that path calls `set_sstv_armed`, an explicit act.
     #[serde(default = "default_true")]
     pub sstv_rx_auto_arm: bool,
+    /// Whether opening the SSTV view tunes to the band's SSTV frequency (#451): the band's own
+    /// calling channel, or 20 m's from an HF band with none. Off by default — opening a screen
+    /// otherwise asserts nothing about the dial, and an upgrade must not start moving anyone's
+    /// radio. The choice of channel, and the cases that leave the dial alone (already on an SSTV
+    /// channel, transmitting, a VHF/UHF band with none), are the view's (`sstvChannelOnOpen`);
+    /// the tune itself is the band picker's own `sstv_tune`. The engine never reads it.
+    pub sstv_tune_on_open: bool,
     /// The transmit mode the SSTV screen starts on: a `SSTV_TX_MODES` slug, or "auto"
     /// for the band-aware pick (HF → Scottie 1, the NA calling-frequency convention;
     /// 2 m → PD-120, which is what ARISS transmits).
@@ -3536,6 +3637,14 @@ pub struct Settings {
     /// its own longer floor and one that stays until dismissed still does (`pushToast`,
     /// ui/src/toast.ts).
     pub popup_min_secs: u32,
+    /// Which corner of the window the pop-ups stand in (#445): bottom right (the default, where
+    /// they always stood, and what a file from before the field loads), bottom left, top right or
+    /// top left. Only where the UI draws its toast column (`ui/src/features/popupCorner.ts` `popupCornerOf`, the
+    /// same four values and the same fallback); nothing on the Rust side reads it. Read leniently
+    /// ([`lenient_popup_corner`]): a corner this build does not know loads as bottom right rather
+    /// than failing the whole file.
+    #[serde(deserialize_with = "lenient_popup_corner")]
+    pub popup_corner: PopupCorner,
     /// Put the exchanged dB reports into the logged QSO's COMMENT field, WSJT-X's
     /// "dB reports to comments" (`dBtoComments`, default false there — logqso.cpp:143
     /// builds `"<mode>  Sent: <rpt>  Rcvd: <rpt>"`, two spaces, parts omitted when
@@ -4231,6 +4340,18 @@ fn default_rtty_shift_hz() -> u32 {
     170
 }
 
+/// The standard AFSK pair's lower tone, 2125 Hz (2125/2295 at 170 shift).
+fn default_rtty_low_tone_hz() -> u32 {
+    2125
+}
+
+/// The range a saved RTTY low tone is used in, Hz: 2700 + the widest shift offered (850) still
+/// tops out inside the passband a net reaches. The Settings box (`RTTY_LOW_TONE_HZ_MIN/MAX` in
+/// `SettingsPanel.tsx`) offers exactly this range; `SettingsPanel.rttysignal.test.tsx` reads these
+/// two lines and fails if the copies drift.
+pub const RTTY_LOW_TONE_HZ_MIN: u32 = 300;
+pub const RTTY_LOW_TONE_HZ_MAX: u32 = 2700;
+
 /// The bounds [`Settings::rtty_seq_config`] clamps to, and the range the Settings controls
 /// offer. Named here so the control and the chokepoint cannot disagree about what is legal.
 pub const RTTY_AUTO_LISTEN_SECS_MIN: u32 = 5;
@@ -4452,6 +4573,55 @@ pub struct Macros {
     /// Same one writer as `psk_profiles`.
     #[serde(default, deserialize_with = "lenient_string")]
     pub active_psk_profile: String,
+    /// HOW MANY MACRO KEYS each keyboard cockpit's dock shows — CW's, RTTY's and PSK's, each its
+    /// own: 8 (the default, F1–F8), 12 (F1–F12) or 16 (F1–F12 and four sent with a click). See
+    /// [`MACRO_COUNTS`]. The SETTINGS FORM writes them, like `rtty_esm_roles`; the cockpits' macro
+    /// saves (`Engine::save_rtty_macros`, `Engine::save_psk_macros`) replace only their own two
+    /// fields and so leave these as they are. A count is only how many keys SHOW: choosing fewer
+    /// hides the keys past it and keeps whatever they hold. Not written at 8, so a file saved
+    /// before these existed loads and saves back byte for byte; any value but 12 or 16 loads as 8.
+    #[serde(
+        default = "default_macro_count",
+        skip_serializing_if = "is_default_macro_count",
+        deserialize_with = "lenient_macro_count"
+    )]
+    pub cw_macro_count: u8,
+    /// The RTTY dock's count — see `cw_macro_count`.
+    #[serde(
+        default = "default_macro_count",
+        skip_serializing_if = "is_default_macro_count",
+        deserialize_with = "lenient_macro_count"
+    )]
+    pub rtty_macro_count: u8,
+    /// The PSK dock's count — see `cw_macro_count`.
+    #[serde(
+        default = "default_macro_count",
+        skip_serializing_if = "is_default_macro_count",
+        deserialize_with = "lenient_macro_count"
+    )]
+    pub psk_macro_count: u8,
+}
+
+/// The macro counts a keyboard cockpit's dock offers, the first the default. The UI's twin is
+/// `MACRO_COUNTS` in `ui/src/features/macroSets.ts`.
+pub const MACRO_COUNTS: [u8; 3] = [8, 12, 16];
+
+fn default_macro_count() -> u8 {
+    MACRO_COUNTS[0]
+}
+
+fn is_default_macro_count(count: &u8) -> bool {
+    *count == MACRO_COUNTS[0]
+}
+
+/// A macro count read LENIENTLY ([`lenient_list`]'s WHY): one of [`MACRO_COUNTS`], else the
+/// default. A hand edit gone wrong costs the count, never the file around it.
+fn lenient_macro_count<'de, D: serde::Deserializer<'de>>(de: D) -> Result<u8, D::Error> {
+    Ok(serde_json::Value::deserialize(de)?
+        .as_u64()
+        .and_then(|n| u8::try_from(n).ok())
+        .filter(|n| MACRO_COUNTS.contains(n))
+        .unwrap_or_else(default_macro_count))
 }
 
 /// One customizable CW F-key macro.
@@ -4523,6 +4693,66 @@ fn lenient_esm_role_sets<'de, D: serde::Deserializer<'de>>(
     })
 }
 
+/// [`RadioProfile::ft_drive`] read ENTRY BY ENTRY: a level that is not a number in the slider's
+/// range (0–1), or one filed under a blank key, is dropped; a value that is not a map at all loads
+/// empty. Every way in (the settings file, a settings backup, the Remote's copy) parses through
+/// here, so no stored drive can reach the radio loop out of range, and a bad entry never costs the
+/// settings file around it.
+///
+/// ⛔ DROPPED, NOT CLAMPED. The slider and [`RadioProfile::remember_ft_drive`] never store a level
+/// outside 0–1, so one here is corrupt or hand-edited, and clamping `9.0` would make it full drive.
+/// Dropped, the band's other entry or the drive the station already has is used instead.
+fn lenient_ft_drive<'de, D: serde::Deserializer<'de>>(
+    de: D,
+) -> Result<std::collections::BTreeMap<String, f32>, D::Error> {
+    Ok(match serde_json::Value::deserialize(de)? {
+        serde_json::Value::Object(levels) => levels
+            .into_iter()
+            .filter(|(key, _)| !key.trim().is_empty())
+            .filter_map(|(key, level)| {
+                let level = level.as_f64()? as f32;
+                ft_drive_in_range(level).then_some((key, level))
+            })
+            .collect(),
+        _ => Default::default(),
+    })
+}
+
+/// Whether `level` is one the drive slider can set: a finite number from 0 to 1.
+fn ft_drive_in_range(level: f32) -> bool {
+    (0.0..=1.0).contains(&level)
+}
+
+/// The key of a band+mode entry in [`RadioProfile::ft_drive`] (`"20m/FT8"`); the band's own entry
+/// is the bare band.
+fn ft_drive_key(band: &str, mode: &str) -> String {
+    format!("{band}/{mode}")
+}
+
+impl RadioProfile {
+    /// Remember `level` as the operator's drive on `band` in FT mode `mode`: for that band+mode,
+    /// and as the band's last FT drive (the fallback for a mode never driven there). Clamped to
+    /// the slider's range.
+    pub fn remember_ft_drive(&mut self, band: &str, mode: &str, level: f32) {
+        let level = level.clamp(0.0, 1.0);
+        self.ft_drive.insert(ft_drive_key(band, mode), level);
+        self.ft_drive.insert(band.to_string(), level);
+    }
+
+    /// The drive last set on `band` in FT mode `mode`, else the band's last drive in any FT mode,
+    /// else `None` (nothing to restore: the drive stays as it is). An entry out of the slider's
+    /// range counts as none, as on load ([`lenient_ft_drive`]).
+    pub fn ft_drive_for(&self, band: &str, mode: &str) -> Option<f32> {
+        let valid = |key: &str| {
+            self.ft_drive
+                .get(key)
+                .copied()
+                .filter(|&l| ft_drive_in_range(l))
+        };
+        valid(&ft_drive_key(band, mode)).or_else(|| valid(band))
+    }
+}
+
 /// A list loaded ENTRY BY ENTRY: each entry that parses is kept, each one that does not is
 /// dropped, and a value that is not a list at all loads empty.
 ///
@@ -4551,6 +4781,12 @@ fn lenient_experience_level<'de, D: serde::Deserializer<'de>>(
     de: D,
 ) -> Result<Option<ExperienceLevel>, D::Error> {
     Ok(serde_json::from_value(serde_json::Value::deserialize(de)?).ok())
+}
+
+/// The lenient loader of [`Settings::popup_corner`]: a known corner, else bottom right. A corner
+/// from a later build, or junk, must not cost the file around it (see [`lenient_list`]'s WHY).
+fn lenient_popup_corner<'de, D: serde::Deserializer<'de>>(de: D) -> Result<PopupCorner, D::Error> {
+    Ok(serde_json::from_value(serde_json::Value::deserialize(de)?).unwrap_or_default())
 }
 
 /// [`lenient_list`]'s scalar twin: a string, or empty for any other JSON value.
@@ -4608,6 +4844,9 @@ impl Default for Macros {
             rtty_esm_roles: None,
             psk_profiles: Vec::new(),
             active_psk_profile: String::new(),
+            cw_macro_count: default_macro_count(),
+            rtty_macro_count: default_macro_count(),
+            psk_macro_count: default_macro_count(),
         }
     }
 }
@@ -4655,6 +4894,46 @@ pub enum ExperienceLevel {
     NewToDigital,
     /// Experienced: everything on, Settings as it always was.
     Experienced,
+}
+
+/// The window corner the pop-up notifications stand in ([`Settings::popup_corner`], #445). The wire
+/// values are the UI's (`PopupCorner` in ui/src/features/popupCorner.ts): `bottom-right`, `bottom-left`,
+/// `top-right`, `top-left`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PopupCorner {
+    /// Where the pop-ups always stood.
+    #[default]
+    BottomRight,
+    BottomLeft,
+    TopRight,
+    TopLeft,
+}
+
+impl PopupCorner {
+    /// Every corner. [`lenient_string_choices`] names them, since the lenient loader never says.
+    pub const ALL: [PopupCorner; 4] = [
+        PopupCorner::BottomRight,
+        PopupCorner::BottomLeft,
+        PopupCorner::TopRight,
+        PopupCorner::TopLeft,
+    ];
+}
+
+/// The string settings read LENIENTLY (an unknown value loads as the default instead of failing),
+/// by wire name, with every value each knows. A strict choice says its values in the error an
+/// unknown one raises; a lenient one says nothing, so whatever must try each value of every setting
+/// (the save-from-afar probe in src-tauri's command_dispatch tests) asks here. A lenient string
+/// setting missing from this list is one that probe cannot change, and it says so.
+pub fn lenient_string_choices() -> Vec<(&'static str, Vec<String>)> {
+    let wire = |v: serde_json::Value| v.as_str().map(str::to_owned).unwrap_or_default();
+    vec![(
+        "popupCorner",
+        PopupCorner::ALL
+            .iter()
+            .map(|c| wire(serde_json::to_value(c).unwrap()))
+            .collect(),
+    )]
 }
 
 /// What the operator sees when Nexus switches the active radio BY ITSELF — a band or mode the
@@ -5060,6 +5339,22 @@ pub struct RadioProfile {
     /// follow-up, not dead code to remove.
     #[serde(default)]
     pub yaesu_fix_starts: std::collections::BTreeMap<String, f64>,
+    /// The FT modes' TX drive (`tx_level`) as the operator last set it, per BAND and MODE, for this
+    /// radio: `{"20m/FT8": 0.42, "20m": 0.42}`. A band+mode entry is the level last set there; a
+    /// bare band entry is the level last set on that band in ANY FT mode, the fallback for a mode
+    /// never driven there. An amplifier is rarely flat across the bands, so the drive that is
+    /// right on 20 m is wrong on 6 m, and this brings each band's back without the operator
+    /// re-trimming it. Per radio, because the amplifier is wired to a radio.
+    ///
+    /// ONE WRITER, [`crate::engine::Engine::set_tx_level`] — the operator's own slider move. The
+    /// restore never writes it, so a restored level is never taken for an operator's pick.
+    /// Applied by `Engine::settle_ft_drive`, and never while the radio is on the air.
+    ///
+    /// Read LENIENTLY ([`lenient_ft_drive`]): a level that is not a number in the slider's 0–1
+    /// range is dropped, never clamped, so a hand edit gone wrong costs that entry and can never
+    /// turn into full drive.
+    #[serde(default, deserialize_with = "lenient_ft_drive")]
+    pub ft_drive: std::collections::BTreeMap<String, f32>,
     /// Opt-in to THIS radio's native FlexRadio DAX audio (BOTH directions — see
     /// [`Settings::flex_native_audio`]). Per-radio, as above.
     #[serde(default)]
@@ -5495,6 +5790,7 @@ impl Default for RadioProfile {
             flex_native_pan: false,
             yaesu_rf_scope: false,
             yaesu_fix_starts: Default::default(),
+            ft_drive: Default::default(),
             flex_native_audio: false,
             flex_native_cat: false,
             flex_native_unbenched: false,
@@ -5530,11 +5826,16 @@ pub fn host_is_this_machine(host: &str) -> bool {
         || h.starts_with("127.")
 }
 
-/// A NET rigctl radio's Network Address, trimmed, and its port, when the address is on this
-/// computer: the rigctld the operator runs here (wfview's, or their own), which Nexus shares rather
-/// than starts. `None` for any other radio. The one rule the port bookkeeping below and the openers
-/// that share the address (in `tempo-audio`'s service) both read.
-pub fn net_rigctl_addr_here<'a>(
+/// A NET rigctl radio's Network Address, trimmed, and its port, on this computer or on another
+/// one: the rigctld-compatible server the operator points Nexus at, which Nexus talks to directly
+/// rather than through a rigctld of its own. `None` for any other radio, and for an address with
+/// no port. The openers that share the address (in `tempo-audio`'s service) read this.
+///
+/// A rigctld of Nexus's in front of a remote one is not a neutral relay: Hamlib's NET client waits
+/// out its whole timeout, holding the one lock every command takes, on an answer shape it does not
+/// expect (`\get_lock_mode` without the `RPRT 0` line Hamlib's own rigctld adds, asked before every
+/// mode write). A key queued behind that reached the radio tens of seconds late (#429).
+pub fn net_rigctl_addr<'a>(
     rig_model: u32,
     rig_conn: &str,
     rig_addr: &'a str,
@@ -5543,8 +5844,21 @@ pub fn net_rigctl_addr_here<'a>(
     if rig_model != 2 || !rig_conn_is_network(rig_conn, rig_addr) {
         return None;
     }
-    let (host, port) = split_host_port(rig_addr)?;
-    host_is_this_machine(host).then(|| (rig_addr.trim(), port))
+    let (_, port) = split_host_port(rig_addr)?;
+    Some((rig_addr.trim(), port))
+}
+
+/// [`net_rigctl_addr`], when the address is on this computer: the rigctld the operator runs here
+/// (wfview's, or their own). `None` for any other radio. The rule the port bookkeeping below reads:
+/// only an address on this computer shares a port space with Nexus's own listeners.
+pub fn net_rigctl_addr_here<'a>(
+    rig_model: u32,
+    rig_conn: &str,
+    rig_addr: &'a str,
+) -> Option<(&'a str, u16)> {
+    let (addr, port) = net_rigctl_addr(rig_model, rig_conn, rig_addr)?;
+    let (host, _) = split_host_port(addr)?;
+    host_is_this_machine(host).then_some((addr, port))
 }
 
 /// The port of `p`'s Network Address on this computer, when `p` is NET rigctl
@@ -6441,6 +6755,7 @@ impl Default for Settings {
             rtty_fsk_port: String::new(),         // "" = the CAT serial port
             rtty_baud: default_rtty_baud(),       // true 45.45, never 45
             rtty_shift_hz: default_rtty_shift_hz(), // 170 Hz — the HF standard
+            rtty_low_tone_hz: default_rtty_low_tone_hz(), // 2125 — the 2125/2295 pair
             rtty_reverse: false,
             rtty_afsk_sideband: default_rtty_afsk_sideband(), // "lsb" — the RTTY convention
             ai_cw_enabled: true,
@@ -6500,6 +6815,12 @@ impl Default for Settings {
             sdrconnect_host: default_sdrconnect_host(),
             sdrconnect_port: SDRCONNECT_DEFAULT_PORT,
             sdrconnect_follow: default_sdrconnect_follow(),
+            freedv_log: true,
+            freedv_log_port: crate::freedv::DEFAULT_LOG_PORT,
+            log_intake_lan: false,
+            log_intake_peer: String::new(),
+            freedv_heard: false,
+            freedv_heard_port: crate::freedv::DEFAULT_HEARD_PORT,
             flex_radio_ip: String::new(),
             flex_native_pan: false,
             flex_native_audio: false,
@@ -6525,8 +6846,11 @@ impl Default for Settings {
             default_radio: None,
             // A new install is told when Nexus switches radio by itself (see the field).
             radio_switch_policy: RadioSwitchPolicy::Tell,
+            station_profiles: Vec::new(),
+            active_station_profile: String::new(),
             wsjtx_udp: false,
             wsjtx_udp_addr: "127.0.0.1:2237".to_string(),
+            wsjtx_udp_accept_other_computers: false,
             write_all_txt: true,
             diag_debug_log: false,
             hrd_logging: false,
@@ -6572,6 +6896,7 @@ impl Default for Settings {
             aprs_iss_doppler: true,
             audio_in: String::new(),
             audio_out: String::new(),
+            tx_card_models: std::collections::BTreeMap::new(),
             voice_mic_device: String::new(),
             tx_level: 0.9,
             rx_gain: 1.0,
@@ -6636,6 +6961,7 @@ impl Default for Settings {
             qsy_cadence: tempo_core::qsy::DEFAULT_CADENCE,
             iss_sstv_auto_arm: false,
             sstv_rx_auto_arm: true,
+            sstv_tune_on_open: false,
             sstv_default_tx_mode: default_sstv_default_tx_mode(),
             sstv_tx_power_pct: None,
             sstv_tx_fsk_id: false,
@@ -6667,6 +6993,7 @@ impl Default for Settings {
             pota_new_activation_alert: false,
             popup_notifications: true,
             popup_min_secs: 0,
+            popup_corner: PopupCorner::BottomRight,
             alert_dxcc_bands: default_alert_scope_all(),
             alert_grid_bands: default_alert_grid_bands(),
             // Empty = every continent and every entity alerts, which is precisely the behaviour
@@ -6907,6 +7234,7 @@ impl Settings {
             // dual-representation problem the flat fields already are.
             yaesu_rf_scope: false,
             yaesu_fix_starts: Default::default(),
+            ft_drive: Default::default(),
             flex_native_audio: self.flex_native_audio,
             flex_native_cat: self.flex_native_cat,
             flex_native_unbenched: self.flex_native_unbenched,
@@ -7964,6 +8292,9 @@ impl Settings {
         if !hb_networking_saved {
             s.choose_js8_hb_networking_for_old_settings();
         }
+        // A saved RTTY low tone outside its range (a hand-edited file, or one written before the
+        // Settings box was bounded) is repaired to the standard here, so the file does not keep it.
+        s.rtty_low_tone_hz = s.rtty_low_tone();
         // Migration (2026-09-16): the default list was the ve7cc + wa9pie PAIR, and both died
         // on the same day — every default-config install lost its only SSB/phone sources at
         // once. A list that is still exactly that pair is the shipped default, not a choice,
@@ -8053,6 +8384,9 @@ impl Settings {
             p.flex_native_audio |= flat_audio;
         }
         s.sync_flat_from_active();
+        // ⛔ A station profile id that names no profile is put back on one, with that profile's
+        // call (`Settings::repair_active_station_profile`).
+        s.repair_active_station_profile();
         s
     }
 
@@ -8334,6 +8668,17 @@ impl Settings {
     pub fn rtty_afsk_usb(&self) -> bool {
         !self.rtty_backend.eq_ignore_ascii_case("fsk")
             && self.rtty_afsk_sideband.trim().eq_ignore_ascii_case("usb")
+    }
+
+    /// The saved RTTY low tone, if it is inside [`RTTY_LOW_TONE_HZ_MIN`]–[`RTTY_LOW_TONE_HZ_MAX`];
+    /// otherwise the 2125 standard. Every reader goes through here, so a junk value from any
+    /// writer (a hand-edited file, a Remote write-back) never moves RTTY to the passband's edge.
+    pub fn rtty_low_tone(&self) -> u32 {
+        if (RTTY_LOW_TONE_HZ_MIN..=RTTY_LOW_TONE_HZ_MAX).contains(&self.rtty_low_tone_hz) {
+            self.rtty_low_tone_hz
+        } else {
+            default_rtty_low_tone_hz()
+        }
     }
 
     /// The mark/space swap TX and RX both apply: the operator's Reverse, XOR the upper
@@ -8661,6 +9006,47 @@ mod tests {
             s.ports_the_operators_rigctld_holds(&[]),
             vec![4532, 4540, 4541]
         );
+    }
+
+    /// A NET rigctl Network Address is the server Nexus talks to, wherever it runs; only one on
+    /// this computer counts for the port bookkeeping. Every other radio, and an address with no
+    /// port, names none.
+    #[test]
+    fn a_net_rigctl_address_is_named_on_any_computer_and_here_only_on_this_one() {
+        let rows = [
+            (
+                2,
+                "network",
+                "127.0.0.1:4532",
+                Some(("127.0.0.1:4532", 4532)),
+                true,
+            ),
+            (
+                2,
+                "network",
+                " 192.168.1.235:4532 ",
+                Some(("192.168.1.235:4532", 4532)),
+                false,
+            ),
+            (
+                2,
+                "network",
+                "shack-pi:4533",
+                Some(("shack-pi:4533", 4533)),
+                false,
+            ),
+            (2, "network", "192.168.1.235", None, false),
+            (3073, "network", "192.168.1.235:4532", None, false),
+            (2, "serial", "192.168.1.235:4532", None, false),
+        ];
+        for (model, conn, addr, any, here) in rows {
+            assert_eq!(net_rigctl_addr(model, conn, addr), any, "{addr}");
+            assert_eq!(
+                net_rigctl_addr_here(model, conn, addr),
+                any.filter(|_| here),
+                "{addr}"
+            );
+        }
     }
 
     /// A scratch settings directory no CONCURRENT test process can reach.
@@ -9396,7 +9782,7 @@ mod tests {
 
     #[test]
     fn every_per_radio_field_is_reachable_through_the_patch() {
-        const NOT_EDITABLE: [&str; 7] = [
+        const NOT_EDITABLE: [&str; 8] = [
             "id",
             "name",
             "enabled",
@@ -9404,6 +9790,10 @@ mod tests {
             "lastDialMhz",
             "lastBand",
             "lastSideband",
+            // The FT drive memory: written by the drive slider (`Engine::set_tx_level`), never by
+            // a form. The patch applies onto the stored profile, so an Edit leaves it as it is
+            // (`a_radio_edit_keeps_the_ft_drive_memory`).
+            "ftDrive",
         ];
         let profile = serde_json::to_value(RadioProfile::default()).expect("profile serializes");
         let patch = serde_json::to_value(RadioProfilePatch {
@@ -9909,6 +10299,20 @@ mod tests {
             };
             assert!(!omni.swr_scale_is_verified(), "model {m} over OmniRig");
         }
+    }
+
+    /// A radio's Edit saves through the patch, which carries no FT drive memory: the memory the
+    /// drive slider wrote stays as it was, and the drive the form states is still applied.
+    #[test]
+    fn a_radio_edit_keeps_the_ft_drive_memory() {
+        let mut p = RadioProfile::default();
+        p.remember_ft_drive("20m", "FT8", 0.3);
+        let kept = p.ft_drive.clone();
+        let mut edit = patch_of(&p);
+        edit.tx_level = 0.7;
+        edit.apply_to(&mut p);
+        assert_eq!(p.ft_drive, kept);
+        assert_eq!(p.tx_level, 0.7, "CONTROL: the rest of the edit");
     }
 
     /// Helper for the patch test above: the patch a Save would build from a profile.
@@ -11173,6 +11577,57 @@ mod tests {
 
     /// A settings file from before the AFSK sideband loads on LSB, and a USB pick round-trips
     /// under its camelCase wire key.
+    /// The saved RTTY tone pair: a settings file from before it reads as the 2125 standard, and
+    /// a 1275 Hz pair survives a save and a load under its camelCase wire key.
+    #[test]
+    fn rtty_low_tone_defaults_to_2125_and_round_trips() {
+        let mut v = serde_json::to_value(Settings::default()).unwrap();
+        v.as_object_mut()
+            .unwrap()
+            .remove("rttyLowToneHz")
+            .expect("the wire key");
+        let old: Settings = serde_json::from_value(v).unwrap();
+        assert_eq!(old.rtty_low_tone_hz, 2125);
+        let s = Settings {
+            rtty_low_tone_hz: 1275,
+            rtty_baud: 50.0,
+            ..Settings::default()
+        };
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!((back.rtty_low_tone_hz, back.rtty_baud), (1275, 50.0));
+    }
+
+    /// The saved RTTY low tone is valid only inside 300–2700 Hz (both tones of the widest shift
+    /// stay inside the passband); anything else — a cleared box saved as 0, a hand-edited file —
+    /// reads as the 2125 standard, at the getter AND on load, so the file is repaired too.
+    #[test]
+    fn an_out_of_range_rtty_low_tone_reads_and_loads_as_2125() {
+        for (stored, want) in [
+            (0, 2125),
+            (299, 2125),
+            (2701, 2125),
+            (9000, 2125),
+            (300, 300),
+            (1275, 1275),
+            (2700, 2700),
+        ] {
+            let s = Settings {
+                rtty_low_tone_hz: stored,
+                ..Settings::default()
+            };
+            assert_eq!(s.rtty_low_tone(), want, "getter, stored {stored}");
+            let dir = scratch_dir_ready("rtty_low_tone");
+            let path = dir.join("settings.json");
+            std::fs::write(&path, serde_json::to_string(&s).unwrap()).unwrap();
+            assert_eq!(
+                Settings::load(&path).rtty_low_tone_hz,
+                want,
+                "loaded, stored {stored}"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
     #[test]
     fn rtty_afsk_sideband_defaults_to_lsb_and_round_trips() {
         let mut v = serde_json::to_value(Settings::default()).unwrap();
@@ -12865,6 +13320,25 @@ mod tests {
         );
     }
 
+    /// #451 — "Tune to the band's SSTV frequency when SSTV opens" moves the dial on entering a
+    /// screen, so it ships OFF and an upgrader's file without the key reads OFF: nobody's radio
+    /// starts moving because they updated. An operator who turns it on keeps it on.
+    #[test]
+    fn sstv_tune_on_open_is_off_unless_the_operator_turns_it_on() {
+        assert!(!Settings::default().sstv_tune_on_open, "off by default");
+        let json = serde_json::to_string(&Settings::default()).unwrap();
+        assert!(
+            json.contains("\"sstvTuneOnOpen\":false"),
+            "missing wire key sstvTuneOnOpen in {json}"
+        );
+        let old: Settings = serde_json::from_str(r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert!(!old.sstv_tune_on_open, "a file from before the key is off");
+        let on: Settings = serde_json::from_str(r#"{"sstvTuneOnOpen":true}"#).unwrap();
+        assert!(on.sstv_tune_on_open);
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&on).unwrap()).unwrap();
+        assert!(back.sstv_tune_on_open, "and it survives a save");
+    }
+
     /// The PSK section's one field, on the exact wire key the UI hand-writes —
     /// the same interior-acronym trap the SSTV test above documents
     /// (`pskRXAutoArm` would compile clean on both sides and never match).
@@ -14385,6 +14859,128 @@ mod tests {
         assert!(!declares("popupMinSecss") && !declares("popupMin"));
     }
 
+    /// #445's pop-up corner — ships bottom right (the corner as it always was), its exact wire key
+    /// and values, an upgrader's file loading bottom right through the real load path, each corner
+    /// surviving a save and a load, and a value this build does not know (a later build's corner,
+    /// junk, the wrong type) loading bottom right WITHOUT costing the rest of the file. Then the TS
+    /// mirror, read out of `types.ts` itself.
+    #[test]
+    fn lenient_string_choices_name_every_popup_corner_and_each_loads_as_itself() {
+        let choices = lenient_string_choices();
+        let (name, values) = choices
+            .iter()
+            .find(|(n, _)| *n == "popupCorner")
+            .expect("popupCorner is a lenient string setting");
+        assert_eq!(
+            values,
+            &["bottom-right", "bottom-left", "top-right", "top-left"],
+            "{name}"
+        );
+        // Each value is a real choice, not the fallback: it loads as a different corner.
+        let loaded: std::collections::BTreeSet<String> = values
+            .iter()
+            .map(|v| {
+                let s: Settings =
+                    serde_json::from_value(serde_json::json!({ "popupCorner": v })).unwrap();
+                format!("{:?}", s.popup_corner)
+            })
+            .collect();
+        assert_eq!(loaded.len(), PopupCorner::ALL.len());
+        // A variant added to PopupCorner stops this match compiling, which leads here: add it to
+        // ALL and to the values above.
+        for c in PopupCorner::ALL {
+            match c {
+                PopupCorner::BottomRight
+                | PopupCorner::BottomLeft
+                | PopupCorner::TopRight
+                | PopupCorner::TopLeft => {}
+            }
+        }
+    }
+
+    #[test]
+    fn popup_corner_ships_bottom_right_wire_values_lenient_load_and_ts_mirror() {
+        let s = Settings::default();
+        assert_eq!(
+            s.popup_corner,
+            PopupCorner::BottomRight,
+            "ships bottom right"
+        );
+        let json = serde_json::to_string(&s).unwrap();
+        assert!(
+            json.contains("\"popupCorner\":\"bottom-right\""),
+            "missing wire key in {json}"
+        );
+
+        let dir = scratch_dir("popup-corner");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        std::fs::write(&path, r#"{"mycall":"W9XYZ"}"#).unwrap();
+        assert_eq!(
+            Settings::load(&path).popup_corner,
+            PopupCorner::BottomRight,
+            "an old settings file moved the pop-ups"
+        );
+        for (corner, wire) in [
+            (PopupCorner::BottomRight, "bottom-right"),
+            (PopupCorner::BottomLeft, "bottom-left"),
+            (PopupCorner::TopRight, "top-right"),
+            (PopupCorner::TopLeft, "top-left"),
+        ] {
+            let mut moved = Settings::default();
+            moved.popup_corner = corner;
+            moved.save(&path).unwrap();
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(
+                text.contains(&format!("\"popupCorner\": \"{wire}\""))
+                    || text.contains(&format!("\"popupCorner\":\"{wire}\"")),
+                "{wire} is not the wire value in {text}"
+            );
+            assert_eq!(
+                Settings::load(&path).popup_corner,
+                corner,
+                "{wire} did not survive"
+            );
+        }
+        for junk in [
+            r#""middle""#,
+            r#""TOP-LEFT""#,
+            r#""top_left""#,
+            "3",
+            "null",
+            r#"["top-left"]"#,
+        ] {
+            std::fs::write(
+                &path,
+                format!(r#"{{"mycall":"W9XYZ","popupCorner":{junk}}}"#),
+            )
+            .unwrap();
+            let loaded = Settings::load(&path);
+            assert_eq!(loaded.popup_corner, PopupCorner::BottomRight, "{junk}");
+            assert_eq!(loaded.mycall, "W9XYZ", "{junk} cost the rest of the file");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let ts = include_str!("../../../ui/src/types.ts");
+        let head = "export interface Settings {";
+        let start = ts.find(head).expect("the UI declares Settings") + head.len();
+        let body = &ts[start..];
+        let body = &body[..body.find("\n}").expect("the interface is closed")];
+        let declares = |key: &str| {
+            body.lines().any(|l| {
+                let l = l.trim_start();
+                l.starts_with(&format!("{key}:")) || l.starts_with(&format!("{key}?:"))
+            })
+        };
+        assert!(
+            declares("popupCorner"),
+            "ui/src/types.ts Settings is missing `popupCorner`"
+        );
+        // CONTROL: the scan finds only what is declared.
+        assert!(!declares("popupCornerr") && !declares("popupCorn"));
+    }
+
     /// The tune carrier's own power level, on the exact wire key the UI hand-writes.
     ///
     /// `None` is the whole safety story: an operator who upgrades and never opens the setting
@@ -14576,6 +15172,23 @@ mod tests {
             back.split_detect_enabled,
             "a stored value survives a save and a load"
         );
+    }
+
+    /// ⛔ Other computers' WSJT-X requests stay refused until the operator says otherwise: off on a
+    /// new install and on a settings file written before the switch existed.
+    #[test]
+    fn other_computers_wsjtx_requests_are_refused_unless_turned_on() {
+        let new = Settings::default();
+        assert!(!new.wsjtx_udp_accept_other_computers);
+        let mut stored = serde_json::to_value(&new).unwrap();
+        let fields = stored.as_object_mut().unwrap();
+        assert_eq!(
+            fields.remove("wsjtxUdpAcceptOtherComputers"),
+            Some(serde_json::json!(false)),
+            "the name on the wire"
+        );
+        let old: Settings = serde_json::from_value(stored).unwrap();
+        assert!(!old.wsjtx_udp_accept_other_computers);
     }
 
     #[test]
@@ -16215,6 +16828,118 @@ mod tests {
             assert_eq!(esm_switches(&Settings::load(&path)), [want; 4]);
         }
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// THE MACRO COUNTS (8, 12 or 16 keys per keyboard dock). A file from before them — eight
+    /// keys in every set, no count — loads as 8 everywhere and saves back with its `macros` BYTE
+    /// FOR BYTE (no count is written at 8). A file at 12 or 16, with keys F9–F16 in a CW profile
+    /// and in the RTTY and PSK sets, comes back by value through a save and a load. A count that
+    /// is not 8, 12 or 16 loads as 8 and costs nothing else. Written against the JSON so it
+    /// compiles, and fails, on a build without the counts.
+    #[test]
+    fn macro_counts_round_trip_and_a_file_without_them_is_unchanged() {
+        let dir = scratch_dir("macro_counts");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let keys = |n: usize, prefix: &str| -> String {
+            (1..=n)
+                .map(|i| {
+                    format!(
+                        r#"{{"key":"F{i}","label":"{prefix}{i}","text":"{prefix} {i} {{MYCALL}}"}}"#
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        let macros_of = |s: &Settings| serde_json::to_value(&s.macros).unwrap();
+
+        // The old file: eight keys everywhere, no count.
+        let old_macros = format!(
+            r#"{{"chat":["73"],"qso":["RR73"],"band":["QRZ?"],"cw":[],"cwProfiles":[{{"name":"Mine","macros":[{cw}]}}],"activeCwProfile":0,"rttyProfiles":[{{"name":"contest","macros":[{rtty}]}}],"activeRttyProfile":"contest","pskProfiles":[{{"name":"everyday","macros":[{psk}]}}],"activePskProfile":""}}"#,
+            cw = keys(8, "CW"),
+            rtty = keys(8, "RTTY"),
+            psk = keys(8, "PSK"),
+        );
+        std::fs::write(
+            &path,
+            format!(r#"{{"mycall":"W9XYZ","macros":{old_macros}}}"#),
+        )
+        .unwrap();
+        let loaded = Settings::load(&path);
+        assert_eq!(loaded.mycall, "W9XYZ", "control: the old file loaded");
+        let v = macros_of(&loaded);
+        for field in ["cwMacroCount", "rttyMacroCount", "pskMacroCount"] {
+            assert!(v.get(field).is_none(), "an old file gained `{field}` at 8");
+        }
+        loaded.save(&path).unwrap();
+        let back = Settings::load(&path);
+        assert_eq!(
+            serde_json::to_string(&back.macros).unwrap(),
+            old_macros,
+            "an eight-key file's macros changed through a save and a load"
+        );
+
+        // 12 and 16, each mode its own count, with every key the count shows.
+        for (cw, rtty, psk) in [(12u64, 16u64, 12u64), (16, 12, 16)] {
+            let mut s = Settings::default();
+            let mut v = serde_json::to_value(&s).unwrap();
+            v["macros"] = serde_json::from_str(&format!(
+                r#"{{"cwProfiles":[{{"name":"Mine","macros":[{c}]}}],"activeCwProfile":0,"rttyProfiles":[{{"name":"everyday","macros":[{r}]}}],"pskProfiles":[{{"name":"contest","macros":[{p}]}}],"activePskProfile":"contest","cwMacroCount":{cw},"rttyMacroCount":{rtty},"pskMacroCount":{psk}}}"#,
+                c = keys(cw as usize, "CW"),
+                r = keys(rtty as usize, "RTTY"),
+                p = keys(psk as usize, "PSK"),
+            ))
+            .unwrap();
+            s = serde_json::from_value(v).unwrap();
+            s.save(&path).unwrap();
+            let back = macros_of(&Settings::load(&path));
+            assert_eq!(back["cwMacroCount"], cw, "the CW count did not round-trip");
+            assert_eq!(
+                back["rttyMacroCount"], rtty,
+                "the RTTY count did not round-trip"
+            );
+            assert_eq!(
+                back["pskMacroCount"], psk,
+                "the PSK count did not round-trip"
+            );
+            assert_eq!(
+                back,
+                macros_of(&s),
+                "the macros changed through a save and a load"
+            );
+            assert_eq!(
+                back["rttyProfiles"][0]["macros"].as_array().unwrap().len() as u64,
+                rtty,
+                "the RTTY keys past F8 were lost"
+            );
+            assert_eq!(
+                back["cwProfiles"][0]["macros"][cw as usize - 1]["key"],
+                format!("F{cw}")
+            );
+        }
+
+        // A count that is not one of the three costs only itself.
+        for bad in ["10", "0", "-1", "300", "\"16\"", "null", "[16]"] {
+            std::fs::write(
+                &path,
+                format!(
+                    r#"{{"mycall":"W9XYZ","macros":{{"rttyMacroCount":{bad},"pskMacroCount":16}}}}"#
+                ),
+            )
+            .unwrap();
+            let loaded = Settings::load(&path);
+            assert_eq!(loaded.mycall, "W9XYZ", "a bad count {bad} cost the file");
+            let v = macros_of(&loaded);
+            assert!(
+                v.get("rttyMacroCount").is_none(),
+                "a bad count {bad} did not load as 8"
+            );
+            assert_eq!(
+                v["pskMacroCount"], 16,
+                "a bad RTTY count {bad} cost the PSK one"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A CW profile, the RTTY sets and the voice keyer from before Enter Sends Message carry no
@@ -18423,6 +19148,94 @@ mod tests {
             serde_json::from_str(r#"{"id":0,"name":"FT-710","rigModel":1049}"#)
                 .expect("an older per-radio block still parses");
         assert!(profile.yaesu_fix_starts.is_empty());
+    }
+
+    /// The FT drive memory survives the settings file, and a file that holds a bad entry costs
+    /// that entry only: a level out of the slider's range, one that is not a number and one under
+    /// a blank key are dropped, and a memory that is not a map loads empty.
+    /// Read through `Settings::load`, the way a launch reads it.
+    #[test]
+    fn the_ft_drive_memory_is_validated_on_load() {
+        let dir =
+            std::env::temp_dir().join(format!("tempo_settings_ftdrive_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("settings.json");
+        let mut s = Settings::default();
+        s.mycall = "K1ABC".into();
+        s.radios = vec![RadioProfile {
+            id: 0,
+            ..RadioProfile::default()
+        }];
+        s.active_radio = 0;
+        s.radios[0].remember_ft_drive("20m", "FT8", 0.42);
+        let mut v = serde_json::to_value(&s).expect("settings serialize");
+        let drive = &mut v["radios"][0]["ftDrive"];
+        drive["6m/FT8"] = serde_json::json!(3.5);
+        drive["6m"] = serde_json::json!(-1.0);
+        drive["40m/FT8"] = serde_json::json!("loud");
+        drive[" "] = serde_json::json!(0.3);
+        drive["15m/FT4"] = serde_json::json!(null);
+        std::fs::write(&path, serde_json::to_string(&v).unwrap()).unwrap();
+
+        let back = Settings::load(&path);
+        assert_eq!(back.mycall, s.mycall, "the file loaded, not set aside");
+        let p = &back.radios[0];
+        assert_eq!(
+            p.ft_drive.get("20m/FT8"),
+            Some(&0.42),
+            "a good entry is kept"
+        );
+        assert_eq!(p.ft_drive.get("20m"), Some(&0.42), "with the band's own");
+        assert_eq!(
+            p.ft_drive.get("6m/FT8"),
+            None,
+            "above full scale: dropped, never clamped to full drive"
+        );
+        assert_eq!(p.ft_drive.get("6m"), None, "below zero: dropped");
+        assert_eq!(p.ft_drive.get("40m/FT8"), None, "not a number: dropped");
+        assert_eq!(p.ft_drive.get("15m/FT4"), None, "null: dropped");
+        assert_eq!(p.ft_drive.len(), 2, "a blank key is dropped");
+
+        // A memory that is not a map loads empty, and the radio with it.
+        v["radios"][0]["ftDrive"] = serde_json::json!([0.5]);
+        std::fs::write(&path, serde_json::to_string(&v).unwrap()).unwrap();
+        let back = Settings::load(&path);
+        assert!(back.radios[0].ft_drive.is_empty());
+        assert_eq!(back.radios.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The band+mode level wins; the band's last FT level is the fallback; a band never driven
+    /// has none. A level is clamped as it is remembered, and a stored one out of range (put there
+    /// past the loader) counts as none: never full drive.
+    #[test]
+    fn the_ft_drive_lookup_falls_back_to_the_band_only() {
+        let mut p = RadioProfile::default();
+        assert_eq!(p.ft_drive_for("20m", "FT8"), None, "nothing saved");
+        p.remember_ft_drive("20m", "FT8", 0.3);
+        p.remember_ft_drive("20m", "FT4", 0.6);
+        assert_eq!(p.ft_drive_for("20m", "FT8"), Some(0.3));
+        assert_eq!(p.ft_drive_for("20m", "FT4"), Some(0.6));
+        assert_eq!(
+            p.ft_drive_for("20m", "FST4"),
+            Some(0.6),
+            "the band's last FT drive"
+        );
+        assert_eq!(p.ft_drive_for("40m", "FT8"), None, "never another band's");
+        p.remember_ft_drive("6m", "FT8", 2.0);
+        assert_eq!(p.ft_drive_for("6m", "FT8"), Some(1.0));
+        p.ft_drive.insert("20m/FT8".into(), 9.0);
+        assert_eq!(
+            p.ft_drive_for("20m", "FT8"),
+            Some(0.6),
+            "an out-of-range entry is passed over for the band's"
+        );
+        p.ft_drive.insert("20m".into(), f32::NAN);
+        assert_eq!(
+            p.ft_drive_for("20m", "FT8"),
+            None,
+            "and with none valid, none"
+        );
     }
 }
 

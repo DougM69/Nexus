@@ -555,19 +555,84 @@ describe('the SSTV stamp has a real percentage base and the shell has real floor
     '.layout.single.psk-cockpit',
     '.layout.single.sstv-view',
   ]) {
-    it(`${shell} sets the fill-frame floor knob (--cockpit-fill-min, em units)`, () => {
-      // Region-less cockpits: the bare fill frame's inline `min-height:
-      // var(--cockpit-fill-min, 0)` is the ONLY floor channel a sheet cannot outrank —
-      // `.rtty-cockpit > .pane-frame { min-height: 10em }` shipped dead against the
-      // frame's inline `min-height: 0`. cockpit-panes.test.ts fences who may set it.
-      const v = finalDecl(shell, '--cockpit-fill-min')
-      expect(v, `${shell}: --cockpit-fill-min not set — its fill frame floors at 0`).not.toBeNull()
-      // An em length, or RTTY's short-cockpit knob over one (`var(--rtty-fill-floor, 10em)`, set in
-      // cockpit-panes.css `.rtty-cockpit`): the stock em value stands wherever nothing sets the knob, as on
-      // PSK and SSTV, which share this rule.
-      expect(/^(\d+(\.\d+)?em|var\(--rtty-fill-floor, \d+(\.\d+)?em\))$/.test(v!), `${shell} --cockpit-fill-min is \`${v}\``).toBe(true)
+    it(`${shell} no longer sets the fill-frame floor knob: its frames are in a pane region`, () => {
+      // While these cockpits were region-less, their bare fill frames' inline `min-height:
+      // var(--cockpit-fill-min, 0)` was floored from the shell. Since 2026-11-04 the frames stand in
+      // the shell's one `.cockpit-panes` region, whose bounded flow sets the yielding floor itself
+      // (cockpit-panes.css); a shell value would only be dead weight inherited past it.
+      expect(finalDecl(shell, '--cockpit-fill-min')).toBeNull()
     })
   }
+})
+
+// THE PINNED HEADER (SSTV, RTTY, PSK — 2026-11-04). On a short or zoomed window these shells' deficit
+// valve scrolls, and the header (mode, dial, band, ⊞ Panels, power, CAT) scrolled out of the window with
+// the scope, while only the TX strip and the dock stayed. CockpitHeader `pinned` adds
+// `.cockpit-header-pinned` (cockpit-panes.css, loaded after this sheet): sticky at the top of the shell's
+// scrollport. COMPUTED over both sheets in load order, against the header's real chain in each shell, so a
+// later or heavier styles.css rule that took position, top, the background or the stacking back would
+// turn this red — the dead-fix mechanism this file exists for.
+const PANES_RULES = parseRules(
+  readFileSync(fileURLToPath(new URL('./cockpit-panes.css', import.meta.url)), 'utf8').replace(/\/\*[\s\S]*?\*\//g, ''),
+)
+function winningAcross<T>(chain: Array<Set<string>>, blockValue: (body: string) => T | null): { value: T; selector: string } | null {
+  let win: { value: T; selector: string; spec: number; order: number } | null = null
+  const all = [...RULES, ...PANES_RULES.map((r) => ({ ...r, order: r.order + RULES.length + 1 }))]
+  for (const r of all) {
+    if (r.media !== null || !matchesChain(r.selector, chain)) continue
+    const v = blockValue(r.body)
+    if (v === null) continue
+    const spec = specificity(r.selector)
+    if (!win || spec > win.spec || (spec === win.spec && r.order >= win.order)) win = { value: v, selector: r.selector, spec, order: r.order }
+  }
+  return win && { value: win.value, selector: win.selector }
+}
+const declOf = (prop: string) => (body: string) => {
+  let v: string | null = null
+  for (const d of body.split(';')) {
+    const m = new RegExp(`^\\s*${prop}\\s*:\\s*([^]*?)\\s*$`).exec(d)
+    if (m) v = m[1].replace(/\s+/g, ' ')
+  }
+  return v
+}
+describe('SSTV, RTTY and PSK pin their header: it never scrolls out of the window', () => {
+  for (const shell of ['sstv-view', 'rtty-cockpit', 'psk-cockpit']) {
+    const head = [...shellChain(shell), new Set(['cockpit-header', 'cockpit-header-pinned'])]
+    it(`.${shell}: the header resolves sticky at top 0, opaque, never stacked over the strip`, () => {
+      expect(winningAcross(head, declOf('position'))?.value).toBe('sticky')
+      expect(winningAcross(head, declOf('top'))?.value).toBe('0')
+      expect(winningAcross(head, declOf('background'))?.value).toBe('var(--bg)')
+      const strip = [...shellChain(shell), new Set(['cockpit-txstrip'])]
+      // The strip wins any overlap (equal z, later sibling): a broken parking hides the dial, not Stop TX.
+      expect(Number(winningAcross(head, declOf('z-index'))?.value)).toBeLessThanOrEqual(Number(winningAcross(strip, declOf('z-index'))?.value))
+      // The strip parks UNDER it, at the height the strip measures.
+      expect(winningAcross(strip, declOf('top'))?.value).toBe('var(--cockpit-txstrip-top, 0px)')
+      // …and the dock (SSTV's TX bar or `.cockpit-txdock`) is no lower than the header either: Send and
+      // Stop win any overlap.
+      const dock = [...shellChain(shell), new Set([shell === 'sstv-view' ? 'sstv-tx-bar' : 'cockpit-txdock'])]
+      expect(Number(winningAcross(head, declOf('z-index'))?.value)).toBeLessThanOrEqual(Number(winningAcross(dock, declOf('z-index'))?.value))
+    })
+    it(`.${shell}: the band the header's shadow covers is exactly the shell's top padding`, () => {
+      // A sticky box parks inside its scroller's padding, so the shell's top padding stays open above
+      // the header and content scrolled through it in view. The shadow lifts the header's box by the
+      // padding the shell actually computes; a different padding would leave a band or cover the header.
+      const pad = winningAcross(shellChain(shell), declOf('padding'))?.value
+      expect(pad, 'the shell declares no padding').toBeTruthy()
+      const top = pad!.split(' ')[0]
+      // (One pixel more, for a shell edge on a subpixel; it lies outside the scrollport.)
+      expect(winningAcross(head, declOf('box-shadow'))?.value).toBe(`0 calc(-1 * ${top} - 1px) 0 var(--bg)`)
+      expect(winningAcross(shellChain(shell), declOf('padding-top')), 'a padding-top longhand would move the band').toBeNull()
+    })
+    it(`.${shell}: the header is still a direct shell child the valve scrolls past, and the shell still scrolls`, () => {
+      // Sticky needs a scrolling ancestor to stick in: the shell's own valve.
+      expect(winningOverflowY(shellChain(shell), null)?.value).toBe('auto')
+    })
+  }
+  it('the control: every other cockpit header is not pinned by any rule (FT, Phone, CW, JS8, JTTY keep theirs)', () => {
+    for (const shell of ['phone-cockpit', 'cw-cockpit', 'js8-cockpit', 'jtty-cockpit', 'operate-cockpit']) {
+      expect(winningAcross([...shellChain(shell), new Set(['cockpit-header'])], declOf('position')), shell).toBeNull()
+    }
+  })
 })
 
 /** Final flex-shrink a block computes (longhand + shorthand, in-block order). */
@@ -903,6 +968,124 @@ describe('the dock rows that key the rig cannot shrink (winning flex-shrink is 0
         `\`${win!.selector}\` leaves ${name} shrinkable (flex-shrink ${win!.value}) — under ` +
           'deficit the control that keys the rig squeezes before anything scrolls.',
       ).toBe(0)
+    })
+  }
+})
+
+describe('the 1080p pass keeps every transmit control its full size (2026-11-01)', () => {
+  // The compact dock and the short-window tier take spacing and read-only rows out of the chrome; they
+  // may never take size out of a control that keys or stops the rig. These compute, from styles.css,
+  // the size each such control resolves to in its dock or strip — the same values as before the pass —
+  // and that the structural sheet, where the tier lives, names none of them at all.
+  const SIZE: Array<[name: string, chain: Array<Set<string>>, prop: string, want: string]> = [
+    ['Phone’s PTT (min-height)', [...shellChain('phone-cockpit'), new Set(['cockpit-txdock']), new Set(['ph-ptt-row']), new Set(['ph-ptt'])], 'min-height', '40px'],
+    ['Phone’s PTT (min-width)', [...shellChain('phone-cockpit'), new Set(['cockpit-txdock']), new Set(['ph-ptt-row']), new Set(['ph-ptt'])], 'min-width', '220px'],
+    ['the strip’s Stop TX (padding)', [...shellChain('cw-cockpit'), new Set(['cockpit-txstrip']), new Set(['op-controls', 'cq-txctl']), new Set(['op-btn', 'stop'])], 'padding', '6px var(--space-4)'],
+    // Send keeps its hit area at the 30 px Standard row (`--touch`, 2026-11-01): wider, 104 px, where it
+    // was 76×44; the Tempo composer's keeps its 44 px height.
+    ['the keyboard docks’ Send (min-width)', [...shellChain('cw-cockpit'), new Set(['cockpit-txdock']), new Set(['cw-send']), new Set(['cw-send-btn'])], 'min-width', '104px'],
+    ['the Tempo composer’s Send (min-height)', [new Set(['app']), new Set(['composer']), new Set(['send-btn'])], 'min-height', 'max(var(--touch), 44px)'],
+    ['a macro key (padding)', [...shellChain('rtty-cockpit'), new Set(['cockpit-txdock']), new Set(['rtty-dock-keys']), new Set(['cw-macros', 'rtty-macros', 'dock-fkeys']), new Set(['rtty-macro-slot']), new Set(['cw-macro'])], 'padding', '3px 9px'],
+  ]
+  for (const [name, chain, prop, want] of SIZE) {
+    it(`${name} resolves ${prop}: ${want}`, () => {
+      const decl = (body: string): string | null => {
+        let v: string | null = null
+        for (const d of body.split(';')) {
+          const m = new RegExp(`^\\s*${prop}\\s*:\\s*(\\S[^]*?)\\s*$`).exec(d)
+          if (m) v = m[1].replace(/\s+/g, ' ')
+        }
+        return v
+      }
+      const win = winningValue(chain, decl)
+      expect(win?.value, `${name}: won by ${win?.selector}`).toBe(want)
+    })
+  }
+
+  it('the structural sheet names no transmit control: the tier there cannot reach one', () => {
+    const sheet = readFileSync(fileURLToPath(new URL('./cockpit-panes.css', import.meta.url)), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '')
+    const selectors = [...sheet.matchAll(/([^{}]+)\{/g)].map((m) => m[1].trim())
+    const TX = /\.(ph-ptt|ph-lock|op-btn|cw-macro|rtty-stop|rtty-tx-latch|cq-txctl|op-controls|cw-send|cw-type)(?![a-z0-9-])/
+    expect(selectors.filter((sel) => TX.test(sel))).toEqual([])
+    // Control: the scan reads the sheet (it finds the dock it is about).
+    expect(selectors.some((sel) => sel === '.cockpit-txdock')).toBe(true)
+  })
+})
+
+describe('every stop and send control keeps its floor when --touch drops (computed, 1080p pass)', () => {
+  // `--touch` is 30 px at Standard (44 at Comfortable, 48 at Touch) since the 1080p pass. A control that
+  // stops or starts a transmission may never get a smaller hit area than it had at 44. Two ways a control
+  // can follow the token: its own min-height reads it, or it stands in a row whose fields read it and
+  // stretches to that row's height (`.cw-send`: the keyboard docks' compose rows). Each one is listed with
+  // the floor its winning declarations resolve to at each density, evaluated here; a control that is not
+  // listed does not read the token (measured base → tip in Chrome: PTT, Stop TX, TX On, Tune, RTTY/PSK
+  // Esc Stop then in their fixed rows, the F-keys, SSTV's Stop and Send, APRS's and the FT strip's controls are unchanged).
+  const evalLen = (v: string, touch: number): number => {
+    const js = v
+      .replace(/var\(--touch\)/g, `${touch}px`)
+      .replace(/(\d+(?:\.\d+)?)px/g, '$1')
+      .replace(/\bmax\(/g, 'Math.max(')
+      .replace(/\bmin\(/g, 'Math.min(')
+    if (!/^[\d\s.+\-*/(),Mathmaxin]*$/.test(js)) throw new Error(`unmodelled length ${v}`)
+    return Function(`return (${js})`)() as number
+  }
+  const decl = (prop: string) => (body: string): string | null => {
+    let v: string | null = null
+    for (const d of body.split(';')) {
+      const m = new RegExp(`^\\s*${prop}\\s*:\\s*(\\S[^]*?)\\s*$`).exec(d)
+      if (m) v = m[1].replace(/\s+/g, ' ')
+    }
+    return v
+  }
+  const sendRow = (shell: string) => [...shellChain(shell), new Set(['cockpit-txdock']), new Set(['cw-send'])]
+  // [name, chain, property, floor at Standard (30), at Comfortable (44), at Touch (48)] — the pre-pass sizes.
+  const FLOORS: Array<[string, Array<Set<string>>, string, number, number, number]> = [
+    ['JTTY’s Esc Stop (in the send row)', [...sendRow('jtty-cockpit'), new Set(['cw-macro', 'rtty-stop', 'jtty-stop'])], 'min-height', 44, 44, 48],
+    // RTTY's and PSK's latch and Esc Stop joined their send rows (the dock's keep row, 2026-11-05).
+    ...(['rtty-cockpit', 'psk-cockpit'] as const).flatMap((shell): Array<[string, Array<Set<string>>, string, number, number, number]> => [
+      [`${shell}’s Esc Stop (in the send row)`, [...sendRow(shell), new Set(['rtty-send-stops']), new Set(['cw-macro', 'rtty-stop', 'send-row-stop'])], 'min-height', 44, 44, 48],
+      [`${shell}’s TX latch (in the send row)`, [...sendRow(shell), new Set(['rtty-send-stops']), new Set(['cw-macro', 'rtty-tx-latch', 'send-row-stop'])], 'min-height', 44, 44, 48],
+    ]),
+    // Send keeps its AREA instead (76×44 → ≥104 wide at the 30 px row; the operator's accepted trade).
+    ...(['cw-cockpit', 'rtty-cockpit', 'psk-cockpit', 'jtty-cockpit', 'js8-cockpit'] as const).map(
+      (shell): [string, Array<Set<string>>, string, number, number, number] => [
+        `${shell}’s Send (width, for its area)`, [...sendRow(shell), new Set(['cw-send-btn'])], 'min-width', 104, 104, 104,
+      ],
+    ),
+    ['the Tempo composer’s Send', [new Set(['app']), new Set(['composer']), new Set(['send-btn'])], 'min-height', 44, 44, 48],
+    ['Phone’s PTT', [...shellChain('phone-cockpit'), new Set(['cockpit-txdock']), new Set(['ph-ptt-row']), new Set(['ph-ptt'])], 'min-height', 40, 40, 40],
+  ]
+  for (const [name, chain, prop, std, comfy, touch] of FLOORS) {
+    it(`${name}: ${prop} ≥ ${std}/${comfy}/${touch} px at Standard/Comfortable/Touch`, () => {
+      const win = winningValue(chain, decl(prop))
+      expect(win, `${name}: no rule declares ${prop}`).not.toBeNull()
+      expect(evalLen(win!.value, 30), `${name} at Standard (${win!.selector}: ${win!.value})`).toBeGreaterThanOrEqual(std)
+      expect(evalLen(win!.value, 44), `${name} at Comfortable`).toBeGreaterThanOrEqual(comfy)
+      expect(evalLen(win!.value, 48), `${name} at Touch`).toBeGreaterThanOrEqual(touch)
+    })
+  }
+
+  it('the evaluator bites: the bare token would shrink a stop control (control)', () => {
+    expect(evalLen('var(--touch)', 30)).toBeLessThan(44)
+    expect(evalLen('max(var(--touch), 44px)', 30)).toBe(44)
+  })
+})
+
+describe('a shell keeps what it scrolls to clear of what is parked', () => {
+  // Top: the TX strip. Bottom: a folded dock's keep row, or Tab stops on a macro key behind it and Enter sends a key the
+  // operator cannot see (RTTY at 900×600 at 175 %, measured). Computed for every shell that folds.
+  const decl = (prop: string) => (body: string): string | null => {
+    let v: string | null = null
+    for (const d of body.split(';')) {
+      const m = new RegExp(`^\\s*${prop}\\s*:\\s*(\\S[^]*?)\\s*$`).exec(d)
+      if (m) v = m[1].replace(/\s+/g, ' ')
+    }
+    return v
+  }
+  for (const shell of ['cw-cockpit', 'phone-cockpit', 'rtty-cockpit', 'psk-cockpit', 'js8-cockpit', 'jtty-cockpit']) {
+    it(`${shell}: both edges read what the strip writes`, () => {
+      expect(winningValue(shellChain(shell), decl('scroll-padding-top'))?.value).toBe('var(--cockpit-txstrip-h, 0px)')
+      expect(winningValue(shellChain(shell), decl('scroll-padding-bottom'))?.value, 'a folded dock’s keep row can hide what is focused').toBe('var(--cockpit-txdock-keep-h, 0px)')
     })
   }
 })
@@ -1450,4 +1633,132 @@ describe("the scope Splitter's declared range is the range the sheet HONOURS", (
       })
     }
   }
+})
+
+// THE REGION'S COLUMN DIVIDERS NEVER PAINT OVER A TX SURFACE. A column divider
+// (components/panes/RegionColumnSeams: `.pane-splitter.cockpit-colseam`) is the full height of the
+// pane region. While the shell's deficit valve scrolls (CW at 1920×1080 pinned at 150 %), the sticky
+// dock parks over the bottom of the region and the sticky TX strip over its top, and whichever stacks
+// higher takes the click where they cross: with the divider at `.pane-splitter`'s level (styles.css)
+// above the dock's, F7's centre landed on the divider (measured in Chrome). Computed across BOTH
+// sheets, styles.css then cockpit-panes.css (main.tsx's import order), for every shell with a region
+// and on Phone's two stage states. The dock and strip must stack STRICTLY higher than every class set a
+// column divider renders with: at a tie, a strip (before the region in the DOM) would lose.
+describe('the pane region’s column dividers stack under the dock and the TX strip', () => {
+  const both = parseRules(
+    css + '\n' + readFileSync(fileURLToPath(new URL('./cockpit-panes.css', import.meta.url)), 'utf8').replace(/\/\*[\s\S]*?\*\//g, ''),
+  )
+  const zOf = (chain: Array<Set<string>>): { value: number; selector: string } | null => {
+    let win: { value: number; selector: string; spec: number; order: number } | null = null
+    for (const r of both) {
+      if (r.media !== null || !matchesChain(r.selector, chain)) continue
+      let v: number | null = null
+      for (const d of r.body.split(';')) {
+        const m = /^\s*z-index\s*:\s*(-?\d+)\s*$/.exec(d)
+        if (m) v = Number(m[1])
+      }
+      if (v === null) continue
+      const spec = specificity(r.selector)
+      if (!win || spec > win.spec || (spec === win.spec && r.order >= win.order)) win = { value: v, selector: r.selector, spec, order: r.order }
+    }
+    return win && { value: win.value, selector: win.selector }
+  }
+  // Every class set PaneSeam can render a column divider with (its three branches), at both places.
+  const SEAMS = ['2', '3'].flatMap((n) =>
+    [[], ['vertical-inline'], ['col-seam', 'seam']].map((extra) => new Set(['pane-splitter', 'cockpit-colseam', `cockpit-colseam-${n}`, ...extra])),
+  )
+  const HOSTS: Array<[string, Array<Set<string>>]> = [
+    ['CW', shellChain('cw-cockpit')],
+    ['JS8', shellChain('js8-cockpit')],
+    ['JTTY', shellChain('jtty-cockpit')],
+    ...PHONE_STAGES.map(([state, chain]): [string, Array<Set<string>>] => [`Phone (${state})`, chain]),
+  ]
+  for (const [name, host] of HOSTS) {
+    it(`${name}: the dock and the TX strip stack above every column divider`, () => {
+      const shell = host.slice(0, 3)
+      for (const surface of ['cockpit-txdock', 'cockpit-txstrip']) {
+        const tx = zOf([...(surface === 'cockpit-txdock' ? shell : host), new Set([surface])])
+        expect(tx, `.${surface}: no z-index — it stacks under any positioned divider`).not.toBeNull()
+        for (const seam of SEAMS) {
+          const z = zOf([...host, new Set(['cockpit-panes']), seam])
+          if (z === null) continue
+          expect(tx!.value, `.${surface} (${tx!.selector}: ${tx!.value}) vs the divider .${[...seam].join('.')} (${z.selector}: ${z.value})`).toBeGreaterThan(z.value)
+        }
+      }
+    })
+  }
+})
+
+describe("CW's Both view: the radio's scope and the audio view stacked inside the strip (2026-11-04)", () => {
+  // `.scope-stack` (cockpit-panes.css) holds two FILL CockpitPaneFrames inside `.ph-scope-panel`. The
+  // strip's height must stay the divider's: the stack is the strip's grower in place of the one
+  // `.ph-scope`, with basis 0 and no floor, and each frame's body is the scroller its scope's floor
+  // sits in. Computed across both sheets, ordered as main.tsx imports them, for the reason the RF
+  // pane test above gives.
+  const panes = parseRules(
+    readFileSync(fileURLToPath(new URL('./cockpit-panes.css', import.meta.url)), 'utf8').replace(/\/\*[\s\S]*?\*\//g, ''),
+  ).map((r) => ({ ...r, order: r.order + 1_000_000 }))
+  const winner = <T,>(chain: Array<Set<string>>, blockValue: (body: string) => T | null) => {
+    let win: { value: T; selector: string; spec: number; order: number } | null = null
+    for (const r of [...RULES, ...panes]) {
+      if (r.media !== null || !matchesChain(r.selector, chain)) continue
+      const v = blockValue(r.body)
+      if (v === null) continue
+      const spec = specificity(r.selector)
+      if (!win || spec > win.spec || (spec === win.spec && r.order >= win.order)) {
+        win = { value: v, selector: r.selector, spec, order: r.order }
+      }
+    }
+    return win
+  }
+  const blockBasis = (body: string): string | null => {
+    let v: string | null = null
+    for (const decl of body.split(';')) {
+      let m = /^\s*flex-basis\s*:\s*(\S+)\s*$/.exec(decl)
+      if (m) {
+        v = m[1]
+        continue
+      }
+      m = /^\s*flex\s*:\s*\S+\s+\S+\s+(\S+)\s*$/.exec(decl)
+      if (m) v = m[1]
+    }
+    return v
+  }
+  const strip = [...shellChain('cw-cockpit'), new Set(['ph-scope-panel'])]
+  const stack = [...strip, new Set(['scope-stack'])]
+  const body = [...stack, new Set(['pane-frame']), new Set(['pane-body'])]
+
+  it('the stack is a column that grows into the strip from a zero basis, with no floor of its own', () => {
+    expect(winner(stack, blockFlexDirection)?.value).toBe('column')
+    expect(winner(stack, blockGrow)?.value).toBe(1)
+    expect(['0', '0px', '0%']).toContain(winner(stack, blockBasis)?.value)
+    const floor = winner(stack, blockLonghand('min-height'))
+    expect(floor?.value, `the stack's floor comes from \`${floor?.selector}\``).toBe('0')
+  })
+
+  it('the strip itself still takes its height from the divider (grow 0), stack or not', () => {
+    expect(winner(strip, blockGrow)?.value).toBe(0)
+  })
+
+  it("each frame's body in the stack scrolls, so the scope's readable floor never pushes the strip", () => {
+    const scrolls = winner(body, (b) => blockOverflowY(b))
+    expect(scrolls?.value, `overflow-y from \`${scrolls?.selector}\``).toMatch(/^(auto|scroll)$/)
+    // The floor is there, and it is the one under that scroller.
+    expect(winner([...body, new Set(['rf-scope'])], blockLonghand('min-height'))?.value).not.toBeNull()
+  })
+
+  it('on a short window the halves stand side by side, and may shrink below their toolbars', () => {
+    const beside = [...strip, new Set(['scope-stack', 'scope-stack--beside'])]
+    const dir = winner(beside, blockFlexDirection)
+    expect(dir?.value, `direction from \`${dir?.selector}\``).toBe('row')
+    expect(winner(beside, blockLonghand('min-width'))?.value).toBe('0')
+    // It is still the strip's grower from a zero basis with no floor.
+    expect(winner(beside, blockGrow)?.value).toBe(1)
+    expect(winner(beside, blockLonghand('min-height'))?.value).toBe('0')
+  })
+
+  it('control: without the stack the strip holds the one scope as before (no stack rule reaches it)', () => {
+    expect(winner([...strip, new Set(['ph-scope'])], blockGrow)?.value).toBe(1)
+    expect(winner([...strip, new Set(['ph-scope'])], blockLonghand('min-height'))?.value).toBe('0')
+  })
 })

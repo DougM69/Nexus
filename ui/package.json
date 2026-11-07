@@ -1,7 +1,7 @@
 {
   "name": "tempo-ui",
   "private": true,
-  "version": "1.22.0",
+  "version": "1.23.0",
   "type": "module",
   "description": "Nexus web UI — unified ham digital-ops nerve center",
   "author": "KD9TAW <kd9taw@protonmail.com>",
@@ -49,7 +49,7 @@
     "jsdom": "^29.1.1",
     "typescript": "^5.6.3",
     "us-atlas": "^3.0.1",
-    "vite": "^5.4.11",
+    "vite": "^6.4.5",
     "vitest": "^4.1.8"
   }
 }

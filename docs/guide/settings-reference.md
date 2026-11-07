@@ -617,9 +617,10 @@ target to copy.*
 - **Live input spectrum** — what the selected input hears, live. "Band noise
   should show as a moving floor. Confirms the RIGHT device before you leave
   Settings." Flat means no audio on that input.
-- **Tx Power** — the audio **drive** into the rig, the same control as the
-  cockpit **Pwr** slider (they always match). "Trim down until your rig's ALC is
-  just zero. This is *not* the rig's RF watts — set those on the radio." On a Yaesu
+- **Drive** — the audio **drive** into the rig, the same control as the
+  cockpit **Drive** slider (they always match). "Trim down until your rig's ALC is
+  just zero. This is *not* the rig's RF power — set that on the radio, or with the
+  **RF power** slider on the Phone, RTTY, PSK and SSTV screens." On a Yaesu
   that turns its power down with the ALC, such as the FT-991A, the ALC reads above
   zero whenever the power is below full, so set the drive at full power.
 - **RX Level** — a live dB meter like WSJT-X. "Aim for around 30 dB. Anything
@@ -628,7 +629,7 @@ target to copy.*
   meter responds as you release the slider. Leave at ×1.0 unless the meter reads
   low (under ~15 dB) — FT8 decodes on a small signal, so you rarely need much."
 
-While you **Edit** a radio that is not the one in use, Tx Power and RX Gain are
+While you **Edit** a radio that is not the one in use, Drive and RX Gain are
 that radio's own levels: moving them changes nothing on the radio in use,
 **Save** stores them on the radio you are editing, and it uses them once it
 becomes the active radio.
@@ -758,7 +759,7 @@ built not to have.
 
 **Where the three controls are.** Not here. They are a compact strip in every
 cockpit header once an amplifier is configured — Standby/Operate, band ◀ ▶ and
-power out — described under
+power out — and a big Operate/Standby button in the Amplifier box, both described under
 [Conditions ▸ The Amplifier pane](connect.md#the-amplifier-pane). The only control
 on *this* page that moves the amplifier is **Follow the radio's band** below,
 and it is the only one that acts without being asked.
@@ -925,6 +926,33 @@ full power on every mode.*
     refused it, and **Disconnect**.
 
   See [Share by TCI](../rigs/tci-server.md).
+- **Accept contacts other programs log**: on by default. Other programs hand the
+  contacts they log to Nexus on the **Contact port** (2239 unless you change it),
+  and each lands in your log: FreeDV (its QSO Logging), WSJT-X, JTDX or MSHV (their
+  secondary UDP server), JTAlert or GridTracker forwards, N1MM (its contact
+  broadcast) and anything that sends ADIF over UDP. Nexus reads WSJT-X's QSO Logged
+  and Logged ADIF messages from any program, raw ADIF (one or a few records, with or
+  without a header) and N1MM's `<contactinfo>`; N1MM's edits and deletes
+  (`<contactreplace>`, `<contactdelete>`) are not read yet, so a contact changed in
+  N1MM stays as it was first logged. A contact is taken only under your own station
+  call (one under another call is refused, and the reason shows here), is checked
+  against the contacts you logged in Nexus in the last five minutes so it is not
+  written twice, takes your running POTA or SOTA activation when it names no park
+  of its own, and goes to QRZ, Club Log, eQSL and your other services like your own
+  contacts (held while contest mode is on). It is not sent on to WSJT-X UDP, HRD,
+  N1MM or DXKeeper, so nothing comes back in. The line here says the last contact
+  and the program it came from; each one also shows a short "Logged K1ABC from
+  WSJT-X" message, and the contact's card says **Logged via** that program. A port
+  Nexus itself sends to (its WSJT-X UDP, HRD or N1MM address) is refused, with the
+  reason. Receive only: nothing sent here can key or tune the radio.
+  - **Accept from devices on my network**: off by default. On, the port also takes
+    contacts from private network addresses (a home network's 192.168.x.x, 10.x.x.x
+    and the like), never from the internet; Windows may ask once whether Nexus may
+    use the network. Anything on your network that can send to the port can log contacts, and they go on to your logging services under your call: the allowed address narrows who may send, but it is not a password, so turn this on only on a network you trust. **S.A.T. satellite tracker:** on the S.A.T., set **QSO LOG TYPE** to **Log4OM** or **HRD**, **QSO LOG IP** to this computer's address, and the port to **2239**; in Nexus, turn on **Accept from devices on my network**.
+    *(The fields the S.A.T. sends have not yet been checked against a real capture.)*
+  - **Only from this address**: optional, once the network is let in. The one
+    network address allowed to send contacts (the S.A.T.'s, say); empty takes any
+    device on your network. This computer is always allowed.
 
 ---
 
@@ -1219,8 +1247,8 @@ All Decoder settings drive the *native* decoder. On a WSJT-X UDP source
   contact as its power (ADIF TX_PWR), and unlocks the Journey miles-per-watt &
   QRP feats." It also feeds the P.533 link budget. Leave blank if unknown, and
   contacts are logged with no power. This is what you actually run, for the
-  record — it commands nothing; the rig's power lives on the cockpit **Pwr**
-  slider.
+  record — it commands nothing; the rig's power lives on the radio, or on the **RF power**
+  slider of the Phone, RTTY, PSK and SSTV screens.
 
 Units used to be the last field in this row; it is now on the Station tab under
 [Operator & Radio](#operator--radio).
@@ -1365,11 +1393,20 @@ Comma-separated chip lists for the quick text you fire from each surface:
 
 **Signal**
 
-- **Baud rate** — 45.45 (the HF standard) or 75. Drives the TX bit clock and the
-  RX demodulator — true 45.45, never rounded to 45.
+- **Baud rate** — 45.45 (the HF standard), 50 (used in parts of Europe) or 75.
+  Drives the TX bit clock and the RX demodulator — true 45.45, never rounded to 45.
 - **Shift (Hz)** — 170 (the HF standard), 425 or 850. The TX tone pair and the RX
   demodulator both.
-- **Reverse (swap mark/space)** — swaps mark and space on TX and in the RX
+- **Low tone (Hz)** — where the decoder and the AFSK transmitter sit until you
+  click the waterfall: this tone and this plus the shift. 2125 gives the standard
+  2125/2295; 1275 gives 1275/1445. A waterfall click still moves both for the
+  session; changing this setting moves them back onto it. It is the *low* tone
+  rather than "mark" because which of the two is mark depends on the sideband and
+  Reverse. True FSK keys the rig's own tones, but the decoder still listens here,
+  so set it to the tones your rig's RTTY mode puts out.
+  It takes 300 to 2700 Hz, which keeps both tones inside the passband at any
+  shift; a cleared or out-of-range entry is not taken, and the box keeps the last
+  tone you gave it.- **Reverse (swap mark/space)** — swaps mark and space on TX and in the RX
   decoder, to work a station sending upside down. Not for running USB: pick the
   AFSK sideband instead, which keeps the sense right on its own.
 
@@ -1401,7 +1438,7 @@ PSK31 receive needs no setup: open the PSK screen, tune a watering hole
 prints. The click nets the *decoder* — it never moves the rig — and a
 slew-limited AFC (never more than ±25 Hz) rides small drift for you.
 
-PSK31 and QPSK31 both **transmit as well as receive** in this build. Nothing about
+PSK31, QPSK31 and PSK63 all **transmit as well as receive** in this build. Nothing about
 sending lives on this tab, which is why there is only one control here: you type and send
 from the [PSK cockpit](psk.md), and its dock carries the macros, the continuous-TX latch
 and its own Stop. An over is capped at 500 characters — about two to three
@@ -1703,10 +1740,10 @@ it well below their SSB drive.*
   there for one picture. **Automatic** follows the band: HF gets Scottie 1 (the
   NA calling-frequency convention — Martin 1 is the EU one), 2 m gets PD-120,
   which is what ARISS transmits. Pick one of the 15 modes to always start there.
-- **Transmit power** — the drive the SSTV screen starts on, and the level an
+- **RF power** — the RF power the SSTV screen starts on, and the power an
   image is sent at. Leave it blank and Nexus never touches your power. SSTV is up
   to 290 seconds of continuous key-down at full duty, so most operators run it
-  well below their SSB drive. Your Phone power cap still applies on top of this.
+  well below their SSB power. Your Phone power cap still applies on top of this.
 
 Your callsign is burned into the top-left of every picture you transmit and there
 is no switch for it: an SSTV over is one long carrier of picture-only audio, so
@@ -2054,6 +2091,17 @@ the decode-log switches continue to the right.*
 
 - **WSJT-X UDP API** + **UDP Address** — "for JTAlert / GridTracker / loggers"
   (default `127.0.0.1:2237`).
+- **Accept requests from other computers** — off by default. Off, only a program
+  sending from this computer's `127.0.0.1` can answer a station (a double-click in
+  its decode list), send or fill in free text, or change your grid; any other can
+  still stop TX. That includes a program on this computer reached through a multicast
+  address. To keep one without this switch, list one `127.0.0.1` address per program,
+  with commas (`127.0.0.1:2237, 127.0.0.1:2238`). On, anyone who can reach this
+  computer over the network can turn TX on and send under your call, because a UDP
+  sender's address can be faked. Stop TX and a tripped watchdog still refuse them, but
+  each accepted answer restarts the watchdog's clock, as in WSJT-X, so repeated answers
+  can keep it from tripping. Set at the station only: a save from a remote computer, a
+  backup or a profile never changes it.
 - **Ham Radio Deluxe logging** + **HRD UDP Address** — push each QSO to HRD
   Logbook over its QSO-Forwarding UDP port (default `127.0.0.1:2333`). HRD must
   be running, and don't also run JTAlert/QSO Relay into HRD or you'll double-log.

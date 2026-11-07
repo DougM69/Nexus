@@ -97,7 +97,10 @@ const STYLES_RULES = parseStylesRules(STYLES)
  *  attribute (`[data-cols=…]` or `[data-flow=…]`). Anything else — a descendant, a
  *  combinator, a second class, a tag, an id, a pseudo — is a specificity gradient, i.e.
  *  a future cascade war. */
-const FLAT = /^\.[a-z][a-z0-9-]*(\[data-(cols='[123]'|flow='(stack|fill)')\])?$/
+// `[data-pin='off']`: the pinned header's one state, written by the TX strip (CockpitTxStrip decidePin);
+// `[data-menu='open']`: the pinned header while a menu it opens is open (CockpitHeader).
+// `[data-fold='on']`: a TX dock that does not fit whole, and its keep row (CockpitTxStrip decideFold).
+const FLAT = /^\.[a-z][a-z0-9-]*(\[data-(cols='[123]'|flow='(stack|fill)'|pin='off'|menu='open'|fold='on')\])?$/
 
 /** (classes+attributes, ids) — flat rules are all (0,1,0) or (0,2,0). */
 function specificity(sel: string): number {
@@ -245,7 +248,18 @@ describe('the fence: styles.css never names a structural class', () => {
   // size, from the sheet that has lost every one of these fights before.
   // The RF scope pane's modifier on FT's waterfall strip (2026-10-04) too: the strip's direction is
   // structure, and the styles.css `.panel` it overrides is exactly the kind of rule that wins a tie.
-  for (const cls of ['cockpit-panes', 'cockpit-col', 'cockpit-txdock', 'cockpit-txstrip', 'remote-observer-strip', 'cockpit-pane-acts', 'cockpit-recall', 'cockpit-recall-kept', 'remote-cockpit-lower', 'remote-observer-dock', 'cockpit-colseam', 'cockpit-colseam-2', 'cockpit-colseam-3', 'dash-rail', 'dash-rail-seam', 'dash-rail-head', 'dash-rail-acts', 'dash-rail-col', 'cockpit-flat', 'cockpit-leftrow', 'cockpit-stage', 'cockpit-left', 'cockpit-left-col', 'cockpit-left-seam', 'cockpit-rfbeside', 'op-rail-floor']) {
+  for (const cls of ['cockpit-panes', 'cockpit-col', 'cockpit-txdock', 'cockpit-txstrip', 'remote-observer-strip', 'cockpit-pane-acts', 'cockpit-recall', 'cockpit-recall-kept', 'remote-cockpit-lower', 'remote-observer-dock', 'cockpit-colseam', 'cockpit-colseam-2', 'cockpit-colseam-3', 'dash-rail', 'dash-rail-seam', 'dash-rail-head', 'dash-rail-acts', 'dash-rail-col', 'cockpit-flat', 'cockpit-leftrow', 'cockpit-stage', 'cockpit-left', 'cockpit-left-col', 'cockpit-left-seam', 'cockpit-rfbeside', 'op-rail-floor', 'macro-bank', 'macro-bank-shared-12', 'macro-bank-shared-16', 'macro-quad', 'freedv-pane', 'freedv-heard',
+    // The 1080p pass (2026-11-01): the compact dock's meters cell and in-row status, the keyboard docks'
+    // key floor, the folded top bar and now-bar, the header's ⋯ and the shorter CW speed slider. Each is a flat class a component adds; a styles.css rule naming
+    // one could undo the fold or the tier from the sheet that has lost these fights before.
+    'cockpit-txstrip-meters', 'dock-status-inrow', 'dock-fkeys', 'tier-menu-folded', 'topbar-now', 'now-bar-inbar',
+    'ch-overflow', 'ch-overflow-panel', 'ch-overflow-open', 'cw-wpm-compact',
+    // The My station picker in the top bar (2026-11-03): it stands over the callsign, out of the bar's
+    // line; a styles.css margin or width on it would put it back in the line and wrap the bar.
+    'mycall-picker', 'station-profile-picker',
+    // The TX dock's keep row (2026-11-05): parked alone while the dock is folded. A styles.css position, offset or
+    // background on it would park it, or unpark it, from the sheet that cannot see the fold.
+    'cockpit-txdock-keep']) {
     it(`styles.css declares no .${cls} rule`, () => {
       const hits = STYLES_RULES
         .map((r) => r.selector)
@@ -454,6 +468,25 @@ describe("FT'S STOCK RAIL WITH THE RECENT CONTACTS PANE: a scroller whose feeds 
     expect(classWinner('op-rail-floor', blockVar('--cockpit-fill-min'))?.value).toBe(
       classWinner('op-stack', blockVar('--cockpit-fill-min'))?.value,
     )
+  })
+})
+
+describe("PHONE'S FREEDV PANE: its heard list is the pane's one scroller, as Needed's grid is", () => {
+  // The pane sits in the feeds' wrapper (`.np-pane`, floored only in the stacking flow). Up to 50
+  // heard calls must scroll under the status lines rather than stand at full height above the log
+  // form, so each level is a column flex with a ZERO basis (a percentage or auto basis resolves to
+  // content height against an indefinite box) and the list is the scroller.
+  it('the pane is a column flex that takes the wrapper with a zero basis, and may shrink to it', () => {
+    expect(classWinner('freedv-pane', blockDecl('display'))?.value).toBe('flex')
+    expect(classWinner('freedv-pane', blockDecl('flex-direction'))?.value).toBe('column')
+    expect(classWinner('freedv-pane', blockDecl('flex'))?.value).toBe('1 1 0')
+    expect(classWinner('freedv-pane', blockDecl('min-height'))?.value).toBe('0')
+  })
+  it('the heard list scrolls inside itself, with a zero basis and no floor', () => {
+    const y = classWinner('freedv-heard', blockOverflowY)
+    expect(y && SCROLLS(y.value), `the heard list does not scroll: ${JSON.stringify(y)}`).toBe(true)
+    expect(classWinner('freedv-heard', blockDecl('flex'))?.value).toBe('1 1 0')
+    expect(classWinner('freedv-heard', blockDecl('min-height'))?.value).toBe('0')
   })
 })
 
@@ -806,7 +839,8 @@ describe('panes are sized by the grid, never by themselves', () => {
       for (const m of r.body.matchAll(/min-height\s*:\s*([^;]+)/g)) {
         const v = m[1].trim()
         if (v === '0') continue
-        if (r.selector === '.cockpit-panes' && /^\d+(\.\d+)?em$/.test(v)) continue
+        // An em floor, or the one knob over an em fallback (`--cockpit-region-floor`, fenced below).
+        if (r.selector === '.cockpit-panes' && /^(\d+(\.\d+)?em|var\(--cockpit-region-floor, \d+(\.\d+)?em\))$/.test(v)) continue
         // The hosted FT region has the same shell-valve contract. Its smaller
         // viewport-capped floor is paired with computed overflow guards in
         // cockpit-shells.test.ts and real compiled-browser reachability tests.
@@ -832,7 +866,20 @@ describe('panes are sized by the grid, never by themselves', () => {
       r!.body.replace(/\s+/g, ' '),
       'the region must floor itself (em units — px are zoom-hostile) so vertical deficit ' +
         'overflows the shell and its valve scrolls.',
-    ).toMatch(/min-height: \d+(\.\d+)?em/)
+    ).toMatch(/min-height: (var\(--cockpit-region-floor, )?\d+(\.\d+)?em/)
+  })
+
+  it('the region-floor knob is set by RTTY alone, from the frames’ own yielding floors', () => {
+    // `.cockpit-panes { min-height: var(--cockpit-region-floor, 18em) }`. RTTY's transcript and log strip
+    // stood on a yielding floor of their own before they moved into a region (`--rtty-fill-floor`, 6em to
+    // 10em with the shell's height); the knob makes the region stand on exactly that, so the shell's valve
+    // fires no sooner than it did (`scripts/browser-probe --desktop rttyfit`). Anywhere else a lower floor
+    // is the crush the base floor exists to stop, and a higher one is more shell scroll. Both sheets.
+    const sets = [...RULES, ...STYLES_RULES].filter((r) => /--cockpit-region-floor\s*:/.test(r.body))
+    expect(sets.map((r) => r.selector)).toEqual(['.rtty-cockpit'])
+    expect(/--cockpit-region-floor\s*:\s*([^;]+)/.exec(sets[0].body)![1].trim()).toBe('calc(2 * var(--rtty-fill-floor) + var(--space-3))')
+    // The floor it is built from still yields and still floors at a readable 6em.
+    expect(/--rtty-fill-floor\s*:\s*([^;]+)/.exec(sets[0].body)![1].trim()).toBe('max(6em, min(10em, calc((100% - 30em) / 2)))')
   })
 
   it('the log column cap cannot out-pay the feed track (§11.6 maximize-tracks)', () => {
@@ -932,11 +979,61 @@ describe('panes are sized by the grid, never by themselves', () => {
     }
     expect(decl('flex'), 'a grower or a shrink victim').toBe('0 0 auto')
     expect(decl('position'), 'not sticky: at a large pin it scrolls out of the window').toBe('sticky')
-    expect(decl('top'), 'scrolled down, it would leave through the top').toBe('0')
+    // Under a pinned header (SSTV, RTTY, PSK) the strip parks at the header's height, which it measures
+    // (CockpitTxStrip.pinnedHeader.test.tsx); everywhere else that is 0.
+    expect(decl('top'), 'scrolled down, it would leave through the top, or park over a pinned header').toBe('var(--cockpit-txstrip-top, 0px)')
     expect(decl('bottom'), 'parked at the bottom, it must clear the sticky dock').toBe('var(--cockpit-txstrip-bottom, 0px)')
     // A sticky box over scrolled content must be opaque and stack above the panes it covers.
     expect(decl('background')).toBe('var(--panel)')
     expect(Number(decl('z-index'))).toBeGreaterThanOrEqual(1)
+  })
+
+  // THE PINNED HEADER (SSTV, RTTY, PSK). Sticky at the top of the shell's scrollport so the dial, the
+  // band, ⊞ Panels, power and CAT stay in the window when the shell's valve scrolls. The fence makes
+  // this one rule its whole cascade (styles.css may not name the class); the shells' side is computed
+  // in cockpit-shells.test.ts.
+  it('the pinned header is sticky at the top, opaque, over the dividers, and NEVER over the strip or the dock', () => {
+    const r = RULES.filter((x) => x.selector === '.cockpit-header-pinned')
+    expect(r.length, 'exactly one .cockpit-header-pinned rule').toBe(1)
+    const decl = (prop: string) => {
+      let v: string | null = null
+      for (const d of r[0].body.split(';')) {
+        const m = new RegExp(`^\\s*${prop}\\s*:\\s*([^]*?)\\s*$`).exec(d)
+        if (m) v = m[1].replace(/\s+/g, ' ')
+      }
+      return v
+    }
+    expect(decl('position')).toBe('sticky')
+    expect(decl('top')).toBe('0')
+    // Content scrolls under it: the page colour, which both themes define (styles.css theme blocks).
+    expect(decl('background')).toBe('var(--bg)')
+    // …and the shell's top padding above it, which a sticky box leaves open, is covered in that colour.
+    expect(decl('box-shadow')).toBe('0 calc(-1 * var(--space-4) - 1px) 0 var(--bg)')
+    const z = (rules: Rule[], selector: string) => Number(/(?:^|;)\s*z-index\s*:\s*(-?\d+)/.exec(rules.find((x) => x.selector === selector)!.body)![1])
+    // In any overlap the stop surfaces win: the header is no higher than the strip or the dock, and
+    // it is their EARLIER sibling (the structure tests hold it first), so at equal z it paints under.
+    expect(Number(decl('z-index'))).toBeLessThanOrEqual(z(RULES, '.cockpit-txstrip'))
+    expect(Number(decl('z-index'))).toBeLessThanOrEqual(z(RULES, '.cockpit-txdock'))
+    expect(Number(decl('z-index'))).toBeGreaterThan(z(STYLES_RULES, '.pane-splitter'))
+    // …and where the three would not fit, the strip turns the pin off: static, nothing parked.
+    const off = RULES.filter((x) => x.selector === ".cockpit-header-pinned[data-pin='off']")
+    expect(off.length, "no .cockpit-header-pinned[data-pin='off'] rule").toBe(1)
+    expect(/(?:^|;)\s*position\s*:\s*static\s*(?:;|$)/.test(off[0].body), 'the unpinned header still sticks').toBe(true)
+    // A flex item's z-index stacks even when it is static: unpinned, the header must drop it.
+    expect(/(?:^|;)\s*z-index\s*:\s*auto\s*(?:;|$)/.test(off[0].body), 'a static header at z 4 still paints over a dock').toBe(true)
+    // It comes AFTER the pinned rule (same specificity, so source order decides).
+    expect(RULES.indexOf(off[0])).toBeGreaterThan(RULES.indexOf(r[0]))
+    // THE MENU LIFT: one step over the strip and the dock while a menu the header opens is open, so the
+    // menu is never under them; and BEFORE the unpinned rule, so an unpinned header is never lifted.
+    const lift = RULES.filter((x) => x.selector === ".cockpit-header-pinned[data-menu='open']")
+    expect(lift.length, "no .cockpit-header-pinned[data-menu='open'] rule").toBe(1)
+    const liftZ = Number(/(?:^|;)\s*z-index\s*:\s*(-?\d+)/.exec(lift[0].body)![1])
+    expect(liftZ).toBeGreaterThan(z(RULES, '.cockpit-txstrip'))
+    expect(liftZ).toBeGreaterThan(z(RULES, '.cockpit-txdock'))
+    expect(RULES.indexOf(lift[0]), 'the lift would outrank the unpinned rule').toBeLessThan(RULES.indexOf(off[0]))
+    expect(RULES.indexOf(lift[0])).toBeGreaterThan(RULES.indexOf(r[0]))
+    // Not a size: the header stays exactly as tall as what it holds (cockpit-header-crush.test.tsx).
+    for (const p of ['height', 'min-height', 'max-height', 'flex', 'overflow', 'overflow-y']) expect(decl(p), p).toBeNull()
   })
 
   // THE MACRO EDITOR stands on the dock's top edge, over the pane region, so it paints at the
@@ -953,6 +1050,102 @@ describe('panes are sized by the grid, never by themselves', () => {
     const lifted = z(RULES, '.cockpit-txdock-editing')
     expect(lifted).toBeGreaterThan(z(STYLES_RULES, '.pane-splitter'))
     expect(lifted).toBeGreaterThan(z(RULES, '.cockpit-txdock'))
+  })
+})
+
+// THE FOLDED DOCK (2026-11-05). On a small window at a large zoom the whole dock was taller than the shell's
+// scrollport and, parked at the bottom, covered Stop TX in the strip and pushed Send out of the window (measured,
+// 900×600 and 700×800 at 175 %). Where it does not fit, the strip folds it (CockpitTxStrip.fold.test.tsx): the dock
+// stops being a box, its rows scroll with the panes, and its keep row parks alone. Computed from both sheets.
+describe('a TX dock that does not fit folds, and only its keep row parks', () => {
+  const one = (rules: Rule[], selector: string) => {
+    const r = rules.filter((x) => x.selector === selector)
+    expect(r.length, `exactly one ${selector} rule`).toBe(1)
+    return r[0]
+  }
+  const zOf = (rules: Rule[], selector: string) => Number(blockDecl('z-index')(one(rules, selector).body))
+
+  it('folded, the dock generates no box, so its rows are the shell’s and scroll with the panes', () => {
+    const fold = one(RULES, ".cockpit-txdock[data-fold='on']")
+    expect(blockDecl('display')(fold.body), 'a folded dock that is still a box parks whole, over Stop TX').toBe('contents')
+    // It outranks the base dock rule by its attribute, whatever their order.
+    expect(specificity(fold.selector)).toBeGreaterThan(specificity('.cockpit-txdock'))
+    // …and only there: the base dock is still a pinned, unshrinkable flex box.
+    expect(blockDecl('display')(one(RULES, '.cockpit-txdock').body)).toBe('flex')
+    expect(blockDecl('position')(one(RULES, '.cockpit-txdock').body)).toBe('sticky')
+  })
+
+  it('the keep row parks at the bottom, opaque, at the dock’s level and with the dock’s padding', () => {
+    const keep = one(RULES, ".cockpit-txdock-keep[data-fold='on']")
+    const d = blockDecl
+    expect(d('position')(keep.body), 'a folded keep row scrolls away with Send and Esc/Stop').toBe('sticky')
+    expect(d('bottom')(keep.body)).toBe('0')
+    // Last in the shell: a dock row below it (JS8's beacon row) lifts it onto Stop TX at the end of the scroll.
+    expect(Number(d('order')(keep.body)), 'a dock row can stand below the parked row').toBeGreaterThan(0)
+    expect(d('background')(keep.body), 'the panes would show through the parked row').toBe('var(--panel)')
+    expect(zOf(RULES, ".cockpit-txdock-keep[data-fold='on']"), 'not at the dock’s own level').toBe(zOf(RULES, '.cockpit-txdock'))
+    expect(zOf(RULES, ".cockpit-txdock-keep[data-fold='on']")).toBeGreaterThan(zOf(STYLES_RULES, '.pane-splitter'))
+    // Folding moves no control of the row by a pixel: a pointer held on PTT while the dock folds stays on it.
+    expect(d('padding')(keep.body), 'the keep row’s controls jump when the dock folds').toBe(d('padding')(one(RULES, '.cockpit-txdock').body))
+    // Not a size.
+    for (const p of ['height', 'min-height', 'max-height', 'flex']) expect(d(p)(keep.body), p).toBeNull()
+  })
+
+  it('unfolded, nothing restyles the keep row: inside the parked dock it is the row it always was', () => {
+    const bare = [...RULES, ...STYLES_RULES]
+      .map((r) => r.selector)
+      .filter((sel) => /\.cockpit-txdock-keep(?![a-z0-9-])/.test(sel) && sel !== ".cockpit-txdock-keep[data-fold='on']")
+    expect(bare).toEqual([])
+  })
+
+  it('the macro editor stands on the dock’s edge, and joins the flow while the dock has no edge', () => {
+    // styles.css owns the editor; its position reads the custom property only the folded dock sets.
+    const pos = classWinner('rtty-macro-editor', blockDecl('position'))
+    expect(pos?.value, 'the editor no longer reads the fold').toBe('var(--cockpit-txdock-float, absolute)')
+    // JS8's heartbeat menu stands on the same edge, and its keep row folds the same way.
+    expect(classWinner('js8-hb-menu', blockDecl('position'))?.value, 'the heartbeat menu no longer reads the fold').toBe('var(--cockpit-txdock-float, absolute)')
+    expect(blockVar('--cockpit-txdock-float')(one(RULES, ".cockpit-txdock[data-fold='on']").body)).toBe('static')
+    // Nothing else sets it: unfolded, the fallback (absolute) stands.
+    const setters = [...RULES, ...STYLES_RULES].filter((r) => blockVar('--cockpit-txdock-float')(r.body) !== null).map((r) => r.selector)
+    expect(setters).toEqual([".cockpit-txdock[data-fold='on']"])
+  })
+
+  it('JTTY’s refusal is an overlay on the parked keep row while folded, so showing it moves no stop; in its line otherwise', () => {
+    const pos = classWinner('jtty-dock-reason', blockDecl('position'))
+    expect(pos?.value, 'the reason no longer reads the fold').toBe('var(--cockpit-txdock-reason-pos, static)')
+    expect(blockVar('--cockpit-txdock-reason-pos')(one(RULES, ".cockpit-txdock[data-fold='on']").body), 'folded, a reason in flow grows the keep row and moves Send and Esc/Stop').toBe('absolute')
+    expect(classWinner('jtty-dock-reason', blockDecl('bottom'))?.value, 'it does not stand on the row’s top edge').toBe('100%')
+    // The strip parks directly above the keep row at some scrolls: the overlay keeps to the column right of Stop TX.
+    expect(classWinner('jtty-dock-reason', blockDecl('left'))?.value, 'it can stand over Stop TX').toBe('var(--cockpit-txdock-reason-left, 0px)')
+    expect(classWinner('jtty-dock-reason', blockDecl('background'))?.value, 'the panes show through it').toBe('var(--panel)')
+    // It hides what is under it, so it takes its own clicks: with `pointer-events: none` a click on the words went to the
+    // hidden key behind them, and called it (measured).
+    expect(classWinner('jtty-dock-reason', blockDecl('pointer-events')), 'a click on the words reaches a key the operator cannot see').toBeNull()
+    // Clamped while folded, to the lines the strip writes; the whole text is in its tooltip and a click's toast.
+    const fold = one(RULES, ".cockpit-txdock[data-fold='on']").body
+    expect(classWinner('jtty-dock-reason', blockDecl('display'))?.value).toBe('var(--cockpit-txdock-reason-display, block)')
+    expect(blockVar('--cockpit-txdock-reason-display')(fold), 'folded, it is not clamped').toBe('-webkit-box')
+    expect(classWinner('jtty-dock-reason', blockDecl('-webkit-line-clamp'))?.value).toBe('var(--cockpit-txdock-reason-lines, none)')
+    expect(classWinner('jtty-dock-reason', blockDecl('overflow'))?.value).toBe('var(--cockpit-txdock-reason-overflow, visible)')
+    expect(blockVar('--cockpit-txdock-reason-overflow')(fold)).toBe('hidden')
+    // The shell's scroll ends that much later, or the row above the keep row never comes out from under the words.
+    expect(blockDecl('margin-top')(one(RULES, ".cockpit-txdock-keep[data-fold='on']").body)).toBe('var(--cockpit-txdock-reason-room, 0px)')
+    // In flow, the dock's own gap above it, not the send row's: a refusal replacing the hint moves nothing.
+    const dockGap = blockDecl('gap')(one(RULES, '.cockpit-txdock').body)
+    const sendGap = classWinner('cw-send', blockDecl('gap'))?.value
+    expect(classWinner('jtty-dock-reason', blockDecl('margin-top'))?.value, 'Send and Esc/Stop shift as a refusal arrives').toBe(`calc(${dockGap} - ${sendGap})`)
+    // Its own line when it is in flow, under the send row as main draws it.
+    expect(classWinner('jtty-dock-reason', blockDecl('flex'))?.value).toBe('0 0 100%')
+  })
+
+  it('the keyboard docks’ send rows wrap rather than leave the window, and their stops never shrink', () => {
+    // CW's His Call, text box and Send came to 908 px on a 700 px window at 175 %: Send stood off the edge.
+    expect(classWinner('cw-send-wrap', blockDecl('flex-wrap'))?.value).toBe('wrap')
+    // The stops (TX latch and Esc/Stop, RTTY and PSK) are a fixed group at the row's right end.
+    expect(classWinner('rtty-send-stops', blockDecl('flex'))?.value, 'the stops are a shrink victim').toBe('0 0 auto')
+    expect(classWinner('rtty-send-stops', blockDecl('margin-left'))?.value).toBe('auto')
+    // …and the send row itself is still never a shrink victim in the dock's column.
+    expect(classWinner('cw-send', blockDecl('flex'))?.value).toBe('0 0 auto')
   })
 })
 
@@ -1123,15 +1316,11 @@ describe('styles.css cannot size a pane frame either (the fence has two sides)',
     // including frames with nothing between them and a clip edge, where a floor IS the
     // clip mechanism. So the allowlist is not "these files" but "these owners, each of
     // which has a scroller standing behind the floor":
-    //   · the three REGION-LESS shells (RTTY / PSK / SSTV): their own `overflow-y: auto`
-    //     deficit valve (cockpit-shells.test.ts), and their frames are bare shell children.
     //   · the region's BOUNDED flow: the column valve above (.cockpit-col scrolls).
-    // Anything else — a shell that clips, a column, a tier variant, `:root` — is refused.
-    const ALLOWED_KNOB = new Set([
-      '.layout.single.rtty-cockpit',
-      '.layout.single.psk-cockpit',
-      '.layout.single.sstv-view',
-    ])
+    // Anything else — a shell that clips, a column, a tier variant, `:root` — is refused. (RTTY, PSK
+    // and SSTV set it on their shells while their frames were bare shell children; since 2026-11-04
+    // their frames are in a pane region, which sets it itself, so no shell in styles.css may.)
+    const ALLOWED_KNOB = new Set<string>()
     // …and Phone's LEFT SIDE (2026-10-03), whose column IS the scroller its frames sit in
     // (`.cockpit-left-col`, overflow-y: auto — computed in the left-side block above), and FT's arranged
     // columns (2026-10-07), the same: `.op-stack` scrolls (computed in its block above). So does FT's stock
@@ -1176,5 +1365,423 @@ describe('a pane frame holds its own positioned content, without a backdrop blur
       const w = classWinner('pane-frame', blockDecl(prop))
       expect(w?.value ?? 'none', `${prop} on .pane-frame from ${w?.selector} in ${w?.sheet}`).toBe('none')
     }
+  })
+})
+
+/** Cascade winner of a property for the element at the end of `chain` (outermost first; each entry
+ *  the classes — and `[attr='v']` attributes — that element carries), across BOTH sheets: styles.css
+ *  sorts first, so an equal-specificity structural rule wins a tie. Compound selectors with
+ *  descendant and child combinators are matched against the chain; a rule with a pseudo-class or a
+ *  tag cannot be matched and is left out, as the other computers here leave it. */
+function chainWinner<T>(
+  chain: ReadonlyArray<ReadonlySet<string>>,
+  blockValue: (body: string) => T | null,
+): { value: T; selector: string; sheet: string } | null {
+  const compound = (c: string): string[] | null => {
+    const parts = c.match(/\.[a-z][a-z0-9-]*|\[[^\]]+\]/g)
+    return parts && parts.join('') === c ? parts.map((x) => (x.startsWith('.') ? x.slice(1) : x)) : null
+  }
+  const has = (at: number, c: string[]) => c.every((x) => chain[at].has(x))
+  const matches = (selector: string): boolean => {
+    const parts = selector.split(/\s*(>)\s*|\s+/).filter((x): x is string => !!x)
+    const subject = compound(parts[parts.length - 1])
+    if (!subject || !has(chain.length - 1, subject)) return false
+    let at = chain.length - 2
+    let child = false
+    for (let i = parts.length - 2; i >= 0; i--) {
+      if (parts[i] === '>') {
+        child = true
+        continue
+      }
+      const c = compound(parts[i])
+      if (!c) return false
+      if (child) {
+        if (at < 0 || !has(at, c)) return false
+      } else {
+        while (at >= 0 && !has(at, c)) at--
+        if (at < 0) return false
+      }
+      at--
+      child = false
+    }
+    return true
+  }
+  const candidates = [
+    ...STYLES_RULES.map((r) => ({ r, sheet: 'styles.css', rank: 0 })),
+    ...RULES.map((r) => ({ r, sheet: 'cockpit-panes.css', rank: 1 })),
+  ]
+  let win: { value: T; selector: string; sheet: string; spec: number; key: number } | null = null
+  for (const { r, sheet, rank } of candidates) {
+    if (!matches(r.selector)) continue
+    const v = blockValue(r.body)
+    if (v === null) continue
+    const spec = specificity(r.selector)
+    const key = rank * 1e6 + r.order
+    if (!win || spec > win.spec || (spec === win.spec && key >= win.key)) win = { value: v, selector: r.selector, sheet, spec, key }
+  }
+  return win && { value: win.value, selector: win.selector, sheet: win.sheet }
+}
+
+// ── THE 1080p PASS (2026-11-01) ─────────────────────────────────────────────────────────────────────
+// The compact dock, the one-row top bar and header, and the short-window tier, COMPUTED: every rule
+// below is the cascade winner across BOTH sheets for an element modelled with the classes the
+// components give it (and its parent's, where a combinator could reach it), never a presence match.
+
+/** Right-to-left match of a class-only selector against an element modelled as a chain of class sets
+ *  (outermost → the element). Descendant and child combinators; a compound with anything but classes
+ *  (an attribute, a pseudo, a tag) does not match — a viewport or state rule is not the unconditional
+ *  cascade these tests compute, and the fold rules are deliberately keyed on no viewport at all. */
+function chainMatch(selector: string, chain: string[][]): boolean {
+  const parts = selector.split(/\s*(>)\s*|\s+/).filter((p): p is string => !!p)
+  const classes = (compound: string): string[] | null => {
+    const m = compound.match(/\.[a-zA-Z0-9_-]+/g)
+    return m && m.join('') === compound ? m.map((c) => c.slice(1)) : null
+  }
+  const subject = classes(parts[parts.length - 1] ?? '')
+  if (!subject || !subject.every((c) => chain[chain.length - 1].includes(c))) return false
+  let idx = chain.length - 2
+  for (let i = parts.length - 2; i >= 0; i--) {
+    const child = parts[i] === '>'
+    if (child) i--
+    const want = classes(parts[i] ?? '')
+    if (!want) return false
+    if (child) {
+      if (idx < 0 || !want.every((c) => chain[idx].includes(c))) return false
+      idx--
+    } else {
+      while (idx >= 0 && !want.every((c) => chain[idx].includes(c))) idx--
+      if (idx < 0) return false
+      idx--
+    }
+  }
+  return true
+}
+
+/** The cascade winner of one property for the LAST element of `chain`, across both sheets (styles.css
+ *  first, as main.tsx imports it), by specificity then order. */
+function classChainWinner(chain: string[][], prop: string): { value: string; selector: string; sheet: string } | null {
+  const spec = (sel: string) => (sel.match(/\.[a-zA-Z0-9_-]+|\[[^\]]+\]|:[a-z-]+/g) ?? []).length
+  const candidates = [
+    ...STYLES_RULES.map((r) => ({ r, sheet: 'styles.css', key: r.order })),
+    ...RULES.map((r) => ({ r, sheet: 'cockpit-panes.css', key: 1e6 + r.order })),
+  ]
+  let win: { value: string; selector: string; sheet: string; spec: number; key: number } | null = null
+  for (const { r, sheet, key } of candidates) {
+    if (!chainMatch(r.selector, chain)) continue
+    const v = blockDecl(prop)(r.body)
+    if (v === null) continue
+    const sp = spec(r.selector)
+    if (!win || sp > win.spec || (sp === win.spec && key >= win.key)) win = { value: v, selector: r.selector, sheet, spec: sp, key }
+  }
+  return win && { value: win.value, selector: win.selector, sheet: win.sheet }
+}
+
+describe('a dock of 12 or 16 macro keys is the keyboard: groups of four, wrapping by width', () => {
+  // Settings ▸ CW / RTTY / PSK ▸ Macro keys: 8 (the dock as it always was, none of the classes
+  // below on it), 12 or 16. At 12 and 16 the keys stand in groups of four — F1–F4, F5–F8, F9–F12,
+  // 13–16, as a keyboard groups its F-keys — in a bank that puts as many groups on a line as the
+  // dock's own width holds and wraps the rest under them, in keyboard order: a wide window shows one
+  // row, a narrower one two or more, a phone-width one a group per row. Width-driven, so it follows
+  // the dock at any zoom and needs no viewport rule. The keys are senders; Esc/Stop and the latch are
+  // never in the bank.
+  const VIEWPORTS = ['xs', 'sm', 'md', 'lg', 'xl'] as const
+  const html = (vp: string) => new Set([`[data-viewport='${vp}']`])
+  const shell = (cockpit: string) => [new Set(['app']), new Set(['shell']), new Set(['layout', 'single', cockpit])]
+  const dock = new Set(['cockpit-txdock'])
+  const CW_BANK = new Set(['cw-macros', 'macro-bank'])
+  const KEYS_ROW = new Set(['rtty-dock-keys'])
+  const bankIn = (count: 12 | 16, ...more: string[]) => new Set(['cw-macros', 'macro-bank', `macro-bank-shared-${count}`, ...more])
+  const CHAINS: Array<[string, (vp: string) => Array<Set<string>>, Set<string>]> = [
+    ['CW', (vp) => [html(vp), ...shell('cw-cockpit'), dock, CW_BANK], new Set(['macro-quad'])],
+    ...([12, 16] as const).flatMap((n): Array<[string, (vp: string) => Array<Set<string>>, Set<string>]> => [
+      [`RTTY ×${n}`, (vp) => [html(vp), ...shell('rtty-cockpit'), dock, KEYS_ROW, bankIn(n)], new Set(['rtty-macros', 'macro-quad'])],
+      [`PSK ×${n}`, (vp) => [html(vp), ...shell('psk-cockpit'), dock, KEYS_ROW, bankIn(n, 'psk-macros')], new Set(['rtty-macros', 'macro-quad'])],
+    ]),
+  ]
+  const QUAD_TRACKS = 'repeat(auto-fit, minmax(min(32em, 100%), 1fr))'
+
+  for (const [mode, chainAt, quad] of CHAINS) {
+    for (const vp of VIEWPORTS) {
+      it(`${mode} at ${vp}: the bank lays groups of four by width, and each group is four keys`, () => {
+        const bank = chainAt(vp)
+        const display = chainWinner(bank, blockDecl('display'))
+        expect(display?.value, `the bank's display came from \`${display?.sheet}: ${display?.selector}\``).toBe('grid')
+        const tracks = chainWinner(bank, blockDecl('grid-template-columns'))
+        expect(
+          tracks?.value,
+          `\`${tracks?.sheet}: ${tracks?.selector}\` decides the bank's tracks — the eight-key grid or the ` +
+            "96 px auto-fill would scatter the groups, and a fixed floor would overflow a phone-width dock",
+        ).toBe(QUAD_TRACKS)
+        const quads = chainWinner([...bank, quad], blockDecl('grid-template-columns'))
+        expect(quads?.value, `\`${quads?.sheet}: ${quads?.selector}\` decides a group's tracks`).toBe('repeat(4, minmax(0, 1fr))')
+        expect(chainWinner([...bank, quad], blockDecl('display'))?.value).toBe('grid')
+        expect(chainWinner([...bank, quad], blockDecl('min-width'))?.value, 'a long caption must not widen its group').toBe('0')
+      })
+    }
+  }
+
+  it("CW's bank is a row of the dock's column: it never shrinks (the keys stay hit-able)", () => {
+    const win = chainWinner([...shell('cw-cockpit'), dock, CW_BANK], blockDecl('flex'))
+    expect(win?.value, `\`${win?.sheet}: ${win?.selector}\``).toBe('0 0 auto')
+  })
+
+  // The basis is the bank's whole line — three groups of 32em at 12, four at 16, and their gaps — so the
+  // fixed row stands beside the bank only where every group fits beside it, and folds under it otherwise.
+  for (const [n, basis] of [[12, '97em'], [16, '129em']] as const) {
+    for (const [mode, cockpit, more] of [['RTTY', 'rtty-cockpit', []], ['PSK', 'psk-cockpit', ['psk-macros']]] as const) {
+      it(`${mode}'s bank of ${n} shares the keys row only where its whole line fits beside the fixed row`, () => {
+        const chain = [...shell(cockpit), dock, KEYS_ROW, bankIn(n, ...more)]
+        const flex = chainWinner(chain, blockDecl('flex'))
+        expect(flex?.value, `\`${flex?.sheet}: ${flex?.selector}\``).toBe(`999 1 ${basis}`)
+        expect(chainWinner(chain, blockDecl('min-width'))?.value).toBe('0')
+      })
+    }
+  }
+
+  it('control: the eight-key grid in the keys row is what it always was', () => {
+    // The eight-key grid carries `.dock-fkeys`, where the 1080p pass moved the keys' share of the line.
+    const eight = [...shell('rtty-cockpit'), dock, KEYS_ROW, new Set(['cw-macros', 'rtty-macros', 'dock-fkeys'])]
+    expect(chainWinner(eight, blockDecl('flex'))?.value).toBe('999 1 76em')
+    expect(chainWinner(eight, blockDecl('grid-template-columns'))?.value).toBe('repeat(8, minmax(0, 1fr))')
+  })
+
+  it('control: the eight-key docks are untouched — CW keeps its auto-fill grid', () => {
+    const win = chainWinner([...shell('cw-cockpit'), dock, new Set(['cw-macros'])], blockDecl('grid-template-columns'))
+    expect(win?.value).toBe('repeat(auto-fill, minmax(96px, 1fr))')
+  })
+})
+
+/** A length expression evaluated the way the browser resolves it at an effective window height:
+ *  `--vh-eff` (and its 100vh fallback) at `vhEff`, the spacing tokens at their stock sizes, then
+ *  max()/min() and the arithmetic. One number per top-level value (a padding shorthand has two). */
+const TOKENS: Record<string, number> = { '--space-1': 4, '--space-2': 8, '--space-3': 12, '--gap': 12 }
+/** `var(--name, fallback)` for the tier's own custom properties, resolved the way the cascade does for an
+ *  element inside `.app`: the winning declaration on `.app` (across both sheets), else the fallback. */
+function resolveChromeVars(value: string): string {
+  let out = value
+  for (;;) {
+    const at = out.search(/var\(\s*--chrome-/)
+    if (at < 0) return out
+    let depth = 0
+    let end = at
+    for (; end < out.length; end++) {
+      if (out[end] === '(') depth++
+      else if (out[end] === ')' && --depth === 0) break
+    }
+    const inner = out.slice(at + 4, end)
+    const comma = inner.indexOf(',')
+    const name = (comma < 0 ? inner : inner.slice(0, comma)).trim()
+    const fallback = comma < 0 ? '' : inner.slice(comma + 1).trim()
+    const onApp = classChainWinner([['app']], name)
+    out = out.slice(0, at) + (onApp?.value ?? fallback) + out.slice(end + 1)
+  }
+}
+function lengthsAt(value: string, vhEff: number): number[] {
+  const subst = resolveChromeVars(value)
+    .replace(/var\(\s*--vh-eff\s*,\s*100vh\s*\)/g, `${vhEff}px`)
+    .replace(/var\(\s*(--[a-z0-9-]+)\s*\)/g, (_, name: string) => {
+      if (!(name in TOKENS)) throw new Error(`unmodelled token ${name} in ${value}`)
+      return `${TOKENS[name]}px`
+    })
+  const values: string[] = []
+  let depth = 0
+  let cur = ''
+  for (const ch of subst) {
+    if (ch === '(') depth++
+    if (ch === ')') depth--
+    if (/\s/.test(ch) && depth === 0) {
+      if (cur) values.push(cur)
+      cur = ''
+    } else cur += ch
+  }
+  if (cur) values.push(cur)
+  return values.map((v) => {
+    const js = v.replace(/(\d+(?:\.\d+)?)px/g, '$1').replace(/\bmax\(/g, 'Math.max(').replace(/\bmin\(/g, 'Math.min(')
+    if (!/^[\d\s.+\-*/(),Mathmaxin]*$/.test(js)) throw new Error(`not a length expression: ${v}`)
+    return Function(`return (${js})`)() as number
+  })
+}
+
+describe('THE SHORT-WINDOW TIER (1080p pass): the chrome tightens at an effective height of 1100 px and below', () => {
+  // Each line: the element as the components build it, the property, its TIGHT value at 1100 and below,
+  // its STOCK value above. 1040 is 1080p at 100 % (the taskbar's window), 920 the same screen at 125 %
+  // with the auto zoom, 1440 the 4K reference, which must not move.
+  const CASES: Array<[name: string, chain: string[][], prop: string, tight: number[], stock: number[]]> = [
+    ['the TX dock', [['cockpit-txdock']], 'gap', [4], [8]],
+    ['the TX dock', [['cockpit-txdock']], 'padding', [4, 8], [8, 8]],
+    ['the TX strip', [['cockpit-txstrip']], 'padding', [1, 10], [3, 10]],
+    // The bar and the header keep their rules in styles.css and read the tier's custom properties from
+    // `.app` (cockpit-panes.css), so their winner is styles.css's and the value resolves through `.app`.
+    ['the top bar', [['app'], ['topbar', 'topbar--ft']], 'padding', [4, 14], [10, 14]],
+    ['the top bar', [['app'], ['topbar', 'topbar--ft']], 'gap', [12], [18]],
+    ['the cockpit header', [['app'], ['cockpit-header']], 'gap', [8], [12]],
+    ['the header’s mode controls', [['app'], ['cockpit-header'], ['ch-mode-extras']], 'gap', [8], [12]],
+  ]
+  it.each(CASES)('%s: %s steps from STOCK above 1100 to TIGHT at 1100 and below', (name, chain, prop, tight, stock) => {
+    const w = classChainWinner(chain, prop)
+    expect(w, `nothing declares ${prop} on ${name}`).not.toBeNull()
+    expect(
+      w!.sheet === 'cockpit-panes.css' || /var\(--chrome-/.test(w!.value),
+      `${name}'s ${prop} is won by ${w!.selector} in ${w!.sheet} (${w!.value}) — neither the tier's rule nor a reader of its property`,
+    ).toBe(true)
+    for (const vh of [700, 920, 1040, 1100]) expect(lengthsAt(w!.value, vh), `${name} ${prop} at an effective ${vh} px`).toEqual(tight)
+    for (const vh of [1101, 1200, 1440, 2160]) expect(lengthsAt(w!.value, vh), `${name} ${prop} at an effective ${vh} px`).toEqual(stock)
+  })
+
+  it('outside `.app` (a probe page, a test) the bar and the header keep their stock spacing', () => {
+    const bar = classChainWinner([['topbar']], 'padding')
+    expect(lengthsAt(bar!.value.replace(/var\(--chrome-bar-pad,\s*([^)]*)\)/, '$1'), 900)).toEqual([10, 14])
+  })
+
+  it('the evaluator bites: a stock-only value does not step (control)', () => {
+    expect(lengthsAt('var(--space-2)', 900)).toEqual([8])
+    expect(lengthsAt('max(var(--space-1), min(var(--space-2), (var(--vh-eff, 100vh) - 1100px) * 100))', 1100.5)).toEqual([8])
+    expect(() => lengthsAt('var(--unknown)', 900)).toThrow()
+  })
+})
+
+describe('THE COMPACT DOCK (1080p pass): the read-only meters stand in the TX strip, and nothing can wrap a keying row', () => {
+  it('the strip’s meters cell has a zero basis, so the strip’s line breaking can never put it on a second line', () => {
+    const chain = [['cockpit-txstrip'], ['cockpit-txstrip-meters']]
+    expect(classChainWinner(chain, 'flex')?.value).toBe('1 1 0')
+    expect(classChainWinner(chain, 'min-width')?.value).toBe('0')
+    expect(classChainWinner(chain, 'max-width')?.value).toBe('30em')
+    expect(classChainWinner(chain, 'margin-left')?.value, 'right-packed: after the cluster and the TX state').toBe('auto')
+    // …in a strip that still wraps as it did (a control: the cluster itself may wrap on a phone).
+    expect(classChainWinner([['cockpit-txstrip']], 'flex-wrap')?.value).toBe('wrap')
+  })
+
+  it('in the row the contract clips only at its end, the busy cell shrinks first, and VOX never shrinks (it is drawn first)', () => {
+    const row = [['phone-cockpit'], ['cockpit-txdock'], ['ph-ptt-row'], ['ph-txcontract', 'dock-status-inrow']]
+    const busy = classChainWinner([...row, ['ph-txc-cell', 'ph-txc-busy']], 'min-width')
+    expect(busy?.value, 'the busy cell may shrink to nothing before anything is clipped').toBe('0')
+    expect(classChainWinner([...row, ['ph-txc-cell', 'ph-txc-busy']], 'overflow')?.value).toBe('hidden')
+    // VOX: a whole cell or none, never part of one — nowrap at the flex default minimum (its own text).
+    expect(classChainWinner([...row, ['ph-txc-cell', 'ph-txc-warn']], 'white-space')?.value).toBe('nowrap')
+    expect(classChainWinner([...row, ['ph-txc-cell', 'ph-txc-warn']], 'min-width'), 'nothing lets VOX shrink').toBeNull()
+  })
+
+  it('Phone’s transmit contract in the PTT row takes only the room left: zero basis, clipped, one line', () => {
+    const chain = [['phone-cockpit'], ['cockpit-txdock'], ['ph-ptt-row'], ['ph-txcontract', 'dock-status-inrow']]
+    expect(classChainWinner(chain, 'flex')?.value).toBe('1 1 0')
+    expect(classChainWinner(chain, 'min-width')?.value).toBe('0')
+    expect(classChainWinner(chain, 'overflow')?.value).toBe('hidden')
+    expect(classChainWinner(chain, 'flex-wrap')?.value, 'the contract is still one line').toBe('nowrap')
+    // The row it joins still never shrinks (cockpit-shells.test.ts ROWS holds the same pin in styles.css).
+    expect(classChainWinner([['phone-cockpit'], ['cockpit-txdock'], ['ph-ptt-row']], 'flex')?.value).toBe('0 0 auto')
+  })
+
+  // THE KEYS' WIDTH, COMPUTED AT EVERY DOCK WIDTH. The keys are one-click senders, and no key may be
+  // narrower than the pre-1080p rule (`flex: 999 1 76em; min-width: 0`) made it, at any window. A flex
+  // line is modelled from the WINNING declarations: the keys' group and the fixed row share the line when
+  // the keys' hypothetical size (basis, floored by min-width) plus the gap plus the row fit, and then grow
+  // 999 : 1; otherwise the row folds and the keys take the whole line. Eight tracks, 4 px gaps, 14 px em.
+  const KEYS = [['cockpit-txdock'], ['rtty-dock-keys'], ['cw-macros', 'rtty-macros', 'dock-fkeys']]
+  const EM = 14
+  const lengthPx = (v: string, line: number): number => {
+    const em = /^([\d.]+)em$/.exec(v)
+    if (em) return Number(em[1]) * EM
+    const px = /^([\d.]+)px$/.exec(v)
+    if (px) return Number(px[1])
+    if (v === '0' || v === 'auto') return 0
+    const mn = /^min\(100%,\s*([\d.]+)em\)$/.exec(v)
+    if (mn) return Math.min(line, Number(mn[1]) * EM)
+    throw new Error(`unmodelled length ${v}`)
+  }
+  const keyWidth = (flex: string, minWidth: string, line: number, row: number): number => {
+    const [grow, , basis] = flex.split(/\s+/)
+    const hyp = Math.max(lengthPx(basis, line), lengthPx(minWidth, line))
+    const shared = hyp + 8 + row <= line
+    const keys = shared ? hyp + ((line - hyp - 8 - row) * Number(grow)) / (Number(grow) + 1) : line
+    return (keys - 7 * 4) / 8
+  }
+  it('every F-key is at least as wide as the pre-1080p rule made it, at every dock width (computed)', () => {
+    const flex = classChainWinner(KEYS, 'flex')
+    const minW = classChainWinner(KEYS, 'min-width')
+    expect(flex, 'the keys have a flex rule (a group without one falls back to 0 1 auto)').not.toBeNull()
+    const bad: string[] = []
+    // Fixed rows measured in Chrome: 551 px in English, wider in other catalogs and with a contest's plate.
+    for (const row of [400, 551, 700, 900])
+      for (let line = 600; line <= 3000; line++) {
+        const now = keyWidth(flex!.value, minW?.value ?? 'auto', line, row)
+        const before = keyWidth('999 1 76em', '0', line, row)
+        if (now < before - 0.01) bad.push(`dock ${line} px, row ${row} px: key ${now.toFixed(1)} < ${before.toFixed(1)}`)
+      }
+    expect(bad.slice(0, 5), `${bad.length} widths where a key got narrower`).toEqual([])
+  })
+
+  it('the key-width guard bites: the zero-basis 70em floor tried in the 1080p pass fails it (control)', () => {
+    // 1080p at 125 %: a ~1580 px dock with the 551 px English row. The floor shared the line and made each
+    // key 120 px of CSS; the basis folds the row there and gives each key the whole line.
+    expect(keyWidth('999 1 0', 'min(100%, 70em)', 1580, 551)).toBeLessThan(keyWidth('999 1 76em', '0', 1580, 551))
+    expect(keyWidth('999 1 76em', '0', 1580, 551)).toBeCloseTo((1580 - 28) / 8, 6)
+    expect(keyWidth('999 1 76em', '0', 1800, 551), 'at 1920 the row shares the line, as it always did').toBeLessThan(200)
+  })
+
+  it('the keys group stays the plain row without the class (control: the class is what carries the rule)', () => {
+    expect(classChainWinner([['cockpit-txdock'], ['rtty-dock-keys'], ['cw-macros', 'rtty-macros']], 'flex')?.value).toBe('0 0 auto')
+    expect(classChainWinner([['cockpit-txdock'], ['rtty-dock-keys']], 'flex-wrap')?.value, 'the fold is a wrap').toBe('wrap')
+  })
+})
+
+describe('THE ONE-ROW TOP BAR AND HEADER (1080p pass): what the folds show and hide', () => {
+  it('the folded mode button is drawn (it beats styles.css’s `.tier-menu-btn { display: none }`), the bare one is not', () => {
+    expect(classChainWinner([['topbar'], ['tier-toggle'], ['tier-btn', 'active', 'tier-menu-btn', 'tier-menu-folded']], 'display')?.value).toBe('inline-flex')
+    expect(classChainWinner([['topbar'], ['tier-toggle'], ['tier-btn', 'active', 'tier-menu-btn']], 'display')?.value).toBe('none')
+  })
+
+  it('the now-bar in the bar is its own width and never grows (a message must not re-wrap it), and draws no frame', () => {
+    const slot = [['topbar'], ['topbar-now']]
+    expect(classChainWinner(slot, 'flex')?.value, 'a grower would share the status lane’s room').toBe('0 1 auto')
+    expect(classChainWinner(slot, 'min-width')?.value).toBe('min(100%, 18em)')
+    const bar = [['topbar'], ['topbar-now'], ['now-bar', 'now-bar-inbar']]
+    expect(classChainWinner(bar, 'padding')?.value).toBe('0')
+    expect(classChainWinner(bar, 'background')?.value).toBe('transparent')
+    expect(classChainWinner(bar, 'border-bottom')?.value).toBe('0')
+    // Control: its own line keeps its frame.
+    expect(classChainWinner([['now-bar']], 'border-bottom')?.value).toBe('1px solid var(--border)')
+  })
+
+  it('the My station picker adds no width to the bar’s line: it stands over the callsign, out of flow', () => {
+    // The bar is one flex-wrap line with a few px of slack at 1920×1080 on Operate. A picker in the line
+    // (its old 9.5em beside the callsign) wrapped the now-bar to a second line there and, on the Logbook,
+    // pushed Stop TX and Tune 113 px along. So the callsign block IS the picker: the select covers it.
+    const id = [['topbar'], ['topbar-group', 'brand'], ['mycall', 'mycall-picker']]
+    expect(classChainWinner(id, 'position')?.value, 'the callsign block is the picker’s containing block').toBe('relative')
+    const sel = [...id, ['station-profile-picker']]
+    expect(classChainWinner(sel, 'position')?.value, 'out of the bar’s line').toBe('absolute')
+    expect(classChainWinner(sel, 'margin-left'), 'no margin in the line').toBeNull()
+    expect(classChainWinner(sel, 'height')?.value).toBe('100%')
+    // It reaches 10 px past the call, the brand group's own gap, and draws its arrow there, clear of the call.
+    expect(classChainWinner([['topbar-group']], 'gap')?.value, 'the overhang is the gap').toBe('10px')
+    expect(classChainWinner(sel, 'width')?.value).toBe('calc(100% + 10px)')
+    expect(classChainWinner(sel, 'background-position')?.value).toBe('right 5px center, right 0 center !important')
+    expect(classChainWinner(sel, 'max-width')?.value, 'nothing caps it short of the callsign').toBe('none')
+    // High Contrast forces a select's text to CanvasText; with its own text drawn, it covers the call.
+    expect(classChainWinner(sel, 'forced-color-adjust')?.value).toBe('none')
+    expect(classChainWinner(sel, 'color')?.value).toBe('transparent')
+    // Control: the callsign block without profiles is the plain block, no containing block of its own.
+    expect(classChainWinner([['topbar'], ['topbar-group', 'brand'], ['mycall']], 'position')).toBeNull()
+  })
+
+  it('the header’s ⋯ group is not drawn while closed (out of the tab order too), and is a wrapping row while open', () => {
+    expect(classChainWinner([['ch-overflow'], ['ch-overflow-panel']], 'display')?.value).toBe('none')
+    expect(classChainWinner([['ch-overflow'], ['ch-overflow-panel', 'ch-overflow-open']], 'display')?.value).toBe('flex')
+    expect(classChainWinner([['ch-overflow'], ['ch-overflow-panel', 'ch-overflow-open']], 'flex-wrap')?.value).toBe('wrap')
+    // Out of flow, so opening it moves no control in the header, the strip or the dock.
+    expect(classChainWinner([['ch-overflow'], ['ch-overflow-panel']], 'position')?.value).toBe('absolute')
+    expect(classChainWinner([['ch-overflow']], 'position')?.value).toBe('relative')
+  })
+
+  it('FT8 Roster’s rail gives Band Activity three shares to Rx Frequency’s one by default (a stored share still wins)', () => {
+    expect(classChainWinner([['cockpit-decodes-side', 'panel']], 'flex')?.value).toBe('var(--pane-share, 3) 1 0')
+    expect(classChainWinner([['cockpit-rxfreq', 'panel']], 'flex')?.value).toBe('var(--pane-share, 1) 1 0')
+  })
+
+  it('the CW speed slider is shorter only where the header folds: a placement input the stock rule reads', () => {
+    const stock = STYLES_RULES.find((r) => r.selector === ".cw-wpm input[type='range']")
+    expect(blockDecl('width')(stock!.body)).toBe('var(--cw-wpm-w, 160px)')
+    expect(classChainWinner([['cw-wpm', 'cw-wpm-compact']], '--cw-wpm-w')?.value).toBe('80px')
+    expect(classChainWinner([['cw-wpm']], '--cw-wpm-w'), 'nothing sets it on the stock label').toBeNull()
   })
 })

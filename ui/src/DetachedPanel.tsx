@@ -20,9 +20,11 @@ import { useEscStop } from './useEscStop'
 import { publishBandConditions } from './bandConditions'
 import { confirmDialog, ConfirmHost } from './confirm'
 import { pushToast, setPopupMinSeconds, setPopupNotifications, withErrorToast } from './toast'
+import { setPopupCorner } from './features/popupCorner'
 import { announceMarkersChanged, entryCall, markHere, markerRefusal, MARKERS_CHANGED_KEY } from './features/freqMarkers'
 import { pollSingleFlight } from './singleFlight'
 import { WSPR_WATERFALL_WINDOW, markerWidthHz } from './waterfall'
+import { isOnAir } from './types'
 import type {
   AppSnapshot,
   BandChannel,
@@ -371,6 +373,10 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   useEffect(() => {
     setPopupMinSeconds(settings?.popupMinSecs ?? 0)
   }, [settings?.popupMinSecs])
+  // #445: and the corner, as the main window's.
+  useEffect(() => {
+    setPopupCorner(settings?.popupCorner)
+  }, [settings?.popupCorner])
 
   // Band-map pop-out: poll the live spot feed. (The worked set follows the log above.) The
   // dashboard window polls it too, at the main window's 15 s, for its Spots box: the board's feed;
@@ -690,6 +696,8 @@ function DetachedPanelBody({ panel }: { panel: string }) {
       <DetachedShell className="detached-waterfall">
         <Waterfall
           transmitting={snap?.radio.transmitting ?? false}
+          passbandHz={snap?.radio.filterWidthHz ?? null}
+          passbandMode={snap?.radio.rigMode || snap?.radio.sideband}
           rxOffsetHz={snap?.radio.rxOffsetHz ?? 1500}
           txOffsetHz={snap?.radio.txOffsetHz ?? 1500}
           theme={theme}
@@ -834,6 +842,7 @@ function DetachedPanelBody({ panel }: { panel: string }) {
           onWorkSpot={onWorkSpot}
           needAlerts={gatedAlerts}
           amp={snap?.radio.amp ?? null}
+          radioOnAir={snap ? isOnAir(snap.radio) : false}
           rigBand={snap?.radio.band ?? null}
           fieldDay={snap?.fieldDay ?? null}
           activation={snap ? { act: snap.activation ?? null, logTick: snap.logTick } : undefined}

@@ -123,7 +123,10 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'operator name', 'state', 'my call',
       'units', 'miles', 'km', 'kilometres', 'kilometers', 'imperial', 'metric', 'distance',
       'temperature', 'fahrenheit', 'celsius', 'wind speed',
-      'experience', 'new to the hobby', 'new ham', 'beginner', 'new to digital', 'experienced'],
+      'experience', 'new to the hobby', 'new ham', 'beginner', 'new to digital', 'experienced',
+      // "My station" profiles: named setups switched from the top bar.
+      'station profile', 'my station', 'portable', 'home', 'club call', 'county', 'cq zone',
+      'itu zone', 'iota', 'antenna', 'rig', 'tqsl station location', 'lotw location'],
   },
 
   // ---- Remote ------------------------------------------------------------------
@@ -282,6 +285,10 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     keywords: ['band edge', 'edge tone', 'max power', 'power limit', 'watts', 'safety',
       'share rig', 'rigctld address', 'other programs',
       'foreign ptt', 'wsjt-x share', 'n1mm share',
+      // FreeDV's own app beside Nexus: its logged contacts and the calls it hears.
+      'freedv', 'freedv log', 'qso logging', 'digital voice',
+      // The same port takes the contacts other programs log (WSJT-X, N1MM, the S.A.T. tracker).
+      'accept contacts', 'contact port', 'log intake', 's.a.t.', 'adif over udp',
       // The high-SWR cutoff. NOT the bare word 'swr' — that belongs to the amplifier
       // section's own SWR read-out, and one term cannot land the operator on two sections.
       'high swr', 'swr cutoff', 'stop on swr', 'antenna fault',
@@ -401,8 +408,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     id: 'rtty',
     label: 'RTTY',
     tab: 'digital',
-    keywords: ['rtty', 'baudot', 'fsk', 'afsk', 'shift', 'baud', '45.45', '170', 'reverse',
-      'mark', 'space', 'sideband', 'usb', 'lsb', 'upside down', 'auto arm', 'start receiving', 'not decoding', 'macro',
+    keywords: ['rtty', 'baudot', 'fsk', 'afsk', 'shift', 'baud', '45.45', '50 baud', '170', 'reverse',
+      'mark', 'space', 'low tone', 'tone pair', '1275', '2125', 'sideband', 'usb', 'lsb', 'upside down', 'auto arm', 'start receiving', 'not decoding', 'macro',
       // #304 asked for a "timer" and neither the control nor this section is called one.
       // The rest are what the cadence is called out loud — the reporter wrote "cq, 15s rx,
       // cq", not "listen window".
@@ -413,7 +420,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     id: 'psk',
     label: 'PSK',
     tab: 'digital',
-    keywords: ['psk31', 'bpsk', 'varicode', 'keyboard', 'ragchew', 'warble', '14.070',
+    keywords: ['psk31', 'psk63', 'bpsk', 'varicode', 'keyboard', 'ragchew', 'warble', '14.070',
       'afc', 'auto arm', 'start receiving', 'narrow band', 'digipan',
       // JTTY, the Keyboard section's other modem, keeps its one setting here.
       'jtty', 'wsjt-x keyboard', '14.090'],
@@ -450,7 +457,8 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     // for the modes added in #264.
     keywords: ['slow scan', 'slow-scan', 'television', 'picture', 'image', 'photo', 'scottie',
       'martin', 'robot', 'pd120', 'iss', 'ariss', '145.800', '14.230', 'gallery',
-      'fsk id', 'fsk', 'callsign id', 'ident', 'id burst', 'wraase', 'pasokon'],
+      'fsk id', 'fsk', 'callsign id', 'ident', 'id burst', 'wraase', 'pasokon', 'rf power',
+      'transmit power', 'sstv power'],
   },
   {
     id: 'aprs',
@@ -578,6 +586,7 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
     label: 'Integrations & Feeds',
     tab: 'services',
     keywords: ['wsjt-x', 'udp', 'gridtracker', 'jtalert', 'hrd', 'ham radio deluxe', 'psk',
+      'accept requests', 'other computers', 'another computer', 'reply', 'free text',
       'pskreporter', 'cluster', 'rbn', 'reverse beacon', 'spot source', 'cluster node',
       'dxspider', 'cc cluster', 'all.txt', 'directed.txt', 'wav',
       'recording', 'propagation', 'diagnostic log', 'nexus-diag.log', 'log file', 'debug log',
@@ -752,7 +761,9 @@ export const SETTINGS_SECTIONS: SettingsSectionDef[] = [
       'ui scale', 'text size', 'font size', 'zoom', 'accessibility', 'large text', 'readable',
       'larger text', 'bigger text',
       'density', 'compact', 'comfortable', 'touch', 'touchscreen',
-      'pane', 'layout', 'clock', 'local time', 'time zone', 'utc'],
+      'pane', 'layout', 'clock', 'local time', 'time zone', 'utc',
+      // #343: the TX meters' look, Bars or Needle.
+      'needle', 'needle meter', 'analog meter', 'analogue meter', 'peak hold', 'meter style'],
   },
   {
     // The theme cards and the rows that change how the theme paints: High contrast, Night and

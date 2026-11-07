@@ -26,7 +26,9 @@ pub mod engine;
 pub mod fd_scoreboard;
 pub mod fdbridge;
 pub mod fdevent;
+pub mod freedv;
 pub mod keyboard;
+pub mod log_intake;
 pub mod logexport;
 pub mod logfill;
 pub mod loghistory;
@@ -38,6 +40,7 @@ pub mod needed_alert;
 pub mod pota_exports;
 pub mod presence;
 pub mod privileges;
+pub mod radio_claim;
 pub mod remote_control;
 pub mod remote_monitor;
 pub mod scp;
@@ -275,6 +278,9 @@ impl AppState {
                 flex_radio_has_mic: false,
                 flex_tune: None,
                 flex_tune_refused: false,
+                tune_tone_refused: false,
+                tune_over_refused: false,
+                atu_carrier_refused_mhz: None,
                 flex_atu: None,
                 flex_atu_refused: false,
                 flex_meter_stream: false,
@@ -387,6 +393,7 @@ impl AppState {
                 scope_span_refused: None,
                 scope_mode_code: None,
                 scope_fix_start_mhz: None,
+                scope_rate: None,
                 radio_config_warning: None,
                 tx_power_zero: false,
                 recording_warning: None,
@@ -1027,6 +1034,9 @@ impl AppState {
             radios: Vec::new(),
             active_radio_id: 0,
             radio_pegged: false,
+            station_profiles: Vec::new(),
+            active_station_profile: String::new(),
+            station_profile_locked: false,
             auto_radio_switch: None,
             b4_match_mode: false,
             link: self.link.clone(),
@@ -1085,6 +1095,7 @@ impl AppState {
             // Filled by the engine while a contest runs whose FT8/FT4 messages apply; none here.
             contest_cq: None,
             contest_cq_typed: false,
+            freedv: None,
         }
     }
 

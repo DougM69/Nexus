@@ -7,7 +7,7 @@
 
 pub mod arrival;
 pub mod aurora;
-mod body;
+pub mod body;
 pub mod callook;
 pub mod cloudlog;
 pub mod clublog;
@@ -31,12 +31,14 @@ pub mod repeaterbook;
 pub mod rsgb;
 pub mod satnogs;
 pub mod solar_cycle;
+pub mod solar_regions;
 pub mod solar_wind;
 pub mod swpc;
 pub mod swpc_scales;
 pub mod tle;
 pub mod wrl;
 pub mod wspr;
+pub mod wwff;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 

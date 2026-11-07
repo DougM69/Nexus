@@ -1,3 +1,4 @@
+import { localizeRefusal } from '../radioRefusal'
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { RemoteStation } from '../remote-native/RemoteStation'
 import { ConnectEntry } from '../lan/ConnectEntry'
@@ -117,6 +118,7 @@ import {
   callbookCacheClear,
 } from '../api'
 import { pushToast, withErrorToast } from '../toast'
+import { popupCornerOf } from '../features/popupCorner'
 import {
   TCI_DEFAULT_HOST,
   TCI_DEFAULT_PORT,
@@ -144,6 +146,7 @@ import {
 // QSO-management surface, and they move in the transmit-path batch with the stop-line sweeps
 // re-run. The comment beside them says so at the call site.
 import { setLocale, t, type MessageKey } from '../i18n'
+import { catDetailText } from '../features/catDetail'
 import { LOCALE_NATIVE_NAME, localeChoices, useLocale } from '../i18n/useLocale'
 import { T } from '../i18n/T'
 import { CONTESTS, CONTESTS_SENDING_POWER, clubSyncRefusalText, contestClubRefusal, contestName, contestRoleWords, isFieldDay } from '../fdEvent'
@@ -205,6 +208,7 @@ import { clearCallHistory, getCallHistoryStatus, getScpStatus, importCallHistory
 import type { CallHistoryStatus, ScpStatus } from '../types'
 import { CONTEST_LISTS_CHANGED } from '../features/contestLists'
 import { fmtUtc } from '../features/logQuery'
+import { programLabel } from '../features/logIntake'
 import { EsmRolePicker } from './EsmRolePicker'
 import {
   CW_BUILT_IN_ROLES,
@@ -215,7 +219,17 @@ import {
   esmVoiceSlots,
   type EsmRoleMap,
 } from '../features/esmRoles'
-import { MACRO_KEYS, macroSetId, type MacroSetId } from '../features/macroSets'
+import {
+  MACRO_COUNTS,
+  MACRO_KEYS,
+  macroCount,
+  macroKeyCaption,
+  macroSetId,
+  type MacroCount,
+  type MacroSetId,
+} from '../features/macroSets'
+import { macroSlotName } from '../features/macroSlotWords'
+import { cwVisibleMacros } from '../features/cwMacros'
 import { resolveRttySet } from '../features/rttyMacros'
 import { fetchLotwUsers, getLotwUsersStatus, type LotwUsersStatus } from '../api'
 import { getDxccEntityNames } from '../api'
@@ -237,7 +251,7 @@ import { ShackFilesSave } from './ShackFilesSave'
 import { getCloudlogStations, type CloudlogStation } from '../api'
 import { findDaxDevices, isDaxPaired } from '../features/dax'
 import { sayExportLacks } from '../features/exportLacks'
-import type { AssistanceEvent, ClubFirewall, ClubLink, ConnEvent, CredStatus, FieldDayStatus, ParsecPresence } from '../types'
+import type { AssistanceEvent, ClubFirewall, ClubLink, ConnEvent, CredStatus, FieldDayStatus, FreedvState, ParsecPresence } from '../types'
 import { parsecStatusText, parsecSwitchPlacement } from '../features/parsecPresence'
 import { connState, dotClass, stateLabel, whenText } from '../settings/connHealth'
 import { cloudlogLocationMismatch } from '../settings/cloudlogLocation'
@@ -255,6 +269,7 @@ import { PalettePicker } from './PalettePicker'
 import { SettingsColours } from './SettingsColours'
 import type { PaletteRoleId, PaletteSelection } from '../features/paletteRoles'
 import { LiveLevelMeter, LiveRxLevelDb } from './LiveMeters'
+import { TxMeters } from './TxMeters'
 import { WatchlistPanel } from './WatchlistPanel'
 import { MiniSpectrum } from './MiniSpectrum'
 import { SettingsGroup, SettingsOpenTarget } from './SettingsGroup'
@@ -280,7 +295,7 @@ import { FSK_ID_SECONDS_LABEL, SSTV_TX_MODES, TX_MODE_GROUPS } from '../sstvMode
 // The APRS channel list and the grid→channel derivation, shared with the APRS cockpit so the
 // picker's options and the derived default can never name different numbers.
 import { APRS_FREQS, BEACON_SYMBOLS, NORTH_AMERICA, aprsChannelForGrid } from '../aprsBeacon'
-import type { Scale, ScaleMode } from '../useScale'
+import type { FitRule, Scale, ScaleMode } from '../useScale'
 import { SCALE_STEPS, fitScale } from '../useScale'
 import type { Density } from '../useDensity'
 import type { TextSize } from '../useTextSize'
@@ -303,9 +318,26 @@ import { ARRL_SECTIONS_BY_DIVISION, RETIRED_SECTIONS } from '../features/arrlSec
 // end there (mac QA audit, 2026-08-17). The check moved to the shared platform module when
 // the modifier-chord labels needed it too.
 import { IS_LINUX, IS_MAC, IS_WINDOWS } from '../platform'
+import { renumberedTwin, showHiddenSpaces } from '../features/audioDeviceTwin'
 import { ampPortIsNetwork, joinAmpAddress, KPA_NET_PORT, splitAmpAddress } from '../settings/ampAddress'
 import { normaliseTyped, upperTyped } from '../typedInput'
 import { IotaListSettings } from './Iota'
+import { setTxMeterStyle, useTxMeterStyle } from '../txMeterStyle'
+
+/** The call a running contest entry is operated under, when saving `form` over `saved` would
+ *  change the station's call (`mycall`) while the entry runs (the live snapshot, `fieldDay`) and
+ *  the Save does not turn the contest off; `null` otherwise. The operator at the key
+ *  (`fdOperator`) is not the station's call, and changing it never asks. */
+function entryCallChanged(
+  saved: Settings | null,
+  form: Settings,
+  fieldDay: FieldDayStatus | null | undefined,
+): string | null {
+  if (!fieldDay || !saved || (saved.fdActive === true && !form.fdActive)) return null
+  const call = (c?: string | null) => (c ?? '').trim().toUpperCase()
+  if (call(form.mycall) === call(saved.mycall)) return null
+  return call(fieldDay.entryCall) || call(saved.mycall)
+}
 
 interface Props {
   /** The live contest session, for the READ-ONLY role read-out on the Contesting tab.
@@ -336,6 +368,16 @@ interface Props {
   /** Parsec presence mode as the station reports it (`snap.parsecPresence`), for the readout
    *  under its switch. Absent from tests, the setup wizard and a station older than the mode. */
   parsecPresence?: ParsecPresence | null
+  /** A run, a contact or a JS8 message is under way on a station with "My station" profiles
+   *  (`snap.stationProfileLocked`): the call field waits. Absent from tests and the wizard. */
+  stationProfileLocked?: boolean
+  /** The "My station" profile the station is on (`snap.activeStationProfile`). The Station tab's
+   *  call, grid, state and power reload when it changes, so a form left open across a switch shows
+   *  the profile the station is on. Absent from tests, the wizard and a station with no profiles. */
+  activeStationProfile?: string
+  /** FreeDV's listeners as the station reports them (`snap.freedv`), for the readout under their
+   *  switches. Absent while neither listens, from tests and from an older station. */
+  freedv?: FreedvState | null
   /** The live active radio id (dual-radio). The form reloads when this changes so a switch made from
    * the always-visible TopBar pills while Settings is open can't leave the Rig form stale. */
   activeRadioId?: number
@@ -348,6 +390,11 @@ interface Props {
   scaleCap: Scale
   onScaleModeChange: (m: ScaleMode) => void
   onScaleCapChange: (c: Scale) => void
+  /** The answer to the one-time scaled-display prompt (useScaleFitNotice.ts), shown and changed
+   *  under Auto: 'scaled' = the smaller fit, 'classic' = the size Nexus used before. Undefined
+   *  where the rule cannot apply (a pop-out, a browser), and with no setter, no row. */
+  scaleFitRule?: FitRule
+  onScaleFitRuleChange?: (r: FitRule) => void
   density: Density
   onDensityChange: (d: Density) => void
   /** #215: text size, Normal / Large / Larger (`useTextSize`). Optional so hosts/tests that do
@@ -452,7 +499,7 @@ const CTCSS_TONES = [
   167.9, 173.8, 179.9, 186.2, 192.8, 203.5, 210.7, 218.1, 225.7, 233.6, 241.8, 250.3,
 ]
 
-const NUMERIC_KEYS: FieldKey[] = ['dialMhz', 'baud', 'ratedWatts', 'rigctldPort', 'rigModel', 'txWatchdogMin', 'catBrokerPort', 'tuneTimeoutSecs', 'aprsIsPort', 'aprsIsRadiusKm', 'aprsStationTtlMin', 'contestCqZone', 'contestItuZone']
+const NUMERIC_KEYS: FieldKey[] = ['dialMhz', 'baud', 'ratedWatts', 'rigctldPort', 'rigModel', 'txWatchdogMin', 'catBrokerPort', 'freedvLogPort', 'tuneTimeoutSecs', 'aprsIsPort', 'aprsIsRadiusKm', 'aprsStationTtlMin', 'contestCqZone', 'contestItuZone']
 
 /** Clamp a typed zone to `0..=max`, as the STRING `update` takes (0 = not set).
  *
@@ -1076,6 +1123,30 @@ export const RTTY_AUTO_REPEATS_MAX = 10
 export const RTTY_AUTO_REPEATS_DEFAULT = 3
 
 /**
+ * The saved RTTY tone pair's low tone: the range it is used in and the standard it falls back to.
+ * A SECOND COPY of `RTTY_LOW_TONE_HZ_MIN/MAX` in `settings.rs` (`Settings::rtty_low_tone`), checked
+ * by `SettingsPanel.rttysignal.test.tsx`. 2700 + the widest shift (850) stays inside the passband.
+ */
+export const RTTY_LOW_TONE_HZ_MIN = 300
+export const RTTY_LOW_TONE_HZ_MAX = 2700
+export const RTTY_LOW_TONE_HZ_DEFAULT = 2125
+
+/** `v` if it is a low tone the engine uses, else the 2125 standard — what the engine reads. */
+export function validLowTone(v: unknown): number {
+  return typeof v === 'number' && Number.isInteger(v) && v >= RTTY_LOW_TONE_HZ_MIN && v <= RTTY_LOW_TONE_HZ_MAX
+    ? v
+    : RTTY_LOW_TONE_HZ_DEFAULT
+}
+
+/** A loaded form whose stored low tone is outside the range carries the standard instead, so the
+ *  box shows what the engine uses and the next Save writes it (a missing key stays missing). */
+function withValidLowTone(s: Settings): Settings {
+  return s.rttyLowToneHz === undefined || s.rttyLowToneHz === validLowTone(s.rttyLowToneHz)
+    ? s
+    : { ...s, rttyLowToneHz: RTTY_LOW_TONE_HZ_DEFAULT }
+}
+
+/**
  * APRS's own wire formats, shown as examples or written into a frame.
  *
  * `ssid` is a callsign, `path` is a digipeater path the packet carries verbatim, and `isHost`
@@ -1097,6 +1168,10 @@ const SSTV_ID_RULE = '§97.119(b)(4)'
 /** The ISS SSTV downlink, in MHz. A dial reading: formatted invariantly, never written into
  *  a sentence (`i18n/index.ts`, the invariant-token rule). */
 const ISS_SSTV_MHZ = 145.8
+/** 20 m's SSTV calling frequency and its band, where the SSTV screen tunes on opening from an HF
+ *  band with no SSTV channel (#451). Dial readings and band names, interpolated into the hint. */
+const SSTV_20M_MHZ = 14.23
+const SSTV_20M_BAND = '20m'
 
 /**
  * Tokens the panel prints beside a number or stores as a `<select>` value, where the row has
@@ -1133,6 +1208,9 @@ export function SettingsPanel({
   targetSeq,
   radio,
   parsecPresence,
+  stationProfileLocked,
+  activeStationProfile,
+  freedv,
   activeRadioId,
   onProveTx,
   scale,
@@ -1140,6 +1218,8 @@ export function SettingsPanel({
   scaleCap,
   onScaleModeChange,
   onScaleCapChange,
+  scaleFitRule,
+  onScaleFitRuleChange,
   density,
   onDensityChange,
   textSize,
@@ -1197,7 +1277,7 @@ export function SettingsPanel({
       // values, so a restore looks like it did nothing — and the stale form is still live, so the
       // next Save writes the old values straight back over the restored ones.
       const fresh = await getSettings()
-      setForm(fresh)
+      setForm(withValidLowTone(fresh))
       setEditingRadioId(fresh.activeRadio)
       dirtyRef.current = false
       savedRef.current = fresh
@@ -1232,7 +1312,7 @@ export function SettingsPanel({
     )
     if (snap) {
       const fresh = await getSettings()
-      setForm(fresh)
+      setForm(withValidLowTone(fresh))
       setEditingRadioId(fresh.activeRadio)
       dirtyRef.current = false
       savedRef.current = fresh
@@ -1244,6 +1324,8 @@ export function SettingsPanel({
   const [logbookGlobe, setLogbookGlobe] = useLogbookGlobe()
   // Browser-local like the globe: whether resting the pointer on a call opens its station card.
   const [callCardHover, setCallCardHover] = useCallCardHover()
+  // Browser-local too (txMeterStyle.ts): how the TX meters are drawn.
+  const txMeterStyle = useTxMeterStyle()
   // APPEARANCE IN THE BACKUP (features/appearanceBackup.ts). The look on screen, as the backup
   // carries it: what this host wires, both waterfall palettes and the Logbook globe — and, by
   // design, not Field mode or UI scale. A restore puts it back through the very setters the rows
@@ -1254,6 +1336,7 @@ export function SettingsPanel({
       waterfallPalette: getWaterfallPalette(),
       ftWaterfallPalette: getWaterfallPalette(FT_PALETTE_SCOPE),
       logbookGlobe,
+      txMeterStyle,
     }
     if (theme) a.theme = theme
     if (onSkinChange) a.skin = skin
@@ -1284,8 +1367,12 @@ export function SettingsPanel({
     if (a.waterfallPalette) setWaterfallPalette(a.waterfallPalette)
     if (a.ftWaterfallPalette) setWaterfallPalette(a.ftWaterfallPalette, FT_PALETTE_SCOPE)
     if (a.logbookGlobe !== undefined) setLogbookGlobe(a.logbookGlobe)
+    if (a.txMeterStyle) setTxMeterStyle(a.txMeterStyle)
   }
   const [form, setForm] = useState<Settings | null>(null)
+  // The RTTY Low tone box's text while it is being edited (null = show the form's value): lets the
+  // operator clear it to type a new number while only a valid tone ever reaches the form.
+  const [lowToneText, setLowToneText] = useState<string | null>(null)
   // From a computer driving the station, the read names the settings a save from there keeps as
   // the station has them (`stationOnlySettings`): each shows here read-only, and says so, instead
   // of taking an edit the save would quietly put back. At the station the read names none.
@@ -1934,6 +2021,22 @@ export function SettingsPanel({
   // TopBar switcher pills while Settings is open), the flat Rig/CAT form now describes the WRONG
   // radio. Reload the form from the live settings so a Save can't fold edits into — or command —
   // the wrong rig. Skip the first observation (the mount effect already loads the form).
+  // "My station" profiles: the same for a profile switched underneath the form (the top bar's
+  // picker, a POTA Start or Stop). The Station tab's call, grid, state and power now describe the
+  // profile the station LEFT, and a Save from it would edit nothing (a form on another profile
+  // saves none of the four). They are read again from the station, with the list and the active
+  // id, so the tab shows the profile the station is on; the rest of the form stays as it is.
+  const lastStationProfileRef = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    if (activeStationProfile == null) return
+    if (lastStationProfileRef.current === undefined) {
+      lastStationProfileRef.current = activeStationProfile
+      return
+    }
+    if (lastStationProfileRef.current === activeStationProfile) return
+    lastStationProfileRef.current = activeStationProfile
+    void refreshStationFields()
+  }, [activeStationProfile])
   const lastActiveRef = useRef<number | undefined>(undefined)
   useEffect(() => {
     if (activeRadioId == null) return
@@ -1945,7 +2048,7 @@ export function SettingsPanel({
     lastActiveRef.current = activeRadioId
     void getSettings()
       .then((s) => {
-        setForm(s)
+        setForm(withValidLowTone(s))
         dirtyRef.current = false
       savedRef.current = s
         setEditingRadioId(activeRadioId) // form now mirrors the (new) active radio
@@ -1959,7 +2062,7 @@ export function SettingsPanel({
     getSettings()
       .then((s) => {
         if (mounted) {
-          setForm(s)
+          setForm(withValidLowTone(s))
           dirtyRef.current = false
       savedRef.current = s
           setStatus('idle')
@@ -2060,13 +2163,13 @@ export function SettingsPanel({
     )
   }
 
-  // True while the form edits a radio that is NOT the one in use. Its RX Gain and Tx Power then edit
+  // True while the form edits a radio that is NOT the one in use. Its RX Gain and Drive then edit
   // the form only, and Save stores them on that radio: `set_rx_gain` / `set_tx_level` take no radio,
   // so applying them live would change the radio in use. Keyed on the LIVE active radio, as the
   // satellite VFO map's guard is, because that is the radio the two verbs act on.
   const editingOtherRadio = editingRadioId != null && editingRadioId !== (activeRadioId ?? form?.activeRadio)
-  // …and the hint both sliders show then, in place of their own: those call Tx Power the cockpit
-  // Pwr's control and say the RX Level meter answers RX Gain, which holds for the radio in use only.
+  // …and the hint both sliders show then, in place of their own: those call Drive the cockpit
+  // Drive slider's twin and say the RX Level meter answers RX Gain, which holds for the radio in use only.
   const otherRadioLevelHint = (
     <T
       k="settings.audio.multiRadio.levelHint"
@@ -2089,7 +2192,7 @@ export function SettingsPanel({
     void setRxGain(value).catch(() => pushToast(t('settings.audio.rxGain.failed'), 'error'))
   }
 
-  // Apply TX drive (Pwr) to the LIVE radio, the SAME value as the cockpit "Pwr" slider —
+  // Apply the TX drive to the LIVE radio, the SAME value as the cockpit "Drive" slider —
   // set_tx_level persists + updates the snapshot, so the cockpit reflects it immediately.
   // Throttled to ~16 Hz while dragging (not gated entirely on release): set_tx_level writes
   // the whole settings.json to disk on every call, so applying on every onChange tick would
@@ -2104,7 +2207,7 @@ export function SettingsPanel({
     void setTxLevel(value).catch(() => pushToast(t('settings.audio.txPower.failed'), 'error'))
   }
 
-  // Keep the Tx Power slider in step with the cockpit "Pwr" control — both are the SAME value
+  // Keep the Drive slider in step with the cockpit "Drive" control — both are the SAME value
   // (radio.txLevel). When the cockpit changes it, mirror the live value into the form so the slider
   // tracks it (previously the form was a stale copy, so cockpit→Settings never showed). setForm
   // directly (not updateNum) so this live-sync never spuriously marks the form dirty.
@@ -2430,18 +2533,54 @@ export function SettingsPanel({
       return { ...prev, macros: { ...prev.macros, cwProfiles: list } }
     })
   }
-  const updateCwMacro = (i: number, field: 'label' | 'text', value: string) => {
+  // By KEY, not by row: the grid shows the keys the dock shows (`cwVisibleMacros`), so a row past
+  // F8 may be one the profile does not hold yet, and is added to it on the first character.
+  const updateCwMacro = (key: string, field: 'label' | 'text', value: string) => {
     markDirty()
     setForm((prev) => {
       if (!prev) return prev
       const idx = prev.macros.activeCwProfile ?? 0
       const list = (prev.macros.cwProfiles ?? []).map((p, pi) => {
         if (pi !== idx) return p
-        return { ...p, macros: p.macros.map((m, mi) => (mi === i ? { ...m, [field]: value } : m)) }
+        const macros = p.macros.some((m) => m.key === key)
+          ? p.macros.map((m) => (m.key === key ? { ...m, [field]: value } : m))
+          : [...p.macros, { key, label: '', text: '', [field]: value }]
+        return { ...p, macros }
       })
       return { ...prev, macros: { ...prev.macros, cwProfiles: list } }
     })
   }
+
+  // --- How many macro keys each keyboard mode's dock shows: 8 (not written), 12 or 16 ---
+  type MacroCountField = 'cwMacroCount' | 'rttyMacroCount' | 'pskMacroCount'
+  const setMacroCount = (field: MacroCountField, count: MacroCount) => {
+    markDirty()
+    setForm((prev) => {
+      if (!prev) return prev
+      const { [field]: _was, ...macros } = prev.macros
+      return { ...prev, macros: count === 8 ? macros : { ...macros, [field]: count } }
+    })
+  }
+  /** The Macro keys choice for one mode. Fewer keys hides the rest; nothing they hold is deleted. */
+  const macroCountField = (field: MacroCountField) =>
+    form && (
+      <label className="settings-field">
+        <span className="settings-label">{t('settings.macroCount.label')}</span>
+        <select
+          disabled={locked('macros')}
+          className="settings-input"
+          value={macroCount(form.macros[field])}
+          onChange={(e) => setMacroCount(field, macroCount(Number(e.target.value)))}
+        >
+          {MACRO_COUNTS.map((n) => (
+            <option key={n} value={n}>
+              {t('settings.macroCount.option', { count: n })}
+            </option>
+          ))}
+        </select>
+        <span className="settings-hint">{t('settings.macroCount.hint')}</span>
+      </label>
+    )
 
   // --- Enter Sends Message: each set's own mapping of its keys to ESM's steps ---
   // A mapping describes its set, so it is saved WITH the set: on the active CW profile, per
@@ -2954,6 +3093,32 @@ export function SettingsPanel({
   // starting feature set as the wizard does, so whenever that would turn any screen off (whatever
   // the set is now, a named profile or a hand-tuned one) it asks first and names what would go.
   // Declined, nothing changes.
+  // A "My station" profile was saved or removed (its own writer, not Save): the station's call,
+  // grid, state and power may be the profile's now, so the form and its saved copy take them, with
+  // the list, from the backend; the rest of the form is left as the operator has it.
+  const handleStationProfilesChanged = () => {
+    void refreshStationFields().then((fresh) => {
+      if (fresh) onSaved?.()
+    })
+  }
+  // The station's call, grid, state and power, its profiles and the one it is on, read again from
+  // the backend into the form and its saved copy. Resolves whether it read them.
+  async function refreshStationFields(): Promise<boolean> {
+    const fresh = await getSettings().catch(() => null)
+    if (!fresh) return false
+    const station: Partial<Settings> = {
+      mycall: fresh.mycall,
+      mygrid: fresh.mygrid,
+      opState: fresh.opState,
+      stationPowerW: fresh.stationPowerW,
+      stationProfiles: fresh.stationProfiles,
+      activeStationProfile: fresh.activeStationProfile,
+    }
+    setForm((prev) => (prev ? { ...prev, ...station } : prev))
+    if (savedRef.current) savedRef.current = { ...savedRef.current, ...station }
+    return true
+  }
+
   const handleSetExperience = (level: ExperienceLevel) => {
     void (async () => {
       const label = EXPERIENCE_LEVELS.find((l) => l.value === level)?.label ?? level
@@ -3295,16 +3460,18 @@ export function SettingsPanel({
     // it again. Edit loads a radio from this copy and `withActiveRadioConfig` writes the operating
     // radio back from it: left stale, a saved baud, port or sound card came back on the radio
     // re-opened for Edit, and the operating radio's went back at the next save of the other one.
-    const { radios } = await getSettings()
-    setForm((prev) => (prev ? { ...prev, radios } : prev))
+    // The station's record of the TX cards, too: the "" a pick put there asked for one read, at this
+    // Save, and must not ride a later save, when the cards may have been renumbered since.
+    const { radios, txCardModels } = await getSettings()
+    setForm((prev) => (prev ? { ...prev, radios, txCardModels } : prev))
     // The baseline the next Save is diffed against (`saveForm`) holds the radio fields as the form
     // now holds them: the radio on the form, whichever it is, so only the operator's next edit of it
     // reads as a change. (The station-wide save of a form showing another radio leaves the radio
     // fields out, so the radio in use's drive and gain, moved in the cockpit since, are not sent.)
     // Test CAT and Auto-test save through here too, so the radio fields move here for every caller;
     // `commitSave` then takes the whole of what this returns.
-    const saved = { ...next, radios }
-    if (savedRef.current) savedRef.current = { ...savedRef.current, ...radioPatch(saved), radios }
+    const saved = { ...next, radios, txCardModels }
+    if (savedRef.current) savedRef.current = { ...savedRef.current, ...radioPatch(saved), radios, txCardModels }
     return saved
   }
 
@@ -4002,6 +4169,22 @@ export function SettingsPanel({
         return
       }
     }
+    // ⭐ THE STATION'S CALL CHANGED WHILE A CONTEST ENTRY RUNS asks once before it saves (the
+    // operator's decision, 2026-11-01): an entry is operated under one call (ARRL Field Day rules
+    // 6.12 and 6.2), and its log and Cabrillo stay under the call it was started with. Asked of the
+    // station's call only, never the operator at the key (`fdOperator`), whom a club rotates. A
+    // Save that turns the contest off is the checklist's below, and asks nothing here.
+    const entryCall = entryCallChanged(savedRef.current, form, fieldDay)
+    if (
+      entryCall &&
+      !(await confirmDialog({
+        title: t('settings.save.entryCall.title'),
+        body: t('settings.save.entryCall.body', { call: entryCall }),
+        confirmLabel: t('settings.save.entryCall.action'),
+      }))
+    ) {
+      return
+    }
     // ⭐ THE CONTEST-OVER CHECKLIST (ContestOverDialog.tsx): a Save that turns Contest mode off
     // offers it FIRST and saves nothing until it is answered — the merge and the export need the
     // session the mode holds. "Now" is what this Save would leave: the live settings, with this
@@ -4220,10 +4403,45 @@ export function SettingsPanel({
   // offered_in_picker=false, opens_at_runtime=true). We cannot know from here whether a name
   // will open — so we state the thing we do know and leave the verdict to the open, which is
   // already a visible error naming the device.
+  //
+  // The saved name shows the whitespace a reader cannot see (#425: a stale "USB AUDIO CODEC" beside
+  // the device's real "USB AUDIO  CODEC" read as the same entry twice).
   const audioLabel = (name: string, kind: 'input' | 'output') =>
     audio[kind].includes(name)
       ? (audioLabels[kind][name] ?? name)
-      : t('settings.audio.device.notInList', { device: name })
+      : t('settings.audio.device.notInList', { device: showHiddenSpaces(name) })
+  // The operator chose a TX device from the list: the station reads the sound card it is on at the
+  // Save, even when it is the device already saved (picked away and back), by the "" the form names
+  // it with (`tx_card_models_after`, notify_sound.rs). That is how a TX device saved before the
+  // card was recorded gets its card recorded.
+  const pickTxDevice = (device: string) => {
+    update('audioOut', device)
+    if (device.trim()) {
+      setForm((prev) => (prev ? { ...prev, txCardModels: { ...(prev.txCardModels ?? {}), [device]: '' } } : prev))
+    }
+  }
+  // A saved RX / TX device not in the list, and the ONE offered device that is it but for the number
+  // Windows puts in front and the spacing (#425): offered as a button, never switched to.
+  // The station's other radios' devices in that direction are never offered: on a two-radio station
+  // they are the other radio's codec.
+  const useInstead = (key: 'audioIn' | 'audioOut', kind: 'input' | 'output') => {
+    const here = editingRadioId ?? form.activeRadio
+    const taken = (form.radios ?? []).filter((r) => r.id !== here).map((r) => r[key])
+    const twin = renumberedTwin(form[key], audio[kind], taken)
+    return twin === null ? null : (
+      <button
+        type="button"
+        className="settings-refresh"
+        data-testid={`use-instead-${key}`}
+        onClick={() => (key === 'audioOut' ? pickTxDevice(twin) : update(key, twin))}
+        title={t('settings.audio.device.useInsteadHint')}
+      >
+        {t('settings.audio.device.useInstead', {
+          device: showHiddenSpaces(audioLabels[kind][twin] ?? twin),
+        })}
+      </button>
+    )
+  }
 
   // Frequencies tab: last-wins override lookup for the stock table, plus
   // duplicate band+mode keys (flagged in the editor — the last row wins).
@@ -4245,6 +4463,18 @@ export function SettingsPanel({
   // network connection; over a cable only through the native switch, asked the way the switch asks it
   // (`civBlocked`): never on Network or through OmniRig, where a switch left on does nothing.
   const civAppliesDataMode = form.rigConn === 'icomlan' || (civBlocked === null && !!form.icomNativeCat)
+  // A Flex model off the network connection. Only the native PANADAPTER needs Connection: Network
+  // (`native_spectrum_kind` serves the Flex stream on the network alone), so on any other
+  // connection it shows disabled with a note saying so, rather than vanishing without a word. The
+  // native client and DAX audio run on Serial and Network alike, but not on OmniRig, the Icom
+  // network connection or TCI (`flex_client_reachable`; `flexClientNotHere` below).
+  const flexPanNeedsNetwork = [2036, 23005].includes(form.rigModel) && form.rigConn !== 'network'
+  // A Flex model on OmniRig or TCI: those connections hand CAT to another program, and the CAT
+  // daemon starts that connection's own driver before it ever asks for the Flex client
+  // (`spawn_cat_daemon`), so the client, its DAX audio and its CW/Tune/ATU setting do nothing
+  // there. Their switches say so and refuse to turn ON, but one left on still turns OFF.
+  const flexClientNotHere =
+    [2036, 23005].includes(form.rigModel) && (form.rigConn === 'omnirig' || form.rigConn === 'tci')
   const fdSectionInvalid =
     form.fdSection.trim() !== '' && !FD_SECTION_CODES.has(form.fdSection.trim().toUpperCase())
   // …and WHY it isn't known, when the reason is that ARRL retired it. A saved `MAR`
@@ -4485,6 +4715,42 @@ export function SettingsPanel({
                             })
                           : t('settings.workspace.scale.auto.hint.full', { scale })}
                     </span>
+                    {/* The answer to the scaled-display prompt (useScaleFitNotice.ts), which asks
+                        once: here it is seen and changed afterwards, applied live by useScale.
+                        Under Auto only, because a pinned scale is never touched by it. Its label
+                        is a hint, like the cap's, so the row keeps one settings-label. */}
+                    {scaleFitRule && onScaleFitRuleChange && (
+                      <>
+                        <span className="settings-hint">
+                          {t('settings.workspace.scale.fit.label')}
+                        </span>
+                        <div
+                          className="theme-switcher"
+                          role="group"
+                          aria-label={t('settings.workspace.scale.fit.aria')}
+                        >
+                          {(
+                            [
+                              ['scaled', t('settings.workspace.scale.fit.auto')],
+                              ['classic', t('settings.workspace.scale.fit.off')],
+                            ] as const
+                          ).map(([rule, label]) => (
+                            <button
+                              key={rule}
+                              type="button"
+                              className={`theme-chip${scaleFitRule === rule ? ' active' : ''}`}
+                              aria-pressed={scaleFitRule === rule}
+                              onClick={() => onScaleFitRuleChange(rule)}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                        <span className="settings-hint">
+                          {t('settings.workspace.scale.fit.hint')}
+                        </span>
+                      </>
+                    )}
                   </>
                 ) : (
                   <>
@@ -4626,6 +4892,30 @@ export function SettingsPanel({
                   <span className="settings-hint">{t('settings.workspace.localClock.hint')}</span>
                 </div>
               )}
+              {/* #343: how the TX meters are drawn — bars, or needles with a peak marker. Per
+                  machine, Bars by default (txMeterStyle.ts); the meters read it themselves. */}
+              <div className="settings-field">
+                <span className="settings-label">{t('settings.workspace.txMeters.label')}</span>
+                <div className="theme-switcher" role="group" aria-label={t('settings.workspace.txMeters.label')}>
+                  <button
+                    type="button"
+                    className={`theme-chip${txMeterStyle === 'bars' ? ' active' : ''}`}
+                    aria-pressed={txMeterStyle === 'bars'}
+                    onClick={() => setTxMeterStyle('bars')}
+                  >
+                    {t('settings.workspace.txMeters.bars')}
+                  </button>
+                  <button
+                    type="button"
+                    className={`theme-chip${txMeterStyle === 'needle' ? ' active' : ''}`}
+                    aria-pressed={txMeterStyle === 'needle'}
+                    onClick={() => setTxMeterStyle('needle')}
+                  >
+                    {t('settings.workspace.txMeters.needle')}
+                  </button>
+                </div>
+                <span className="settings-hint">{t('settings.workspace.txMeters.hint')}</span>
+              </div>
 
               <div className="settings-field">
                 <span className="settings-label">{t('settings.workspace.panes.label')}</span>
@@ -5338,6 +5628,8 @@ export function SettingsPanel({
             onUpdate={update}
             onSetFreq={setFreq}
             onSetExperience={handleSetExperience}
+            onStationProfilesChanged={handleStationProfilesChanged}
+            callWaits={stationProfileLocked}
           />
           )}
 
@@ -6982,8 +7274,9 @@ export function SettingsPanel({
                   A name-sniff for "flex" also matched the PowerSDR entry, offering an ANAN/HL2
                   operator a SmartSDR VITA-49 stream that radio cannot serve. `native_spectrum_kind`
                   in Rust has always gated on 2036|23005; this is the UI catching up. */}
-              {form.rigConn === 'network' &&
-                ([2036, 23005].includes(form.rigModel) || (form.flexRadioIp ?? '').trim() !== '') && (
+              {((form.rigConn === 'network' &&
+                ([2036, 23005].includes(form.rigModel) || (form.flexRadioIp ?? '').trim() !== '')) ||
+                flexPanNeedsNetwork) && (
                   <label className="settings-field">
                     <span className="settings-label">
                       {t('settings.rigControl.flexPan.label')}
@@ -6991,12 +7284,16 @@ export function SettingsPanel({
                     <button
                       type="button"
                       role="switch"
+                      disabled={flexPanNeedsNetwork}
                       aria-checked={form.flexNativePan ?? false}
                       className={`toggle${form.flexNativePan ? ' on' : ''}`}
                       onClick={() => updateBool('flexNativePan', !form.flexNativePan)}
                     >
                       <span className="toggle-knob" />
                     </button>
+                    {flexPanNeedsNetwork && (
+                      <span className="settings-hint">{t('settings.rigControl.flexNeedsNetwork')}</span>
+                    )}
                     <span className="settings-hint">
                       <T k="settings.rigControl.flexPan.hint" tags={{ b: <strong /> }} />
                     </span>
@@ -7026,9 +7323,12 @@ export function SettingsPanel({
                 </label>
               )}
 
-              {/* Same model-number gate as the panadapter above — see the note there. */}
-              {form.rigConn === 'network' &&
-                ([2036, 23005].includes(form.rigModel) || (form.flexRadioIp ?? '').trim() !== '') && (
+              {/* Same model-number gate as the panadapter above — see the note there. Unlike the
+                  panadapter it rides the native client, which does not depend on the connection,
+                  so a Flex model shows it live on Serial too (and it can always be turned off). */}
+              {((form.rigConn === 'network' &&
+                ([2036, 23005].includes(form.rigModel) || (form.flexRadioIp ?? '').trim() !== '')) ||
+                [2036, 23005].includes(form.rigModel)) && (
                   <label className="settings-field">
                     <span className="settings-label">
                       {t('settings.rigControl.flexAudio.label')}
@@ -7036,12 +7336,16 @@ export function SettingsPanel({
                     <button
                       type="button"
                       role="switch"
+                      disabled={flexClientNotHere && !form.flexNativeAudio}
                       aria-checked={form.flexNativeAudio ?? false}
                       className={`toggle${form.flexNativeAudio ? ' on' : ''}`}
                       onClick={() => updateBool('flexNativeAudio', !form.flexNativeAudio)}
                     >
                       <span className="toggle-knob" />
                     </button>
+                    {flexClientNotHere && (
+                      <span className="settings-hint">{t('settings.rigControl.flexClientNotHere')}</span>
+                    )}
                     <span className="settings-hint">
                       <T k="settings.rigControl.flexAudio.hint" tags={{ b: <strong /> }} />
                     </span>
@@ -7051,8 +7355,10 @@ export function SettingsPanel({
               {/* Nexus's own Flex client as this radio's CAT: Beta, opt-in per radio (operator
                   ruling, 2026-10-03), with SmartSDR CAT the default and the fallback. The Rust
                   side serves it only on these two model numbers and with the radio's own address
-                  set (`flex_client_reachable`), so the toggle shows on the models alone. */}
-              {form.rigConn === 'network' && [2036, 23005].includes(form.rigModel) && (
+                  set, on any connection but OmniRig, the Icom network connection and TCI
+                  (`flex_client_reachable`), so the toggle shows on the models alone and says so
+                  there (`flexClientNotHere`). */}
+              {[2036, 23005].includes(form.rigModel) && (
                 <label className="settings-field">
                   <span className="settings-label">
                     {t('settings.rigControl.flexClient.label')}
@@ -7060,12 +7366,16 @@ export function SettingsPanel({
                   <button
                     type="button"
                     role="switch"
+                    disabled={flexClientNotHere && !form.flexNativeCat}
                     aria-checked={form.flexNativeCat ?? false}
                     className={`toggle${form.flexNativeCat ? ' on' : ''}`}
                     onClick={() => updateBool('flexNativeCat', !form.flexNativeCat)}
                   >
                     <span className="toggle-knob" />
                   </button>
+                  {flexClientNotHere && (
+                    <span className="settings-hint">{t('settings.rigControl.flexClientNotHere')}</span>
+                  )}
                   <span className="settings-hint">
                     <T k="settings.rigControl.flexClient.hint" tags={{ b: <strong /> }} />
                   </span>
@@ -7074,18 +7384,22 @@ export function SettingsPanel({
 
               {/* The client's Beta setting for CW, Tune and the ATU, which no bench has confirmed yet
                   (operator ruling, 2026-10-14, "A Beta setting, off by default"). Per radio, and
-                  shown only where Nexus's own Flex client is this radio's connection, the one place
-                  it means anything (`flex_client_reachable` and the opt-in above). Only at the
-                  shack: a press that comes through the Remote stream changes nothing. */}
-              {form.rigConn === 'network' &&
-                [2036, 23005].includes(form.rigModel) &&
+                  shown wherever Nexus's own Flex client can run, the one place it means anything
+                  (`flex_client_reachable` and the opt-in above). That is Serial as well as Network,
+                  though not OmniRig, the Icom network connection or TCI: the client talks to the
+                  radio at its own address and honours this there, so hiding it off the network left
+                  a setting no one could turn off. Only at
+                  the shack: a press that comes through the Remote stream changes nothing. */}
+              {[2036, 23005].includes(form.rigModel) &&
                 form.flexNativeCat &&
                 (form.flexRadioIp ?? '').trim() !== '' && (
                   <label className="settings-field">
                     <span className="settings-label">
                       {t('settings.rigControl.flexUnbenched.label')}
                     </span>
-                    <button disabled={locked('flexNativeUnbenched')} data-setting="flexNativeUnbenched"
+                    <button
+                      disabled={locked('flexNativeUnbenched') || (flexClientNotHere && !form.flexNativeUnbenched)}
+                      data-setting="flexNativeUnbenched"
                       type="button"
                       role="switch"
                       aria-checked={form.flexNativeUnbenched ?? false}
@@ -7102,6 +7416,9 @@ export function SettingsPanel({
                       <span className="toggle-knob" />
                     </button>
                     {setAtStation('flexNativeUnbenched')}
+                    {flexClientNotHere && (
+                      <span className="settings-hint">{t('settings.rigControl.flexClientNotHere')}</span>
+                    )}
                     <span className="settings-hint">
                       <T k="settings.rigControl.flexUnbenched.hint" tags={{ b: <strong /> }} />
                     </span>
@@ -7147,6 +7464,28 @@ export function SettingsPanel({
                       )}
                     </span>
                   </label>
+                )}
+
+              {/* The radio's own scope stream, MEASURED (`radio.scopeRate`): read only, on the same
+                  radios as the CI-V log above. The SPEED is the radio's menu word, as it shows it. */}
+              {(form.rigConn === 'icomlan'
+                ? ICOM_LAN_MODELS.includes(form.rigModel)
+                : civBlocked === null && form.icomNativeCat) && (
+                  <div className="settings-field" data-testid="scope-rate">
+                    <span className="settings-label">{t('settings.rigControl.scopeRate.label')}</span>
+                    {radio?.scopeRate && (
+                      <span>
+                        {t('settings.rigControl.scopeRate.value', {
+                          rate: radio.scopeRate.sweepsPerSec.toFixed(1),
+                          dropped: String(radio.scopeRate.dropped),
+                          speed:
+                            radio.scopeRate.speed?.toUpperCase() ??
+                            t('settings.rigControl.scopeRate.speedUnknown'),
+                        })}
+                      </span>
+                    )}
+                    <span className="settings-hint">{t('settings.rigControl.scopeRate.idle')}</span>
+                  </div>
                 )}
 
               {(form.rigModel === 2036 || form.rigModel === 23005) && (
@@ -7259,14 +7598,15 @@ export function SettingsPanel({
               {(() => {
                 // Show the just-run test result, else the live CAT status from the snapshot.
                 const ok = catResult ? catResult.ok : radio?.catOk
-                const detail = catResult ? catResult.detail : radio?.catDetail
-                if (detail == null || detail === '') return null
+                const raw = catResult ? catResult.detail : radio?.catDetail
+                if (raw == null || raw === '') return null
+                const detail = localizeRefusal(raw)
                 const cls = ok === true ? 'ok' : ok === false ? 'fail' : 'na'
                 const mark = ok === true ? '✓ ' : ok === false ? '✗ ' : ''
                 return (
                   <span className={`cat-result ${cls}`} role="status">
                     {mark}
-                    {detail}
+                    {catDetailText(detail)}
                   </span>
                 )
               })()}
@@ -7323,6 +7663,7 @@ export function SettingsPanel({
                     {audioLoading ? '…' : t('settings.audio.refresh.action')}
                   </button>
                 </div>
+                {useInstead('audioIn', 'input')}
                 <span className="settings-hint">{t('settings.audio.input.hint')}</span>
               </label>
 
@@ -7331,7 +7672,7 @@ export function SettingsPanel({
                 <select
                   className="settings-input"
                   value={form.audioOut}
-                  onChange={(e) => update('audioOut', e.target.value)}
+                  onChange={(e) => pickTxDevice(e.target.value)}
                 >
                   <option value="">{t('settings.audio.device.systemDefault')}</option>
                   {audioOutOptions.map((d) => (
@@ -7340,6 +7681,7 @@ export function SettingsPanel({
                     </option>
                   ))}
                 </select>
+                {useInstead('audioOut', 'output')}
                 <span className="settings-hint">{t('settings.audio.output.hint')}</span>
               </label>
 
@@ -7393,6 +7735,17 @@ export function SettingsPanel({
                   )}
                 </span>
               </label>
+
+              {/* THE TX METERS BESIDE THE DRIVE (#461): set the drive against the radio's ALC without
+                  leaving Settings. The cockpits' read-only TxMeters (`pinned`: live while keyed, the
+                  last readings held between overs), nothing in it to press. Only for the radio in
+                  use, the one they measure: under another radio's Drive they would be the wrong
+                  radio's ALC. */}
+              {radio && !editingOtherRadio && (
+                <div className="settings-field">
+                  <TxMeters radio={radio} pinned />
+                </div>
+              )}
 
               <div className="settings-field">
                 <span className="settings-label">
@@ -7470,6 +7823,9 @@ export function SettingsPanel({
                     </select>
                     {setAtStation('pcMicDevice')}
                     <span className="settings-hint">{t('settings.audio.pcMic.device.hint')}</span>
+                    {/* Nexus keys a Front/Mic radio on its microphone input: the radio must be set
+                        to transmit the USB/rear audio this microphone arrives on (engine/pc_mic.rs). */}
+                    <span className="settings-hint">{t('settings.audio.pcMic.radioInput')}</span>
                   </label>
                   <label className="settings-field">
                     <span className="settings-label">
@@ -8653,6 +9009,119 @@ export function SettingsPanel({
               locked={locked}
               setAtStation={setAtStation}
             />
+            {/* FreeDV's own app beside Nexus, RECEIVE ONLY (`tempo_app::freedv`): the contacts it
+                logs land in the log, and the calls it hears are listed in the Phone FreeDV pane.
+                Its rig control is the share block above; these are its two hand-offs back. The
+                address and port numbers are invariant tokens. Like the share block, a bind the
+                system refused replaces the address with the sentence saying why. */}
+            <div className="settings-field" data-testid="freedv-settings">
+              <span className="settings-label">{t('settings.transmit.freedv.log.label')}</span>
+              <div className="rig-share-row">
+                <button disabled={locked('freedvLog')} data-setting="freedvLog"
+                  type="button"
+                  role="switch"
+                  aria-checked={form.freedvLog ?? true}
+                  aria-label={t('settings.transmit.freedv.log.label')}
+                  className={`toggle${(form.freedvLog ?? true) ? ' on' : ''}`}
+                  onClick={() => updateBool('freedvLog', !(form.freedvLog ?? true))}
+                >
+                  <span className="toggle-knob" />
+                </button>
+                {(form.freedvLog ?? true) && freedv?.logError && (
+                  <span className="rig-share-fault" role="alert">{freedv.logError}</span>
+                )}
+                {/* Port 0 is the listener switched off (the backend binds nothing): no address. */}
+                {(form.freedvLog ?? true) && !freedv?.logError && (form.freedvLogPort ?? 2239) === 0 && (
+                  <span className="settings-hint">{t('settings.transmit.freedv.logPort.off')}</span>
+                )}
+                {(form.freedvLog ?? true) && !freedv?.logError && (form.freedvLogPort ?? 2239) !== 0 && (
+                  <code className="rig-share-addr mono">{form.logIntakeLan ? '0.0.0.0' : '127.0.0.1'}:{form.freedvLogPort ?? 2239}</code>
+                )}
+              </div>
+              {setAtStation('freedvLog')}
+              <span className="settings-hint">{t('settings.transmit.freedv.log.hint')}</span>
+              {(form.freedvLog ?? true) && freedv?.intakeProgram && freedv.intakeUnix != null && (
+                <span className="settings-hint" role="status" data-testid="intake-last">
+                  {t('settings.transmit.freedv.last', {
+                    program: programLabel(freedv.intakeProgram),
+                    call: freedv.intakeCall ?? '',
+                    time: fmtUtc(freedv.intakeUnix),
+                  })}
+                </span>
+              )}
+              {(form.freedvLog ?? true) && freedv?.notice && (
+                <span className="settings-hint" role="status">{freedv.notice}</span>
+              )}
+              {(form.freedvLog ?? true) && (
+                <label className="settings-field">
+                  <span className="settings-label">{t('settings.transmit.freedv.logPort.label')}</span>
+                  <input disabled={locked('freedvLogPort')} data-setting="freedvLogPort"
+                    className="settings-input"
+                    type="number"
+                    inputMode="numeric"
+                    value={String(form.freedvLogPort ?? 2239)}
+                    placeholder="2239"
+                    onChange={(e) => update('freedvLogPort', e.target.value)}
+                    autoComplete="off"
+                  />
+                  {setAtStation('freedvLogPort')}
+                </label>
+              )}
+              {/* Off by default: the port is this computer's alone until the operator lets in the
+                  devices on their own network (private addresses only, `tempo_app::log_intake`). */}
+              {(form.freedvLog ?? true) && (
+                <>
+                  <span className="settings-label">{t('settings.transmit.freedv.lan.label')}</span>
+                  <div className="rig-share-row">
+                    <button disabled={locked('logIntakeLan')} data-setting="logIntakeLan"
+                      type="button"
+                      role="switch"
+                      aria-checked={form.logIntakeLan ?? false}
+                      aria-label={t('settings.transmit.freedv.lan.label')}
+                      className={`toggle${form.logIntakeLan ? ' on' : ''}`}
+                      onClick={() => updateBool('logIntakeLan', !form.logIntakeLan)}
+                    >
+                      <span className="toggle-knob" />
+                    </button>
+                  </div>
+                  {setAtStation('logIntakeLan')}
+                  <span className="settings-hint">{t('settings.transmit.freedv.lan.hint')}</span>
+                  {form.logIntakeLan && (
+                    <label className="settings-field">
+                      <span className="settings-label">{t('settings.transmit.freedv.peer.label')}</span>
+                      <input disabled={locked('logIntakePeer')} data-setting="logIntakePeer"
+                        className="settings-input mono"
+                        type="text"
+                        value={form.logIntakePeer ?? ''}
+                        placeholder="192.168.1.40"
+                        onChange={(e) => update('logIntakePeer', e.target.value)}
+                        autoComplete="off"
+                        spellCheck={false}
+                      />
+                      {setAtStation('logIntakePeer')}
+                      <span className="settings-hint">{t('settings.transmit.freedv.peer.hint')}</span>
+                    </label>
+                  )}
+                </>
+              )}
+              <span className="settings-label">{t('settings.transmit.freedv.heard.label')}</span>
+              <div className="rig-share-row">
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={form.freedvHeard ?? false}
+                  aria-label={t('settings.transmit.freedv.heard.label')}
+                  className={`toggle${form.freedvHeard ? ' on' : ''}`}
+                  onClick={() => updateBool('freedvHeard', !form.freedvHeard)}
+                >
+                  <span className="toggle-knob" />
+                </button>
+                {form.freedvHeard && freedv?.heardError && (
+                  <span className="rig-share-fault" role="alert">{freedv.heardError}</span>
+                )}
+              </div>
+              <span className="settings-hint">{t('settings.transmit.freedv.heard.hint')}</span>
+            </div>
           </fieldset>
           </>
           )}
@@ -9254,7 +9723,7 @@ export function SettingsPanel({
               <div className="settings-grid">
                 {/* ⚠️ The beacon toggle is a CONFIGURATION control, not a transmit control: it
                     chooses whether the station announces itself, and it can neither key, unkey
-                    nor stop anything. Same reading as Tx Power's drive slider — nothing in this
+                    nor stop anything. Same reading as the Drive slider — nothing in this
                     sub-group is on any cockpit's stop-line census. */}
                 <div className="settings-field">
                   <label className="settings-toggle">
@@ -9940,6 +10409,7 @@ export function SettingsPanel({
                     {t('settings.cw.macros.profiles.delete')}
                   </button>
                 </div>
+                {macroCountField('cwMacroCount')}
                 {!activeCwMacros.length ? (
                   <div className="cw-macro-row">
                     {/* The macro tokens live INSIDE the entry — `{MYCALL}` and friends are
@@ -9956,18 +10426,18 @@ export function SettingsPanel({
                   </div>
                 ) : (
                   <>
-                    {activeCwMacros.map((m, i) => (
+                    {cwVisibleMacros(activeCwMacros, macroCount(form.macros.cwMacroCount)).map((m) => (
                       <div key={m.key} className="cw-macro-row">
                         <span className="cw-macro-key" title={CW_MACRO_ROLES[m.key] ?? ''}>
-                          {m.key}
+                          {macroKeyCaption(m.key) || macroSlotName(m.key)}
                         </span>
                         <span className="cw-macro-role">{CW_MACRO_ROLES[m.key] ?? ''}</span>
                         <input disabled={locked('macros')}
                           className="settings-input cw-macro-label"
                           type="text"
                           value={m.label}
-                          onChange={(e) => updateCwMacro(i, 'label', e.target.value)}
-                          aria-label={t('settings.cw.macros.row.label.aria', { key: m.key })}
+                          onChange={(e) => updateCwMacro(m.key, 'label', e.target.value)}
+                          aria-label={t('settings.cw.macros.row.label.aria', { key: macroSlotName(m.key) })}
                           autoComplete="off"
                           spellCheck={false}
                         />
@@ -9975,8 +10445,8 @@ export function SettingsPanel({
                           className="settings-input cw-macro-text"
                           type="text"
                           value={m.text}
-                          onChange={(e) => updateCwMacro(i, 'text', e.target.value)}
-                          aria-label={t('settings.cw.macros.row.text.aria', { key: m.key })}
+                          onChange={(e) => updateCwMacro(m.key, 'text', e.target.value)}
+                          aria-label={t('settings.cw.macros.row.text.aria', { key: macroSlotName(m.key) })}
                           autoComplete="off"
                           spellCheck={false}
                         />
@@ -10023,6 +10493,7 @@ export function SettingsPanel({
               </label>
               <span className="settings-hint">{t('settings.rtty.rxAutoArm.hint')}</span>
             </div>
+            {macroCountField('rttyMacroCount')}
             <div className="settings-featgroup">
               <span className="settings-featgroup-title">{t('settings.rtty.keying.title')}</span>
               <label className="settings-field">
@@ -10096,6 +10567,7 @@ export function SettingsPanel({
                   onChange={(e) => updateNum('rttyBaud', Number(e.target.value))}
                 >
                   <option value="45.45">{t('settings.rtty.baud.hf')}</option>
+                  <option value="50">{t('settings.rtty.baud.eu')}</option>
                   <option value="75">{t('settings.rtty.baud.vhf')}</option>
                 </select>
                 <span className="settings-hint">{t('settings.rtty.baud.hint')}</span>
@@ -10114,6 +10586,31 @@ export function SettingsPanel({
                   <option value="850">850</option>
                 </select>
                 <span className="settings-hint">{t('settings.rtty.shift.hint')}</span>
+              </label>
+              {/* The saved tone pair, by its LOW tone: which of the two is mark swaps with the
+                  sideband and Reverse, so a "mark" box would mean different tones on different
+                  rigs. Offered on true FSK too — the decoder still listens on the pair. The
+                  engine clamps the pair's centre into 300–3700 Hz, as a waterfall net is. */}
+              <label className="settings-field">
+                <span className="settings-label">{t('settings.rtty.lowTone.label')}</span>
+                <input
+                  className="settings-input"
+                  type="number"
+                  min={RTTY_LOW_TONE_HZ_MIN}
+                  max={RTTY_LOW_TONE_HZ_MAX}
+                  step={5}
+                  value={lowToneText ?? String(validLowTone(form.rttyLowToneHz ?? RTTY_LOW_TONE_HZ_DEFAULT))}
+                  onChange={(e) => {
+                    // Cleared, junk or out of range: shown while typing, never stored — the form
+                    // keeps the last valid tone, and leaving the box shows it again.
+                    const raw = e.target.value
+                    setLowToneText(raw)
+                    const n = Number(raw)
+                    if (raw.trim() !== '' && validLowTone(n) === n) updateNum('rttyLowToneHz', n)
+                  }}
+                  onBlur={() => setLowToneText(null)}
+                />
+                <span className="settings-hint">{t('settings.rtty.lowTone.hint')}</span>
               </label>
               <div className="settings-field">
                 <label className="settings-toggle">
@@ -10202,6 +10699,7 @@ export function SettingsPanel({
               </label>
               <span className="settings-hint">{t('settings.psk.rxAutoArm.hint')}</span>
             </div>
+            {macroCountField('pskMacroCount')}
             {/* JTTY — WSJT-X's keyboard mode, the Keyboard section's other modem, so its one
                 setting lives in this section (the Digital tab is at its section ceiling). Its F Tol
                 is kept too, but by the JTTY cockpit, its one writer — never by this form. */}
@@ -10669,6 +11167,21 @@ export function SettingsPanel({
                   </button>
                 </label>
                 <span className="settings-hint">{t('settings.sstv.rxAutoArm.hint')}</span>
+              </div>
+              <div className="settings-field">
+                <label className="settings-toggle">
+                  <span className="settings-label">{t('settings.sstv.tuneOnOpen.label')}</span>
+                  <button disabled={locked('sstvTuneOnOpen')}
+                    type="button"
+                    role="switch"
+                    aria-checked={form.sstvTuneOnOpen === true}
+                    className={`toggle${form.sstvTuneOnOpen === true ? ' on' : ''}`}
+                    onClick={() => updateBool('sstvTuneOnOpen', form.sstvTuneOnOpen !== true)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </label>
+                <span className="settings-hint">{t('settings.sstv.tuneOnOpen.hint', { freq: SSTV_20M_MHZ.toFixed(3), band: SSTV_20M_BAND })}</span>
               </div>
               <div className="settings-field">
                 <label className="settings-toggle">
@@ -11418,6 +11931,27 @@ export function SettingsPanel({
                   </select>
                 </label>
                 <span className="settings-hint">{t('settings.alerts.popupDwell.hint')}</span>
+              </div>
+
+              {/* #445: which corner they stand in. A stored corner this build does not know shows
+                  (and saves) as bottom right, where they always stood (`popupCornerOf`). */}
+              <div className="settings-field">
+                <label className="settings-inline-label">
+                  <span className="settings-label">{t('settings.alerts.popupCorner.label')}</span>
+                  <select
+                    className="settings-input"
+                    value={popupCornerOf(form.popupCorner)}
+                    aria-label={t('settings.alerts.popupCorner.label')}
+                    onChange={(e) => update('popupCorner', popupCornerOf(e.target.value))}
+                  >
+                    {/* The <option> VALUES are the persisted corners; only the labels are prose. */}
+                    <option value="bottom-right">{t('settings.alerts.popupCorner.bottomRight')}</option>
+                    <option value="bottom-left">{t('settings.alerts.popupCorner.bottomLeft')}</option>
+                    <option value="top-right">{t('settings.alerts.popupCorner.topRight')}</option>
+                    <option value="top-left">{t('settings.alerts.popupCorner.topLeft')}</option>
+                  </select>
+                </label>
+                <span className="settings-hint">{t('settings.alerts.popupCorner.hint')}</span>
               </div>
 
               <div className="settings-field">
@@ -12363,6 +12897,29 @@ export function SettingsPanel({
                   {setAtStation('wsjtxUdpAddr')}
                   <span className="settings-hint">{t('settings.integrations.udpAddr.hint')}</span>
                 </label>
+
+                <div className="settings-field">
+                  <label className="settings-toggle">
+                    <span className="settings-label">
+                      {t('settings.integrations.wsjtxUdpAccept.label')}
+                    </span>
+                    <button
+                      disabled={locked('wsjtxUdpAcceptOtherComputers') || !form.wsjtxUdp}
+                      data-setting="wsjtxUdpAcceptOtherComputers"
+                      type="button"
+                      role="switch"
+                      aria-checked={form.wsjtxUdpAcceptOtherComputers === true}
+                      className={`toggle${form.wsjtxUdpAcceptOtherComputers ? ' on' : ''}`}
+                      onClick={() =>
+                        updateBool('wsjtxUdpAcceptOtherComputers', !form.wsjtxUdpAcceptOtherComputers)
+                      }
+                    >
+                      <span className="toggle-knob" />
+                    </button>
+                  </label>
+                  {setAtStation('wsjtxUdpAcceptOtherComputers')}
+                  <span className="settings-hint">{t('settings.integrations.wsjtxUdpAccept.hint')}</span>
+                </div>
 
                 <div className="settings-field">
                   <label className="settings-toggle">

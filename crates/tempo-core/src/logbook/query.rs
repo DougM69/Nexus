@@ -178,10 +178,12 @@ pub fn mode_key(mode: &str) -> String {
 }
 
 /// The UI's band table (`ui/src/band.ts` `BAND_RANGES`), low to high: `(lo, hi, label)` in MHz.
-pub(crate) const UI_BANDS: [(f64, f64, &str); 22] = [
+pub(crate) const UI_BANDS: [(f64, f64, &str); 26] = [
+    (0.1357, 0.1378, "2200m"),
+    (0.472, 0.479, "630m"),
     (1.8, 2.0, "160m"),
     (3.5, 4.0, "80m"),
-    (5.3, 5.41, "60m"),
+    (5.06, 5.5, "60m"),
     (7.0, 7.3, "40m"),
     (10.1, 10.15, "30m"),
     (14.0, 14.35, "20m"),
@@ -189,7 +191,9 @@ pub(crate) const UI_BANDS: [(f64, f64, &str); 22] = [
     (21.0, 21.45, "15m"),
     (24.89, 24.99, "12m"),
     (28.0, 29.7, "10m"),
+    (40.0, 45.0, "8m"),
     (50.0, 54.0, "6m"),
+    (54.0, 69.9, "5m"),
     (70.0, 71.0, "4m"),
     (144.0, 148.0, "2m"),
     (222.0, 225.0, "1.25m"),
@@ -204,10 +208,10 @@ pub(crate) const UI_BANDS: [(f64, f64, &str); 22] = [
 ];
 
 /// Every band label of the UI's table, in its order.
-pub(crate) const UI_BAND_LABELS: [&str; 22] = {
-    let mut out = [""; 22];
+pub(crate) const UI_BAND_LABELS: [&str; UI_BANDS.len()] = {
+    let mut out = [""; UI_BANDS.len()];
     let mut i = 0;
-    while i < 22 {
+    while i < UI_BANDS.len() {
         out[i] = UI_BANDS[i].2;
         i += 1;
     }
@@ -223,7 +227,7 @@ pub(crate) fn ui_band_edges(label: &str) -> Option<(f64, f64)> {
 }
 
 /// `bandLabelForMhz(mhz)`: the first band whose edges hold `mhz`, or `""`.
-fn ui_band_for_mhz(mhz: f64) -> &'static str {
+pub(crate) fn ui_band_for_mhz(mhz: f64) -> &'static str {
     if !mhz.is_finite() {
         return "";
     }
@@ -340,6 +344,16 @@ pub enum SortKey {
     ExchRcvd,
     /// The comment, or the private note where there is no comment.
     Notes,
+    /// A satellite contact's bird and propagation mode (#423), as stored.
+    #[serde(rename = "satName")]
+    SatName,
+    #[serde(rename = "propMode")]
+    PropMode,
+    /// The name the park list gives each POTA park the Park column shows ([`park_name`], #437).
+    /// The names live outside the log: an order only has them when its caller hands the list
+    /// over ([`OrderBuilder::park_names`]); without it every contact is empty here.
+    #[serde(rename = "parkName")]
+    ParkName,
 }
 
 /// What an order reads from the store's child tables beside the `qso` columns: the upload stamps
@@ -411,6 +425,10 @@ impl SortKey {
             SortKey::EqslRcvdDate => (&[], Some("EQSL_QSLRDATE")),
             SortKey::ExchSent | SortKey::ExchRcvd => (CONTEST_COLUMNS, None),
             SortKey::Notes => (&["comment", "notes"], None),
+            SortKey::SatName => (&["sat_name"], None),
+            SortKey::PropMode => (&["prop_mode"], None),
+            // The references are the Logbook's own columns; their programs are not.
+            SortKey::ParkName => (&["ota_their_program", "ota_my_program"], None),
             _ => (&[], None),
         }
     }
@@ -604,8 +622,11 @@ fn notes_key(s: Option<&str>) -> SortVal {
     }
 }
 
-/// An upload stamp as its column marks it (`uploadMark`): failed, waiting, done; none is empty.
+/// An upload stamp as its column marks it (`uploadMark`): failed, waiting, done; none (and
+/// corrected-not-sent-yet) is empty.
 fn upload_rank(s: Option<&super::UploadStatus>) -> SortVal {
+    // #163: corrected and not sent yet sorts with the contacts not uploaded, as its mark reads.
+    let s = s.filter(|s| s.detail != Some(super::UploadDetail::Resend));
     s.map_or(SortVal::Empty, |s| {
         SortVal::Num(match s.outcome {
             UploadOutcome::Rejected | UploadOutcome::AuthFail => 0.0,
@@ -636,8 +657,54 @@ fn exchange(r: &QsoRecord, sent: bool) -> Option<String> {
     (if sent { c.stx } else { c.srx }).map(|n| n.to_string())
 }
 
-/// `entity` is the row's DXCC entity (`q.entity`), asked for only when the column is the country.
-fn sort_val(r: &QsoRecord, k: SortKey, entity: Option<&str>) -> SortVal {
+/// The POTA references whose names the park name column shows (`parkNameRefs`): the Park
+/// column's — the other station's, else my own — split, trimmed, upper-cased, each once; none
+/// when that reference is of another program (SOTA has no name list). A reference with no program
+/// recorded is read as POTA, as the Park column's hover reads it.
+pub fn park_name_refs(ota: &super::Ota) -> Vec<String> {
+    let theirs = ota
+        .their_ref
+        .as_deref()
+        .map(js_trim)
+        .filter(|r| !r.is_empty());
+    let (r, program) = match theirs {
+        Some(r) => (Some(r), ota.their_program.as_deref()),
+        None => (
+            ota.my_ref.as_deref().map(js_trim),
+            ota.my_program.as_deref(),
+        ),
+    };
+    let program = program.map(js_trim).unwrap_or("");
+    let Some(r) = r.filter(|r| !r.is_empty()) else {
+        return Vec::new();
+    };
+    if !program.is_empty() && !program.eq_ignore_ascii_case("POTA") {
+        return Vec::new();
+    }
+    let mut refs: Vec<String> = Vec::new();
+    for park in super::hot::park_refs(r) {
+        if !refs.contains(&park) {
+            refs.push(park);
+        }
+    }
+    refs
+}
+
+/// The park name column's text (`parkNameText`): the name `name_of` gives each of
+/// [`park_name_refs`], those it knows, joined by ` / ` in the order logged; `None` when it knows
+/// none.
+pub fn park_name(ota: &super::Ota, name_of: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+    let names: Vec<String> = park_name_refs(ota)
+        .iter()
+        .filter_map(|r| name_of(r))
+        .filter(|n| !n.is_empty())
+        .collect();
+    (!names.is_empty()).then(|| names.join(" / "))
+}
+
+/// `entity` is the row's DXCC entity (`q.entity`), asked for only when the column is the country;
+/// `park` the row's park name ([`park_name`]), asked for only when the column is the park name.
+fn sort_val(r: &QsoRecord, k: SortKey, entity: Option<&str>, park: Option<&str>) -> SortVal {
     match k {
         SortKey::Call => text_or_empty(Some(&r.call)),
         // The country the Logbook shows (`q.entity ?? q.country`): the DXCC entity, so a QRZ
@@ -696,6 +763,9 @@ fn sort_val(r: &QsoRecord, k: SortKey, entity: Option<&str>) -> SortVal {
             let comment = r.comment.as_deref().map(js_trim).filter(|c| !c.is_empty());
             notes_key(comment.or(r.notes.as_deref()))
         }
+        SortKey::SatName => text_or_empty(r.sat_name.as_deref()),
+        SortKey::PropMode => text_or_empty(r.prop_mode.as_deref()),
+        SortKey::ParkName => text_or_empty(park),
     }
 }
 
@@ -813,6 +883,9 @@ where
     b.finish()
 }
 
+/// The park list's name for one POTA reference ([`OrderBuilder::park_names`]).
+pub type ParkNames<'a> = dyn Fn(&str) -> Option<String> + 'a;
+
 /// An order vector built as the rows go by, so a pass over a lifetime log keeps only what the
 /// order needs of each row it shows — its handle, its value in the sorted column, its time —
 /// and never the rows. Filter, then a stable sort on the column with the time as the
@@ -836,6 +909,9 @@ pub struct OrderBuilder<'a, H> {
     /// the statistics ask theirs ([`LogStatCounter`]).
     resolve: &'a dyn Fn(&QsoRecord) -> Option<String>,
     entity_of: HashMap<(String, Option<u32>), Option<String>>,
+    /// The park list's name for one POTA reference, for the park name column; `None` when the
+    /// caller handed no list ([`Self::park_names`]).
+    park_names: Option<&'a ParkNames<'a>>,
     kept: Vec<(H, SortVal, Box<[SortVal]>, u64)>,
 }
 
@@ -851,8 +927,16 @@ impl<'a, H> OrderBuilder<'a, H> {
             t: js_lower(js_trim(&query.search)),
             resolve,
             entity_of: HashMap::new(),
+            park_names: None,
             kept: Vec::new(),
         }
+    }
+
+    /// Sort the park name column on the names `name_of` gives a POTA reference: the station's
+    /// park list. Without it that column reads every contact as empty.
+    pub fn park_names(mut self, name_of: &'a ParkNames<'a>) -> Self {
+        self.park_names = Some(name_of);
+        self
     }
 
     /// Whether the query searches, and so reads each row's SUBMODE as well as its columns: a
@@ -914,13 +998,20 @@ impl<'a, H> OrderBuilder<'a, H> {
         } else {
             None
         };
+        let by_park =
+            self.sort == SortKey::ParkName || self.then.iter().any(|t| t.sort == SortKey::ParkName);
+        let park = match self.park_names {
+            Some(name_of) if by_park => park_name(&r.ota, name_of),
+            _ => None,
+        };
+        let park = park.as_deref();
         let then: Box<[SortVal]> = self
             .then
             .iter()
-            .map(|t| sort_val(r, t.sort, entity))
+            .map(|t| sort_val(r, t.sort, entity, park))
             .collect();
         self.kept
-            .push((h, sort_val(r, self.sort, entity), then, r.when_unix));
+            .push((h, sort_val(r, self.sort, entity, park), then, r.when_unix));
     }
 
     /// The handles of the rows shown, in display order.
@@ -1765,3 +1856,34 @@ pub mod reference {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod resend_rank_tests {
+    use super::*;
+    use crate::logbook::{UploadDetail, UploadStatus};
+
+    /// #163: a satellite contact corrected and not sent yet sorts with the contacts not uploaded,
+    /// not with the failures (the Logbook's `uploadMark` says "Corrected, not sent yet", not
+    /// "Refused").
+    #[test]
+    fn a_corrected_contact_not_sent_yet_sorts_with_the_not_uploaded() {
+        let st = |detail| UploadStatus {
+            outcome: UploadOutcome::Rejected,
+            when_unix: 1,
+            detail,
+        };
+        assert_eq!(
+            upload_rank(Some(&st(Some(UploadDetail::Resend)))),
+            SortVal::Empty
+        );
+        assert_eq!(upload_rank(None), SortVal::Empty);
+        assert_eq!(
+            upload_rank(Some(&st(Some(UploadDetail::Unclassified)))),
+            SortVal::Num(0.0)
+        );
+        assert_eq!(
+            UploadDetail::from_code("resend"),
+            Some(UploadDetail::Resend)
+        );
+    }
+}

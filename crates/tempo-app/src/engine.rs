@@ -112,6 +112,8 @@ mod cw_whole_message_tests;
 pub mod decoder_screens;
 mod field_day_display;
 /// WSJT-X's mid-over message switch for FT8 and FT4 (`m_restart`).
+/// The FT modes' TX drive, remembered per band and mode and brought back between overs.
+mod ft_drive;
 /// When an FT8/FT4 contact is logged by itself, offered in the confirm popup, or left for Log QSO.
 #[cfg(test)]
 mod ft_log_offer_tests;
@@ -145,6 +147,10 @@ mod kept_files_tests;
 /// The cockpit's drive and RX gain survive a later Settings save, and a save of another radio.
 #[cfg(test)]
 mod live_level_tests;
+/// A contact another program logged: its stamps and its uploads, never the log funnel.
+mod log_intake;
+#[cfg(test)]
+mod lotw_location_tests;
 mod mode_entry;
 /// A program outside Nexus judged across the whole audio passband it could send.
 #[cfg(test)]
@@ -181,6 +187,10 @@ mod remote_transmit_hold_tests;
 mod restore_session_tests;
 #[cfg(test)]
 mod rtty_sideband_tests;
+/// "My station" profiles: switching, the log stamp, the activation's pick, the licence refusal.
+mod station_profiles;
+#[cfg(test)]
+mod station_profiles_tests;
 pub mod tx_extras;
 #[cfg(test)]
 mod tx_extras_tests;
@@ -189,6 +199,9 @@ mod tx_extras_tests;
 #[cfg(test)]
 mod upload_start_tests;
 // Debug builds only, like the station's parity tests: they read the debug build's counters.
+/// A decode pane's refill (#452): the periods it missed, from the history, read only.
+#[cfg(test)]
+mod decode_refill_tests;
 /// The experience answer's one writer (the first-run wizard and Settings ▸ Station).
 #[cfg(test)]
 mod experience_level_tests;
@@ -222,6 +235,8 @@ pub mod tci_spots;
 #[cfg(test)]
 mod ten_meter_ssb_only_tests;
 mod tx_alarms;
+/// Diagnostic-log words about transmit: who keyed, and why the TX watchdog tripped. Log only.
+mod tx_diag;
 /// A data frame judged across its whole width, and where it keys.
 #[cfg(test)]
 mod tx_frame_width_tests;
@@ -314,7 +329,27 @@ use tempo_core::{channel, spectrum, tempo_fast, tx};
 #[derive(Default)]
 struct FeedRows {
     audio: Option<RowAverage>,
+    /// The NEWEST RF frame and when it was published. Everything that asks "what is the RF
+    /// picture now" reads this one; the frames before it wait in `rf_prev`.
     rf: Option<(SpectrumFrame, Instant)>,
+    /// Whether `rf` has been handed to an in-order reader yet (see [`FeedRows::rf_next_after`]).
+    rf_shown: bool,
+    /// Whether a scope was reading when `rf` was published: see [`RfEntry::watched`].
+    rf_watched: bool,
+    /// The CI-V frames published before `rf`, oldest first, at most [`SpectrumFeed::RF_BACKLOG`]:
+    /// what lets a reader that polls between two publishes still draw each one, in order, rather
+    /// than only the newest. See [`FeedRows::rf_next_after`]. Empty for any other source.
+    rf_prev: VecDeque<RfEntry>,
+    /// When an in-order reader last read the RF slot: frames are counted as dropped only while
+    /// someone is drawing them.
+    rf_read_at: Option<Instant>,
+    /// CI-V frames that left the backlog undrawn although a scope was reading when they were
+    /// published: pushed out by newer ones, or stepped over by a reader that fell behind.
+    rf_dropped: u64,
+    /// The RF frames handed out lately, each with when a reader holding it last polled: a reader
+    /// names the last frame it drew, so this tells how long ago it last polled, which is how a reader slower than the radio is told
+    /// apart (see [`SpectrumFeed::RF_SLOW_READER`]). At most [`SpectrumFeed::RF_BACKLOG`] + 1.
+    rf_handed: VecDeque<(u64, Instant)>,
     /// The span the on-screen rig scope is actually showing, and the row computed over it.
     /// See [`SpectrumFeed::scope_row`] — this is the second slot, not a second feed.
     scope_req: Option<ScopeReq>,
@@ -370,6 +405,134 @@ impl FeedRows {
             bins: row.row,
         }
     }
+
+    /// Empty the RF slot: the newest frame and its backlog. A deliberate clear (the source
+    /// changed or stood down), so nothing in it counts as dropped.
+    fn clear_rf(&mut self) {
+        self.rf = None;
+        self.rf_prev.clear();
+    }
+
+    /// Make `frame` the newest RF frame.
+    ///
+    /// ONLY A CI-V SCOPE KEEPS A BACKLOG. Its sweeps come a few to some fifteen a second, slower
+    /// than a scope polls, so every one can be drawn; the frame `frame` replaces joins the backlog,
+    /// and a full backlog lets its oldest go, counted as dropped if a scope was reading when it was
+    /// published and none drew it. Every other source (a Flex, TCI or Yaesu panadapter, an IQ
+    /// receiver) publishes at or above the poll rate, where drawing in order would only add lag, so
+    /// it stays latest-wins: the slot holds its newest frame and nothing behind it.
+    fn push_rf(&mut self, frame: SpectrumFrame) {
+        let reading = self
+            .rf_read_at
+            .is_some_and(|at| at.elapsed() < Duration::from_secs(1));
+        if frame.source != "civ" {
+            self.rf_prev.clear();
+        } else if let Some((old, at)) = self.rf.take() {
+            let shown = std::mem::replace(&mut self.rf_shown, false);
+            self.rf_prev.push_back(RfEntry {
+                frame: old,
+                at,
+                shown,
+                watched: self.rf_watched,
+            });
+            if self.rf_prev.len() > SpectrumFeed::RF_BACKLOG {
+                let gone = self
+                    .rf_prev
+                    .pop_front()
+                    .expect("over the bound, so not empty");
+                if !gone.shown && gone.watched {
+                    self.rf_dropped += 1;
+                }
+            }
+        }
+        self.rf_shown = false;
+        self.rf_watched = reading;
+        self.rf = Some((frame, Instant::now()));
+    }
+
+    /// ⭐ EVERY RF FRAME, IN ORDER: the frame to hand a reader that last drew `last_seq`, given that
+    /// the newest RF frame is fresh and newer than that. The oldest frame it has not drawn, so a
+    /// reader polling between two publishes (a tick that published several sweeps at once, a poll
+    /// that ran late) draws each one rather than only the newest; and the newest for a reader that
+    /// has drawn nothing yet (`last_seq` 0), which starts at the live picture, not the backlog.
+    ///
+    /// Two rules keep a reader on the live picture:
+    /// - A SLOW READER, one whose previous poll (a poll that found nothing new counts) was more than
+    ///   [`SpectrumFeed::RF_SLOW_READER`] ago, polls slower than the radio sweeps: the reduced-motion
+    ///   poll. It is handed the newest sweep on every read, as before the backlog, and what it steps
+    ///   over is thinning by choice, not counted as dropped. A single stall longer than that line is
+    ///   treated the same way, and not counted either.
+    /// - A reader whose oldest undrawn frame is more than [`SpectrumFeed::RF_CATCHUP`] older than
+    ///   the newest JUMPS TO THE NEWEST. Frames it jumps over are counted when they leave the backlog
+    ///   (`rf_dropped`). The age is the PUBLISH time: a burst the radio loop published at once after
+    ///   a long tick (at most [`SpectrumFeed::RF_BACKLOG`] sweeps, about a second of the radio's
+    ///   fastest output) is drawn in full, in order.
+    fn rf_next_after(&mut self, last_seq: u64) -> Option<SpectrumFrame> {
+        let (newest_seq, newest_at) = self.rf.as_ref().map(|(f, at)| (f.seq, *at))?;
+        let now = Instant::now();
+        if newest_seq <= last_seq {
+            // Nothing new, but the reader POLLED: a fast scope waiting between two slow sweeps
+            // must not look like a slow one when the next sweep arrives.
+            if let Some(h) = self
+                .rf_handed
+                .iter_mut()
+                .rev()
+                .find(|(seq, _)| *seq == last_seq)
+            {
+                h.1 = now;
+            }
+            return None;
+        }
+        self.rf_read_at = Some(now);
+        // A reader that last read more than RF_SLOW_READER ago polls slower than a CI-V scope
+        // sweeps (the reduced-motion poll): it thins by choice, so it is handed the live sweep,
+        // never one from the backlog it would only trail.
+        let slow = self
+            .rf_handed
+            .iter()
+            .rev()
+            .find(|(seq, _)| *seq == last_seq)
+            .is_some_and(|(_, at)| now.duration_since(*at) > SpectrumFeed::RF_SLOW_READER);
+        // What a slow reader steps over it thinned by choice: not a drop.
+        if slow {
+            for e in self.rf_prev.iter_mut().filter(|e| e.frame.seq > last_seq) {
+                e.shown = true;
+            }
+        }
+        let next = if last_seq != 0 && !slow {
+            self.rf_prev
+                .iter_mut()
+                .find(|e| e.frame.seq > last_seq)
+                .filter(|e| newest_at.duration_since(e.at) <= SpectrumFeed::RF_CATCHUP)
+                .map(|e| {
+                    e.shown = true;
+                    e.frame.clone()
+                })
+        } else {
+            None
+        };
+        let frame = next.or_else(|| {
+            self.rf_shown = true;
+            self.rf.as_ref().map(|(f, _)| f.clone())
+        })?;
+        self.rf_handed.push_back((frame.seq, now));
+        if self.rf_handed.len() > SpectrumFeed::RF_BACKLOG + 1 {
+            self.rf_handed.pop_front();
+        }
+        Some(frame)
+    }
+}
+
+/// One RF frame in the backlog ([`FeedRows::rf_prev`]).
+struct RfEntry {
+    frame: SpectrumFrame,
+    /// When it was published.
+    at: Instant,
+    /// Whether an in-order reader has been handed it.
+    shown: bool,
+    /// Whether a scope was reading when it was published. A frame published while no scope was on
+    /// screen is never a drop: nobody was there to miss it.
+    watched: bool,
 }
 
 /// A standing request from the rig scope for a row over ITS window rather than the full
@@ -631,7 +794,7 @@ impl SpectrumFeed {
                 return;
             }
             let frame = g.stamp(row, scale, slice);
-            g.rf = Some((frame, Instant::now()));
+            g.push_rf(frame);
         }
     }
     /// Drop the native row so the audio FFT takes over immediately (DATA mode / scope off).
@@ -640,7 +803,7 @@ impl SpectrumFeed {
     pub fn clear_rf(&self) {
         if let Ok(mut g) = self.rows.lock() {
             if g.rf_owner.is_none() {
-                g.rf = None;
+                g.clear_rf();
             }
         }
     }
@@ -652,7 +815,7 @@ impl SpectrumFeed {
         if let Ok(mut g) = self.rows.lock() {
             if g.rf_owner != owner {
                 g.rf_owner = owner;
-                g.rf = None;
+                g.clear_rf();
             }
         }
     }
@@ -664,7 +827,7 @@ impl SpectrumFeed {
                 .as_ref()
                 .is_some_and(|(frame, _)| frame.source == source)
             {
-                g.rf = None;
+                g.clear_rf();
             }
         }
     }
@@ -854,7 +1017,7 @@ impl SpectrumFeed {
         hi_hz: f32,
         win: impl Into<spectrum::ScopeAnalysis>,
     ) -> Option<Spectrum> {
-        self.scope_frame(lo_hz, hi_hz, win.into())
+        self.scope_frame(lo_hz, hi_hz, win.into(), false)
             .map(Spectrum::from)
     }
 
@@ -880,7 +1043,42 @@ impl SpectrumFeed {
         last_seq: u64,
         fallback: impl FnOnce() -> Spectrum,
     ) -> Option<SpectrumFrame> {
-        let Some(frame) = self.scope_frame(lo_hz, hi_hz, win.into()) else {
+        self.frame_after(
+            self.scope_frame(lo_hz, hi_hz, win.into(), false),
+            last_seq,
+            fallback,
+        )
+    }
+
+    /// [`Self::scope_frame_after`] for the AUDIO VIEW that the CW and Phone cockpits draw under
+    /// the radio's own scope: the audio row over `lo_hz..hi_hz`, never the RF row, and the
+    /// request for that window stands while a native RF row is fresh. The radio's scope is
+    /// already on screen in its own pane (`rf_frame_after`), so here the audio FFT IS the
+    /// picture someone is looking at. Nothing here reaches the radio.
+    pub fn audio_scope_frame_after(
+        &self,
+        lo_hz: f32,
+        hi_hz: f32,
+        win: impl Into<spectrum::ScopeAnalysis>,
+        last_seq: u64,
+        fallback: impl FnOnce() -> Spectrum,
+    ) -> Option<SpectrumFrame> {
+        self.frame_after(
+            self.scope_frame(lo_hz, hi_hz, win.into(), true),
+            last_seq,
+            fallback,
+        )
+    }
+
+    /// The answer both scope reads give for the frame their slot chose (`None`: nothing was ever
+    /// published, so `fallback` computes one), given the last frame the caller drew.
+    fn frame_after(
+        &self,
+        frame: Option<SpectrumFrame>,
+        last_seq: u64,
+        fallback: impl FnOnce() -> Spectrum,
+    ) -> Option<SpectrumFrame> {
+        let Some(frame) = frame else {
             let row = fallback();
             return Some(SpectrumFrame {
                 seq: 0,
@@ -894,15 +1092,52 @@ impl SpectrumFeed {
                 bins: row.row,
             });
         };
-        (frame.bins.is_empty() || frame.seq > last_seq).then_some(frame)
+        if frame.bins.is_empty() {
+            return Some(frame);
+        }
+        // The radio's own panadapter answers IN ORDER, every CI-V sweep: see
+        // `FeedRows::rf_next_after`, which also notes a poll that found nothing new. Any other
+        // slot's frame (the narrow scope row, the audio row) is a running mean, whose newest is the
+        // only one there is.
+        if let Ok(mut g) = self.rows.lock() {
+            if g.rf.as_ref().is_some_and(|(f, _)| f.seq == frame.seq) {
+                return g.rf_next_after(last_seq);
+            }
+        }
+        (frame.seq > last_seq).then_some(frame)
     }
 
-    /// [`Self::scope_row`], as the frame the winning slot holds.
+    /// How many CI-V sweeps wait behind the newest for a reader that has not drawn them yet: a
+    /// little over a second of a radio's scope at its fastest. Bounded, so a feed nobody reads holds
+    /// a fixed few frames. Other RF sources keep none (see `FeedRows::push_rf`).
+    pub const RF_BACKLOG: usize = 15;
+
+    /// How far behind the newest CI-V sweep a reader that is NOT slow (see
+    /// [`Self::RF_SLOW_READER`]) may draw: a reader whose next undrawn sweep was published longer
+    /// ago than this before the newest jumps to the newest rather than trailing the live picture,
+    /// and the sweeps it jumps over count as dropped. A reader polling faster than the radio sweeps
+    /// never meets it.
+    pub const RF_CATCHUP: Duration = Duration::from_millis(300);
+
+    /// A reader that last polled longer ago than this is slower than a CI-V scope sweeps, and is
+    /// handed the newest sweep on every read: the reduced-motion poll (never under 120 ms) is; the
+    /// normal one (33 ms, up to about 60 ms with a busy UI) is not.
+    pub const RF_SLOW_READER: Duration = Duration::from_millis(100);
+
+    /// CI-V sweeps that left the backlog undrawn although a scope was reading when they were
+    /// published, since the feed started. Diagnostics read two of these apart.
+    pub fn rf_dropped(&self) -> u64 {
+        self.rows.lock().map(|g| g.rf_dropped).unwrap_or(0)
+    }
+
+    /// [`Self::scope_row`], as the frame the winning slot holds. `audio_only` is the audio view's
+    /// read ([`Self::audio_scope_frame_after`]): a live RF row neither wins nor drops the request.
     fn scope_frame(
         &self,
         lo_hz: f32,
         hi_hz: f32,
         win: spectrum::ScopeAnalysis,
+        audio_only: bool,
     ) -> Option<SpectrumFrame> {
         let sane = hi_hz > lo_hz
             && lo_hz >= 0.0
@@ -912,10 +1147,10 @@ impl SpectrumFeed {
             let mut g = self.rows.lock().ok()?;
             // A live native row means the scope is not drawing the audio FFT at all — drop the
             // request so the producer stops paying for a row nobody will show.
-            let rf_live = g
-                .rf
-                .as_ref()
-                .is_some_and(|(s, at)| at.elapsed() < Duration::from_secs(1) && !s.bins.is_empty());
+            let rf_live = !audio_only
+                && g.rf.as_ref().is_some_and(|(s, at)| {
+                    at.elapsed() < Duration::from_secs(1) && !s.bins.is_empty()
+                });
             // A WINDOW-LENGTH CHANGE MUST DROP THE ACCUMULATED AVERAGE. `RowAverage::push`
             // restarts on span, bin count and source; two window lengths share all three, so
             // without this a Fast->Sharp switch would fold an 85 ms picture and a 341 ms one
@@ -942,7 +1177,11 @@ impl SpectrumFeed {
                 }
             }
         }
-        self.frame()
+        if audio_only {
+            self.audio_frame()
+        } else {
+            self.frame()
+        }
     }
 
     /// How long the RF scope pane's request stands after the read that renewed it. The scope span
@@ -988,23 +1227,22 @@ impl SpectrumFeed {
         let mut g = self.rows.lock().ok()?;
         g.rf_req = Some(Instant::now());
         let held = held && Self::hold_is_young(g.tx_hold_since);
-        match &g.rf {
-            Some((frame, at))
-                if !frame.bins.is_empty() && (held || at.elapsed() < Self::RF_PANE_STALE) =>
-            {
-                (frame.seq > last_seq).then(|| frame.clone())
-            }
-            _ => Some(SpectrumFrame {
-                seq: 0,
-                t_ms: now_unix_millis(),
-                source: String::new(),
-                lo_hz: 0.0,
-                hi_hz: 0.0,
-                scale: SpectrumScale::Relative,
-                slice: None,
-                bins: Vec::new(),
-            }),
+        let live = g.rf.as_ref().is_some_and(|(frame, at)| {
+            !frame.bins.is_empty() && (held || at.elapsed() < Self::RF_PANE_STALE)
+        });
+        if live {
+            return g.rf_next_after(last_seq);
         }
+        Some(SpectrumFrame {
+            seq: 0,
+            t_ms: now_unix_millis(),
+            source: String::new(),
+            lo_hz: 0.0,
+            hi_hz: 0.0,
+            scale: SpectrumScale::Relative,
+            slice: None,
+            bins: Vec::new(),
+        })
     }
 
     /// How long one scope's RF window counts towards [`Self::rf_view`] after the poll that asked
@@ -1374,6 +1612,9 @@ pub struct RadioLive {
     pub sideband: Option<String>,
     pub smeter_db: Option<i32>,
     pub cat_ok: Option<bool>,
+    /// Nexus refused to start this radio's CAT itself: a declared Hardware serial handshake on a
+    /// port where RTS keys a transmitter. Its pill says why, not just "not answering".
+    pub cat_refused: bool,
 }
 
 /// How many CONSECUTIVE failed amplifier polls before the link indicator goes down.
@@ -1397,7 +1638,7 @@ pub struct AmpLive {
 }
 use modes::{NativeSource, SignalSource, WsjtxUdpSource};
 use std::sync::{Arc, Mutex};
-use tempo_core::message::{same_call, Msg};
+use tempo_core::message::{lookup_call, names_whole_call, same_call, Msg};
 
 /// The decoder ([`SignalSource`]) behind its OWN lock, independent of the engine
 /// mutex. The heavy per-slot decode runs on a persistent worker thread that locks
@@ -1910,6 +2151,8 @@ pub const FLEX_VOICE_MAX_SAMPLES: usize = 20 * 12_000;
 /// The decodes Band Activity keeps, and so the most a logger's Replay re-sends: the pane's own
 /// store (`MAX_HISTORY`, `ui/src/decodeHistory.ts`).
 const BAND_ACTIVITY_DEPTH: usize = 3000;
+/// The received decodes the engine keeps across periods (`decode_history`), newest kept.
+const DECODE_HISTORY_DEPTH: usize = 240;
 /// A logger's free text refused while TX is off ([`Engine::udp_free_text`]).
 const UDP_FREE_TEXT_TX_OFF: &str =
     "TX is off: turn TX on in Nexus before sending a logger's free text";
@@ -1970,6 +2213,12 @@ const CW_REFUSED_CW_PRIVILEGES: &str = "CW not sent: where it would key is outsi
      license's CW privileges, so it was dropped.";
 /// …and when the operator LEFT the CW screen with words still to go
 /// ([`Engine::set_operating_mode_with_reset`]): dropped, not keyed from the screen they went to.
+/// The CW cockpit's warning line when CW is refused because the chosen Serial keyline or WinKeyer
+/// has no port set (#434): nothing keys, and nothing keys through another keyer instead.
+const CW_NO_KEYLINE_PORT: &str = "CW not sent: Serial keyline is your keyer, but no port is set. \
+     Pick the keyline serial port in Settings ▸ CW.";
+const CW_NO_WINKEYER_PORT: &str = "CW not sent: WinKeyer is your keyer, but no port is set. \
+     Pick the WinKeyer port in Settings ▸ CW.";
 const CW_LEFT_SECTION: &str = "CW stopped: you left the CW screen, so what was still to go was \
      dropped. Send it again when you are ready.";
 
@@ -2312,6 +2561,13 @@ pub struct DecodeResult {
     /// the radio loop clears its in-flight latch when a result lands, so a job that
     /// never returns one stops decoding forever.
     failed: bool,
+    /// The contacts a WSJT-X companion source received this decode (its Logged ADIF records,
+    /// [`modes::SignalSource::take_logged_adif`]): the upstream app sends them to the address the
+    /// decodes come from. They are the log's, not the decode's — an epoch change does not make a
+    /// contact stale — so the radio loop takes them ([`Self::take_logged_adif`]) before it folds
+    /// the result, and hands them to the import. A contained panic carries none: what the source
+    /// holds stays there for the next decode.
+    logged_adif: Vec<String>,
 }
 
 /// One decode a running pass has just found, on its way to the engine before the pass ends
@@ -2420,6 +2676,10 @@ impl DecodeResult {
     pub fn slot(&self) -> u64 {
         self.slot
     }
+    /// The contacts the companion source received this decode, taken (see the field).
+    pub fn take_logged_adif(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.logged_adif)
+    }
 }
 
 /// One multi-speed JS8 decode job: the due speeds' windows (each `speed.frames_needed()`
@@ -2504,6 +2764,7 @@ pub fn run_js8_multi_job(job: Js8MultiJob) -> Vec<DecodeResult> {
             epoch,
             heard_on: None,
             failed: false,
+            logged_adif: Vec::new(),
         })
         .collect()
 }
@@ -2618,6 +2879,7 @@ pub fn run_decode_job_streaming(job: DecodeJob, progress: &mut dyn DecodeProgres
                 epoch,
                 heard_on: None,
                 failed: true,
+                logged_adif: Vec::new(),
             }
         }
     }
@@ -2751,6 +3013,9 @@ fn run_decode_job_inner(job: DecodeJob, progress: &mut dyn DecodeProgress) -> De
         // and pre-existing in shape, but it must be closed before two chains transmit.
         Some(ctx) => ctx.lock().unwrap_or_else(|e| e.into_inner()).scoped(decode),
     };
+    // What the companion source received besides decodes, taken before a decoder swapped in below
+    // drops the source holding it.
+    let logged_adif = src.take_logged_adif();
     // A decoder asked for while this decode ran takes over before the lock is let go.
     // The lock on it is held until the decoder's is released, so one asked for in
     // between finds the decoder free and is swapped in by the asker instead.
@@ -2768,13 +3033,26 @@ fn run_decode_job_inner(job: DecodeJob, progress: &mut dyn DecodeProgress) -> De
         epoch,
         heard_on,
         failed: false,
+        logged_adif,
     }
 }
 
-/// Default waterfall resolution (display bins). 512 over the 0–4000 Hz span ≈ 7.8 Hz/bin — ~3×
-/// finer than the old 120-bin/22.5 Hz bank, over a wider band. The row is resampled from a
-/// Hann-windowed 2048-point FFT (see `tempo_core::spectrum`).
-pub const SPECTRUM_BINS: usize = 512;
+/// Default waterfall resolution (display bins). 640 over the 0–5000 Hz span = 7.8125 Hz/bin — ~3×
+/// finer than the old 120-bin/22.5 Hz bank. The row is resampled from a Hann-windowed 2048-point
+/// FFT (see `tempo_core::spectrum`).
+///
+/// It was 512 over 0–4000, the same 7.8125 Hz per bin. The span grew to 5000 Hz so the audio
+/// waterfalls reach as high as the reference FT program's wide graph does (it computes to 5000 Hz
+/// at the same 12 kHz rate), and the bin count grew WITH it so the resolution did not move: every
+/// bin below 4000 Hz covers exactly the frequencies it always did (pinned by
+/// `the_row_for_a_known_input_is_byte_stable` in tempo-audio's rxdsp, whose old 512-bin reference is
+/// now the row's first 512 bins). DISPLAY ONLY: no decoder reads this row, and the FT TX-offset
+/// bounds (`tx_offset_bounds`, 200–4000) are a separate fact that did not move with it.
+pub const SPECTRUM_BINS: usize = 640;
+/// The top of the audio waterfall row, Hz (the bottom is 0). See [`SPECTRUM_BINS`]. Under the
+/// 6 kHz Nyquist of the 12 kHz analysis rate, with the capture resampler's anti-alias roll-off
+/// still above it.
+pub const SPECTRUM_HI_HZ: f32 = 5000.0;
 
 /// The engine's current operating mode (holds the active sequencer).
 ///
@@ -3350,6 +3628,20 @@ struct RecentPartner {
     owed: Option<Msg>,
 }
 
+impl StalledQso {
+    /// With station profiles, the station as it is now, stamped on a record of the contact's own
+    /// ([`StalledQso::station`]); with none, nothing, as before profiles.
+    fn with_station(mut self, e: &Engine) -> Self {
+        if !e.settings.station_profiles.is_empty() {
+            let mut station =
+                e.qso_record(self.dxcall.clone(), self.dxgrid.clone(), self.rx_report);
+            e.stamp_hold(&mut station);
+            self.station = Some(station);
+        }
+        self
+    }
+}
+
 /// A contact abandoned mid-exchange that still deserves to reach the log (#153), or one a band
 /// change ended before it was logged ([`Engine::band_change_qso`]).
 ///
@@ -3377,6 +3669,15 @@ struct StalledQso {
     /// Our 73 to a roger the operator clicked, with no report exchanged ([`roger_click_73_sent`]):
     /// Log QSO only offers it, in the popup ([`HeldQso::confirm_only`]).
     confirm_only: bool,
+    /// With station profiles: the station it was made under, stamped when it was set aside
+    /// ([`Engine::stamp_hold`] on a record of its own): its call, grid, place, rig and power. Log
+    /// QSO may come after a profile switch, and the contact logs the station its overs went out
+    /// under, not the one on when the button is pressed. `None` with no profiles: the contact is
+    /// stamped when it is logged, as before profiles.
+    station: Option<QsoRecord>,
+    /// The call its overs carried ([`Engine::contact_station_callsign`], taken when it was set
+    /// aside): with no profiles, a call saved before Log QSO does not relabel it.
+    station_callsign: Option<String>,
 }
 
 /// Where and in what mode a finished contact was made, kept when a tier change comes before Log
@@ -3743,6 +4044,11 @@ pub struct Engine {
     /// beside Tune. It also makes the tune judged as CW where the radio puts the carrier; see
     /// [`Self::observe_flex_tune`].
     flex_tune: Option<crate::dto::FlexTune>,
+    /// When a Tune press was last refused because a slot over was on the air with Split Operation
+    /// on ([`Self::set_tune_for`]): the note beside Tune says why for the rest of that over's
+    /// period, at most [`TUNE_OVER_REFUSED_SECS`] (`RadioStatus::tune_over_refused`). The next
+    /// slot boundary ends it ([`Self::plan_tx`]).
+    tune_over_refused_at: Option<Instant>,
     /// While Nexus's own Flex client runs the radio's own ATU: what is shown beside it. It also
     /// makes an ATU press judged as CW where the radio puts the carrier; see
     /// [`Self::observe_flex_atu`].
@@ -3890,10 +4196,28 @@ pub struct Engine {
     /// Whether the active QSO has already been auto-logged (so it logs exactly
     /// once when the sequencer reaches `Done`). Reset when a new QSO starts.
     qso_logged: bool,
+    /// Where an activation's Stop would have taken the station profile back to, kept when the Stop
+    /// could not go (a run or contact under way, or stopped from afar onto another call):
+    /// (the profile before, the park's profile). The next activation started on it takes it up,
+    /// so its Stop goes back; a switch drops it (`engine/station_profiles.rs`).
+    station_profile_return_kept: Option<(String, String)>,
     /// Unix-secs when the current QSO's exchange began (TIME_ON) — set when answering a
     /// station or when our CQ first gets a reply; `None` between QSOs. The log records
     /// this as the contact start, with the completion time as TIME_OFF.
     qso_start_unix: Option<u64>,
+    /// A late reply owed under another call than the station's was dropped
+    /// ([`STATION_CALL_CHANGED_LATE_REPLY_DROPPED`]): said in the cockpit until the next over
+    /// keys or TX is stopped. Display only.
+    ft_late_reply_dropped: bool,
+    /// The calls this station transmitted under before the one it has now, oldest first, each
+    /// once ([`Self::note_call_saved`]). The keying-time call check counts them as the station's
+    /// own ([`ft_over_call_refusal`]), so an over naming one of them is held back on a station with
+    /// no profiles as on one with them: a Tx row a screen drew before the save, say.
+    former_calls: Vec<String>,
+    /// The operator's free text Nexus addressed (`<DX> <ME> <text>`) and the over it made, while
+    /// it may wait in the sequencer ([`Self::qso_freetext_checked`]). A call saved before it keys
+    /// writes it again under the new call ([`Self::note_call_saved`]).
+    qso_freetext: Option<(String, Msg)>,
     /// Whether the operator is RUNNING (called CQ) vs answering a specific station.
     /// When running, a completed QSO returns to calling CQ (WSJT-X's run workflow).
     cq_running: bool,
@@ -4467,6 +4791,9 @@ pub struct Engine {
     /// (`engine/tci/cw.rs`); gated by `tx_enabled` (Monitor) and the privileges, and a word they
     /// refuse is dropped, never held (`poll_cw_one`).
     cw_queue: VecDeque<String>,
+    /// The call the station had when the oldest message in `cw_queue` was queued (its macros'
+    /// `{MYCALL}` was expanded with it): the keying-time call check reads it at the poll.
+    cw_queue_call: Option<String>,
     /// The messages in [`Self::cw_queue`], oldest first, as (words left, CW speed match's speed,
     /// whether its first word has been taken, the TCI program that sent it): `None` keys at the
     /// operator's own speed, and `None` for the sender is Nexus's own. Words leave the front as the
@@ -4624,6 +4951,9 @@ pub struct Engine {
     /// Until when the radio loop holds the key on a deadline of its own — a voice-keyer message
     /// or an APRS frame it is still playing — see [`Self::observe_loop_tx_hold`]. `None` = none.
     loop_tx_hold_until: Option<Instant>,
+    /// The band, FT mode and radio the FT drive last settled on ([`Self::settle_ft_drive`]):
+    /// `None` until the first radio-loop tick, and while the station is on no FT mode.
+    ft_drive_at: Option<ft_drive::FtDriveSlot>,
     /// The turn the app takes to change a saved key a notice can ask about — see
     /// [`Self::key_changes`].
     key_changes: Arc<Mutex<()>>,
@@ -4638,8 +4968,9 @@ pub struct Engine {
     /// [`Self::observe_rig_tx_alc_zone`]. `None` = 1.0 is the top of the zone.
     rig_tx_alc_zone: Option<f32>,
     rig_tx_po_w: Option<f32>,
-    /// The forward power the radio measured during its latest over, for the contact it is logged
-    /// on ([`Self::log_power_now`]). Kept past the unkey, unlike `rig_tx_po_w`.
+    /// The forward power measured during the latest over (the radio's, or the amplifier's when
+    /// one is on the radio), for the contact it is logged on ([`Self::log_power_now`]). Kept
+    /// past the unkey, unlike `rig_tx_po_w`.
     measured_over: Option<MeasuredOver>,
     rig_tx_comp_db: Option<f32>,
     /// The radio's own PA (finals) temperature and its SSB transmit-bandwidth setting: see
@@ -4867,6 +5198,10 @@ pub struct Engine {
     /// instead of sleeping a fixed guess, and a dial note or any other CAT status published
     /// while it waits is not taken as its result.
     cat_reprobe_answer: (u64, Option<bool>, String),
+    /// Whether the latest Test CAT answer is a launch Nexus REFUSED itself (a declared Hardware
+    /// serial handshake on a port where RTS keys the transmitter). Typed, so `test_cat` skips its
+    /// baud sweep on it — a sweep would open the port the refusal kept shut.
+    cat_reprobe_refused: bool,
     /// While `Some(deadline)`, the radio loop must NOT own the CAT serial port: Test
     /// CAT's baud-ladder probe needs to open it at other rates itself (serial ports are
     /// exclusive-open). The deadline is a crash guard — if the prober never calls
@@ -4892,9 +5227,14 @@ pub struct Engine {
     tci_spots: tci_spots::PanadapterSpots,
     /// The spots programs on Nexus's TCI server sent, for the band map. See [`tci_spots`].
     tci_program_spots: tci_spots::ProgramSpots,
+    /// FreeDV's own app beside Nexus: its listeners, last contact, notice and heard calls
+    /// ([`crate::freedv`]). Written by the FreeDV listeners; read by the snapshot.
+    freedv: crate::freedv::FreedvDto,
     scope_error: Option<String>,
     /// See `RadioStatus::scope_span_refused`.
     scope_span_refused: Option<String>,
+    /// See `RadioStatus::scope_rate`.
+    scope_rate: Option<crate::dto::ScopeRate>,
     /// See `RadioStatus::scope_mode_code`.
     scope_mode_code: Option<u32>,
     /// See `RadioStatus::scope_fix_start_mhz`.
@@ -4962,6 +5302,10 @@ pub struct Engine {
     /// Stop TX / halt clears this queue so the rest never keys, and so does
     /// leaving the RTTY section.
     rtty_queue: VecDeque<String>,
+    /// The call the station had when the oldest over in `rtty_queue` was queued: the keying-time
+    /// call check reads it at the poll ([`Engine::sent_call_refusal`]). Set when an over goes into
+    /// an empty queue; what follows it waits behind it.
+    rtty_queue_call: Option<String>,
     /// One-shot: abort the RTTY transmission in progress (the loop stops the FSK
     /// keying thread / flushes the AFSK audio ring and unkeys PTT).
     rtty_abort: bool,
@@ -5077,6 +5421,9 @@ pub struct Engine {
     /// refuse is dropped there, never held). Stop/halt clears it, and so does
     /// leaving the PSK section.
     psk_queue: VecDeque<String>,
+    /// The call the station had when the oldest text in `psk_queue` was queued, as
+    /// `rtty_queue_call` is for RTTY: the keying-time call check reads it at the poll.
+    psk_queue_call: Option<String>,
     /// One-shot: abort PSK TX now (the radio loop flushes the audio ring and
     /// unkeys on its next tick). Mirrors `rtty_abort`.
     psk_abort: bool,
@@ -5122,6 +5469,9 @@ pub struct Engine {
     /// time via [`Engine::poll_aprs_tx`]; Stop TX / halt clears it, and TX Off or a refusal at the
     /// poll drops it with a notice ([`Self::aprs_tx_notice`]).
     aprs_tx_queue: VecDeque<(Vec<f32>, Option<String>)>,
+    /// The call the station had when the oldest frame in `aprs_tx_queue` was made (its AX.25
+    /// source): the keying-time call check reads it at the poll ([`Engine::sent_call_refusal`]).
+    aprs_tx_queue_call: Option<String>,
     /// The station the frame [`Engine::poll_aprs_tx`] last handed the radio loop acks, when it is
     /// an automatic ack: what [`Engine::aprs_key_refused`] names.
     aprs_keying_ack: Option<String>,
@@ -5264,6 +5614,9 @@ pub struct Engine {
     /// arm/launch/mode-select. The radio loop takes it via [`Engine::poll_sstv_tx`]
     /// behind every TX gate; one image in flight at a time (no queue). `None` = idle.
     sstv_tx: Option<SstvTxJob>,
+    /// The call burned into the picture in `sstv_tx` (its ID plate, its FSK ID, a preset's
+    /// text): the keying-time call check reads it at the poll ([`Engine::sent_call_refusal`]).
+    sstv_tx_call: Option<String>,
     /// One-shot: abort the SSTV image in progress (the loop drops the feed, flushes
     /// the output ring and unkeys PTT). Mirrors `rtty_abort`.
     sstv_abort: bool,
@@ -5336,15 +5689,15 @@ pub const RTTY_SCOPE_WANTED_FOR: Duration = Duration::from_secs(1);
 /// PSK31 decoded-character ring cap — the RTTY sizing (PSK31 copies even slower,
 /// ~4 chars/s, so 4000 chars is comfortably tens of minutes of transcript).
 const PSK_TEXT_CAP: usize = 4000;
-/// AFSK RTTY mark tone (Hz) — mirrors `tempo_audio::rtty_afsk::MARK_HZ` (tempo-app can't
-/// depend on tempo-audio); used only to judge where the AFSK emission lands vs the dial.
-/// The STANDARD AFSK mark tone, and now only the basis for the DEFAULT centre.
+/// The STANDARD AFSK mark tone (Hz), 2125 — the default of [`Settings::rtty_low_tone_hz`], and
+/// kept here for the tests that reason about the standard pair. Nothing outside them reads it.
 ///
 /// ⚠️ NOT WHAT THE PRIVILEGE GATE JUDGES — that is `Engine::rtty_tx_mark_hz`, which follows the
-/// operator's netted centre. Judging this constant was correct until 1.9.0 made the transmitter
-/// follow the net; afterwards it could be wrong by ~1.9 kHz and APPROVE a transmission landing
-/// outside a privileged segment. If you find yourself reaching for it in a gate, you want
-/// `rtty_tx_mark_hz`.
+/// operator's netted centre and saved tone pair. Judging this constant was correct until 1.9.0
+/// made the transmitter follow the net; afterwards it could be wrong by ~1.9 kHz and APPROVE a
+/// transmission landing outside a privileged segment. If you find yourself reaching for it in a
+/// gate, you want `rtty_tx_mark_hz`.
+#[cfg(test)]
 const RTTY_AFSK_MARK_HZ: f64 = 2125.0;
 /// Cap on the armed RTTY/SSTV audio drain buffers (~10 s at 12 kHz). The decode
 /// threads normally empty these every ~100 ms; the cap only bites if a thread
@@ -5971,6 +6324,26 @@ const SSTV_MAX_TX_SECS: f64 = 330.0;
 /// before the operator keyed the mic would fire when they unkeyed — see [`Engine::take_atu_tune`].
 /// Generous next to the ~750 ms poll it normally waits on, tight next to any real over.
 const ATU_REQUEST_MAX_AGE_SECS: u64 = 5;
+/// Why a voice-keyer message is refused where the section's own emission is allowed but a voice
+/// is not ([`Engine::send_voice`]): a phone emission outside the licence's phone privileges.
+const VOICE_OUTSIDE_PHONE: &str =
+    "TX locked — a voice message would be outside your phone privileges here";
+/// Why an ATU press keys nothing on any CAT path when the licence allows the section's emission
+/// but not the radio's own carrier at the transmit dial `mhz` ([`Engine::atu_tune_gate`]).
+fn atu_carrier_outside(mhz: f64) -> String {
+    format!(
+        "ATU keys nothing here: the radio's own carrier at your dial, {mhz:.4} MHz, would be \
+         outside your license privileges"
+    )
+}
+/// The audio tone Nexus's own Tune carrier plays (Hz), the same f0 the FT1 modem centers on. The
+/// radio loop plays it; the licence gate judges it where it goes out, this far from the transmit
+/// dial on the side the transmitting VFO's mode word names ([`Engine::tune_allowed`]). One number
+/// for both, so the gate cannot judge a tone the loop does not play.
+pub const TUNE_TONE_HZ: f32 = 1500.0;
+/// The longest a refused Tune press during a slot over is shown beside Tune (seconds): an FT8
+/// period. The note goes sooner, with the over ([`Engine::set_tune_for`]).
+const TUNE_OVER_REFUSED_SECS: u64 = 15;
 /// Why an ATU press keys nothing while Nexus's own Flex client runs the radio's ATU and the
 /// licence allows the section's emission but not CW where the radio transmits
 /// ([`Engine::atu_tune_gate`]).
@@ -6402,6 +6775,114 @@ pub struct TxPlan {
     /// Everything the TX gate evaluated when this plan was made — see
     /// [`TxGateStamp`].
     stamp: TxGateStamp,
+    /// What `plan_tx` changed when it counted this FT over as sent, so [`Engine::commit_tx`] can
+    /// take it back when the over is refused at the key for its call. `None` for every other plan.
+    counted: Option<FtOverCount>,
+}
+
+/// What [`Engine::plan_tx`] changed when it counted an FT or contest over as sent: the
+/// sequencer's step and the flags the over arms. A call saved while the radio loop builds the wave
+/// with the engine unlocked makes [`Engine::commit_tx`] refuse the over on its stamp; it was never
+/// sent, so it is not counted either (the operator's decision, 2026-10-28): no step counted, no
+/// "Disable Tx after sending 73", no CW ID. Only that refusal takes the count back. An over that
+/// keys, or one refused at the key for another reason, keeps it exactly as before.
+#[derive(Debug, Clone)]
+struct FtOverCount {
+    /// The sequencer's step before and after the count.
+    step: CountedStep,
+    /// The station's call the plan judged the over under (`settings.mycall`). The key judges it
+    /// by this call, not by whatever station the operator put in the sequencer meanwhile.
+    mycall: String,
+    /// The engine's own bookkeeping before the count.
+    pending_tx_disable: bool,
+    pending_cw_id: bool,
+    qso_start_unix: Option<u64>,
+    cq_pause_until: Option<u64>,
+}
+
+/// The part of a sequencer an over's count changes, with enough of the rest to tell that nothing
+/// else moved it between the plan and the key. Put back only when the sequencer is exactly as the
+/// count left it: a station the operator replaced or moved meanwhile is theirs, and left alone.
+#[derive(Debug, Clone, PartialEq)]
+enum CountedStep {
+    Qso {
+        before: QsoStep,
+        after: QsoStep,
+    },
+    FieldDay {
+        before: FdStep,
+        after: FdStep,
+    },
+    /// The late reply owed to a partner the run had left (#170): taken by the plan, and dropped
+    /// whether it keys or not, since it is one over, once.
+    Owed(Msg),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct QsoStep {
+    state: QsoState,
+    dxcall: Option<String>,
+    pending: Option<Msg>,
+    tx_count: u32,
+    rv_count: u8,
+    keyed_on_air: bool,
+    /// The call the sequencer makes its overs under, and the one its latest over went out under: a
+    /// call saved while the over's wave is built makes the messages again ([`QsoStation::sign_as`]).
+    mycall: String,
+    keyed_as: Option<String>,
+}
+
+impl QsoStep {
+    fn of(s: &QsoStation) -> Self {
+        Self {
+            state: s.state,
+            dxcall: s.dxcall.clone(),
+            pending: s.pending.clone(),
+            tx_count: s.tx_count,
+            rv_count: s.rv_count,
+            keyed_on_air: s.keyed_on_air,
+            mycall: s.mycall.clone(),
+            keyed_as: s.keyed_as.clone(),
+        }
+    }
+
+    /// This step with its messages made again under `call`, as a save of the call does
+    /// ([`QsoStation::sign_as`]).
+    fn signed_by(&self, call: &str) -> Self {
+        let mut s = self.clone();
+        if s.mycall != call {
+            s.pending = s.pending.map(|m| m.signed_by(&self.mycall, call));
+            s.mycall = call.to_string();
+        }
+        s
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct FdStep {
+    state: tempo_core::fieldday::FdState,
+    dxcall: Option<String>,
+    pending: Option<Msg>,
+    /// The call the contest sequencer makes its overs under ([`FieldDayStation::call`]).
+    call: String,
+}
+
+impl FdStep {
+    fn of(s: &FieldDayStation) -> Self {
+        Self {
+            state: s.state,
+            dxcall: s.dxcall.clone(),
+            pending: s.pending.clone(),
+            call: s.call().to_string(),
+        }
+    }
+
+    /// Whether this step is `after`, or `after` with its messages made again under another call
+    /// ([`FieldDayStation::sign_as`]): the same state and partner, only the call moved.
+    fn moved_only_by_its_call(&self, after: &FdStep) -> bool {
+        self == after
+            || (self.call != after.call && self.state == after.state && self.dxcall == after.dxcall)
+    }
 }
 
 /// The transmit side of WSJT-X's UDP Status (type 1, `Network/NetworkMessage.hpp`), as
@@ -6423,6 +6904,69 @@ pub struct WsjtxTxStatus {
     pub tx_watchdog: bool,
     /// "Tx Message": `m_currentMessage`, the over on the air or the last one sent.
     pub tx_message: String,
+}
+
+/// The over [`Engine::qso_freetext`] makes of the operator's free `text` to `dx` under `mycall`:
+/// `<DX> <ME> <text>`, or, where exactly one of the two calls is nonstandard and the text reads
+/// as a standard message, that message as WSJT-X writes it for the pair
+/// ([`QsoStation::on_air_form`]). Free text to the sequence either way.
+fn addressed_free_text(mycall: &str, dx: &str, text: &str) -> Msg {
+    let std = |c: &str| tempo_core::message::is_std_call(tempo_core::message::unhash_call(c));
+    let typed = format!("{dx} {mycall} {text}");
+    let parsed = Msg::parse(&typed);
+    if std(mycall) != std(dx) && !matches!(parsed, Msg::Other(_)) {
+        Msg::Other(QsoStation::on_air_form(mycall, dx, parsed).to_text())
+    } else {
+        Msg::Other(typed)
+    }
+}
+
+/// [`Engine::sent_call_refusal`]'s comparison: `built`, the call a message was made under, against
+/// `now`, the call the station transmits under. Unhashed, without surrounding spaces and in any
+/// capitals; a message made with no call is never refused for it.
+fn call_changed_refusal(built: &str, now: &str) -> Option<&'static str> {
+    let built = tempo_core::message::unhash_call(built).trim();
+    (!built.is_empty() && !built.eq_ignore_ascii_case(now.trim()))
+        .then_some(crate::settings::STATION_CALL_CHANGED_TX_REFUSED)
+}
+
+/// ⛔ The keying-time call check for an FT over of the QSO sequencer (or a Chat-tier frame), `text`.
+///
+/// Only an over Nexus made from the station's call is judged (the operator's decision,
+/// 2026-10-28): one whose sender (`Msg::sender`) is one of the station's own calls, that is the
+/// call it transmits under `now`, the call its sequencer was made with (`built`), a stored
+/// station profile's call, a call the station transmitted under before (`former`,
+/// [`Engine::former_calls`]: a Tx row a screen drew before a call was saved names one), or the
+/// sender of the one over owed to a partner the run has left (`owed`, made by the sequencer). Each is compared by its base call (`same_call`), so a
+/// portable or other compound form of one of them is one of them. Such an over is refused when
+/// its sender is not the call of `now` ([`call_changed_refusal`]). Text the operator typed (Tx 5,
+/// the free text, a logger's free text) whose sender is another station's call, or that reads as
+/// one ("W1AW 5NN 73", "CQ DX EN52"), is the operator's own words and goes out as before.
+fn ft_over_call_refusal(
+    text: &str,
+    now: &str,
+    built: &str,
+    profiles: &[crate::settings::StationProfile],
+    former: &[String],
+    owed: Option<&Msg>,
+) -> Option<&'static str> {
+    let msg = Msg::parse(text);
+    let de = msg.sender()?;
+    let own = |call: &str| !call.trim().is_empty() && same_call(de, call);
+    let ours = own(now)
+        || own(built)
+        || profiles.iter().any(|p| own(&p.call))
+        || former.iter().any(|c| own(c))
+        || owed.and_then(Msg::sender).is_some_and(own);
+    ours.then(|| call_changed_refusal(de, now)).flatten()
+}
+
+/// ⛔ The keying-time call check for a contest over (`Mode::FieldDay`): every over the contest
+/// sequencer sends is made under its call (`FieldDayStation::call`), the ARRL
+/// VHF contests' rogered grid ("W1AW KD9TAW R EN52", free text to `Msg::parse`) included, so it is
+/// judged by that call.
+fn contest_over_call_refusal(built: &str, now: &str) -> Option<&'static str> {
+    call_changed_refusal(built, now)
 }
 
 /// The Tx Message WSJT-X reports for an over: `m_currentMessage = QString::fromLatin1 (msgsent)`
@@ -6447,7 +6991,8 @@ fn wsjtx_msgsent(tier: Tier, waveform: &TxWaveform) -> String {
     format!("{text:<width$}")
 }
 
-/// The forward power the radio measured during one over ([`Engine::note_measured_power`]).
+/// The forward power measured during one over: the radio's ([`Engine::note_measured_power`]),
+/// or with an amplifier on the radio the amplifier's ([`Engine::note_amp_output`]).
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct MeasuredOver {
     /// The highest reading of the over, in watts.
@@ -6977,6 +7522,7 @@ impl Engine {
             flex_dax_tx: false,
             flex_radio_has_mic: false,
             flex_tune: None,
+            tune_over_refused_at: None,
             flex_atu: None,
             flex_meter_stream: false,
             last_dx_tier: None,
@@ -7005,7 +7551,11 @@ impl Engine {
             pending_log_epoch: 0,
             qso_log_epoch: remote_logging::next_identity(),
             qso_logged: false,
+            station_profile_return_kept: None,
             qso_start_unix: None,
+            ft_late_reply_dropped: false,
+            former_calls: Vec::new(),
+            qso_freetext: None,
             cq_running: false,
             // Seeded from the callsign so two stations do not share a draw
             // sequence; the percentage is applied from settings on each decision.
@@ -7142,6 +7692,7 @@ impl Engine {
             off_band_made_on: None,
             rig_dial_seen: false,
             cw_queue: VecDeque::new(),
+            cw_queue_call: None,
             cw_messages: VecDeque::new(),
             cw_sent: VecDeque::new(),
             cw_keyer_error: None,
@@ -7191,6 +7742,7 @@ impl Engine {
             rig_keyed: false,
             cw_keying_until: None,
             loop_tx_hold_until: None,
+            ft_drive_at: None,
             key_changes: Arc::default(),
             rig_tx_swr: None,
             swr_over_count: 0,
@@ -7252,6 +7804,7 @@ impl Engine {
             remote_readings: Default::default(),
             cat_probe_gen: 0,
             cat_reprobe_answer: (0, None, String::new()),
+            cat_reprobe_refused: false,
             cat_port_hold_until: None,
             cat_port_released: false,
             radio_live: std::collections::HashMap::new(),
@@ -7264,8 +7817,10 @@ impl Engine {
             tci_server: None,
             tci_spots: tci_spots::PanadapterSpots::default(),
             tci_program_spots: tci_spots::ProgramSpots::default(),
+            freedv: crate::freedv::FreedvDto::default(),
             scope_error: None,
             scope_span_refused: None,
+            scope_rate: None,
             scope_mode_code: None,
             scope_fix_start_mhz: None,
             recording_warning: None,
@@ -7282,6 +7837,7 @@ impl Engine {
             rtty_afc_reset: false,
             rtty_center: None,
             rtty_queue: VecDeque::new(),
+            rtty_queue_call: None,
             rtty_abort: false,
             rtty_latched: false,
             rtty_type_buf: VecDeque::new(),
@@ -7305,6 +7861,7 @@ impl Engine {
             psk_mode: tempo_core::psk::PskModeKind::Bpsk31,
             psk_reverse: false,
             psk_queue: VecDeque::new(),
+            psk_queue_call: None,
             psk_abort: false,
             psk_latched: false,
             psk_type_buf: VecDeque::new(),
@@ -7322,6 +7879,7 @@ impl Engine {
             aprs_heard: Vec::new(),
             aprs_health: AprsHealth::default(),
             aprs_tx_queue: VecDeque::new(),
+            aprs_tx_queue_call: None,
             aprs_keying_ack: None,
             aprs_tx_notice: None,
             aprs_msg_seq: 0,
@@ -7345,6 +7903,7 @@ impl Engine {
             sstv_audio: Vec::new(),
             sstv_progress: None,
             sstv_tx: None,
+            sstv_tx_call: None,
             sstv_abort: false,
             sstv_sending: false,
             sstv_tx_mode: None,
@@ -7519,6 +8078,9 @@ impl Engine {
     /// So the restore keeps nothing. `ensure_radio_profiles` / `ensure_routing_targets` still run,
     /// so a bundle with an empty or inconsistent roster lands in a state the loop can drive.
     pub fn apply_restored_settings(&mut self, s: Settings) {
+        let mut s = s;
+        // ⛔ A bundle whose station profile id names no profile lands on one, with its call.
+        s.repair_active_station_profile();
         self.apply_settings_inner(s, false);
     }
 
@@ -7556,6 +8118,8 @@ impl Engine {
 
     fn apply_settings_inner(&mut self, s: Settings, keep_live_roster: bool) {
         self.remote_readings.invalidate();
+        // The station's call before the save ([`Self::note_call_saved`], at the end).
+        let call_was = self.settings.mycall.clone();
         // The address the club link line is about, before the save: a save that moves it
         // starts the line afresh at the end of this function.
         let club_target_was = self.fd_sync_targets().1;
@@ -7676,6 +8240,16 @@ impl Engine {
         // The setup wizard's "seen" record (`mark_setup_wizard_seen`) only ever goes from not seen
         // to seen: no form, restore or reset brings the first-run wizard back to a station.
         let live_setup_wizard_seen = self.settings.setup_wizard_seen;
+        // The station profiles and which one is on: ONE writer each, the profile verbs
+        // (`engine/station_profiles.rs`). The form's own active id says which profile its flat
+        // call, grid, state and power describe (`Settings::keep_station_form`).
+        // ⛔ While a run, a contact, an over or a JS8 message is under way, a save keeps the call
+        // the station transmits under (`keep_live_station_profiles`). Read before the save lands.
+        let live_station_call_waits = (!self.settings.station_profiles.is_empty()
+            && self.station_profile_switch_refusal().is_some())
+        .then(|| self.settings.mycall.clone());
+        let live_station_profiles = std::mem::take(&mut self.settings.station_profiles);
+        let live_active_station = std::mem::take(&mut self.settings.active_station_profile);
         // ⛔ The switches that let the station transmit by itself have ONE writer each, the switch
         // the operator presses: the presence beacon (`set_beacon`) and JS8's automatic replies,
         // relay and heartbeat acks (`js8_arm`). From a computer driving the station those run only
@@ -7777,7 +8351,18 @@ impl Engine {
             contest_was.mycall.clone(),
             contest_was.contest_entry_class.clone(),
         );
+        // A save that moves the saved RTTY tone pair (`rtty_low_tone_hz`) re-homes the decoder
+        // and the AFSK transmitter onto it, dropping the session's waterfall net: the operator
+        // just said where RTTY lives. It is a tone change like a shift or baud change in the same
+        // save — a latched over re-keys on the new pair rather than splicing (the radio loop's
+        // `RttyStream::key_cfg` carries the centre), and the privilege gate judges the new pair
+        // (`rtty_tx_mark_hz`) on its next per-tick check.
+        let rtty_home_moved = s.rtty_low_tone() != self.settings.rtty_low_tone();
         self.settings = s;
+        if rtty_home_moved {
+            self.rtty_center = None;
+            self.request_rtty_afc_reset();
+        }
         // A settings save can carry a new position id.
         self.sync_log_posid();
         // Restore the engine-owned pending Cloudlog key captured above (see that comment). Prefer a
@@ -7850,6 +8435,11 @@ impl Engine {
             // A form never writes or wipes the note; the save itself may take it or end it.
             self.settings.contest_before = live_contest_before;
             self.note_contest_before(contest_was, contest_was_active);
+            self.keep_live_station_profiles(
+                live_station_profiles,
+                live_active_station,
+                live_station_call_waits,
+            );
         }
         if let Some(club) = self.fd_club.as_mut() {
             club.note_host_settings(
@@ -8095,6 +8685,63 @@ impl Engine {
             // …and the contacts the mode left were that host's to have ([`Self::fd_left_log`]).
             self.fd_left_log = None;
         }
+        self.note_call_saved(&call_was);
+    }
+
+    /// After a save that changed the station's call from `was`: `was` becomes one of the calls the
+    /// station transmitted under before ([`Self::former_calls`]), and the FT or contest sequencer
+    /// makes its messages again under the call now, the one waiting included
+    /// ([`QsoStation::sign_as`], [`FieldDayStation::sign_as`]), so its next over goes out under
+    /// it. The operator's free text waiting to go is addressed again under the call now
+    /// ([`Self::qso_freetext`]) when it has no sender ("W1AW KD9TAW TNX 73"): the call in it is the
+    /// one Nexus put there. Free text that reads as a standard message ("W1AW KD9TAW 73") is signed
+    /// by the call now like the sequencer's own messages.
+    fn note_call_saved(&mut self, was: &str) {
+        let now = self.settings.mycall.clone();
+        if call_changed_refusal(was, &now).is_none() {
+            return;
+        }
+        let was = tempo_core::message::unhash_call(was)
+            .trim()
+            .to_ascii_uppercase();
+        self.former_calls
+            .retain(|c| !c.eq_ignore_ascii_case(&was) && !c.eq_ignore_ascii_case(now.trim()));
+        self.former_calls.push(was);
+        let freetext = self.qso_freetext.take();
+        // ⭐ THE MESSAGES ARE MADE AGAIN UNDER THE CALL NOW (the operator's decision, 2026-10-31):
+        // WSJT-X regenerates Tx1-Tx6 on Settings OK (`on_actionSettings_triggered` → `set_mode` →
+        // `displayWidgets` → `genStdMsgs`), and neither stops TX nor ends the QSO. So the over the
+        // sequencer was about to send goes out under the new call, counted as any over is, and the
+        // contact goes on. Nothing made under the old call is sent.
+        let station = match &mut self.mode {
+            Mode::FieldDay { station, .. } => {
+                if call_changed_refusal(station.call(), &now).is_some() {
+                    station.sign_as(&now);
+                }
+                return;
+            }
+            Mode::Qso { station, .. } => station,
+            Mode::Chat => return,
+        };
+        let readdress = freetext.filter(|(_, made)| {
+            station.pending.as_ref() == Some(made) && Msg::parse(&made.to_text()).sender().is_none()
+        });
+        if call_changed_refusal(&station.mycall, &now).is_some() {
+            station.sign_as(&now);
+        }
+        let (Some((typed, _)), Some(dx)) = (readdress, station.dxcall.clone()) else {
+            return;
+        };
+        let msg = addressed_free_text(&now, &dx, &typed);
+        tempo_core::applog::info(
+            "tx",
+            &format!(
+                "free text addressed again under the call now: {}",
+                msg.to_text()
+            ),
+        );
+        station.pending = Some(msg.clone());
+        self.qso_freetext = Some((typed, msg));
     }
 
     /// Re-enter Field Day if the persisted master switch (`fd_active`) left it
@@ -8323,6 +8970,13 @@ impl Engine {
     /// 1.0.5 "intermittent mode drift" field report).
     pub fn set_qrz_sync_cursor(&mut self, unix: u64) {
         self.settings.qrz_last_sync_unix = unix;
+    }
+
+    /// Record the sound card each TX audio device is on ([`Settings::tx_card_models`], persisted by
+    /// the caller), as `tempo_audio::notify_sound::tx_card_models_after` works it out after a save.
+    /// The narrow write, for the same reason as [`set_qrz_sync_cursor`](Self::set_qrz_sync_cursor).
+    pub fn set_tx_card_models(&mut self, models: std::collections::BTreeMap<String, String>) {
+        self.settings.tx_card_models = models;
     }
 
     /// Advance the automatic-LoTW-upload cursor (persisted by the caller). Same narrow
@@ -8731,6 +9385,16 @@ impl Engine {
         {
             return;
         }
+        // ONE RADIO, ONE WINDOW (`radio_claim`): a radio another live Nexus window drives is
+        // refused, and this window stays on the one it has. Every switch comes through here (the
+        // operator's pick, Remote's, the band→radio routing), so none can put two windows on one
+        // radio's rigctld. Otherwise the claim moves to the new radio's port with the switch. A
+        // process that never set up claims (tests, headless tools) claims and refuses nothing.
+        if let Some(p) = self.settings.radios.iter().find(|p| p.id == id) {
+            if crate::radio_claim::claim_profile(p).is_err() {
+                return;
+            }
+        }
         self.remote_readings.invalidate();
         // Where the dial was, for a contact a handoff onto another band ends (`on_band_change`).
         let made_on = self.made_on_now();
@@ -9048,6 +9712,25 @@ impl Engine {
     /// The radios and the broker a form save of `s` would leave, folded as `apply_settings_inner`
     /// folds them: the live roster, with the form's flat rig fields in the radio the form
     /// describes, then the port repair. Only those are read from it.
+    /// One radio, one window, for a settings save ([`crate::radio_claim::save_refusal`]): the
+    /// refusal when the save would put this window's active radio on a port (or address) another
+    /// live Nexus window drives. A form save is read as `apply_settings` will apply it (the live
+    /// roster and active radio, the form's CAT fields for that radio); a restore or reset as the
+    /// settings it hands in. Refused whole, before anything is applied, like
+    /// [`Self::port_clash_a_save_introduces`].
+    pub fn radio_claim_a_save_refuses(
+        &self,
+        s: &Settings,
+        replaces_station: bool,
+    ) -> Option<String> {
+        let after = if replaces_station {
+            s.clone()
+        } else {
+            self.roster_after_form_save(s)
+        };
+        crate::radio_claim::save_refusal(&self.settings, &after, crate::radio_claim::claims())
+    }
+
     fn roster_after_form_save(&self, s: &Settings) -> Settings {
         let live_active = self.settings.active_radio;
         let form_active = if s.radios.is_empty() {
@@ -9286,10 +9969,22 @@ impl Engine {
                 }
             }) {
                 let from = self.settings.active_radio;
-                self.set_active_radio_with_reset(id, &mut reset);
+                // The radio the routing chose is another Nexus window's: the station stays where
+                // it is, and the screen says why (always, whatever the switch-notice policy).
+                let refused = id != from
+                    && self
+                        .settings
+                        .radios
+                        .iter()
+                        .find(|p| p.id == id)
+                        .is_some_and(crate::radio_claim::profile_held_elsewhere);
+                if !refused {
+                    self.set_active_radio_with_reset(id, &mut reset);
+                }
                 // Said on screen when the policy asks for it (the switch notice). Recorded only
-                // when the switch really happened (it refuses a disabled radio).
-                if self.settings.active_radio != from {
+                // when the switch really happened (it refuses a disabled radio), or was refused
+                // for being another window's.
+                if refused || self.settings.active_radio != from {
                     let seq = self.auto_radio_switch.as_ref().map_or(0, |n| n.seq) + 1;
                     self.auto_radio_switch = Some(crate::dto::AutoRadioSwitch {
                         seq,
@@ -9297,6 +9992,7 @@ impl Engine {
                         to_id: id,
                         band: band.to_string(),
                         mode: route_mode,
+                        refused,
                     });
                 }
             }
@@ -9839,6 +10535,12 @@ impl Engine {
         *self.monitor_reads.entry(id).or_default() += 1;
     }
 
+    /// Record whether a non-active radio's CAT open was refused by Nexus itself
+    /// ([`RadioLive::cat_refused`]), so its switcher pill can give the reason.
+    pub fn observe_radio_cat_refused(&mut self, id: u32, refused: bool) {
+        self.radio_live.entry(id).or_default().cat_refused = refused;
+    }
+
     /// Drop a radio's live cache (it left the monitor pool — became active, was removed, or
     /// disconnected). The snapshot then falls back to its profile `last_*`.
     pub fn forget_radio_live(&mut self, id: u32) {
@@ -9848,13 +10550,16 @@ impl Engine {
     // --- Amplifier: per-radio live status from the amplifier poll thread ---
     //
     // The same contract as the block above — update `amp_live[id]` WITHOUT touching the active
-    // flat state, the decode context or TX. Display-only: it gates nothing and keys nothing.
+    // flat state, the decode context or TX. Display-only: it gates nothing and keys nothing. The
+    // one other reader is the log: the output watts are the contact's power
+    // ([`Self::note_amp_output`]), and STANDBY says the radio's own figure is.
     // Putting an amplifier in standby is not a way to stop a transmission (the exciter keeps
     // keying and the drive passes straight through), so no reading here may ever become a
     // condition on a transmit decision or reach a cockpit's stop-line census.
 
     /// Record a SUCCESSFUL amplifier poll. Clears the miss run and marks the link up.
     pub fn observe_amp_status(&mut self, id: u32, status: crate::dto::AmpStatusDto) {
+        let output_watts = status.output_watts;
         let e = self.amp_live.entry(id).or_default();
         e.misses = 0;
         e.status = crate::dto::AmpStatusDto {
@@ -9862,6 +10567,7 @@ impl Engine {
             reason: String::new(),
             ..status
         };
+        self.note_amp_output(id, output_watts);
     }
 
     /// Record a FAILED amplifier poll — `reason` is one of [`crate::dto::AMP_REASONS`].
@@ -10252,7 +10958,7 @@ impl Engine {
     /// Today's band-dropdown default for (`band`, `om`) — mirrors what the pickers land on
     /// when no memory cell exists (`get_licensed_band_plan` for Phone/CW, the band-plan
     /// channel for Digital, the RTTY plan for RTTY). An empty cell must park EXACTLY where
-    /// the dropdown always did; `None` = no privilege / no channel → leave the dial put.
+    /// the dropdown always did; `None` = no channel → leave the dial put.
     fn band_pick_default(
         &self,
         band: &str,
@@ -10261,20 +10967,18 @@ impl Engine {
         use crate::settings::OperatingMode;
         let class = self.settings.license_class;
         match om {
-            // THE phone home, not the bare segment edge: on LSB the emission hangs BELOW the
-            // dial, so the edge itself is a dial the transmit gate refuses (see
-            // [`crate::privileges::phone_home`] — this arm is where an Extra picking 40 m
-            // landed on an unkeyable 7.1250).
-            OperatingMode::Phone => {
-                crate::privileges::phone_home(class, band).map(|(dial, sb)| (dial, sb.to_string()))
-            }
-            // CW parks in the activity window (14.030, not the dead 14.000 edge), clamped
-            // to the licensed segment start; sideband is inert for CW (the rig-mode
-            // policy commands CW) — "USB" matches the dropdown it mirrors.
-            OperatingMode::Cw => crate::privileges::segment_start(class, band, om).map(|lo| {
-                let dial = crate::bandplan::cw_activity_mhz(band).map_or(lo, |a| a.max(lo));
-                (dial, "USB".to_string())
-            }),
+            // THE ROW THE PHONE/CW PICKER LISTED, read from the same function that lists it
+            // (`bandplan::licensed_bands`), so a listed band always tunes. These arms used to
+            // recompute a segment start of their own and returned `None` where the class had
+            // none, which made a pick of a listed receive-only band (a General's 4 m, `Open`'s
+            // 30 m phone) do nothing at all. The row carries THE phone home (an LSB home lifted
+            // clear of the segment edge — the unkeyable 7.1250 an Extra once landed on) and the
+            // CW activity dial; a receive-only row carries the listening dial, where the
+            // transmit gate, which this does not consult, refuses the over as the row's lock says.
+            OperatingMode::Phone | OperatingMode::Cw => crate::bandplan::licensed_bands(class, om)
+                .into_iter()
+                .find(|c| c.band == band)
+                .map(|c| (c.dial_mhz, c.mode)),
             OperatingMode::Digital => self
                 .band_plan()
                 .into_iter()
@@ -10311,6 +11015,7 @@ impl Engine {
             crate::settings::KeyboardModem::Psk => match self.psk_mode {
                 tempo_core::psk::PskModeKind::Bpsk31 => "PSK31",
                 tempo_core::psk::PskModeKind::Qpsk31 => "QPSK31",
+                tempo_core::psk::PskModeKind::Bpsk63 => "PSK63",
             },
         }
     }
@@ -10358,8 +11063,9 @@ impl Engine {
     ///
     /// `mode`: the cockpit's mode ("phone"/"cw"/…), passed explicitly for the same
     /// entry-race reason as `get_licensed_band_plan`; `None` = the engine's current
-    /// operating mode. No memory + no default = no-op — the dropdown only lists licensed
-    /// bands, and the TX lockout guards the air regardless.
+    /// operating mode. A Phone/CW pick of any band the dropdown lists always has a default (the
+    /// listed row); a band no picker lists is a no-op, and the TX lockout guards the air
+    /// regardless.
     pub fn pick_band(&mut self, band: &str, mode: Option<&str>) {
         self.pick_band_with_reset(band, mode, reset_ft8_a7_without_waiting);
     }
@@ -10948,6 +11654,28 @@ impl Engine {
         self.sstv_tune_with_arming(dial_mhz, band, mode, true);
     }
 
+    /// The SSTV screen's own tune on opening (#451, Settings ▸ Digital ▸ SSTV ▸ tune to the band's
+    /// SSTV frequency when SSTV opens): [`Self::sstv_tune`] — Phone claimed, the FM hold — but the
+    /// APP's tune, not the operator's, and one that never arms Phone's Enable-TX latch. It declares machinery
+    /// provenance ([`Self::machinery_tune`]'s), so the channel never enters the per-(band, mode)
+    /// dial memory and the operator's own dial it displaces is banked: with the switch on, every
+    /// visit would otherwise have written 14.230 over their 20 m Phone dial.
+    ///
+    /// Refused — false, nothing tuned — while a satellite pass owns the dial (Doppler steers it,
+    /// and a retune here would end the pass's hold) and for the ISS downlink, which is a
+    /// receive-only space channel and never "this band's" SSTV frequency.
+    pub fn sstv_tune_on_open(&mut self, dial_mhz: f64, band: &str, mode: &str) -> bool {
+        let iss = crate::bandplan::sstv_band_plan()
+            .iter()
+            .any(|c| c.band == "2m" && (c.dial_mhz - dial_mhz).abs() < 0.0015);
+        if self.sat_dial_owner.is_some() || iss {
+            return false;
+        }
+        // Never the Enable-TX latch: a tune the app makes on its own arms nothing.
+        self.sstv_tune_as(dial_mhz, band, mode, false, DialOrigin::Machinery);
+        true
+    }
+
     /// [`Self::sstv_tune`], arming Phone's Enable-TX latch on the way in only with `arm_manual`:
     /// a computer driving this station passes false, as Remote's entry does.
     pub fn sstv_tune_with_arming(
@@ -10957,6 +11685,19 @@ impl Engine {
         mode: &str,
         arm_manual: bool,
     ) {
+        self.sstv_tune_as(dial_mhz, band, mode, arm_manual, DialOrigin::Operator);
+    }
+
+    /// The body of [`Self::sstv_tune_with_arming`] and [`Self::sstv_tune_on_open`], which differ
+    /// only in who the dial is declared to belong to.
+    fn sstv_tune_as(
+        &mut self,
+        dial_mhz: f64,
+        band: &str,
+        mode: &str,
+        arm_manual: bool,
+        origin: DialOrigin,
+    ) {
         self.set_operating_mode_with_arming("phone", false, arm_manual);
         // An FM channel is held in FM below, so the pick routes on FM: the radio it lands on is
         // the one then commanded FM, as a repeater tune's is. It routed on Phone's own class and,
@@ -10965,7 +11706,7 @@ impl Engine {
         if mode.eq_ignore_ascii_case("fm") && dial_mhz >= 29.0 {
             self.route_intent = Some(crate::settings::RouteMode::Fm);
         }
-        self.set_frequency(dial_mhz, band, mode);
+        self.tune_dial(dial_mhz, band, mode, origin);
         // A cockpit sideband override describes the section being LEFT, not this channel
         // (work_spot's rule) — without this a stale Phone-cockpit FM pick would key FM
         // onto an SSB image frequency.
@@ -12283,6 +13024,7 @@ impl Engine {
         }
         // Said in the strip's own line, so the CW cockpit's warning line does not say it twice.
         if let Some(why) = self.cw_message_refusal(&expanded) {
+            tempo_core::applog::info("tx", &format!("CW not keyed by Enter: {why}"));
             return Err(why);
         }
         tempo_core::applog::info("tx", &format!("CW over queued by Enter: {expanded:?}"));
@@ -12298,8 +13040,14 @@ impl Engine {
     /// the words before it have keyed, and by then Enter Sends Message has logged the contact with
     /// its exchange cut short. So every word is asked here, before any is queued, and the keyer
     /// still checks each word it is handed. The other keyers put no text inside a radio command,
-    /// and their messages go as before.
+    /// and their messages go as before. Before either, a keyline or WinKeyer with no port
+    /// ([`Self::cw_keyer_port_refusal`]) refuses any message at all.
     fn cw_message_refusal(&self, expanded: &str) -> Option<String> {
+        if !expanded.trim().is_empty() {
+            if let Some(why) = self.cw_keyer_port_refusal() {
+                return Some(why.to_string());
+            }
+        }
         if !self.cw_cat_keyer() {
             return None;
         }
@@ -12346,6 +13094,7 @@ impl Engine {
         // this queue) drops the rest of the macro instead of the rig playing it all out.
         if self.cw_queue.is_empty() {
             self.cw_messages.clear();
+            self.cw_queue_call = Some(self.settings.mycall.clone());
         }
         let before = self.cw_queue.len();
         for word in text.split_whitespace() {
@@ -12521,6 +13270,8 @@ impl Engine {
             Some(("transmit is off", CW_REFUSED_TX_OFF))
         } else if let Some(why) = self.connection_tx_refusal() {
             Some((why, why))
+        } else if let Some(why) = self.cw_keyer_port_refusal() {
+            Some(("the chosen keyer has no port set", why))
         } else if !self.tx_allowed() {
             Some((
                 "the dial is outside the licence's privileges",
@@ -12532,7 +13283,12 @@ impl Engine {
                 CW_REFUSED_CW_PRIVILEGES,
             ))
         } else {
-            None
+            // ⛔ The keying-time call check: queued under another call than the station's now.
+            self.cw_queue_call
+                .as_deref()
+                .filter(|_| !self.cw_queue.is_empty())
+                .and_then(|call| self.sent_call_refusal(call))
+                .map(|why| (why, why))
         };
         if let Some((why, notice)) = refused {
             if !self.cw_queue.is_empty() {
@@ -12627,12 +13383,30 @@ impl Engine {
     }
 
     /// True if CW keys on the RADIO'S OWN keyer (the CAT keyer, `rig.send_morse`): the keyer the
-    /// radio loop hands a word to when no other takes it, so a WinKeyer or a key line chosen with
-    /// no port set ([`Self::cw_winkeyer_port`], [`Self::cw_serial_key_port`]) keys there too.
+    /// radio loop hands a word to when no other takes it. A WinKeyer or a key line chosen with no
+    /// port set ([`Self::cw_winkeyer_port`], [`Self::cw_serial_key_port`]) counts here too, but
+    /// is never handed a word: [`Self::cw_keyer_port_refusal`] refuses it first.
     fn cw_cat_keyer(&self) -> bool {
         !self.cw_soundcard()
             && self.cw_winkeyer_port().is_none()
             && self.cw_serial_key_port().is_none()
+    }
+
+    /// ⛔ Why CW may not key at all: the chosen keyer is a Serial keyline or a WinKeyer and its port
+    /// box is blank (#434). Such a word used to fall through to the radio's CAT keyer, a keyer the
+    /// operator never chose, with nothing said; now it is refused at the send and at keying time
+    /// ([`Self::poll_cw_word`]), and keys through no other path. `None` for every other case.
+    fn cw_keyer_port_refusal(&self) -> Option<&'static str> {
+        use crate::settings::CwKeyerBackend;
+        match self.settings.cw_keyer {
+            CwKeyerBackend::Serial if self.cw_serial_key_port().is_none() => {
+                Some(CW_NO_KEYLINE_PORT)
+            }
+            CwKeyerBackend::WinKeyer if self.cw_winkeyer_port().is_none() => {
+                Some(CW_NO_WINKEYER_PORT)
+            }
+            _ => None,
+        }
     }
 
     /// The WinKeyer serial port when the CW keyer backend is WinKeyer and a port is set —
@@ -13012,6 +13786,16 @@ impl Engine {
             .roster
             .get(call)
             .and_then(|h| h.grid.as_deref())
+    }
+
+    /// The grid a contact with `call` would be credited with if the exchange carried none: the
+    /// roster's decoded grid, else the grid it sent on the air this session (any band, within
+    /// 24 hours), else the grid on its newest logged contact — [`Self::dx_grid_resolved`] exactly,
+    /// and never a callbook's (that one counts for the map and distance only). The Needed board
+    /// scores a station this radio is decoding with this grid, so "New grid" promises only a grid
+    /// the log will credit.
+    pub fn credited_grid(&self, call: &str) -> Option<String> {
+        self.dx_grid_resolved(call, None)
     }
 
     /// The grid this station's newest logged contact carries, if that row has one — the log's
@@ -13474,7 +14258,9 @@ impl Engine {
     ///
     /// Only a reading that is the station's output on the radio's own scale counts: none during a
     /// tune carrier (a tune-up's power is not the contact's), none with an amplifier on the radio
-    /// (the radio's power is then the amplifier's drive), none on a path whose watts are not the
+    /// (the radio's power is then the amplifier's drive: [`Self::note_amp_output`] measures that
+    /// over instead) unless the amplifier is linked and says STANDBY (it then passes the drive
+    /// straight through, so the radio's power is the power on the air), none on a path whose watts are not the
     /// radio's own ([`crate::settings::po_watts_scale_known`]), and no zero (between words, or
     /// before the RF rises). The over's figure is its PEAK, which on SSB is the nearest the meter
     /// comes to PEP. A reading more than [`MEASURED_OVER_GAP_SECS`] after the last starts a new
@@ -13483,11 +14269,58 @@ impl Engine {
         if !w.is_finite()
             || w <= 0.0
             || self.tx_owner() == Some(TxOwner::Tune)
-            || self.settings.amp_configured()
+            || (self.settings.amp_configured() && !self.amp_in_standby())
             || !self.settings.po_watts_scale_is_known()
         {
             return;
         }
+        self.fold_over_power(w);
+    }
+
+    /// Fold one amplifier output reading (watts) into the over it was measured on, for the log:
+    /// with an amplifier on the radio, its output is the power on the air. The same rules as the
+    /// radio's figure ([`Self::note_measured_power`]): the active radio's amplifier only, only
+    /// while one is set up on it, none during a tune carrier, and no zero (receiving, or the
+    /// amplifier in standby with nothing to measure).
+    ///
+    /// ⚠️ ONLY WHILE AN OVER IS UNDER WAY. The radio's figure is read only while the radio loop
+    /// sees the rig keyed; the amplifier is polled all the time, on its own thread, so a poll
+    /// sampled on the air can arrive after the unkey, and an amplifier meter can still be falling
+    /// just after it. Such a reading may only extend an over that is still open: it never starts
+    /// a new one, which would replace the over's peak with its tail (or a tune-up's late sample
+    /// with a contact's power). The station is keyed when the rig says so over CAT, a satellite
+    /// pass infers it, or Nexus itself owns the transmitter for anything but a tune carrier.
+    fn note_amp_output(&mut self, id: u32, w: Option<u16>) {
+        let Some(w) = w.filter(|w| *w > 0) else {
+            return;
+        };
+        let owner = self.tx_owner();
+        if id != self.settings.active_radio
+            || !self.settings.amp_configured()
+            || owner == Some(TxOwner::Tune)
+        {
+            return;
+        }
+        let keyed = self.rig_keyed || self.sat_inferred_keyed || owner.is_some();
+        let now = now_unix_secs();
+        let extends_open_over = self
+            .measured_over
+            .is_some_and(|o| o.open && now.saturating_sub(o.last_unix) <= MEASURED_OVER_GAP_SECS);
+        if keyed || extends_open_over {
+            self.fold_over_power(f32::from(w));
+        }
+    }
+
+    /// Is the active radio's amplifier linked and in STANDBY by its latest poll? A missed poll
+    /// clears `operate`, so a quiet amplifier is never taken for one in standby.
+    fn amp_in_standby(&self) -> bool {
+        self.amp_live(self.settings.active_radio)
+            .is_some_and(|a| a.linked && a.operate == Some(false))
+    }
+
+    /// Fold one forward-power reading (watts) into the current over's peak, or start a new over:
+    /// see [`Self::note_measured_power`].
+    fn fold_over_power(&mut self, w: f32) {
         let now = now_unix_secs();
         match &mut self.measured_over {
             Some(over)
@@ -13689,6 +14522,13 @@ impl Engine {
         // refuses more.
         if self.flex_atu.is_some() && !self.tx_allowed_as(crate::settings::OperatingMode::Cw) {
             return Err(FLEX_ATU_OUTSIDE_CW.to_string());
+        }
+        // ⛔ …and on every CAT path the radio's own carrier where it transmits it
+        // ([`Self::atu_carrier_allowed`]): the section's emission model puts Digital's frame,
+        // RTTY's tones and Keyboard's signal an audio offset off that dial, where the ATU's carrier
+        // is not. Only ever refuses more.
+        if !self.atu_carrier_allowed() {
+            return Err(atu_carrier_outside(self.tx_emission_mhz()));
         }
         if let Some(owner) = self.tx_owner() {
             return Err(owner.busy_reason());
@@ -13925,6 +14765,33 @@ impl Engine {
 
     // ----- Phone voice keyer — play recorded WAVs + record, via the radio loop -----
 
+    /// Whether the licence allows a voice-keyer message here: [`Self::tx_allowed`], and the
+    /// message judged as the phone emission it is ([`Self::tx_allowed_as`] Phone: the passband of
+    /// the mode the transmitting VFO is commanded). Its cockpit is Phone's, where the two are one
+    /// judgement; from any other section the section's own model judges a narrow signal an audio
+    /// offset off the dial (Digital's frame, RTTY's tones), not a voice across the whole passband.
+    /// Not while the transmitting VFO is in a mode that takes no audio at all
+    /// ([`Self::tx_mode_keys_no_audio`]: the radio's own CW or RTTY): no voice goes out there, and
+    /// the section's own judgement of its carrier stands. Only ever refuses more.
+    fn voice_allowed(&self) -> bool {
+        self.tx_allowed()
+            && (self.tx_mode_keys_no_audio()
+                || self.tx_allowed_as(crate::settings::OperatingMode::Phone))
+    }
+
+    /// Whether the transmitting VFO is commanded a mode that takes no audio: the radio's own CW or
+    /// RTTY (FSK), where the radio keys its own carrier and audio played into it does not reach the
+    /// air. Both the dial's word and, on a satellite pass, the uplink's own must say so.
+    fn tx_mode_keys_no_audio(&self) -> bool {
+        let keyed = |word: &str| {
+            matches!(
+                word.trim().to_ascii_uppercase().as_str(),
+                "CW" | "CWR" | "RTTY" | "RTTYR"
+            )
+        };
+        keyed(&self.tx_mode_effective()) && self.sat_uplink_word().is_none_or(|w| keyed(&w))
+    }
+
     /// Queue 12 kHz mono samples (a decoded voice-keyer WAV) for transmission. REFUSED while
     /// TX is disabled (Monitor) or the dial is outside the licence's privileges, so a stray F-key
     /// never keys unexpectedly: nothing is queued, the log says why, and so does the `Err`, which
@@ -13998,6 +14865,15 @@ impl Engine {
             );
             return Err(self.licence_lock_text().to_string());
         }
+        // The section allows its own emission here, but not a voice ([`Self::voice_allowed`]):
+        // the words say it is phone the licence does not allow, not the frequency.
+        if !self.voice_allowed() {
+            tempo_core::applog::info(
+                "tx",
+                "voice-keyer message refused: a voice is outside the licence's phone privileges here",
+            );
+            return Err(VOICE_OUTSIDE_PHONE.to_string());
+        }
         if self.flex_radio_has_mic {
             // The pending message is the one this replaces, not something else transmitting.
             if let Some(owner) = self.tx_owner_beside_voice() {
@@ -14069,6 +14945,8 @@ impl Engine {
             Some(why)
         } else if !self.tx_allowed() {
             Some("the dial is outside the licence's privileges")
+        } else if !self.voice_allowed() {
+            Some("a voice is outside the licence's phone privileges here")
         } else if self.pc_mic_armed() {
             // The operator's PTT on the computer's microphone, pressed after the message was
             // queued and before this tick (the press is refused while a message is pending, so
@@ -14584,7 +15462,9 @@ impl Engine {
         // the journal already carries what its hold captured. The station call first, as the log
         // funnel stamps it: with nobody at the key named, the operator is that call. The activation
         // with it ([`Self::stamp_hold`]): the confirm logs the park the contact was made from.
-        self.stamp_hold(&mut held.record);
+        if !held.stamped {
+            self.stamp_hold(&mut held.record);
+        }
         if self.pending_logs.is_empty() {
             self.replace_pending_log(Some(held));
             self.persist_pending_qso();
@@ -17054,32 +17934,58 @@ impl Engine {
         is_designator(name).then(|| name.to_string())
     }
 
-    /// The satellite names LoTW accepts, keyed by what OUR OWN catalog calls the bird (#296).
+    /// Every satellite name LoTW accepts in `SAT_NAME`, exactly as LoTW spells it — the list the
+    /// operator's picker offers and the gate on what an operator edit may store.
     ///
-    /// ⚠️ MEASURED 2026-09-14, and it needs review as new birds appear. Against LoTW's
-    /// accepted-satellite list (as TQSL 11.34 carries it) and the bundled SatNOGS catalog: of the
-    /// 38 designators the catalog can produce, **11 are on that list**. The other 27 are not —
-    /// real designators LoTW has never listed (GO-32, AO-95, IO-26, CO-55, LO-74, OO-38…) and
-    /// names that merely match the designator SHAPE without being one (CUBY-1…5, TOM-1…3, UWE-3/4,
-    /// CANX-4/5, JACK-002). The last rows are the birds LoTW does list under a different spelling
-    /// than the catalog's.
+    /// SOURCE: LoTW's own published list, "What satellites are supported by LoTW?" in the LoTW
+    /// FAQ (https://lotw.arrl.org/lotw-help/frequently-asked-questions/), read 2026-11-02: 110
+    /// IDs (the page lists SO-50 twice). Copied as LoTW prints the ID column, sorted; recheck it
+    /// when LoTW adds a bird, since a name missing here cannot be picked.
+    const LOTW_ACCEPTED_SATS: &[&str] = &[
+        "AISAT1", "AO-10", "AO-109", "AO-123", "AO-13", "AO-16", "AO-21", "AO-24", "AO-27", "AO-3",
+        "AO-4", "AO-40", "AO-51", "AO-6", "AO-7", "AO-73", "AO-8", "AO-85", "AO-91", "AO-92",
+        "ARISS", "BO-102", "BY70-1", "CAS-3H", "CAS-4A", "CAS-4B", "DO-64", "EO-79", "EO-88",
+        "ESEO", "FO-12", "FO-20", "FO-29", "FO-99", "FS-3", "HO-107", "HO-113", "HO-68", "INSPR7",
+        "IO-117", "IO-86", "JO-97", "KEDR", "LEDSAT", "LO-19", "LO-78", "LO-87", "LO-90", "MAYA-3",
+        "MAYA-4", "MIREX", "MO-112", "MO-122", "NO-103", "NO-104", "NO-44", "NO-83", "NO-84",
+        "PO-101", "QO-100", "RS-1", "RS-10", "RS-11", "RS-12", "RS-13", "RS-15", "RS-2", "RS-44",
+        "RS-5", "RS-6", "RS-7", "RS-8", "RS95S", "SAREX", "SO-121", "SO-124", "SO-125", "SO-35",
+        "SO-41", "SO-50", "SONATE", "TAURUS", "TEV2-1", "TEV2-2", "TEV2-3", "TEV2-4", "TEV2-5",
+        "TEV2-6", "TEV2-7", "TEV2-8", "TEV2-9", "TEVEL1", "TEVEL2", "TEVEL3", "TEVEL4", "TEVEL5",
+        "TEVEL6", "TEVEL7", "TEVEL8", "TO-108", "UKUBE1", "UO-14", "UVSQ", "VO-52", "XW-2A",
+        "XW-2B", "XW-2C", "XW-2D", "XW-2E", "XW-2F",
+    ];
+
+    /// The LoTW name to stamp AUTOMATICALLY on a satellite contact, keyed by what OUR OWN catalog
+    /// calls the bird (#296). Every value is on [`Self::LOTW_ACCEPTED_SATS`] (a test holds that).
     ///
-    /// This table is OURS, hand-kept, deliberately not a copy of anyone's file, and the reason it
-    /// may be short: a bird missing here is stamped with NOTHING, which costs a satellite credit
-    /// the operator can still add by hand, while a WRONG name is refused by TQSL and — through the
-    /// `-a compliant` funnel — can take a whole signed batch with it. Unknown fails closed.
+    /// ⚠️ MEASURED 2026-11-02 against LoTW's list above and the bundled catalog
+    /// (`src-tauri/resources/tles/tles.json`), and it needs review as new birds appear: of the
+    /// 45 designators the catalog can produce, **13 are on LoTW's list**. The rest are not — real
+    /// designators LoTW has never listed (GO-32, AO-95, IO-26, CO-55, LO-74, OO-38…) and names
+    /// that merely match the designator SHAPE without being one (CUBY-1…5, TOM-1…3, UWE-3/4,
+    /// CANX-4/5, JACK-002). The later rows are birds the catalog names differently from LoTW,
+    /// each matched on LoTW's own description of the bird (QO-100 is "Es'hail-2", IO-86 is
+    /// "LAPAN-ORARI", i.e. LAPAN-A2) or on the designator inside the catalog name.
     ///
-    /// Left out on purpose, as UNCONFIRMED: the catalog's `AISAT`, `UKUBE 1` and `BY70-4` resemble
-    /// LoTW's `AISAT1`, `UKUBE1` and `BY70-1`, but they were not verified to be the same bird, and
-    /// a guess here is exactly what this table exists to stop.
+    /// The automatic stamp is narrower than the picker on purpose: a bird missing here is
+    /// stamped with NOTHING, which costs a satellite credit the operator can still add from the
+    /// picker, while a WRONG name is refused by TQSL and — through the `-a compliant` funnel —
+    /// can take a whole signed batch with it. Unknown fails closed.
+    ///
+    /// Left out on purpose, as UNCONFIRMED: the catalog's `AISAT` resembles LoTW's `AISAT1`, and
+    /// `LAPAN-A3`/`NEXSAT-1` resemble IO-86/FO-99, but none was verified to be the same bird.
     const LOTW_SAT_NAMES: &[(&str, &str)] = &[
         // On LoTW's list under the designator the catalog already yields.
+        ("AO-7", "AO-7"),
         ("AO-10", "AO-10"),
         ("AO-16", "AO-16"),
         ("AO-27", "AO-27"),
         ("AO-40", "AO-40"),
+        ("AO-73", "AO-73"),
         ("AO-91", "AO-91"),
         ("AO-123", "AO-123"),
+        ("FO-29", "FO-29"),
         ("JO-97", "JO-97"),
         ("LO-19", "LO-19"),
         ("NO-44", "NO-44"),
@@ -17098,6 +18004,17 @@ impl Engine {
         ("TEVEL2-7", "TEV2-7"),
         ("TEVEL2-8", "TEV2-8"),
         ("TEVEL2-9", "TEV2-9"),
+        ("RS-44 & BREEZE-KM R/B", "RS-44"),
+        ("RADIO ROSTO (RS15)", "RS-15"),
+        ("ES'HAIL 2", "QO-100"),
+        ("LAPAN-A2", "IO-86"),
+        ("GREENCUBE", "IO-117"),
+        ("FOX-1A", "AO-85"),
+        ("RADFXSAT (FOX-1B)", "AO-91"),
+        ("LILACSAT-2", "CAS-3H"),
+        ("MESAT1", "MO-122"),
+        ("UKUBE-1", "UKUBE1"),
+        ("ESEO", "ESEO"),
     ];
 
     /// #296: the name LoTW ACCEPTS for the bird this catalog label names, or `None` when we
@@ -17116,8 +18033,9 @@ impl Engine {
     }
 
     /// The satellite names LoTW accepts, sorted — what the operator's "tag this contact"
-    /// picker offers, read straight off [`Self::LOTW_SAT_NAMES`] so the list they can choose
-    /// from and the list [`Self::log_qso`] stamps from cannot drift apart.
+    /// picker offers, read straight off [`Self::LOTW_ACCEPTED_SATS`], the same list
+    /// [`Self::is_lotw_sat_name`] gates on, so the list they choose from cannot drift from the
+    /// list the writer accepts.
     ///
     /// A PICKER AND NOT A TEXT BOX, deliberately. TQSL matches `SAT_NAME` against its own
     /// designator list and rejects anything else ("AO7 instead of AO-7 → rejected"), and
@@ -17126,10 +18044,8 @@ impl Engine {
     /// The cost is the table's own: a bird missing from it still cannot be named from inside
     /// Nexus — the same fail-closed trade the stamp already makes.
     pub fn lotw_accepted_sat_names() -> Vec<&'static str> {
-        let mut names: Vec<&'static str> = Self::LOTW_SAT_NAMES.iter().map(|(_, n)| *n).collect();
+        let mut names = Self::LOTW_ACCEPTED_SATS.to_vec();
         names.sort_unstable();
-        // The table is keyed by OUR catalog name, so two catalog spellings of one bird would
-        // otherwise offer the operator the same LoTW name twice.
         names.dedup();
         names
     }
@@ -17139,9 +18055,9 @@ impl Engine {
     /// else, so a caller that gets the list wrong cannot write a name TQSL will reject.
     pub fn is_lotw_sat_name(name: &str) -> bool {
         let name = name.trim();
-        Self::LOTW_SAT_NAMES
+        Self::LOTW_ACCEPTED_SATS
             .iter()
-            .any(|(_, lotw)| lotw.eq_ignore_ascii_case(name))
+            .any(|lotw| lotw.eq_ignore_ascii_case(name))
     }
 
     /// The station callsign to stamp on a contact: the operator's current `mycall`, ADIF-cased
@@ -17153,6 +18069,31 @@ impl Engine {
     fn station_callsign_now(&self) -> Option<String> {
         let call = self.settings.mycall.trim();
         (!call.is_empty()).then(|| call.to_ascii_uppercase())
+    }
+
+    /// The station callsign to stamp on the FT contact with `dxcall`: while the sequencer holds
+    /// that contact, the call its latest over went out under (`QsoStation::keyed_as`), or the call
+    /// its overs are made under (`QsoStation::mycall`) before one has; otherwise
+    /// [`Self::station_callsign_now`]. A call saved mid-contact makes the overs after it under the
+    /// new call ([`Self::note_call_saved`]), and does not relabel a contact whose overs so far went
+    /// out under the call before it.
+    fn contact_station_callsign(&self, dxcall: &str) -> Option<String> {
+        let built = match &self.mode {
+            Mode::Qso { station, .. }
+                if station
+                    .dxcall
+                    .as_deref()
+                    .is_some_and(|c| same_call(c, dxcall)) =>
+            {
+                let sent = station.keyed_as.as_deref().unwrap_or(&station.mycall);
+                tempo_core::message::unhash_call(sent).trim()
+            }
+            _ => "",
+        };
+        if built.is_empty() {
+            return self.station_callsign_now();
+        }
+        Some(built.to_ascii_uppercase())
     }
 
     /// The rig to stamp on a contact (ADIF `MY_RIG`): the active radio's model, or nothing when
@@ -17177,7 +18118,8 @@ impl Engine {
     /// The power to stamp on a contact that started at `start_unix` (ADIF `TX_PWR`), in watts.
     ///
     /// ⭐ WHAT THE RADIO MEASURED FIRST. The forward power the radio reported during its latest
-    /// over ([`Self::note_measured_power`]), when that over ran after the contact started (less
+    /// over ([`Self::note_measured_power`]) — with an amplifier on the radio, the output the
+    /// amplifier reported ([`Self::note_amp_output`]), since the radio's is then its drive — when that over ran after the contact started (less
     /// [`MEASURED_OVER_SLACK_SECS`], for a reply sent before its call was typed): the power that
     /// was actually on the air for this contact, whatever the slider or Settings say. `None` for
     /// `start_unix` takes the latest over whenever it was (a contest row, logged as it is worked).
@@ -17278,7 +18220,7 @@ impl Engine {
             false,
             StateSource::Operator,
             Vec::new(),
-            false,
+            held.stamped,
             held.gridless,
         );
     }
@@ -17537,8 +18479,11 @@ impl Engine {
         let Some(name) = Self::lotw_sat_name(&st.label) else {
             return;
         };
-        let f_hz = if rec.freq_mhz > 0.0 {
-            (rec.freq_mhz * 1e6) as i64
+        // The RECEIVE leg is what sits in the downlink passband: FREQ_RX when the record carries
+        // one (a same-band pass logged split, whose FREQ is the uplink), FREQ otherwise.
+        let rx_mhz = rec.freq_rx_mhz.unwrap_or(rec.freq_mhz);
+        let f_hz = if rx_mhz > 0.0 {
+            (rx_mhz * 1e6) as i64
         } else {
             (self.settings.dial_mhz * 1e6) as i64
         };
@@ -17547,6 +18492,21 @@ impl Engine {
         if centre > 0 && (f_hz - centre).abs() <= guard {
             rec.prop_mode = Some("SAT".into());
             rec.sat_name = Some(name.to_string());
+            // #163: BOTH LEGS. A contact through the bird arrives with one frequency, the
+            // downlink it was heard on; it is logged as ADIF and TQSL mean it — FREQ the uplink
+            // we transmitted on (the same place in the passband, without Doppler), FREQ_RX the
+            // downlink. The record's band stays the downlink, the band Nexus counts it on; the
+            // ADIF writer sends BAND from FREQ and BAND_RX from the band
+            // (`logbook::cross_band_tx_band`). A record that already carries a receive leg, one
+            // with no frequency, and a simplex channel or a beacon are left as they are.
+            if rec.freq_rx_mhz.is_none() && rec.freq_mhz > 0.0 {
+                let up = tempo_core::doppler::nominal_uplink_hz(&st.transponder, f_hz as u64)
+                    .filter(|&up| up as i64 != f_hz);
+                if let Some(up) = up {
+                    rec.freq_rx_mhz = Some(rec.freq_mhz);
+                    rec.freq_mhz = up as f64 / 1e6;
+                }
+            }
         }
     }
 
@@ -17559,6 +18519,7 @@ impl Engine {
             rec.station_callsign = self.station_callsign_now();
         }
         self.stamp_activation(rec);
+        self.stamp_station_profile(rec);
         self.stamp_station_now(rec);
         // ⛔ The satellite FIRST, as the bird held now: the popup then opens on SAT with its name,
         // and the propagation mode it remembers below never takes a satellite contact's place.
@@ -17795,12 +18756,11 @@ impl Engine {
         // them has a start-of-QSO identity snapshot to read (`Station::mycall`,
         // crates/tempo-core/src/qso.rs). Reading that here would leave every other path
         // unstamped, which is most contacts. The two can only disagree when the operator
-        // changes callsign mid-contact, and in that window the WIRE is already wrong — the
-        // sequencer keeps transmitting from its start-of-QSO snapshot while the identity gate
-        // validates the new call — which is a separate transmit-path defect this change
-        // deliberately does not reach into. The mode builders that CAN be delayed (a
+        // changes callsign mid-contact. The mode builders that CAN be delayed (a
         // `prompt_to_log` record waits in `pending_log`, and on disk, for the operator's
-        // confirm) stamp it at contact time instead, and this fill leaves theirs alone.
+        // confirm) stamp it at contact time instead, and this fill leaves theirs alone; the FT
+        // builder stamps the call the sequencer's latest over went out under
+        // ([`Self::contact_station_callsign`]).
         //
         // A record arriving with its own station call — an imported club log, or a row the
         // operator repaired by hand — is left alone. Same rule as `operator` below.
@@ -17810,8 +18770,11 @@ impl Engine {
         // The activation, then the station as it is now — operator, radio, power, grid, state — on
         // a contact made now ([`Self::stamp_activation`], [`Self::stamp_station_now`]). A held
         // contact's activation was decided when it was held.
+        // The station profile's the same way: a held contact took the profile it was made under
+        // when it was held, and a switch before the confirm does not re-stamp it.
         if !from_hold {
             self.stamp_activation(&mut rec);
+            self.stamp_station_profile(&mut rec);
         }
         self.stamp_station_now(&mut rec);
         // Resolve the DXCC entity (country) if the record doesn't already carry one
@@ -19679,6 +20642,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         }
         if held.prop_mode.as_deref() == Some("SAT") {
             held.sat_name = None;
+            // The satellite's uplink goes with the satellite: the stamp's leg split is undone,
+            // and the contact keeps the frequency it was heard on (#163).
+            tempo_core::logbook::unsplit_satellite_legs(held);
         }
         held.prop_mode = Some(picked.clone()).filter(|m| !m.is_empty());
         self.settings.log_prop_mode = picked;
@@ -19906,8 +20872,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
         };
         let grid_source = GridSource::of(st.dxgrid.as_deref());
         let confirm_only = st.confirm_only;
+        let stamped = st.station.is_some();
         Some(HeldQso {
             confirm_only,
+            stamped,
             ..HeldQso::built(self.set_aside_record(st), grid_source)
         })
     }
@@ -19927,6 +20895,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         rx_report: Option<i32>,
         made_on: (String, (f64, Option<f64>)),
     ) -> StalledQso {
+        let station_callsign = self.contact_station_callsign(&dxcall);
         StalledQso {
             dxcall,
             dxgrid,
@@ -19938,7 +20907,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
             mode: self.adif_mode_for_tier().to_string(),
             end_unix: now_unix_secs(),
             confirm_only: false,
+            station: None,
+            station_callsign,
         }
+        .with_station(self)
     }
 
     /// The record of a set-aside contact: as [`Self::qso_record`] builds it, with the contact's
@@ -19958,6 +20930,21 @@ Pick the one you operate from on the Contesting tab in Settings.",
         (rec.freq_mhz, rec.freq_rx_mhz) = st.freqs;
         rec.mode = st.mode;
         rec.time_off_unix = Some(st.end_unix);
+        rec.station_callsign = st.station_callsign;
+        // The station it was made under ([`StalledQso::station`]): everything the stamps put on
+        // a record, taken as they were when it was set aside.
+        if let Some(station) = st.station {
+            rec.station_callsign = station.station_callsign;
+            rec.operator = station.operator;
+            rec.my_grid = station.my_grid;
+            rec.my_rig = station.my_rig;
+            rec.tx_power = station.tx_power;
+            rec.ota.my_program = station.ota.my_program;
+            rec.ota.my_ref = station.ota.my_ref;
+            rec.extra = station.extra;
+            rec.prop_mode = station.prop_mode;
+            rec.sat_name = station.sat_name;
+        }
         rec
     }
 
@@ -19998,17 +20985,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let Mode::Qso { station, .. } = &self.mode else {
             return Ok(());
         };
-        let std = |c: &str| tempo_core::message::is_std_call(tempo_core::message::unhash_call(c));
+        let addressed = station.dxcall.is_some();
         let msg = match &station.dxcall {
-            Some(dx) => {
-                let typed = format!("{dx} {mycall} {text}");
-                let parsed = Msg::parse(&typed);
-                if std(&mycall) != std(dx) && !matches!(parsed, Msg::Other(_)) {
-                    Msg::Other(QsoStation::on_air_form(&mycall, dx, parsed).to_text())
-                } else {
-                    Msg::Other(typed)
-                }
-            }
+            Some(dx) => addressed_free_text(&mycall, dx, text),
             None => tempo_core::message::Msg::Other(text.to_string()),
         };
         // Free text goes on the air as it is (`QsoStation::hashed_form` passes `Msg::Other`).
@@ -20016,6 +20995,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             return Err(why);
         }
         if let Mode::Qso { station, .. } = &mut self.mode {
+            self.qso_freetext = addressed.then(|| (text.to_string(), msg.clone()));
             station.override_next(msg);
             self.reset_tx_watchdog();
             // No record_own_tx here: QSO free text goes out as a SINGLE non-chunk frame,
@@ -20600,14 +21580,17 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if self.source_kind == SourceKind::Native && self.sat_dial_owner.is_none() {
             // ⭐ FALL BACK TO THE MODE'S PRIMARY CHANNEL when the current band has
             // none. The tier-aware plans are not all all-band: MSK144 and Q65 are
-            // VHF+ only, FST4/FST4W are 2200/630/160 m only. `find()` therefore
+            // VHF+ only, FST4 is 2200/630/160 m only. `find()` therefore
             // MISSES for the common case — an operator sitting on 20 m FT8 clicks
             // MSK144 — and the whole QSY used to be a silent no-op: tier, decoder
             // and slot clock all moved to MSK144 while the radio stayed on 14.074.
             // The mode then decodes an FT8 watering hole forever and reads as
-            // broken, which is how this was found. WSJT-X moves you to the new
-            // mode's own frequency in exactly this situation; the first plan entry
-            // is that mode's calling channel (MSK144 → 6 m 50.260, FST4 → 2200 m).
+            // broken, which is how this was found. ⚠️ NEXUS DIFFERS FROM WSJT-X HERE, ON
+            // PURPOSE: WSJT-X leaves the dial alone (`MainWindow::switch_mode` asks
+            // `best_working_frequency` for a row on the SAME band and does not QSY when
+            // there is none). Nexus moves to the mode's own channel instead, the first one
+            // on a band a radio here is set for (#184), else the plan's first entry
+            // (MSK144 → 6 m 50.260, FST4 → 2200 m).
             //
             // ⚠️ Scoped to the SPECIALTY modes only. For the FT8↔FT4↔FT2 family a
             // flip is a timing change and the operator expects to STAY on band —
@@ -20733,7 +21716,21 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let stay_on_miss = matches!(tier, Tier::Ft8 | Tier::Ft4 | Tier::Ft2 | Tier::Js8);
         plan.iter()
             .find(|c| c.band.eq_ignore_ascii_case(band))
-            .or_else(|| if stay_on_miss { None } else { plan.first() })
+            .or_else(|| {
+                if stay_on_miss {
+                    return None;
+                }
+                // #184: the mode's first channel a radio in the shack is set for, so an HF rig
+                // set to 160 m–4 m picking FST4 lands on 160 m, not 2200 m. A radio with no bands
+                // set covers everything, so a one-radio station still gets the first channel;
+                // `first()` stays the answer when no radio claims any of them.
+                plan.iter()
+                    .find(|c| {
+                        self.settings
+                            .any_radio_covers(&crate::bandplan::canonical_band(&c.band))
+                    })
+                    .or_else(|| plan.first())
+            })
             .filter(|ch| (ch.dial_mhz - dial_mhz).abs() > 0.0005)
             .cloned()
     }
@@ -20902,6 +21899,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // A pending snappy-TX request dies with the halt — otherwise the loop
         // consumes it against a disabled TX and a later re-arm has lost it.
         self.immediate_tx = false;
+        // …and a dropped late reply's notice: the operator has stopped.
+        self.ft_late_reply_dropped = false;
         // So does a deferred after-73 disable: TX is already off.
         self.pending_tx_disable = false;
         self.pending_cw_id = false; // halt = silence; no parting CW ID either
@@ -21160,6 +22159,23 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let roger = roger_click_73_sent(was, self.roger_click.as_deref());
         let complete = ft_contact_complete(was, self.qso_report_sent);
         if !complete && !roger {
+            // Unfinished, with a report crossed, and made under a call the station no longer
+            // uses, which a save would have made again under the new one (`note_call_saved`): its
+            // overs are refused at the key, so the run's give-up, which
+            // sets such a contact aside (#153), never comes. It is set aside here instead, for Log
+            // QSO, under the call its overs carried ([`Self::set_aside`]). Logging only.
+            //
+            // A report crossed only when THEIR report to us arrived: it proves they heard us under
+            // the old call. Our report sent is not asked: it is recorded when the over is queued,
+            // and after the call change that over is refused at the key, so it may never have
+            // gone out.
+            if call_changed_refusal(&was.mycall, &self.settings.mycall).is_some()
+                && was.rx_report.is_some()
+            {
+                let made_on = (self.settings.band.clone(), self.log_frequencies());
+                let st = self.set_aside(dx, was.dxgrid.clone(), was.rx_report, made_on);
+                self.stalled_qso = Some(st);
+            }
             return;
         }
         let (dxgrid, rx_report) = (was.dxgrid.clone(), was.rx_report);
@@ -22002,6 +23018,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// profile (`get_settings` mirrors it into the flat fields every save is built on, and
     /// `update_radio_profile` mirrors it into the fields the radio loop reads), so a profile left
     /// at the old drive was the drive the next save of anything put back over this one.
+    ///
+    /// On an FT mode it is also remembered for the band and mode, and brought back there
+    /// (`engine/ft_drive.rs`). This is the operator's own pick and the memory's one writer; a
+    /// restore goes around it.
     pub fn set_tx_level(&mut self, level: f32) {
         let level = level.clamp(0.0, 1.0);
         self.settings.tx_level = level;
@@ -22009,6 +23029,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if let Some(p) = self.settings.radios.iter_mut().find(|p| p.id == active) {
             p.tx_level = level;
         }
+        self.remember_ft_drive(level);
     }
 
     /// Set the MSK144 T/R period (s) — the cockpit's narrow write. Clamped to the mode's
@@ -23945,6 +24966,25 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if on && !self.tuning && self.cw_sending() {
             return;
         }
+        // ⛔ Nor onto a slot over on the air (FT8, FT4, JS8 and the other timed-slot modes: the TX
+        // indicator, [`TxOwner::Slot`]) while Split Operation can move the TX dial for an over (Rig
+        // split's VFO B, Fake It's VFO A). The radio loop never writes a VFO under a carrier, so a
+        // tune keyed over such an over went out from that over's TX dial, a frequency the gate
+        // judged for no tune. Refused and changes nothing, as onto a CW word; stopping a tune is
+        // never refused. With Split Operation None nothing moves, and Tune takes precedence over
+        // the over as WSJT-X's does (`mainwindow.cpp`: "Tune" takes precedence).
+        if on
+            && !self.tuning
+            && self.app.radio.transmitting
+            && self.settings.split_mode != crate::settings::SplitMode::None
+        {
+            tempo_core::applog::info(
+                "tx",
+                "tune not keyed: an over is on the air from a TX dial Split Operation moved",
+            );
+            self.tune_over_refused_at = Some(Instant::now());
+            return;
+        }
         // A tune toggle invalidates any planned over (commit_tx checks the generation).
         self.tx_gate_gen = self.tx_gate_gen.wrapping_add(1);
         self.remote_actuation.revoke();
@@ -23952,6 +24992,16 @@ Pick the one you operate from on the Contesting tab in Settings.",
         // Tune is the one keying path that bypasses poll_tx (the loop keys PTT directly), so
         // the privilege lockout must gate it here: never arm a tune carrier outside privileges.
         self.tuning = on && self.tune_allowed();
+        if on {
+            self.tune_over_refused_at = None; // a press that got past the over answers anew
+        }
+        if on && !self.tuning && self.tx_allowed() && !self.tune_tone_allowed() {
+            // The cockpit says so beside Tune for as long as it holds (`tune_tone_refused`).
+            tempo_core::applog::info(
+                "tx",
+                "tune not keyed: its tone would go out outside the licence's privileges",
+            );
+        }
         self.note_tci_tune(program);
         if self.tuning {
             // Holding Tune is an operator action and restarts the idle clock — WSJT-X does the
@@ -24021,9 +25071,76 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// makes it at its transmit slice, which the section's own model (FT's signal an audio offset
     /// above the dial, Phone's passband) does not place; where on the slice it lands in each mode is
     /// for a tester's bench. Both must allow it, so this only ever refuses more.
+    ///
+    /// ⛔ AND NEXUS'S OWN TUNE TONE WHERE IT GOES OUT ([`Self::tune_tone_allowed`]). The loop
+    /// plays a fixed [`TUNE_TONE_HZ`] tone, not the section's emission: in Digital the gate judged
+    /// the frame at the TX offset while the carrier went out 1500 Hz from the dial, so a General at
+    /// 14.0230 MHz with the TX offset at 2000 Hz had the frame judged at 14.0250 and the carrier
+    /// sent at 14.0245, below the class's edge.
     fn tune_allowed(&self) -> bool {
         self.tx_allowed()
             && (self.flex_tune.is_none() || self.tx_allowed_as(crate::settings::OperatingMode::Cw))
+            && self.tune_tone_allowed()
+    }
+
+    /// Whether the licence allows Nexus's own tune tone ([`TUNE_TONE_HZ`]) where it goes out: that
+    /// far from each frequency the transmitter is judged on ([`Self::every_tx_frequency`]: the
+    /// transmit dial with split, XIT and a repeater shift), on the side the transmitting VFO's
+    /// mode word names, as the section judges its own emission. In Digital that is a frame of no
+    /// width at the tone ([`Self::tx_allowed_for`], every term of the gate, the stored sideband's
+    /// side included). A word that names no side (FM, CW, the rig's own RTTY, AM's two) adds
+    /// nothing: there the gate already judges the carrier or the passband the tone sits in.
+    ///
+    /// Not while Tune is the radio's own carrier, which plays no tone of Nexus's: Nexus's Flex
+    /// client tuning natively ([`Self::observe_flex_tune`], judged as CW instead) and every TCI
+    /// connection, whose Tune is the SDR program's own carrier.
+    ///
+    /// Only ever refuses more: [`Self::tune_allowed`] ANDs it with the section's own judgement.
+    fn tune_tone_allowed(&self) -> bool {
+        use crate::settings::OperatingMode;
+        if self.flex_tune.is_some() || crate::settings::rig_conn_is_tci(&self.settings.rig_conn) {
+            return true;
+        }
+        let om = self.settings.operating_mode;
+        if om == OperatingMode::Digital {
+            return self.tx_allowed_for(DataFrame {
+                f0_hz: f64::from(TUNE_TONE_HZ),
+                bw_hz: 0.0,
+            });
+        }
+        let tone = f64::from(TUNE_TONE_HZ) / 1_000_000.0;
+        let class = self.settings.license_class;
+        let at = |carrier: f64, word: &str| match Self::side_is_lsb(word) {
+            Some(lsb) => {
+                let f = if lsb { carrier - tone } else { carrier + tone };
+                crate::privileges::tx_span_allowed(class, f, f, om)
+            }
+            None => true,
+        };
+        self.every_tx_frequency(om, |mhz| {
+            at(mhz, &self.tx_mode_effective())
+                && self.sat_uplink_word().is_none_or(|word| at(mhz, &word))
+        })
+    }
+
+    /// Whether the licence allows a carrier at each frequency the transmitter is judged on
+    /// ([`Self::every_tx_frequency`]: the transmit dial with split, XIT and a repeater shift), as
+    /// the section the station is in: where the radio's own ATU carrier and an APRS packet's FM
+    /// carrier go out. The section's own model puts Digital's frame, RTTY's tones and Keyboard's
+    /// signal an audio offset off that dial, so it never judged the dial itself. Only ever refuses
+    /// more: each caller ANDs it with [`Self::tx_allowed`].
+    fn tx_carrier_allowed(&self) -> bool {
+        let om = self.settings.operating_mode;
+        let class = self.settings.license_class;
+        self.every_tx_frequency(om, |mhz| crate::privileges::tx_allowed(class, mhz, om))
+    }
+
+    /// Whether the licence allows the radio's own ATU carrier, on every CAT path: Flex's own rule
+    /// for its ATU cycle, the carrier at the transmit dial judged as the section's mode
+    /// ([`Self::tx_carrier_allowed`]) AND as CW ([`Self::tx_allowed_as`] CW), so CAT and Flex agree
+    /// everywhere, a 60 m channel's dial included (CW is legal there only at the channel centre).
+    fn atu_carrier_allowed(&self) -> bool {
+        self.tx_carrier_allowed() && self.tx_allowed_as(crate::settings::OperatingMode::Cw)
     }
 
     /// Set the RX input audio level (0.0–1.0) shown in the UI meter. Driven by
@@ -24859,7 +25976,8 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if let Some(why) = self.connection_tx_refusal() {
             return Err(why.to_string());
         }
-        if !self.tx_allowed() {
+        // …and the FM carrier the packet rides, at the transmit dial ([`Self::tx_carrier_allowed`]).
+        if !self.tx_allowed() || !self.tx_carrier_allowed() {
             return Err(
                 "TX locked — this frequency is outside your license privileges".to_string(),
             );
@@ -24921,6 +26039,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             return Err("Beacon rendered no audio".to_string());
         }
         self.reset_tx_watchdog();
+        self.note_aprs_queue_call();
         self.aprs_tx_queue.push_back((audio, None));
         Ok(())
     }
@@ -25123,6 +26242,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             return Err("Message rendered no audio".to_string());
         }
         self.reset_tx_watchdog();
+        self.note_aprs_queue_call();
         self.aprs_tx_queue.push_back((audio, None));
         Ok(())
     }
@@ -25187,6 +26307,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
         let audio = render_aprs_frame(&frame);
         if !audio.is_empty() {
             self.reset_tx_watchdog();
+            self.note_aprs_queue_call();
             self.aprs_tx_queue
                 .push_back((audio, Some(from.to_string())));
         }
@@ -25209,6 +26330,14 @@ Pick the one you operate from on the Contesting tab in Settings.",
     /// and the frame keys when it is free. Ownership comes from the ONE arbiter
     /// ([`Engine::tx_owner`]): the four-flag copy that used to live here knew nothing of
     /// mic/broker PTT, the voice keyer, CW, RTTY or SSTV.
+    /// A frame is about to go into the APRS queue, made with the station's call now: when the
+    /// queue is empty, that is the call the queue was made under (`aprs_tx_queue_call`).
+    fn note_aprs_queue_call(&mut self) {
+        if self.aprs_tx_queue.is_empty() {
+            self.aprs_tx_queue_call = Some(self.settings.mycall.clone());
+        }
+    }
+
     pub fn poll_aprs_tx(&mut self) -> Option<Vec<f32>> {
         if self.aprs_tx_queue.is_empty() {
             return None;
@@ -25223,7 +26352,10 @@ Pick the one you operate from on the Contesting tab in Settings.",
             Some(("transmit is off", APRS_REFUSED_TX_OFF))
         } else if let Some(why) = self.connection_tx_refusal() {
             Some((why, why))
-        } else if !self.tx_allowed() {
+        } else if !self.tx_allowed() || !self.tx_carrier_allowed() {
+            // The section's model, and the FM carrier the packet rides at the transmit dial
+            // ([`Self::tx_carrier_allowed`]): Digital's model judges a frame an audio offset off
+            // the dial, where an FM carrier is not.
             Some((
                 "the dial is outside the licence's privileges",
                 APRS_REFUSED_PRIVILEGES,
@@ -25234,7 +26366,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 APRS_REFUSED_RADIO_HAS_MIC,
             ))
         } else {
-            None
+            // ⛔ The keying-time call check: the frame's source is another call than the
+            // station's now.
+            self.aprs_tx_queue_call
+                .as_deref()
+                .and_then(|call| self.sent_call_refusal(call))
+                .map(|why| (why, why))
         };
         if let Some((why, notice)) = refused {
             tempo_core::applog::info("tx", &format!("APRS not keyed: {why} (dropped)"));
@@ -25512,11 +26649,22 @@ Pick the one you operate from on the Contesting tab in Settings.",
     }
 
     /// The audio center (Hz) the RTTY demod nets around — the mark/space midpoint.
-    /// Un-netted resolves to the nominal 2125 Hz mark (`2125 + shift/2`), so an
-    /// un-netted decoder sits on today's 2125/2295 pair at any shift. RX only.
+    /// Un-netted resolves to the SAVED tone pair ([`Self::rtty_home_center_hz`]), so an
+    /// un-netted decoder sits on the operator's pair (2125/2295 by default) at any shift.
+    ///
+    /// ⚠️ NOT RX-ONLY: the AFSK transmitter and the privilege gate
+    /// (`rtty_tx_mark_hz`) read this too — see [`Self::rtty_net`].
     pub fn rtty_center_hz(&self) -> f32 {
         self.rtty_center
-            .unwrap_or(RTTY_AFSK_MARK_HZ as f32 + self.rtty_shift_hz() as f32 / 2.0)
+            .unwrap_or_else(|| self.rtty_home_center_hz())
+    }
+
+    /// The centre of the saved tone pair, [`Settings::rtty_low_tone`] + shift/2, clamped
+    /// into the same 300–3700 Hz passband a net is ([`Self::rtty_net`]), so a hand-edited
+    /// settings file cannot put the pair outside what a click could reach.
+    fn rtty_home_center_hz(&self) -> f32 {
+        (self.settings.rtty_low_tone() as f32 + self.rtty_shift_hz() as f32 / 2.0)
+            .clamp(300.0, 3700.0)
     }
 
     /// Net the RTTY decoder onto a new audio center (Hz) — a waterfall click or a
@@ -25782,6 +26930,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         tempo_core::applog::info("tx", &format!("PSK over queued: {filtered:?}"));
         // An explicit operator send restarts the TX-watchdog clock.
         self.reset_tx_watchdog();
+        if self.psk_queue.is_empty() {
+            self.psk_queue_call = Some(self.settings.mycall.clone());
+        }
         self.psk_queue.push_back(filtered);
         Ok(())
     }
@@ -25872,7 +27023,11 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 PSK_REFUSED_PRIVILEGES,
             ))
         } else {
-            None
+            // ⛔ The keying-time call check: queued under another call than the station's now.
+            self.psk_queue_call
+                .as_deref()
+                .and_then(|call| self.sent_call_refusal(call))
+                .map(|why| (why, why))
         };
         if let Some((why, notice)) = refused {
             tempo_core::applog::info("tx", &format!("PSK not keyed: {why} (dropped)"));
@@ -25888,6 +27043,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             let now = now_unix_secs();
             let start = *self.tx_watchdog_start.get_or_insert(now);
             if now.saturating_sub(start) >= limit_secs {
+                self.note_tx_watchdog_trip("a PSK over");
                 self.tx_watchdog = true;
                 self.tx_enabled = false;
                 self.psk_queue.clear();
@@ -26013,6 +27169,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             None => res.tick,
             Some(why) => {
                 if why == KbDrop::Watchdog {
+                    self.note_tx_watchdog_trip("a latched PSK over");
                     self.tx_watchdog = true;
                     self.tx_enabled = false;
                     self.psk_queue.clear();
@@ -26042,12 +27199,12 @@ Pick the one you operate from on the Contesting tab in Settings.",
     }
 
     /// May the operator's class key the Keyboard section's EMISSION at `dial`? USB always (the
-    /// section's convention): the WHOLE of [`Self::keyboard_span_hz`] inside ONE privileged data
-    /// range ([`crate::privileges::tx_span_allowed`], the data-frame rule FT8, JS8 and RTTY are
-    /// judged by): PSK31's narrow signal at the tuned audio offset (one point), or JTTY's four
+    /// section's convention): the WHOLE of [`Self::keyboard_emission_span_hz`] inside ONE
+    /// privileged data range ([`crate::privileges::tx_span_allowed`], the data-frame rule FT8, JS8
+    /// and RTTY are judged by): PSK's occupied width about the tuned audio offset, or JTTY's four
     /// tones from its Tx offset up.
     fn psk_emission_ok(&self, dial: f64) -> bool {
-        let (lo, hi) = self.keyboard_span_hz();
+        let (lo, hi) = self.keyboard_emission_span_hz();
         crate::privileges::tx_span_allowed(
             self.settings.license_class,
             dial + lo / 1_000_000.0,
@@ -26068,6 +27225,29 @@ Pick the one you operate from on the Contesting tab in Settings.",
             let c = self.psk_center_hz() as f64;
             (c, c)
         }
+    }
+
+    /// What the licence gates judge ([`Self::psk_emission_ok`], [`Self::keyboard_emission_allowed`]):
+    /// [`Self::keyboard_span_hz`] widened to the signal's OCCUPIED width — PSK's centre ± one
+    /// symbol rate of its sub-mode ([`tempo_core::psk::PskModeKind::baud`]: ±31.25 Hz for PSK31
+    /// and QPSK31, ±62.5 Hz for PSK63). JTTY's span is its own and is judged as it was.
+    ///
+    /// ⭐ JUDGED ACROSS ITS WIDTH, NOT AT ONE POINT. Judging the centre alone let a signal netted
+    /// within half its width of a segment edge put its sidebands across that edge. Measured on
+    /// the shaped waveform the −26 dB width is ±27 Hz for PSK31 and ±54 Hz for PSK63, and the 99 %
+    /// power width ±22.5 / ±45 Hz; ±baud covers the −26 dB points with 4–8 Hz to spare and scales
+    /// with the sub-mode from the one rate both directions key by.
+    ///
+    /// ⚠️ NOT [`Self::keyboard_span_hz`] ITSELF: its low edge is the frequency a contact LOGS
+    /// ([`Self::logged_signal_offset`]), which stays the netted centre. And it can only ever
+    /// refuse more: the widened span contains the point that was judged before.
+    fn keyboard_emission_span_hz(&self) -> (f64, f64) {
+        let (lo, hi) = self.keyboard_span_hz();
+        if self.jtty_section() {
+            return (lo, hi);
+        }
+        let half = f64::from(self.psk_mode.baud());
+        (lo - half, hi + half)
     }
 
     // ----- RTTY transmit — operator-initiated, mirroring the CW send path. -----
@@ -26208,6 +27388,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
         if reset_watchdog {
             self.reset_tx_watchdog();
         }
+        if self.rtty_queue.is_empty() {
+            self.rtty_queue_call = Some(self.settings.mycall.clone());
+        }
         self.rtty_queue.push_back(up);
         Ok(())
     }
@@ -26267,7 +27450,11 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 RTTY_REFUSED_PRIVILEGES,
             ))
         } else {
-            None
+            // ⛔ The keying-time call check: queued under another call than the station's now.
+            self.rtty_queue_call
+                .as_deref()
+                .and_then(|call| self.sent_call_refusal(call))
+                .map(|why| (why, why))
         };
         if let Some((why, notice)) = refused {
             tempo_core::applog::info("tx", &format!("RTTY not keyed: {why} (dropped)"));
@@ -26277,7 +27464,9 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 if let Some(seq) = self.rtty_seq.as_mut() {
                     seq.abort();
                 }
-                self.rtty_keyer_error = Some(RTTY_AUTO_REFUSED.to_string());
+                if notice != crate::settings::STATION_CALL_CHANGED_TX_REFUSED {
+                    self.rtty_keyer_error = Some(RTTY_AUTO_REFUSED.to_string());
+                }
             }
             return None;
         }
@@ -26291,6 +27480,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
             let now = now_unix_secs();
             let start = *self.tx_watchdog_start.get_or_insert(now);
             if now.saturating_sub(start) >= limit_secs {
+                self.note_tx_watchdog_trip("an RTTY over");
                 self.tx_watchdog = true;
                 self.tx_enabled = false;
                 self.rtty_queue.clear();
@@ -26732,6 +27922,7 @@ Pick the one you operate from on the Contesting tab in Settings.",
                 if why == KbDrop::Watchdog {
                     // A trip disarms TX so it stays stopped, and takes the queued
                     // overs with it — identical to `poll_rtty_one`'s.
+                    self.note_tx_watchdog_trip("a latched RTTY over");
                     self.tx_watchdog = true;
                     self.tx_enabled = false;
                     self.rtty_queue.clear();
@@ -26959,6 +28150,34 @@ contact yourself."
     /// dropped BEFORE the actions are applied (the borrow-checker seam). A genuine
     /// state advance resets the TX watchdog; each drained action is then applied.
     fn rtty_drive(&mut self, op: RttyOp) {
+        // ⛔ The keying-time call check (`Engine::sent_call_refusal`): the machine sends the call
+        // it was armed with. Once the station's call has changed, a contact under way under the
+        // old call ends here, before it can queue another over or log, and the cockpit says why;
+        // the machine is armed again under the station's call, as a save arms an idle one.
+        if let Some(why) = self
+            .rtty_seq
+            .as_ref()
+            .and_then(|seq| self.sent_call_refusal(seq.mycall()))
+        {
+            let live = self.rtty_seq.as_ref().is_some_and(|seq| {
+                !matches!(
+                    seq.state(),
+                    tempo_core::rtty::SeqState::Idle | tempo_core::rtty::SeqState::Done
+                )
+            });
+            if let Some(seq) = self.rtty_seq.as_mut() {
+                seq.abort();
+            }
+            if self.set_rtty_auto(true).is_err() {
+                self.rtty_seq = None;
+                self.rtty_auto_over = false;
+            }
+            if live {
+                tempo_core::applog::info("tx", &format!("RTTY Auto stopped: {why}"));
+                self.set_rtty_keyer_error(Some(why.to_string()));
+                return;
+            }
+        }
         let now = now_unix_millis();
         let (advanced, actions) = {
             let seq = match self.rtty_seq.as_mut() {
@@ -27533,8 +28752,21 @@ contact yourself."
     /// then guillotined mid-image. On accept, the watchdog clock restarts (an explicit
     /// operator action, like `rtty_send_text`). `samples` are 12 kHz PCM from
     /// `tempo_sstv::encode::encode_image`; `mode_name` is the human label for the DTO.
-    /// **Human-initiate only**: this is the ONLY writer of `sstv_tx`.
+    /// **Human-initiate only**: this and [`Self::sstv_send_as`] are the ONLY writers of
+    /// `sstv_tx`. The picture is taken to carry the station's call now.
     pub fn sstv_send(&mut self, samples: Vec<f32>, mode_name: String) -> Result<(), String> {
+        let call = self.settings.mycall.clone();
+        self.sstv_send_as(samples, mode_name, &call)
+    }
+
+    /// [`Self::sstv_send`] for a picture whose ID carries `call`, the call read when it was
+    /// drawn: the keying-time call check judges the picture by it.
+    pub fn sstv_send_as(
+        &mut self,
+        samples: Vec<f32>,
+        mode_name: String,
+        call: &str,
+    ) -> Result<(), String> {
         self.sstv_tx_gate()?;
         if samples.is_empty() {
             return Err("Nothing to send — the encoded image is empty".to_string());
@@ -27562,6 +28794,7 @@ contact yourself."
         // An explicit operator send restarts the TX-watchdog clock (same as rtty_send_text).
         self.reset_tx_watchdog();
         self.sstv_tx_mode = Some(mode_name.clone());
+        self.sstv_tx_call = Some(call.to_string());
         self.sstv_tx_progress = Some((0.0, duration_ms));
         self.sstv_tx = Some(SstvTxJob {
             samples,
@@ -27629,7 +28862,12 @@ contact yourself."
                 SSTV_REFUSED_RADIO_HAS_MIC,
             ))
         } else {
-            None
+            // ⛔ The keying-time call check: the picture identifies another call than the
+            // station's now.
+            self.sstv_tx_call
+                .as_deref()
+                .and_then(|call| self.sent_call_refusal(call))
+                .map(|why| (why, why))
         };
         if let Some((why, notice)) = refused {
             tempo_core::applog::info("tx", &format!("SSTV not keyed: {why} (dropped)"));
@@ -27733,9 +28971,11 @@ contact yourself."
 
     /// Publish the result of the probe a [`Self::request_cat_reprobe`] asked for: the CAT
     /// status, and Test CAT's answer.
-    pub fn answer_cat_reprobe(&mut self, ok: Option<bool>, detail: String) {
+    /// `refused`: the launch was refused by Nexus itself ([`Self::cat_reprobe_refused`]).
+    pub fn answer_cat_reprobe(&mut self, ok: Option<bool>, detail: String, refused: bool) {
         let n = self.cat_reprobe_answer.0.wrapping_add(1);
         self.cat_reprobe_answer = (n, ok, detail.clone());
+        self.cat_reprobe_refused = refused;
         self.set_cat_status(ok, detail);
     }
 
@@ -27743,6 +28983,12 @@ contact yourself."
     pub fn cat_reprobe_answer(&self, asked: u64) -> Option<(Option<bool>, String)> {
         let (n, ok, detail) = &self.cat_reprobe_answer;
         (*n != asked).then(|| (*ok, detail.clone()))
+    }
+
+    /// Whether the latest Test CAT answer ([`Self::cat_reprobe_answer`]) is a launch Nexus
+    /// refused itself. Read under the same lock as the answer.
+    pub fn cat_reprobe_refused(&self) -> bool {
+        self.cat_reprobe_refused
     }
 
     /// Consume a pending re-probe request (returns true once per request).
@@ -27833,12 +29079,22 @@ contact yourself."
     pub fn set_scope_span_refused(&mut self, note: Option<String>) {
         self.scope_span_refused = note;
     }
+    /// Record what the radio's own scope stream measured, or `None` while it is not running —
+    /// see `RadioStatus::scope_rate`. The radio loop writes it.
+    pub fn set_scope_rate(&mut self, stats: Option<crate::dto::ScopeRate>) {
+        self.scope_rate = stats;
+    }
 
     /// Say (or stop saying) what is wrong on the station's audio-error line. Every writer names the
     /// kind of problem beside its sentence, so the status lane can head it with true words: one
     /// headline for all of them told an operator whose rig refused PTT that the radio had stopped.
     pub fn set_audio_error(&mut self, err: Option<(crate::dto::AudioErrorKind, String)>) {
         self.audio_error = err;
+    }
+
+    /// FreeDV's state for the screens ([`crate::freedv`]), for its listeners to write.
+    pub fn freedv_mut(&mut self) -> &mut crate::freedv::FreedvDto {
+        &mut self.freedv
     }
 
     /// Record why this station is not sharing its radio, or clear it (#165).
@@ -28083,6 +29339,80 @@ contact yourself."
     ) -> Option<&'static str> {
         crate::settings::rig_conn_is_icom_lan(&self.settings.rig_conn)
             .then_some(crate::settings::ICOM_LAN_TX_REFUSED)
+            // ⛔ …and a station profile on another licensee's call while a licence class is set
+            // (`Settings::station_profile_tx_refusal`): every transmit path refuses with it.
+            .or_else(|| self.settings.station_profile_tx_refusal())
+    }
+
+    /// ⛔ **THE KEYING-TIME CALL CHECK** (the operator's decision, 2026-10-28): the one test every
+    /// transmission that carries a call built earlier makes as it is about to go out, beside the
+    /// licence and connection refusals above. `built` is the call the message was made with (the
+    /// FT sequencer's `de`, the call a queued CW, RTTY, PSK, JTTY or JS8 message, an SSTV
+    /// picture's ID or an APRS packet's source was made under). When it is not the call the
+    /// station transmits under now ([`Settings::mycall`]), the message is not sent: the station's
+    /// call has changed since (a profile switch, a Settings save) and it would put the old call on
+    /// the air under the new one's licence, and log another. Each caller drops that message and
+    /// says why, as it does for its other refusals, and changes nothing else: no timing, no
+    /// sequence, no other message.
+    ///
+    /// It only ever refuses, and it runs on every station, with station profiles or without (the
+    /// operator's decision, 2026-10-28): a call edited in Settings while a message waits is a
+    /// change of call like a profile switch. The calls are compared as the transmit path reads
+    /// them, without surrounding spaces and in any capitals, so a stored call that differs only so
+    /// is the same call; a portable or other compound form is another call. A message made while
+    /// the station had no call yet carries none, and nothing is refused for it.
+    pub fn sent_call_refusal(&self, built: &str) -> Option<&'static str> {
+        call_changed_refusal(built, &self.settings.mycall)
+    }
+
+    /// [`Self::sent_call_refusal`] for an SSTV picture's own text: the station calls its presets
+    /// wrote (a CQ's or 73's "DE <call>"), as the screen put them in. A picture made before the
+    /// station's call changed is not sent under the new one.
+    pub fn sstv_overlay_call_refusal(&self, calls: &[String]) -> Option<&'static str> {
+        calls.iter().find_map(|call| self.sent_call_refusal(call))
+    }
+
+    /// [`Self::sent_call_refusal`] for an FT over about to key (`text`), judged as `plan_tx` judges
+    /// it before it counts the over as sent: a contest over by the call its sequencer was made under
+    /// ([`contest_over_call_refusal`]), any other by its sender when that is one of the station's
+    /// own calls ([`ft_over_call_refusal`]).
+    fn ft_sent_call_refusal(&self, text: &str) -> Option<&'static str> {
+        let now = &self.settings.mycall;
+        let owed = self.recent_partner.as_ref().and_then(|p| p.owed.as_ref());
+        match &self.mode {
+            Mode::FieldDay { station, .. } => contest_over_call_refusal(station.call(), now),
+            Mode::Qso { station, .. } => ft_over_call_refusal(
+                text,
+                now,
+                &station.mycall,
+                &self.settings.station_profiles,
+                &self.former_calls,
+                owed,
+            ),
+            Mode::Chat => ft_over_call_refusal(
+                text,
+                now,
+                "",
+                &self.settings.station_profiles,
+                &self.former_calls,
+                owed,
+            ),
+        }
+    }
+
+    /// The FT or Field Day sequencer's next over, judged by [`Self::sent_call_refusal`]: the reason
+    /// the cockpit shows while it holds a message made under another call. DISPLAY ONLY: `plan_tx`
+    /// refuses the over itself ([`Self::ft_sent_call_refusal`]).
+    fn ft_held_call_refusal(&self) -> Option<&'static str> {
+        if self.settings.operating_mode != crate::settings::OperatingMode::Digital {
+            return None;
+        }
+        let next = match &self.mode {
+            Mode::Qso { station, .. } => station.pending.as_ref(),
+            Mode::FieldDay { station, .. } => station.pending.as_ref(),
+            Mode::Chat => None,
+        };
+        next.and_then(|m| self.ft_sent_call_refusal(&m.to_text()))
     }
 
     /// Is the licence lock the phone MODE alone? The Phone section is refused, upper sideband is
@@ -28304,11 +29634,19 @@ contact yourself."
         }
     }
 
-    /// On a 60 m channel dial, may an outside key go with the radio's read-back? Only with none,
-    /// or an upper-sideband one (`USB`, `PKTUSB`, `DATA-U`): a channel's dial is its upper
-    /// sideband's carrier, and any other emission leaves the channel.
+    /// On a 60 m channel dial, may an outside key go with the radio's read-back? For a US class,
+    /// only with none, or an upper-sideband one (`USB`, `PKTUSB`, `DATA-U`): a channel's dial is
+    /// its upper sideband's carrier, and any other emission leaves the channel. The channels are
+    /// the US rule's (47 CFR 97.303(h)); `Open`, every non-US operator, is trusted on them as
+    /// [`crate::privileges::lsb_phone_allowed`] and [`crate::privileges::wide_phone_allowed`]
+    /// trust it (the UK's 60 m blocks take in 5.3715 and 5.4035, where this check used to refuse
+    /// a UK operator's LSB or AM from an outside program).
     fn sixty_dial_readback_allowed(&self) -> bool {
-        self.gate_rig_mode.is_none() || self.readback_emission() == Some(Readback::Side(false))
+        matches!(
+            self.settings.license_class,
+            crate::settings::LicenseClass::Open
+        ) || self.gate_rig_mode.is_none()
+            || self.readback_emission() == Some(Readback::Side(false))
     }
 
     /// Is `word` a CW mode, the rig's normal or reverse CW in any spelling (`CW`, `CWR`, `CW-R`,
@@ -28800,7 +30138,7 @@ contact yourself."
             // RTTY: judge the real mark/space RF span per keying backend (AFSK tones
             // below the LSB dial; FSK shift below the RTTY-mode dial) — both edges.
             OperatingMode::Rtty => self.rtty_emission_ok(dial),
-            // Keyboard (PSK31): a ~60 Hz signal at the tuned audio offset
+            // Keyboard (PSK): its occupied width about the tuned audio offset
             // above the always-USB dial.
             OperatingMode::Keyboard => self.psk_emission_ok(dial),
         }
@@ -28897,14 +30235,14 @@ contact yourself."
 
     /// May the operator's class key a KEYBOARD-mode emission (PSK31's, or JTTY's while it is the
     /// modem) from the transmit dial `dial`, with the transmitting VFO commanded `word`? The span
-    /// [`Self::keyboard_span_hz`] sits on the side the WORD names — where
+    /// [`Self::keyboard_emission_span_hz`] sits on the side the WORD names — where
     /// [`Self::psk_emission_ok`] judges it above the dial always, by the section's USB
     /// convention. The whole span must lie in one privileged range, as there.
     ///
     /// A word that names no side adds nothing, so, like [`Self::digital_emission_allowed`], this
     /// can only ever refuse more than the gate did before it knew the commanded word.
     fn keyboard_emission_allowed(&self, dial: f64, word: &str) -> bool {
-        let (lo, hi) = self.keyboard_span_hz();
+        let (lo, hi) = self.keyboard_emission_span_hz();
         let (lo, hi) = (lo / 1_000_000.0, hi / 1_000_000.0);
         let span = |a: f64, b: f64| {
             crate::privileges::tx_span_allowed(
@@ -29278,6 +30616,18 @@ contact yourself."
         self.split_tx_mhz.is_some()
     }
 
+    /// The dial shift the next over would carry at the current TX offset, consuming nothing, for
+    /// the radio loop to put Split Operation's TX dial on the radio while it receives (WSJT-X
+    /// writes it when the dial changes: `MainWindow::band_changed` calls `setXIT`). `None` when
+    /// Split Operation does not apply to this tier's mode (anything but FT8, FT4 and FT2 today);
+    /// `Some(0)` for an in-window offset, Split Operation off, or a cluster SPLIT-on-Work owning the TX dial,
+    /// as [`Self::split_reduce`] decides for the over itself.
+    pub fn planned_tx_dial_shift(&self) -> Option<i64> {
+        self.tier_mode_kind(self.app.tier())
+            .is_some_and(|k| modes::make_mode(k).capabilities().split_reduce)
+            .then(|| self.split_reduce(self.tx_offset_hz).1)
+    }
+
     /// Consume the dial shift for the over just generated (0 = none). The slot
     /// core applies it via the rig BEFORE keying PTT.
     pub fn take_tx_dial_shift(&mut self) -> i64 {
@@ -29615,6 +30965,232 @@ contact yourself."
         }
     }
 
+    /// One received decode as the decode panes draw it: the B4, new-one, country, rarity and
+    /// addressed-to-me marks, coloured for `cur_band` (`None` off the bands) and labelled `link_tier`
+    /// when the decode names no mode. The snapshot's live feed and the panes' refill
+    /// ([`Self::decode_refill`]) both build their rows here, so a refilled row is the row the live
+    /// feed would have drawn for it. `hot` is taken once by the caller (see `StationCore::hot`).
+    fn decode_row(
+        &self,
+        d: &modes::Decode,
+        hot: &crate::station::Hot<'_>,
+        cur_band: Option<&str>,
+        cur_band_key: &str,
+        fold_mode: bool,
+        link_tier: Tier,
+    ) -> DecodeRow {
+        // #64, display side only: a DXpedition Fox packs two messages into one frame —
+        // "K1ABC RR73; W9XYZ <FOX> -08". In Hound mode `hound_split` has already split it
+        // upstream for everything; in STANDARD mode the sequencer must never see the halves
+        // (a Fox frame must not arm a non-Hound TX — that half of #64 is gated on operator
+        // sign-off), but the ROW must still be recognized the way WSJT-X shows it: the
+        // single on-air line, highlighted when either half is ours. Returns
+        // (first-half addressee, second half) only for the strict Fox shape — first half
+        // exactly "<call> RR73|RRR|73", second half a directed message with a sender — so
+        // free text carrying ';' is untouched.
+        fn fox_multiplex(msg: &str) -> Option<(&str, &str)> {
+            let (a, b) = msg.split_once(';')?;
+            let (a, b) = (a.trim(), b.trim());
+            let [to, fin] = a.split_whitespace().collect::<Vec<_>>()[..] else {
+                return None;
+            };
+            if !matches!(fin, "RR73" | "RRR" | "73") || !tempo_core::message::is_callsign(to) {
+                return None;
+            }
+            let second = Msg::parse(b);
+            (second.sender().is_some() && second.addressee().is_some()).then_some((to, b))
+        }
+        let mycall = &self.settings.mycall;
+        // A Fox multiplex row classifies by its SECOND half (the one carrying the
+        // Fox's call as sender — country, B4 and rarity are about the transmitter);
+        // the first half contributes only its addressee and its RR73-ness below.
+        let fox_mux = fox_multiplex(&d.message);
+        let parsed = Msg::parse(fox_mux.map_or(d.message.as_str(), |(_, b)| b));
+        // #55: a WSPR spot is "CALL GRID DBM" — a different grammar entirely.
+        // Run through the FT8 parser, the trailing dBm (typ. 23–47, inside the
+        // −50..=49 report range) reads as a signal report and the GRID lands in
+        // the sender slot: "TI4JWC EK70 30" filed its country under EK →
+        // Armenia, and TI4JWC (Costa Rica) was never looked up. WSPR rows parse
+        // by the WSPR field order; they are never CQs and address nobody. #408: so
+        // do FST4W's, the same lines, and a Type 2 beacon (`KI4TWB/0 23`) has no
+        // grid, where its power used to show as one.
+        let wspr_fields = tempo_core::beacon::is_beacon_mode(d.mode).then(|| {
+            let beacon = tempo_core::beacon::parse_report(&d.message);
+            (
+                beacon.map(|b| b.call.to_string()),
+                beacon.and_then(|b| b.grid),
+            )
+        });
+        let is_cq = wspr_fields.is_none() && matches!(parsed, Msg::Cq { .. });
+        let from = match &wspr_fields {
+            Some((call, _)) => call.clone(),
+            None => parsed.sender().map(|c| c.to_string()),
+        };
+        // `same_call`, not an exact string compare: a decode addressed with a hashed,
+        // portable or compound form of our call — `<YS/WE9G>` for YS/WE9G, `W1ABC/P`
+        // for W1ABC — is still to us, and WSJT-X highlights it (its report() matches on
+        // the `/`-aware base call). The auto-sequencer already matches on `same_call`
+        // (see `to_me` in the QSO observer); this is the display path catching up, so a
+        // row the sequencer would answer no longer looks unaddressed. (#64)
+        let directed_to_me = wspr_fields.is_none()
+            && (parsed
+                .addressee()
+                .map(|a| same_call(a, mycall))
+                .unwrap_or(false)
+                // A Fox multiplex is to us when EITHER half is: `parsed` covers
+                // the second, this covers the first (the Fox's RR73 that ends
+                // OUR QSO — the exact line the #64 reporter watched go dark).
+                || fox_mux.is_some_and(|(to, _)| same_call(to, mycall)));
+        // Worked-before (B4): the decode's sender is in the logbook —
+        // via the SAME prebuilt set as the roster above. The per-row
+        // `worked_before()` this replaces was the exact O(rows × log)
+        // sweep the set was built to end, re-grown 240 lines below the
+        // comment explaining the 1–2 s waterfall stall it caused.
+        // Keyed as the roster is (`lookup_call`): a hashed sender is its plain call,
+        // `<...>` no call.
+        let key = from.as_deref().and_then(lookup_call);
+        let worked = key.as_deref().is_some_and(|c| hot.worked_call(c));
+        // The stronger scope, same set as the roster above.
+        let worked_band = key
+            .as_deref()
+            .is_some_and(|c| hot.worked_call_band(c, cur_band_key, fold_mode));
+        // New-grid (B3): the decode carries a Maidenhead grid we've never
+        // worked ON THIS BAND. Grid is present on CQ/grid forms. Per band
+        // because that is how grids are awarded (VUCC) — a grid worked on
+        // 20 m is a genuinely new one on 2 m.
+        let grid = match &wspr_fields {
+            Some((_, g)) => *g,
+            None => match &parsed {
+                Msg::Cq { grid, .. } | Msg::Grid { grid, .. } => Some(grid.as_str()),
+                _ => None,
+            },
+        };
+        let new_grid = match (cur_band, grid) {
+            (Some(b), Some(g)) => !g.is_empty() && !hot.grid_worked_on(g, b),
+            // No band claimed (off the bands), or the frame carried no grid.
+            _ => false,
+        };
+        // Country + New-DXCC (B3): resolve the sender's DXCC entity once.
+        // `country` rides every decode (DX chasers scan by country); the
+        // entity also drives new-DXCC. Needs the injected resolver; both
+        // stay None/false in headless tests.
+        let entity = match (&from, &self.station.dxcc_resolve) {
+            (Some(c), Some(resolve)) => resolve(c),
+            _ => None,
+        };
+        // Split the highlight (operator ruling, option 2): a TRUE all-time-new DXCC
+        // entity (never worked on any band) reads as `DXCC` — matching the Needed
+        // board's NEW ONE / ATNO — while an entity worked elsewhere but new on THIS band
+        // (DXCC is awarded per band: Challenge slots, VHF DXCC) reads as the dimmer
+        // `BAND`. The two are mutually exclusive by construction, so a chaser never
+        // mistakes a band-slot for a new country.
+        let (new_dxcc, new_band) = match &entity {
+            Some(e) => {
+                let ever = hot.entity_worked_ever(e);
+                // ATNO is all-time and stays answerable off the bands; the band slot
+                // is not — with no band there is no slot for it to be new in.
+                (
+                    !ever,
+                    ever && cur_band.is_some_and(|b| !hot.entity_worked_on(e, b)),
+                )
+            }
+            None => (false, false),
+        };
+        // Confirmed (award-grade) on THIS band — for the hide-confirmed filter.
+        // A still-new-on-band station is never marked confirmed (mutually exclusive
+        // by construction), so the filter can never hide a slot that's still open.
+        // Off the bands this stays false, which is the safe direction for a FILTER:
+        // "hide what is confirmed here" hides nothing rather than hiding rows on the
+        // strength of a band that does not exist.
+        let confirmed_band = match (cur_band, entity.as_deref()) {
+            (Some(b), Some(e)) => hot.entity_confirmed_on(e, b),
+            _ => false,
+        };
+        // Rarity: prefer the grid on THIS frame, but on report/R/RR73/73
+        // frames (which carry no grid) fall back to the sender's grid
+        // remembered in the roster — so an ULTRA-rare station keeps its
+        // badge through the whole QSO, not just on its CQ. (Backfills only
+        // the rarity marker; the row's own `grid` text stays unchanged.)
+        let grid_rarity = self.station.rarity_of(grid.or_else(|| {
+            from.as_deref()
+                .and_then(|c| self.app.inbox.roster.get(c))
+                .and_then(|h| h.grid.as_deref())
+        }));
+        DecodeRow {
+            lotw_user: self.station.lotw_user(from.as_deref()),
+            from,
+            snr: d.snr,
+            dt_sec: d.dt,
+            freq_hz: d.freq,
+            message: d.message.clone(),
+            is_cq,
+            directed_to_me,
+            // QSO-ending RR73/73, by parse type (token-positional — a DM73
+            // grid or an RRR roger never counts). Feeds the CQ+73 chip. A Fox
+            // multiplex's first half is RR73/RRR/73 by the shape gate, so a
+            // matched frame is a signoff by construction.
+            signoff: parsed.is_signoff() || fox_mux.is_some(),
+            worked,
+            worked_band,
+            country: entity,
+            new_dxcc,
+            new_band,
+            confirmed_band,
+            new_grid,
+            grid: grid.filter(|g| !g.is_empty()).map(str::to_string),
+            grid_rarity,
+            // WSJT-X decode markers: trailing 'a' = AP-assisted decode,
+            // '?' = low-confidence (qual below the stock 0.17 line).
+            ap: d.nap > 0,
+            low_conf: d.qual < 0.17,
+            // Label each decode by the mode that actually produced it
+            // (native source's mode, or a companion stream's per-decode
+            // WSJT-X mode); fall back to the selected tier when unknown
+            // (DX1's robust path, or an unrecognized companion mode).
+            tier: d.mode.map(Tier::from_mode_kind).unwrap_or(link_tier),
+            // DTO wire contract keeps rv as i32 (-1 = N/A); collapse the
+            // unified Option<i32> at this boundary.
+            rv: d.rv.unwrap_or(-1),
+            mine: false,
+            tx_at: None,
+        }
+    }
+
+    /// The decodes still held for slots `from_slot..=to_slot`, as the live feed draws them, for a
+    /// decode pane that missed those periods (#452; [`crate::dto::DecodeRefill`]). Coloured for the
+    /// band and mode on now: the history is cleared on every QSY and mode change
+    /// (`clear_decode_context`), so everything it holds was heard on them.
+    ///
+    /// ⚠️ READ ONLY. `&self`, and nothing it calls writes: the sequencer, the alerts and the
+    /// auto-actions read the same history and must see exactly what they saw before the ask.
+    pub fn decode_refill(&self, from_slot: u64, to_slot: u64) -> crate::dto::DecodeRefill {
+        // A full store has dropped decodes from its oldest slot, possibly some of them: only the
+        // slots after it are whole. One not yet full has dropped nothing since it began.
+        let covered_from = match self.decode_history.front() {
+            Some((oldest, _)) if self.decode_history.len() >= DECODE_HISTORY_DEPTH => oldest + 1,
+            _ => 0,
+        };
+        let cur_band = (!self.settings.band.is_empty()).then_some(self.settings.band.as_str());
+        let fold_mode = self.settings.b4_match_mode;
+        let cur_band_key = tempo_core::logbook::Logbook::band_key(
+            &self.settings.band,
+            self.adif_mode_for_tier(),
+            fold_mode,
+        );
+        let link_tier = self.app.tier();
+        let hot = self.station.hot();
+        let rows = self
+            .decode_history
+            .iter()
+            .filter(|(slot, _)| (from_slot..=to_slot).contains(slot) && *slot >= covered_from)
+            .map(|(slot, d)| crate::dto::RefillRow {
+                slot: *slot,
+                row: self.decode_row(d, &hot, cur_band, &cur_band_key, fold_mode, link_tier),
+            })
+            .collect();
+        crate::dto::DecodeRefill { covered_from, rows }
+    }
+
     /// Full snapshot, with mode + per-mode (QSO / Field Day) status filled in.
     pub fn snapshot(&self) -> AppSnapshot {
         let mut s = self.app.snapshot();
@@ -29657,14 +31233,17 @@ contact yourself."
         let now = now_unix_secs() as i64;
         for st in &mut s.stations {
             let up = st.call.to_ascii_uppercase();
-            match &session_b4 {
-                Some(b4) => {
-                    st.worked = b4.worked_this_session(&up);
-                    st.worked_band = b4.is_dupe(&up);
+            // Asked as the call the log knows (`lookup_call`): a station heard hashed, `<K1ABC>`,
+            // is K1ABC's B4, and the unresolved `<...>` is nobody's. The row shows it as sent.
+            match (&session_b4, lookup_call(&st.call)) {
+                (_, None) => {}
+                (Some(b4), Some(key)) => {
+                    st.worked = b4.worked_this_session(&key);
+                    st.worked_band = b4.is_dupe(&key);
                 }
-                None => {
-                    st.worked = hot.worked_call(&up);
-                    st.worked_band = hot.worked_call_band(&up, &cur_band_key, fold_mode);
+                (None, Some(key)) => {
+                    st.worked = hot.worked_call(&key);
+                    st.worked_band = hot.worked_call_band(&key, &cur_band_key, fold_mode);
                 }
             }
             // How long ago, for the roster's timed Hide worked: the spot row's rule, a contact
@@ -29693,7 +31272,16 @@ contact yourself."
         s.radio.tx_enabled = self.tx_enabled;
         s.radio.qso_recording = self.qso_recording;
         s.radio.tx_allowed = self.tx_allowed();
-        s.radio.tx_refusal = self.connection_tx_refusal().map(str::to_string);
+        s.radio.tx_refusal = self
+            .connection_tx_refusal()
+            .or_else(|| self.ft_held_call_refusal())
+            .or_else(|| {
+                // FT runs in the Digital section only, as the held-call notice above.
+                (self.ft_late_reply_dropped
+                    && self.settings.operating_mode == crate::settings::OperatingMode::Digital)
+                    .then_some(crate::settings::STATION_CALL_CHANGED_LATE_REPLY_DROPPED)
+            })
+            .map(str::to_string);
         s.radio.tx_emission_mhz = Some(self.tx_emission_mhz());
         s.radio.phone_usb_only = crate::privileges::usb_only_phone(
             self.settings.license_class,
@@ -29752,10 +31340,21 @@ contact yourself."
         s.radio.flex_tune = self.flex_tune;
         s.radio.flex_tune_refused =
             self.flex_tune.is_some() && self.tx_allowed() && !self.tune_allowed();
+        s.radio.tune_tone_refused = self.tx_allowed() && !self.tune_tone_allowed();
+        s.radio.tune_over_refused = self.app.radio.transmitting
+            && self
+                .tune_over_refused_at
+                .is_some_and(|at| at.elapsed() < Duration::from_secs(TUNE_OVER_REFUSED_SECS));
         s.radio.flex_atu = self.flex_atu.clone();
         s.radio.flex_atu_refused = self.flex_atu.is_some()
             && self.tx_allowed()
             && !self.tx_allowed_as(crate::settings::OperatingMode::Cw);
+        // The same refusal on any other path, with the dial: the note beside the ATU says why.
+        s.radio.atu_carrier_refused_mhz = (self.rig_tuner.is_some()
+            && !s.radio.flex_atu_refused
+            && self.tx_allowed()
+            && !self.atu_carrier_allowed())
+        .then(|| self.tx_emission_mhz());
         s.radio.flex_meter_stream = self.flex_meter_stream;
         s.radio.time_sync_ok = self.time_sync_ok();
         s.radio.cat_ok = self.cat_status.0;
@@ -29801,6 +31400,7 @@ contact yourself."
         s.radio.amp = self.amp_live(self.settings.active_radio).cloned();
         s.radio.scope_error = self.scope_error.clone();
         s.radio.scope_span_refused = self.scope_span_refused.clone();
+        s.radio.scope_rate = self.scope_rate.clone();
         s.radio.scope_mode_code = self.scope_mode_code;
         s.radio.scope_fix_start_mhz = self.scope_fix_start_mhz;
         s.radio.recording_warning = self.recording_warning.clone();
@@ -29948,6 +31548,9 @@ contact yourself."
         // model), so `catOk`/`smeterDb` are None for them.
         s.active_radio_id = self.settings.active_radio;
         s.radio_pegged = self.settings.radio_pegged;
+        (s.station_profiles, s.active_station_profile) = self.station_profile_choices();
+        s.station_profile_locked =
+            !s.station_profiles.is_empty() && self.station_profile_switch_refusal().is_some();
         s.auto_radio_switch = self.auto_radio_switch.clone();
         // No AI copy or status from an unassisted entry, however it was declared (`cw_decode`).
         let decoding = self.settings.cw_decoder_active();
@@ -29982,6 +31585,8 @@ contact yourself."
                             sideband: s.radio.sideband.clone(),
                             is_active: true,
                             cat_ok: self.cat_status.0,
+                            // The active radio's refusal is its own CAT status line.
+                            cat_refused: false,
                             smeter_db: self.rig_smeter_db,
                             transmitting: s.radio.transmitting,
                             bands: p.bands.clone(),
@@ -30003,6 +31608,7 @@ contact yourself."
                                 .unwrap_or_else(|| p.last_sideband.clone()),
                             is_active: false,
                             cat_ok: live.and_then(|l| l.cat_ok),
+                            cat_refused: live.is_some_and(|l| l.cat_refused),
                             smeter_db: live.and_then(|l| l.smeter_db),
                             transmitting: false,
                             bands: p.bands.clone(),
@@ -30073,30 +31679,7 @@ contact yourself."
                 .count() as u32;
         }
 
-        // #64, display side only: a DXpedition Fox packs two messages into one frame —
-        // "K1ABC RR73; W9XYZ <FOX> -08". In Hound mode `hound_split` has already split it
-        // upstream for everything; in STANDARD mode the sequencer must never see the halves
-        // (a Fox frame must not arm a non-Hound TX — that half of #64 is gated on operator
-        // sign-off), but the ROW must still be recognized the way WSJT-X shows it: the
-        // single on-air line, highlighted when either half is ours. Returns
-        // (first-half addressee, second half) only for the strict Fox shape — first half
-        // exactly "<call> RR73|RRR|73", second half a directed message with a sender — so
-        // free text carrying ';' is untouched.
-        fn fox_multiplex(msg: &str) -> Option<(&str, &str)> {
-            let (a, b) = msg.split_once(';')?;
-            let (a, b) = (a.trim(), b.trim());
-            let [to, fin] = a.split_whitespace().collect::<Vec<_>>()[..] else {
-                return None;
-            };
-            if !matches!(fin, "RR73" | "RRR" | "73") || !tempo_core::message::is_callsign(to) {
-                return None;
-            }
-            let second = Msg::parse(b);
-            (second.sender().is_some() && second.addressee().is_some()).then_some((to, b))
-        }
-
         // Project this slot's decodes into the live feed (alerts + coloring).
-        let mycall = &self.settings.mycall;
         // The band these decodes arrived on — new-grid / new-band / confirmed-on-band are
         // per-band questions, and this chain's dial is the only honest answer to "on what
         // band did I just hear this?".
@@ -30146,160 +31729,7 @@ contact yourself."
                     Some(l) if heard_before => (late_band, late_band_key.as_str(), l.heard.tier),
                     _ => (cur_band, cur_band_key.as_str(), s.link.tier),
                 };
-                // A Fox multiplex row classifies by its SECOND half (the one carrying the
-                // Fox's call as sender — country, B4 and rarity are about the transmitter);
-                // the first half contributes only its addressee and its RR73-ness below.
-                let fox_mux = fox_multiplex(&d.message);
-                let parsed = Msg::parse(fox_mux.map_or(d.message.as_str(), |(_, b)| b));
-                // #55: a WSPR spot is "CALL GRID DBM" — a different grammar entirely.
-                // Run through the FT8 parser, the trailing dBm (typ. 23–47, inside the
-                // −50..=49 report range) reads as a signal report and the GRID lands in
-                // the sender slot: "TI4JWC EK70 30" filed its country under EK →
-                // Armenia, and TI4JWC (Costa Rica) was never looked up. WSPR rows parse
-                // by the WSPR field order; they are never CQs and address nobody. #408: so
-                // do FST4W's, the same lines, and a Type 2 beacon (`KI4TWB/0 23`) has no
-                // grid, where its power used to show as one.
-                let wspr_fields = tempo_core::beacon::is_beacon_mode(d.mode).then(|| {
-                    let beacon = tempo_core::beacon::parse_report(&d.message);
-                    (
-                        beacon.map(|b| b.call.to_string()),
-                        beacon.and_then(|b| b.grid),
-                    )
-                });
-                let is_cq = wspr_fields.is_none() && matches!(parsed, Msg::Cq { .. });
-                let from = match &wspr_fields {
-                    Some((call, _)) => call.clone(),
-                    None => parsed.sender().map(|c| c.to_string()),
-                };
-                // `same_call`, not an exact string compare: a decode addressed with a hashed,
-                // portable or compound form of our call — `<YS/WE9G>` for YS/WE9G, `W1ABC/P`
-                // for W1ABC — is still to us, and WSJT-X highlights it (its report() matches on
-                // the `/`-aware base call). The auto-sequencer already matches on `same_call`
-                // (see `to_me` in the QSO observer); this is the display path catching up, so a
-                // row the sequencer would answer no longer looks unaddressed. (#64)
-                let directed_to_me = wspr_fields.is_none()
-                    && (parsed
-                        .addressee()
-                        .map(|a| same_call(a, mycall))
-                        .unwrap_or(false)
-                        // A Fox multiplex is to us when EITHER half is: `parsed` covers
-                        // the second, this covers the first (the Fox's RR73 that ends
-                        // OUR QSO — the exact line the #64 reporter watched go dark).
-                        || fox_mux.is_some_and(|(to, _)| same_call(to, mycall)));
-                // Worked-before (B4): the decode's sender is in the logbook —
-                // via the SAME prebuilt set as the roster above. The per-row
-                // `worked_before()` this replaces was the exact O(rows × log)
-                // sweep the set was built to end, re-grown 240 lines below the
-                // comment explaining the 1–2 s waterfall stall it caused.
-                let worked = from
-                    .as_deref()
-                    .map(|c| hot.worked_call(&c.to_ascii_uppercase()))
-                    .unwrap_or(false);
-                // The stronger scope, same set as the roster above.
-                let worked_band = from
-                    .as_deref()
-                    .map(|c| hot.worked_call_band(&c.to_ascii_uppercase(), cur_band_key, fold_mode))
-                    .unwrap_or(false);
-                // New-grid (B3): the decode carries a Maidenhead grid we've never
-                // worked ON THIS BAND. Grid is present on CQ/grid forms. Per band
-                // because that is how grids are awarded (VUCC) — a grid worked on
-                // 20 m is a genuinely new one on 2 m.
-                let grid = match &wspr_fields {
-                    Some((_, g)) => *g,
-                    None => match &parsed {
-                        Msg::Cq { grid, .. } | Msg::Grid { grid, .. } => Some(grid.as_str()),
-                        _ => None,
-                    },
-                };
-                let new_grid = match (cur_band, grid) {
-                    (Some(b), Some(g)) => !g.is_empty() && !hot.grid_worked_on(g, b),
-                    // No band claimed (off the bands), or the frame carried no grid.
-                    _ => false,
-                };
-                // Country + New-DXCC (B3): resolve the sender's DXCC entity once.
-                // `country` rides every decode (DX chasers scan by country); the
-                // entity also drives new-DXCC. Needs the injected resolver; both
-                // stay None/false in headless tests.
-                let entity = match (&from, &self.station.dxcc_resolve) {
-                    (Some(c), Some(resolve)) => resolve(c),
-                    _ => None,
-                };
-                // Split the highlight (operator ruling, option 2): a TRUE all-time-new DXCC
-                // entity (never worked on any band) reads as `DXCC` — matching the Needed
-                // board's NEW ONE / ATNO — while an entity worked elsewhere but new on THIS band
-                // (DXCC is awarded per band: Challenge slots, VHF DXCC) reads as the dimmer
-                // `BAND`. The two are mutually exclusive by construction, so a chaser never
-                // mistakes a band-slot for a new country.
-                let (new_dxcc, new_band) = match &entity {
-                    Some(e) => {
-                        let ever = hot.entity_worked_ever(e);
-                        // ATNO is all-time and stays answerable off the bands; the band slot
-                        // is not — with no band there is no slot for it to be new in.
-                        (
-                            !ever,
-                            ever && cur_band.is_some_and(|b| !hot.entity_worked_on(e, b)),
-                        )
-                    }
-                    None => (false, false),
-                };
-                // Confirmed (award-grade) on THIS band — for the hide-confirmed filter.
-                // A still-new-on-band station is never marked confirmed (mutually exclusive
-                // by construction), so the filter can never hide a slot that's still open.
-                // Off the bands this stays false, which is the safe direction for a FILTER:
-                // "hide what is confirmed here" hides nothing rather than hiding rows on the
-                // strength of a band that does not exist.
-                let confirmed_band = match (cur_band, entity.as_deref()) {
-                    (Some(b), Some(e)) => hot.entity_confirmed_on(e, b),
-                    _ => false,
-                };
-                // Rarity: prefer the grid on THIS frame, but on report/R/RR73/73
-                // frames (which carry no grid) fall back to the sender's grid
-                // remembered in the roster — so an ULTRA-rare station keeps its
-                // badge through the whole QSO, not just on its CQ. (Backfills only
-                // the rarity marker; the row's own `grid` text stays unchanged.)
-                let grid_rarity = self.station.rarity_of(grid.or_else(|| {
-                    from.as_deref()
-                        .and_then(|c| self.app.inbox.roster.get(c))
-                        .and_then(|h| h.grid.as_deref())
-                }));
-                DecodeRow {
-                    lotw_user: self.station.lotw_user(from.as_deref()),
-                    from,
-                    snr: d.snr,
-                    dt_sec: d.dt,
-                    freq_hz: d.freq,
-                    message: d.message.clone(),
-                    is_cq,
-                    directed_to_me,
-                    // QSO-ending RR73/73, by parse type (token-positional — a DM73
-                    // grid or an RRR roger never counts). Feeds the CQ+73 chip. A Fox
-                    // multiplex's first half is RR73/RRR/73 by the shape gate, so a
-                    // matched frame is a signoff by construction.
-                    signoff: parsed.is_signoff() || fox_mux.is_some(),
-                    worked,
-                    worked_band,
-                    country: entity,
-                    new_dxcc,
-                    new_band,
-                    confirmed_band,
-                    new_grid,
-                    grid: grid.filter(|g| !g.is_empty()).map(str::to_string),
-                    grid_rarity,
-                    // WSJT-X decode markers: trailing 'a' = AP-assisted decode,
-                    // '?' = low-confidence (qual below the stock 0.17 line).
-                    ap: d.nap > 0,
-                    low_conf: d.qual < 0.17,
-                    // Label each decode by the mode that actually produced it
-                    // (native source's mode, or a companion stream's per-decode
-                    // WSJT-X mode); fall back to the selected tier when unknown
-                    // (DX1's robust path, or an unrecognized companion mode).
-                    tier: d.mode.map(Tier::from_mode_kind).unwrap_or(link_tier),
-                    // DTO wire contract keeps rv as i32 (-1 = N/A); collapse the
-                    // unified Option<i32> at this boundary.
-                    rv: d.rv.unwrap_or(-1),
-                    mine: false,
-                    tx_at: None,
-                }
+                self.decode_row(d, &hot, cur_band, cur_band_key, fold_mode, link_tier)
             })
             .collect();
         s.late_decodes = late.map(|l| crate::dto::LateDecodes {
@@ -30405,6 +31835,7 @@ contact yourself."
         s.contest_entry = self.contest_entry_dto();
         s.contest_cq = self.contest_running_cq();
         s.contest_cq_typed = self.contest_cq_typed();
+        s.freedv = self.freedv.is_shown().then(|| self.freedv.clone());
         s.pending_log = self.pending_log().cloned().map(Into::into);
         s.pending_qso_log_key = self.pending_qso_log_key();
         s.pending_logs_waiting = self.pending_logs_waiting() as u32;
@@ -30563,11 +31994,15 @@ contact yourself."
             },
             beacon: true,
             stamp: self.tx_gate_stamp(),
+            counted: None,
         })
     }
 
     pub fn plan_tx(&mut self, slot: u64) -> Option<TxPlan> {
         self.poll_remote_transmit(std::time::Instant::now());
+        // A Tune refused during the last period's over is that period's: its note goes at the
+        // boundary, and the next over (FT4's 7.5 s on, the next JS8 frame) never shows it again.
+        self.tune_over_refused_at = None;
         // Coordinated QSY: execute a scheduled move the moment it comes due,
         // regardless of TX/RX/mute state (no-op while the feature is disabled).
         self.qsy_execute_due(slot);
@@ -30706,6 +32141,24 @@ contact yourself."
         // tell a capped station apart from ordinary silence — see the watchdog block there.
         let mut withheld_by_call_cap = false;
         let qso_period_s = self.active_slot_secs();
+        // What this over's count changes, for `commit_tx` to take back if the over is refused at
+        // the key for its call (`FtOverCount`). Set by the arms that count an over.
+        let mut counted: Option<FtOverCount> = None;
+        let flags = (
+            self.pending_tx_disable,
+            self.pending_cw_id,
+            self.qso_start_unix,
+            self.cq_pause_until,
+            self.settings.mycall.clone(),
+        );
+        let count = |step| FtOverCount {
+            step,
+            mycall: flags.4.clone(),
+            pending_tx_disable: flags.0,
+            pending_cw_id: flags.1,
+            qso_start_unix: flags.2,
+            cq_pause_until: flags.3,
+        };
         let text: Option<String> = match &mut self.mode {
             Mode::Chat => {
                 // Open broadcasts have priority and send unconditionally — no
@@ -30852,15 +32305,56 @@ contact yourself."
                 {
                     self.recent_partner = None;
                 }
+                // ⛔ THE KEYING-TIME CALL CHECK COMES FIRST (the operator's decision, 2026-10-28):
+                // an over refused for its call is not sent, so it is not spent or counted either.
+                // Every over below is judged here, before the sequencer's bookkeeping; the
+                // refusals after this `match` stay where they are.
+                let call_refusal = |m: &Msg, built: &str, owed: Option<&Msg>| {
+                    ft_over_call_refusal(
+                        &m.to_text(),
+                        &self.settings.mycall,
+                        built,
+                        &self.settings.station_profiles,
+                        &self.former_calls,
+                        owed,
+                    )
+                };
+                if let Some(why) = self
+                    .recent_partner
+                    .as_ref()
+                    .and_then(|p| p.owed.as_ref())
+                    .and_then(|m| call_refusal(m, &station.mycall, Some(m)))
+                {
+                    // ⛔ …and DROPPED, with the record (the operator's decision, 2026-10-28): held,
+                    // it would block every over after it, a Call CQ under the new call included,
+                    // until it expired. One over, once: this slot was its slot, and the cockpit
+                    // says it did not go. The station's own over is back on the next slot.
+                    tempo_core::applog::info("tx", &format!("late reply dropped: {why}"));
+                    self.recent_partner = None;
+                    self.ft_late_reply_dropped = true;
+                    self.app.set_transmitting(false);
+                    return None;
+                }
                 if let Some(m) = self.recent_partner.as_mut().and_then(|p| p.owed.take()) {
+                    counted = Some(count(CountedStep::Owed(m.clone())));
                     self.recent_partner = None;
                     self.cq_pause_until = None;
                     // `tx_rv` is already 0 and stays there: a one-shot has no step for
                     // IR-HARQ to escalate redundancy over.
                     break 'qso_over Some(m.to_text());
                 }
-                match station.outgoing_rv() {
+                let next = station.outgoing_rv();
+                if let Some(why) = next
+                    .as_ref()
+                    .and_then(|(m, _)| call_refusal(m, &station.mycall, None))
+                {
+                    tempo_core::applog::info("tx", &format!("over not keyed: {why}"));
+                    self.app.set_transmitting(false);
+                    return None;
+                }
+                match next {
                     Some((m, rv)) => {
+                        let before = QsoStep::of(station);
                         // Something is going out, so no pause is in force — either the run just
                         // resumed, or (the case that matters) somebody ANSWERED and this is the
                         // reply. Clearing it here rather than only on resume means a stale
@@ -30887,11 +32381,15 @@ contact yourself."
                         station.after_tx();
                         // Stock "Disable Tx after sending 73": the over leaving
                         // NOW is our final 73 (after_tx just cleared pending at
-                        // Done). S&P only — a CQ run returns to CQ instead.
+                        // Done), or our RR73, a 73 message too (#416,
+                        // `closing_sent`). S&P only — a CQ run returns to CQ instead.
+                        if station.closing_sent()
+                            && !self.cq_running
+                            && self.settings.disable_tx_after_73
+                        {
+                            self.pending_tx_disable = true;
+                        }
                         if station.state == QsoState::Done && !self.cq_running {
-                            if self.settings.disable_tx_after_73 {
-                                self.pending_tx_disable = true;
-                            }
                             // WSJT-X "CW ID after 73": queue the ID for AFTER
                             // this final over finishes (the service drains it
                             // on TX-idle, same timing as the deferred disable —
@@ -30914,6 +32412,10 @@ contact yourself."
                                 self.pending_cw_id = true;
                             }
                         }
+                        counted = Some(count(CountedStep::Qso {
+                            before,
+                            after: QsoStep::of(station),
+                        }));
                         // IR-HARQ off: always transmit RV0 (no redundancy escalation).
                         tx_rv = if self.settings.harq_enabled {
                             rv as i32
@@ -30974,6 +32476,16 @@ contact yourself."
                     station.outgoing()
                 };
                 if m.is_some() {
+                    // ⛔ The keying-time call check, before the station counts the over as sent
+                    // (as the QSO arm above).
+                    if let Some(why) =
+                        contest_over_call_refusal(station.call(), &self.settings.mycall)
+                    {
+                        tempo_core::applog::info("tx", &format!("over not keyed: {why}"));
+                        self.app.set_transmitting(false);
+                        return None;
+                    }
+                    let before = FdStep::of(station);
                     station.after_tx();
                     // Stock "Disable Tx after sending 73" after a contact the operator picked (a
                     // double-click on its CQ, a logger's Reply to it): the over leaving NOW closes
@@ -30983,6 +32495,10 @@ contact yourself."
                     if station.done() && station.picked() && self.settings.disable_tx_after_73 {
                         self.pending_tx_disable = true;
                     }
+                    counted = Some(count(CountedStep::FieldDay {
+                        before,
+                        after: FdStep::of(station),
+                    }));
                 }
                 m.map(|x| x.to_text())
             }
@@ -30999,7 +32515,15 @@ contact yourself."
                     self.app.set_transmitting(false);
                     return None;
                 }
+                // ⛔ …nor an over made under another call than the station's now: refused here, at
+                // the keying point, exactly as the encoder's refusal above.
+                if let Some(why) = self.ft_sent_call_refusal(&t) {
+                    tempo_core::applog::info("tx", &format!("over not keyed: {why}"));
+                    self.app.set_transmitting(false);
+                    return None;
+                }
                 self.app.set_transmitting(true);
+                self.ft_late_reply_dropped = false;
                 // Wall-clock watchdog (WSJT-X): start the timer on the first over after
                 // an operator action, then trip (auto-halt TX) once REAL elapsed time
                 // exceeds the limit — counting the RX slots between overs too, so it
@@ -31009,6 +32533,7 @@ contact yourself."
                     let now = now_unix_secs();
                     let start = *self.tx_watchdog_start.get_or_insert(now);
                     if now.saturating_sub(start) >= limit_secs {
+                        self.note_tx_watchdog_trip(&format!("{} over", self.app.tier().label()));
                         self.tx_watchdog = true;
                         self.tx_enabled = false;
                         // A trip is a hard kill: the loop's mid-over cut is the
@@ -31042,6 +32567,10 @@ contact yourself."
                     // starting a few seconds before the limit that today goes out.
                     let over_secs = self.tx_over_secs() as u64;
                     if over_secs > limit_secs {
+                        self.note_tx_watchdog_trip(&format!(
+                            "{} over refused: {over_secs} s is longer than the whole limit",
+                            self.app.tier().label()
+                        ));
                         self.tx_watchdog = true;
                         self.tx_enabled = false;
                         self.slot_tx_abort = true; // watchdog = hard kill (see above)
@@ -31146,6 +32675,7 @@ contact yourself."
                     waveform,
                     beacon: false,
                     stamp: self.tx_gate_stamp(),
+                    counted,
                 })
             }
             None => {
@@ -31183,6 +32713,9 @@ contact yourself."
                         let now = now_unix_secs();
                         let start = *self.tx_watchdog_start.get_or_insert(now);
                         if now.saturating_sub(start) >= limit_secs {
+                            self.note_tx_watchdog_trip(
+                                "a directed call held armed by its call cap",
+                            );
                             self.tx_watchdog = true;
                             self.tx_enabled = false;
                         }
@@ -31213,6 +32746,7 @@ contact yourself."
         let start = *self.tx_watchdog_start.get_or_insert(now);
         let over_secs = self.tx_over_secs() as u64;
         if now.saturating_sub(start) >= limit_secs || over_secs > limit_secs {
+            self.note_tx_watchdog_trip("a JS8 over");
             self.tx_watchdog = true;
             self.tx_enabled = false;
             // A trip is a hard kill: the loop's mid-over cut is the one-shot abort.
@@ -31345,6 +32879,7 @@ contact yourself."
             || plan.slot != current_slot
             || plan.stamp != self.tx_gate_stamp()
         {
+            self.uncount_over_refused_for_its_call(plan);
             self.app.set_transmitting(false);
             return Vec::new();
         }
@@ -31390,6 +32925,94 @@ contact yourself."
         self.note_ft_on_air(plan, wave.len());
         self.tx_message = wsjtx_msgsent(plan.tier, &plan.waveform);
         vec![wave]
+    }
+
+    /// ⛔ An FT over `commit_tx` refused because the station's call changed while its wave was
+    /// built is not counted as sent (the operator's decision, 2026-10-28): what `plan_tx` counted
+    /// for it ([`FtOverCount`]) is taken back, as if `plan_tx` had refused it, and a late reply
+    /// is dropped and said. Judged as `plan_tx` judges an over before it counts it; an over
+    /// refused for anything else keeps its count, as before.
+    fn uncount_over_refused_for_its_call(&mut self, plan: &TxPlan) {
+        let Some(count) = &plan.counted else {
+            return;
+        };
+        let text = match &plan.waveform {
+            TxWaveform::Deep { text, .. }
+            | TxWaveform::Fast { text, .. }
+            | TxWaveform::Native { text, .. } => text,
+            TxWaveform::Js8 { .. } => return,
+        };
+        // Judged by the call the plan judged it under as well as by the station now in the
+        // sequencer: a station the operator picked in the window, made under a new call, must not
+        // make the over's own call look like another station's.
+        let now = &self.settings.mycall;
+        let profiles = &self.settings.station_profiles;
+        let former = &self.former_calls;
+        let refused = match &count.step {
+            CountedStep::Owed(m) => {
+                ft_over_call_refusal(text, now, &count.mycall, profiles, former, Some(m))
+            }
+            CountedStep::Qso { .. } => self
+                .ft_sent_call_refusal(text)
+                .or_else(|| ft_over_call_refusal(text, now, &count.mycall, profiles, former, None)),
+            CountedStep::FieldDay { .. } => self
+                .ft_sent_call_refusal(text)
+                .or_else(|| contest_over_call_refusal(&count.mycall, now)),
+        };
+        if refused.is_none() {
+            return;
+        }
+        tempo_core::applog::info("tx", "over refused at the key for its call: not counted");
+        // Only what the count armed is disarmed: a flag that was already up stays up.
+        if !count.pending_tx_disable {
+            self.pending_tx_disable = false;
+        }
+        if !count.pending_cw_id {
+            self.pending_cw_id = false;
+        }
+        // Only what each plan changed is put back: the QSO over's plan sets the start estimate and
+        // clears the CQ pause, the late reply's clears the pause, the contest over's neither. A
+        // start time the operator set in the window (a Tx2 or Tx3 pick) is theirs and stays.
+        match (&count.step, &mut self.mode) {
+            (CountedStep::Qso { before, after }, Mode::Qso { station, .. })
+                if QsoStep::of(station) == after.signed_by(&station.mycall) =>
+            {
+                // The save in the window made the messages again under the call now
+                // (`note_call_saved`): the over goes back as made again under it.
+                let before = before.signed_by(&station.mycall);
+                station.pending = before.pending;
+                station.tx_count = before.tx_count;
+                station.rv_count = before.rv_count;
+                station.keyed_on_air = before.keyed_on_air;
+                station.keyed_as = before.keyed_as;
+                if self.qso_start_unix.is_some() && count.qso_start_unix.is_none() {
+                    self.qso_start_unix = None;
+                }
+                if self.cq_pause_until.is_none() {
+                    self.cq_pause_until = count.cq_pause_until;
+                }
+            }
+            (CountedStep::FieldDay { before, after }, Mode::FieldDay { station, .. })
+                if FdStep::of(station).moved_only_by_its_call(after) =>
+            {
+                // As the QSO arm: the over goes back as made again under the call now.
+                let now = station.call().to_string();
+                if now != before.call {
+                    station.sign_as(&before.call);
+                }
+                station.pending = before.pending.clone();
+                if station.call() != now {
+                    station.sign_as(&now);
+                }
+            }
+            (CountedStep::Owed(_), _) => {
+                self.ft_late_reply_dropped = true;
+                if self.cq_pause_until.is_none() {
+                    self.cq_pause_until = count.cq_pause_until;
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Decode a captured frame and fold it into the app *and* the active mode's
@@ -32023,7 +33646,7 @@ contact yourself."
         for d in &fresh {
             self.decode_history.push_back((slot, d.clone()));
         }
-        while self.decode_history.len() > 240 {
+        while self.decode_history.len() > DECODE_HISTORY_DEPTH {
             self.decode_history.pop_front();
         }
         let pend_before = self.app.pending_count();
@@ -32154,6 +33777,13 @@ contact yourself."
             " — and every sample in that window is zero: the receive audio is silent, which is \
              the rig's audio cable, the input device or a rig stuck in transmit, not the band"
                 .to_string()
+        } else if peak >= 1.0 {
+            // At or over full scale (the window is after RX Gain, which is 1.0 to 8.0): the
+            // input is clipped, not healthy. A clipped chain decodes little or nothing.
+            format!(
+                " (rx peak {peak:.4} — the receive audio is CLIPPED, at or over full scale: lower \
+                 RX Gain, then the input level of the sound card or the radio's audio output)"
+            )
         } else {
             format!(" (rx peak {peak:.4} — audio IS arriving)")
         }
@@ -32297,7 +33927,7 @@ contact yourself."
         for d in &decodes {
             self.decode_history.push_back((slot, d.clone()));
         }
-        while self.decode_history.len() > 240 {
+        while self.decode_history.len() > DECODE_HISTORY_DEPTH {
             self.decode_history.pop_front();
         }
         // JS8: parse the typed words behind these rows into the message layer (activity
@@ -33125,10 +34755,11 @@ contact yourself."
     /// sitting inside the bird's DOWNLINK passband, so it would silently stop matching and
     /// those contacts would lose their LoTW satellite credit outright.
     ///
-    /// Doing it properly means setting `BAND` from the transmit leg and adding `BAND_RX` — and
-    /// `band` is the key every award, needs and B4 path in Nexus reads, which is a far larger
-    /// change than #163. Satellites wait for one that does BAND and BAND_RX together,
-    /// deliberately, rather than getting half of it now.
+    /// A satellite contact's two legs are written where the satellite itself is known, by the
+    /// stamp in [`Self::log_qso`] ([`Self::stamp_satellite`]): FREQ the nominal uplink, FREQ_RX
+    /// the downlink, with `band` kept the downlink (the key every award, needs and B4 path reads)
+    /// and the ADIF writer sending BAND from FREQ and BAND_RX from the band. A record this builds
+    /// still carries the downlink alone, which is what that stamp's passband gate reads.
     ///
     /// Keyed on the BANDS rather than on "is a transponder held" for two reasons: the
     /// satellite hold OUTLIVES THE PASS (an FM hold is never released), so asking `sat_tune`
@@ -33227,7 +34858,10 @@ contact yourself."
     /// selected (a click on an R-report opens with Tx4): WSJT-X's fallback when it logs,
     /// `now - (m_ntx-2)*int(T/R) - int(fmod(seconds of the minute, T/R))`, with `m_ntx` the Tx
     /// message selected then (`mainwindow_slots.cpp:496-500`, `on_logQSOButton_clicked`). Our
-    /// queued over gives that number, and a contact at Done whose 73 has gone gives Tx5. Tx1 is
+    /// queued over gives that number, a contact at Done whose 73 has gone gives Tx5, and one
+    /// still `Confirming` with nothing queued because its RR73 has gone (#416, `after_tx`) gives
+    /// Tx4, as it did while the RR73 stayed queued; one with a free-text over queued gives now,
+    /// as before. Tx1 is
     /// counted as Tx2, the period's own start, where WSJT-X's formula would put the start AFTER
     /// now. With no contact with `dxcall` in the sequencer (a contact rescued after the run left
     /// it), the start is now, as before.
@@ -33240,8 +34874,11 @@ contact yourself."
                     .as_deref()
                     .is_some_and(|c| same_call(c, dxcall)) =>
             {
-                wsjtx_tx_number(station.pending.as_ref())
-                    .or((station.state == QsoState::Done).then_some(5))
+                wsjtx_tx_number(station.pending.as_ref()).or(match station.state {
+                    QsoState::Done => Some(5),
+                    QsoState::Confirming if station.pending.is_none() => Some(4),
+                    _ => None,
+                })
             }
             _ => None,
         };
@@ -33278,6 +34915,7 @@ contact yourself."
         // settings off, is the contact it was: its mode, band and frequencies ([`MadeOn`]).
         let made_on = self.made_on_for(&dxcall).cloned();
         let dxcall = tempo_core::message::unhash_call(&dxcall).to_string();
+        let station_callsign = self.contact_station_callsign(&dxcall);
         // ADIF mode: one source of truth with the B4 band-key — see adif_mode_for_tier.
         let mode = made_on
             .as_ref()
@@ -33359,10 +34997,11 @@ contact yourself."
             sat_name: None,
             operator: None,
             // Same reason as the RTTY builder: `prompt_to_log` can park this record for as long
-            // as the operator takes to confirm, so the call is captured now.
+            // as the operator takes to confirm, so the call is captured now: the call the
+            // contact's overs carried ([`Self::contact_station_callsign`]).
             my_grid: None,
             my_rig: None,
-            station_callsign: self.station_callsign_now(),
+            station_callsign,
             extra: Vec::new(),
             contest: None,
         }
@@ -33504,7 +35143,7 @@ contact yourself."
         for d in decodes.iter() {
             self.decode_history.push_back((slot, d.clone()));
         }
-        while self.decode_history.len() > 240 {
+        while self.decode_history.len() > DECODE_HISTORY_DEPTH {
             self.decode_history.pop_front();
         }
         self.last_decodes = decodes.to_vec();
@@ -33595,9 +35234,9 @@ contact yourself."
     fn compute_spectrum(audio: &[f32]) -> Spectrum {
         // Widened from 200–2900: shows the full SSB/DATA passband (incl. wide DATA modes) and the
         // filter-slope shelf; the percentile AGC + gain/zero absorb the quiet edges. The 6 kHz
-        // Nyquist (12 kHz capture) caps the top; 4000 covers every voice/data passband in use.
+        // Nyquist (12 kHz capture) caps the top; the span is the rx-dsp row's (`SPECTRUM_HI_HZ`).
         const LO_HZ: f32 = 0.0;
-        const HI_HZ: f32 = 4000.0;
+        const HI_HZ: f32 = SPECTRUM_HI_HZ;
         let row = if audio.is_empty() {
             Vec::new()
         } else {
@@ -34118,15 +35757,39 @@ contact yourself."
         self.station.note_upload(note, ok)
     }
 
-    /// See [`StationCore::set_activation`].
+    /// See [`StationCore::set_activation`]. At the station: a profile that names the park is
+    /// picked ([`Self::set_activation_from`]).
     pub fn set_activation(
         &mut self,
         program: &str,
         reference: &str,
         places: Vec<String>,
     ) -> Result<(String, String), String> {
+        self.set_activation_from(program, reference, places, false)
+    }
+
+    /// See [`StationCore::set_activation`], and the station profile it picks
+    /// (`pick_station_profile_for_activation`). `from_afar`: started from a computer driving the
+    /// station, which may not switch the call the station transmits under.
+    pub fn set_activation_from(
+        &mut self,
+        program: &str,
+        reference: &str,
+        places: Vec<String>,
+        from_afar: bool,
+    ) -> Result<(String, String), String> {
+        // Where a running activation's Stop would have gone back to: the new one keeps it, and so
+        // does one started after a Stop that could not go back.
+        let back = self
+            .station
+            .activation_station_profile_return()
+            .or_else(|| self.station_profile_return_kept.take());
         let started = self.station.set_activation(program, reference, places);
         self.sync_fd_activation();
+        if started.is_ok() {
+            self.station.set_activation_station_profile_return(back);
+            self.pick_station_profile_for_activation(from_afar);
+        }
         started
     }
 
@@ -34147,10 +35810,23 @@ contact yourself."
         self.station.activation_state()
     }
 
-    /// See [`StationCore::clear_activation`].
+    /// See [`StationCore::clear_activation`]. At the station ([`Self::clear_activation_from`]).
     pub fn clear_activation(&mut self) {
+        self.clear_activation_from(false);
+    }
+
+    /// See [`StationCore::clear_activation`], and the station profile it goes back to
+    /// (`return_from_activation_station_profile`). `from_afar`: stopped from a computer driving
+    /// the station, which may not switch the call the station transmits under. The profile it
+    /// could not go back to, once, for the operator to be told how to switch back by hand.
+    pub fn clear_activation_from(
+        &mut self,
+        from_afar: bool,
+    ) -> Option<crate::dto::StationProfileChoice> {
+        let back = self.station.activation_station_profile_return();
         self.station.clear_activation();
         self.sync_fd_activation();
+        self.return_from_activation_station_profile(back, from_afar)
     }
 
     /// See [`StationCore::resume_activation`].
@@ -34197,6 +35873,7 @@ contact yourself."
             started_at: a.started_at,
             utc_day: now / 86_400,
             restored: a.restored,
+            station_profile_back: None,
         }
     }
 
@@ -35022,6 +36699,11 @@ pub fn restore_with_session_rows<T>(
         engine,
         |eng| eng.save_opens_session(&asked),
         |eng, rows| {
+            // ⛔ Not while a run, a contact or an over is under way on a station with profiles:
+            // the bundle would change the call the station transmits under.
+            if let Some(why) = eng.station_profile_restore_refusal(&restored) {
+                return Err(why.to_string());
+            }
             // Never while the radio is keyed, nor while TX is armed to key at the next slot: the
             // restore's hold can wait on the system keychain, and the radio loop needs this lock
             // to end the over, and to key the next one on time. Nothing has changed yet.
@@ -35522,17 +37204,21 @@ fn best_caller_decodes(
         .collect();
     // Distill the stations answering MY CQ this slot: a grid reply or a bare
     // report addressed to me — the two forms the sequencer auto-answers from
-    // CallingCq. A BLOCKED caller's answer is still an ANSWER (it must be
-    // dropped from the slice so the sequencer's first-heard lock can't seize
-    // it) but never a CANDIDATE — the operator said never to work them.
+    // CallingCq, and by the sequencer's own test, my WHOLE call
+    // (`names_whole_call`, as WSJT-X answers a caller to its CQ): a caller to my
+    // base call with another prefix or suffix is not an answer, so it can neither
+    // win the pick nor crowd out a caller the sequencer would take. A BLOCKED
+    // caller's answer is still an ANSWER (it must be dropped from the slice so
+    // the sequencer's first-heard lock can't seize it) but never a CANDIDATE —
+    // the operator said never to work them.
     let mut callers = Vec::new();
     let mut answers: Vec<usize> = Vec::new();
     for (idx, d) in decodes.iter().enumerate() {
         let (de, grid) = match Msg::parse(&d.message) {
-            Msg::Grid { to, de, grid } if same_call(&to, mycall) => {
+            Msg::Grid { to, de, grid } if names_whole_call(&to, mycall) => {
                 (de, (!grid.is_empty()).then_some(grid))
             }
-            Msg::Report { to, de, .. } if same_call(&to, mycall) => (de, None),
+            Msg::Report { to, de, .. } if names_whole_call(&to, mycall) => (de, None),
             _ => continue,
         };
         answers.push(idx);
@@ -35909,6 +37595,25 @@ mod tests {
         // sample in the noise floor is enough to make the window alive.
         let floor = Engine::drought_audio_note(&[0.0, 0.0, 3.0e-5, 0.0]);
         assert!(!floor.contains("silent"), "{floor}");
+    }
+
+    /// A peak at or over full scale is not "audio IS arriving": it is a receive chain driven into
+    /// clipping, which decodes nothing on the busiest band. An operator's drought lines read
+    /// `rx peak 2.3` on every band for weeks with the line calling that healthy. The line now
+    /// says clipped and what to turn down; normal and silent input keep their words.
+    #[test]
+    fn the_drought_line_says_a_clipped_input_is_clipped() {
+        for peak in [1.0f32, 2.3013, -2.69] {
+            let clipped = Engine::drought_audio_note(&[0.0, 0.1, peak, -0.2]);
+            assert!(clipped.contains("CLIPPED"), "{clipped}");
+            assert!(clipped.contains("RX Gain"), "{clipped}");
+            assert!(clipped.contains("input level"), "{clipped}");
+            assert!(!clipped.contains("audio IS arriving"), "{clipped}");
+        }
+        // THE CONTROLS: just under full scale is a normal level, worded as before.
+        let loud = Engine::drought_audio_note(&[0.0, 0.9999, -0.5]);
+        assert_eq!(loud, " (rx peak 0.9999 — audio IS arriving)");
+        assert!(Engine::drought_audio_note(&[0.0; 8]).contains("silent"));
     }
 
     /// What `sat_tune_nominal` is told the bird needs the radio to be in. Named
@@ -37133,6 +38838,25 @@ mod tests {
         // A no-op set does not thrash the demod.
         e.set_psk_mode(PskModeKind::Qpsk31, true).unwrap();
         assert!(!e.take_psk_afc_reset(), "a no-op switch rebuilt the demod");
+    }
+
+    #[test]
+    fn psk63_is_a_sub_mode_that_logs_as_psk63_and_switches_like_the_others() {
+        use tempo_core::psk::PskModeKind;
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.settings.keyboard_modem = crate::settings::KeyboardModem::Psk;
+        assert_eq!(e.keyboard_mode_name(), "PSK31", "control: the default");
+        e.set_psk_mode(PskModeKind::Bpsk63, false).unwrap();
+        assert_eq!(e.psk_mode(), (PskModeKind::Bpsk63, false));
+        assert!(e.take_psk_afc_reset(), "the switch rebuilds the RX demod");
+        assert_eq!(
+            e.keyboard_mode_name(),
+            "PSK63",
+            "the ADIF mode a contact logs"
+        );
+        // …and is refused mid-over exactly as a QPSK switch is.
+        let mut e = psk_latched_engine();
+        assert!(e.set_psk_mode(PskModeKind::Bpsk63, false).is_err());
     }
 
     #[test]
@@ -40065,8 +41789,8 @@ mod tests {
     /// ATU (`observe_flex_atu`), a cycle is the radio's carrier at its transmit slice, so a press
     /// needs CW privileges there as well as the section's, as the radio's tune carrier does. A
     /// General in DIGU at 14.024 MHz may send FT8 1.5 kHz up but holds no CW privilege at 14.024:
-    /// the ATU of any other CAT path runs there, the client's does not and the press says why, a
-    /// press made before the client said so is dropped at the wire, and the snapshot says why
+    /// the ATU of any other CAT path is refused there for its carrier at the dial, the client's for
+    /// CW and the press says why, nothing is left to go to the wire, and the snapshot says why
     /// beside the ATU. At 14.030 both are allowed. In Phone at 14.100 the licence's own lock
     /// refuses it first, as before, and the CW judgement adds nothing there.
     #[test]
@@ -40083,7 +41807,13 @@ mod tests {
             "scene guard: FT8 1.5 kHz above 14.024 is a General's, and TX is on"
         );
         let press = |e: &mut Engine| (e.atu_tune(), e.snapshot().radio.flex_atu_refused);
-        assert_eq!(press(&mut e), (Ok(()), false), "another CAT path's ATU");
+        // Another CAT path's ATU is refused here too: its carrier at the transmit dial, 14.024,
+        // is judged on every path now (`an_atu_tune_up_is_judged_at_the_transmit_dial`).
+        assert_eq!(
+            press(&mut e),
+            (Err(atu_carrier_outside(14.024)), false),
+            "another CAT path's ATU"
+        );
 
         let atu = crate::dto::FlexAtu {
             tune: crate::dto::FlexTune {
@@ -40128,6 +41858,352 @@ mod tests {
         e.observe_flex_atu(None);
         let s = e.snapshot();
         assert_eq!((s.radio.flex_atu, s.radio.flex_atu_refused), (None, false));
+    }
+
+    /// Press Tune, read what came of it (the engine's own answer, the snapshot's, and the note
+    /// beside Tune), and let go again.
+    fn press_tune(e: &mut Engine) -> (bool, bool, bool) {
+        e.set_tune(true);
+        let s = e.snapshot();
+        let seen = (e.tuning(), s.radio.tuning, s.radio.tune_tone_refused);
+        e.set_tune(false);
+        seen
+    }
+
+    /// ⛔ NEXUS'S TUNE TONE IS JUDGED WHERE IT GOES OUT. The radio loop plays a fixed
+    /// [`TUNE_TONE_HZ`] tone, so in Digital the carrier is 1500 Hz above the dial whatever the TX
+    /// offset, while the gate judged the FT8 frame at the TX offset. A General at 14.0230 MHz with
+    /// the TX offset at 2000 Hz had the frame judged at 14.0250, inside, and the carrier sent at
+    /// 14.0245, below a General's 14.025 edge. Tune is refused there now, and the note beside Tune
+    /// says why. Controls: 1 kHz up the tone is inside and Tune keys; the section's own judgement
+    /// still stands beside it (a frame outside the privileges refuses Tune as it did, with the
+    /// licence's own lock, not the note); and a TX offset that moves the frame out leaves the tone
+    /// where it is, so a tone inside still needs the frame inside too.
+    #[test]
+    fn a_tune_tone_outside_the_privileges_is_refused_though_the_frame_is_inside() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_license_class("general");
+        e.set_frequency(14.023, "20m", "USB");
+        e.set_tx_offset(2000.0);
+        assert!(
+            e.tx_allowed(),
+            "scene guard: the FT8 frame 2 kHz above 14.0230 is a General's"
+        );
+        assert_eq!(
+            press_tune(&mut e),
+            (false, false, true),
+            "the tone would go out at 14.0245, below a General's 14.025 edge"
+        );
+
+        // CONTROL: 1 kHz up, the tone at 14.0255 is inside.
+        e.set_frequency(14.024, "20m", "USB");
+        assert_eq!(
+            press_tune(&mut e),
+            (true, true, false),
+            "a tone inside keys"
+        );
+
+        // CONTROL: a tune already up is refused on the read once the tone leaves (the loop's
+        // question every tick), as the section's own lock is.
+        e.set_tune(true);
+        assert!(e.tuning(), "scene guard: the tune is up");
+        e.set_tx_offset(2000.0);
+        e.observe_rig_freq(14_023_000);
+        assert!(
+            e.tx_allowed() && !e.tuning(),
+            "the tone left the privileges under a held tune"
+        );
+        e.set_tune(false);
+
+        // CONTROL: the section's own judgement is kept, and its lock says why, not the note.
+        e.set_frequency(14.0236, "20m", "USB");
+        e.set_tx_offset(0.0);
+        assert!(
+            !e.tx_allowed(),
+            "scene guard: the frame at the dial, 14.0236, is outside"
+        );
+        assert_eq!(
+            press_tune(&mut e),
+            (false, false, false),
+            "the frame outside refuses Tune though the tone at 14.0251 is inside"
+        );
+    }
+
+    /// The same tone outside the other soundcard sections, on the side the transmitting VFO's
+    /// word names. RTTY's AFSK keys the radio in LSB: its mark/space pair sits 2125-2295 Hz under
+    /// the dial, and the tune tone 1500 Hz under it, nearer the dial. A General at 14.1520 MHz
+    /// sends the pair at 14.1497-14.1499, inside the data segment, and the tone at 14.1505, in the
+    /// phone segment: refused. At 14.1514 the tone, at 14.1499, is inside. Phone is unchanged: its
+    /// passband holds the tone (a General at 14.2260 USB tunes as before).
+    #[test]
+    fn a_tune_tone_is_judged_on_the_side_the_transmitting_word_names() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("rtty", false);
+        e.set_frequency(14.152, "20m", "LSB");
+        assert!(
+            e.tx_allowed(),
+            "scene guard: the RTTY pair under 14.1520 is a General's"
+        );
+        assert_eq!(
+            press_tune(&mut e),
+            (false, false, true),
+            "the tone at 14.1505 is in the phone segment"
+        );
+        e.set_frequency(14.1514, "20m", "LSB");
+        assert_eq!(
+            press_tune(&mut e),
+            (true, true, false),
+            "the tone at 14.1499"
+        );
+
+        e.set_operating_mode("phone", false);
+        e.set_frequency(14.226, "20m", "USB");
+        assert!(e.tx_allowed(), "scene guard: 14.2260 USB is a General's");
+        assert_eq!(
+            press_tune(&mut e),
+            (true, true, false),
+            "Phone tunes as before"
+        );
+    }
+
+    /// The tone is Nexus's only where Nexus plays it. On a TCI connection Tune is the SDR
+    /// program's own carrier, and while Nexus's Flex client tunes with the radio's carrier that
+    /// carrier is judged as CW instead: neither is refused for a tone that does not go out.
+    #[test]
+    fn a_tune_that_is_the_radios_own_carrier_is_not_judged_as_the_tone() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_license_class("general");
+        e.set_frequency(14.026, "20m", "USB");
+        e.set_tx_offset(2000.0);
+        e.settings.rig_conn = "tci".to_string();
+        assert!(e.tx_allowed(), "scene guard: the frame at 14.0280");
+        assert_eq!(
+            press_tune(&mut e),
+            (true, true, false),
+            "TCI: the program's carrier"
+        );
+        e.set_frequency(14.023, "20m", "USB");
+        assert_eq!(
+            press_tune(&mut e),
+            (true, true, false),
+            "TCI: no tone of Nexus's at 14.0245 to refuse"
+        );
+        e.settings.rig_conn = String::new();
+        assert_eq!(
+            press_tune(&mut e),
+            (false, false, true),
+            "CONTROL: Nexus's tone is refused there"
+        );
+    }
+
+    /// ⛔ TUNE IS REFUSED WHILE A SLOT OVER IS ON THE AIR WITH SPLIT OPERATION ON. Its radio may
+    /// transmit from a TX dial moved for that over (Rig split's VFO B, Fake It's VFO A), which
+    /// nothing writes under a carrier, so a tune keyed over it went out from that dial. Refused and
+    /// nothing changes, as onto a CW word: the over stays planned. Controls: once the over is off
+    /// the air Tune keys; a tune already up is never dropped by it, nor is stopping one refused;
+    /// and with Split Operation None, where no dial moves, Tune takes precedence as in WSJT-X.
+    #[test]
+    fn tune_is_refused_while_a_slot_over_is_on_the_air() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        let mut s = e.settings().clone();
+        s.split_mode = crate::settings::SplitMode::Rig;
+        e.apply_settings(s);
+        e.set_tx_enabled(true);
+        e.app.set_transmitting(true); // an FT8 over on the air
+        let gen = e.tx_gate_gen;
+        e.set_tune(true);
+        assert!(!e.tuning(), "a tune keyed over the over");
+        assert_eq!(
+            e.tx_gate_gen, gen,
+            "…and the planned over was not invalidated"
+        );
+        assert!(e.tx_enabled(), "…nor the sequencer stood down");
+        assert!(
+            e.snapshot().radio.tune_over_refused,
+            "the note beside Tune says why"
+        );
+        // The next slot boundary ends that period: the next over (FT4 7.5 s on) does not say it.
+        let _ = e.plan_tx(1);
+        e.app.set_transmitting(true);
+        assert!(
+            !e.snapshot().radio.tune_over_refused,
+            "the note came back with the next period's over"
+        );
+        e.app.set_transmitting(false);
+        e.set_tune(false);
+        e.app.set_transmitting(true);
+        e.set_tune(true);
+        assert!(
+            e.snapshot().radio.tune_over_refused,
+            "premise: refused again in this period"
+        );
+
+        e.app.set_transmitting(false);
+        assert!(
+            !e.snapshot().radio.tune_over_refused,
+            "…for as long as the over is on the air"
+        );
+        e.set_tune(true);
+        assert!(e.tuning(), "CONTROL: off the air, Tune keys");
+        e.app.set_transmitting(true);
+        assert!(e.tuning(), "a tune already up is not dropped");
+        e.set_tune(false);
+        assert!(!e.tuning(), "and stopping it is never refused");
+
+        for split in [
+            crate::settings::SplitMode::FakeIt,
+            crate::settings::SplitMode::None,
+        ] {
+            let mut s = e.settings().clone();
+            s.split_mode = split;
+            e.apply_settings(s);
+            e.set_tx_enabled(true);
+            e.app.set_transmitting(true);
+            e.set_tune(true);
+            assert_eq!(
+                e.tuning(),
+                split == crate::settings::SplitMode::None,
+                "{split:?}: a tune pressed over the over"
+            );
+            e.set_tune(false);
+        }
+    }
+
+    /// ⛔ THE RADIO'S OWN ATU CARRIER IS JUDGED AT THE TRANSMIT DIAL, on every CAT path. A General
+    /// in DIGU at 14.024 MHz may send FT8 1.5 kHz up, but the ATU's carrier goes out from the
+    /// radio near its dial, 14.024, below the General edge: refused, and the press says so in
+    /// plain words with the dial. At 14.0255 it runs.
+    #[test]
+    fn an_atu_tune_up_is_judged_at_the_transmit_dial() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_license_class("general");
+        e.set_frequency(14.024, "20m", "USB");
+        e.set_tx_offset(1500.0);
+        e.set_tier(Tier::Ft8);
+        e.set_tx_enabled(true);
+        e.observe_rig_tuner(Some(false), true);
+        assert!(
+            e.tx_allowed(),
+            "scene guard: FT8 1.5 kHz above 14.024 is a General's"
+        );
+        assert_eq!(
+            e.atu_tune(),
+            Err(
+                "ATU keys nothing here: the radio's own carrier at your dial, 14.0240 MHz, would \
+                 be outside your license privileges"
+                    .to_string()
+            ),
+            "the ATU's carrier at 14.024, in plain words"
+        );
+        assert_eq!(
+            e.snapshot().radio.atu_carrier_refused_mhz,
+            Some(14.024),
+            "…and the note beside the ATU says so"
+        );
+        e.set_frequency(14.0255, "20m", "USB");
+        assert_eq!(e.atu_tune(), Ok(()), "CONTROL: at 14.0255");
+        assert!(e.take_atu_tune(), "…and it goes to the radio");
+        assert_eq!(e.snapshot().radio.atu_carrier_refused_mhz, None, "no note");
+
+        // As Flex judges its ATU cycle: CW too. On a 60 m channel in Phone the dial, 5.3305, is the
+        // phone carrier the section allows, but CW there is legal only at the channel centre.
+        e.set_operating_mode("phone", false);
+        e.set_frequency(5.3305, "60m", "USB");
+        e.set_tx_enabled(true);
+        assert!(
+            e.tx_allowed(),
+            "scene guard: USB phone on the 5.3320 channel"
+        );
+        assert_eq!(
+            e.atu_tune(),
+            Err(atu_carrier_outside(5.3305)),
+            "an unmodulated carrier at the phone dial of a 60 m channel"
+        );
+        e.set_operating_mode("cw", false);
+        e.set_frequency(5.332, "60m", "CW");
+        e.set_tx_enabled(true);
+        assert!(e.tx_allowed(), "scene guard: CW at the channel centre");
+        assert_eq!(e.atu_tune(), Ok(()), "CONTROL: at the channel centre");
+    }
+
+    /// ⛔ AN APRS PACKET'S FM CARRIER IS JUDGED AT THE TRANSMIT DIAL. From the Digital section the
+    /// gate judged a data frame an audio offset above the dial, where an FM carrier is not: a
+    /// General at 144.0995 MHz had the frame judged at 144.1010, inside, and the carrier sent in
+    /// the 2 m CW-only segment. Refused now; at 144.1005 it is sent.
+    #[test]
+    fn an_aprs_carrier_is_judged_at_the_transmit_dial() {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.set_license_class("general");
+        e.set_frequency(144.0995, "2m", "USB");
+        e.set_tx_offset(1500.0);
+        e.set_tx_enabled(true);
+        assert!(
+            e.tx_allowed(),
+            "scene guard: a data frame 1.5 kHz above 144.0995 is a General's"
+        );
+        assert!(
+            e.aprs_beacon(41.9, -87.6, '/', '>', "test", &[]).is_err(),
+            "the carrier at 144.0995 is in the CW-only segment"
+        );
+        e.set_frequency(144.1005, "2m", "USB");
+        e.set_tx_enabled(true);
+        assert_eq!(
+            e.aprs_beacon(41.9, -87.6, '/', '>', "test", &[]),
+            Ok(()),
+            "CONTROL: at 144.1005"
+        );
+        // …and judged again at the key: the dial moved back down under a queued beacon.
+        e.set_frequency(144.0995, "2m", "USB");
+        e.set_tx_enabled(true);
+        assert!(e.poll_aprs_tx().is_none(), "the queued beacon is dropped");
+        assert_eq!(e.aprs_tx_notice(), Some(APRS_REFUSED_PRIVILEGES));
+    }
+
+    /// ⛔ A VOICE-KEYER MESSAGE IS JUDGED AS THE PHONE EMISSION IT IS, from any section. From the
+    /// Digital section the gate judged a narrow data frame at the TX offset: a General at 14.074 MHz
+    /// queued a voice message into the data segment, where a General has no phone. Refused at the
+    /// send, and dropped at the key when the licence changes under a queued one. Controls: in Phone
+    /// at 14.2300 it queues and plays; on the CW screen with the radio's own keyer (the radio in
+    /// CW, which takes no audio) it is judged as before.
+    #[test]
+    fn a_voice_keyer_message_is_judged_as_phone_from_any_section() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_license_class("general");
+        e.set_frequency(14.074, "20m", "USB");
+        e.set_tx_enabled(true);
+        assert!(e.tx_allowed(), "scene guard: FT8 at 14.074 is a General's");
+        assert_eq!(
+            e.send_voice(vec![0.1; 1200]),
+            Err(VOICE_OUTSIDE_PHONE.to_string()),
+            "a voice in the 20 m data segment: it is phone the licence refuses"
+        );
+        assert!(e.poll_voice().is_none(), "nothing queued");
+
+        // Queued under an Open licence, then the class is declared before the key.
+        e.set_license_class("open");
+        assert_eq!(e.send_voice(vec![0.1; 1200]), Ok(()), "scene guard: Open");
+        e.set_license_class("general");
+        assert!(e.tx_allowed(), "scene guard: the frame still a General's");
+        assert!(e.poll_voice().is_none(), "dropped at the key");
+
+        e.set_operating_mode("phone", false);
+        e.set_frequency(14.230, "20m", "USB");
+        assert_eq!(
+            e.send_voice(vec![0.1; 1200]),
+            Ok(()),
+            "CONTROL: Phone at 14.2300"
+        );
+        assert!(e.poll_voice().is_some(), "…and it plays");
+
+        e.set_operating_mode("cw", false);
+        e.set_frequency(14.030, "20m", "CW");
+        assert!(e.tx_allowed(), "scene guard: CW at 14.030 is a General's");
+        assert_eq!(
+            e.send_voice(vec![0.1; 1200]),
+            Ok(()),
+            "CONTROL: the radio in CW puts no voice on the air"
+        );
     }
 
     #[test]
@@ -41273,6 +43349,69 @@ mod tests {
         );
     }
 
+    /// ⛔ THE OFF-BAND HALT SEES THE ADIF BAND EDGES. A non-US operator on their own 60 m below
+    /// 5.3 MHz (the UK's starts at 5.2585), or on 630 m or 2200 m, is on a ham band: the knob
+    /// moving there keeps the over and names the band. CONTROLS: the knob leaving every band
+    /// (WWV at 5 MHz, 5.0599 just under the new 60 m bottom) still cuts transmit; and a US
+    /// General tuned to 5.2585 is refused by its licence, whose 60 m is the channels and the
+    /// 5351.5-5366.5 kHz segment and nothing else.
+    #[test]
+    fn the_off_band_halt_knows_the_adif_bands() {
+        for (from, from_band, hz, band) in [
+            (5.357, "60m", 5_258_500, "60m"),
+            (5.357, "60m", 5_060_000, "60m"),
+            (0.4742, "630m", 475_000, "630m"),
+            (0.1360, "2200m", 136_500, "2200m"),
+            (40.660, "8m", 40_680_000, "8m"),
+        ] {
+            let mut e = Engine::new("N0CALL", "EN61", 0);
+            e.set_frequency(from, from_band, "USB");
+            e.set_tx_enabled(true);
+            e.observe_rig_freq(hz);
+            assert!(e.tx_enabled, "{hz} Hz is on {band}: the over is not cut");
+            assert_eq!(e.settings().band, band, "{hz} Hz names {band}");
+        }
+        for hz in [5_000_000, 5_059_900] {
+            let mut e = Engine::new("N0CALL", "EN61", 0);
+            e.set_frequency(5.357, "60m", "USB");
+            e.set_tx_enabled(true);
+            e.observe_rig_freq(hz);
+            assert!(
+                !e.tx_enabled,
+                "{hz} Hz is off every band: the halt still cuts"
+            );
+        }
+        let mut e = Engine::new("N0CALL", "EN61", 0);
+        e.set_license_class("general");
+        e.set_operating_mode("phone", false);
+        e.set_frequency(5.2585, "60m", "USB");
+        assert!(
+            !e.tx_allowed(),
+            "a US General holds no 60 m below the channels"
+        );
+    }
+
+    /// The WSPR and FST4 plans tune 2200 m and 630 m; a US General now keys there, a Technician
+    /// still does not.
+    #[test]
+    fn a_us_general_keys_wspr_on_2200m_and_630m_and_a_technician_does_not() {
+        for (class, keys) in [
+            ("general", true),
+            ("advanced", true),
+            ("extra", true),
+            ("technician", false),
+            ("novice", false),
+        ] {
+            for (dial, band) in [(0.136, "2200m"), (0.4742, "630m")] {
+                let mut e = Engine::new("N0CALL", "EN61", 0);
+                e.set_license_class(class);
+                e.set_operating_mode("digital", false);
+                e.set_frequency(dial, band, "USB");
+                assert_eq!(e.tx_allowed(), keys, "{class} on {band}");
+            }
+        }
+    }
+
     #[test]
     fn a_qsy_clears_the_cw_decode_transcript() {
         // Operator report: the CW decode area lingered after a QSY. Changing bands
@@ -41925,6 +44064,66 @@ mod tests {
         );
     }
 
+    /// #451: OPENING SSTV WITH "TUNE ON OPEN" IS THE APP'S TUNE, NOT THE OPERATOR'S. With the
+    /// switch on, every visit to the SSTV screen tunes 14.230; through `sstv_tune` (the operator's
+    /// own pick) that wrote 14.230 into Phone's 20 m memory, and a Phone → SSTV → CW → Phone trip
+    /// came back on 14.230 instead of the operator's 14.250. The open-path verb declares
+    /// machinery provenance: the operator's dial is banked and 14.230 never is.
+    #[test]
+    fn the_sstv_open_tune_never_takes_the_operators_phone_dial() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        e.set_operating_mode("phone", true);
+        e.set_frequency(14.250, "20m", "USB"); // the operator's own SSB dial
+        assert!(
+            e.sstv_tune_on_open(14.230, "20m", "USB"),
+            "the open tune ran"
+        );
+        assert!(
+            (e.settings().dial_mhz - 14.230).abs() < 1e-9,
+            "and SSTV is on its channel"
+        );
+        e.set_operating_mode("cw", true);
+        e.set_operating_mode("phone", true);
+        assert!(
+            (e.settings().dial_mhz - 14.250).abs() < 1e-9,
+            "Phone returns to the operator's 14.250, not SSTV's 14.230 — got {}",
+            e.settings().dial_mhz
+        );
+
+        // CONTROL: the operator's own pick of the same channel IS theirs, as it always was.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        e.set_operating_mode("phone", true);
+        e.set_frequency(14.250, "20m", "USB");
+        e.sstv_tune(14.230, "20m", "USB");
+        e.set_operating_mode("cw", true);
+        e.set_operating_mode("phone", true);
+        assert!((e.settings().dial_mhz - 14.230).abs() < 1e-9);
+    }
+
+    /// #451: the open tune never parks on the ISS downlink and never moves a dial a satellite pass
+    /// owns (Doppler steers it, and an operator-path retune would end the pass's hold).
+    #[test]
+    fn the_sstv_open_tune_refuses_the_iss_downlink_and_a_pass_owned_dial() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_frequency(146.520, "2m", "FM");
+        assert!(
+            !e.sstv_tune_on_open(145.800, "2m", "FM"),
+            "never the ISS downlink"
+        );
+        assert!((e.settings().dial_mhz - 146.520).abs() < 1e-9);
+
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_frequency(14.074, "20m", "USB");
+        e.sat_dial_owner = Some(("SO-50".into(), 0));
+        assert!(
+            !e.sstv_tune_on_open(14.230, "20m", "USB"),
+            "not while a pass owns the dial"
+        );
+        assert!((e.settings().dial_mhz - 14.074).abs() < 1e-9);
+    }
+
     #[test]
     fn cw_remembers_its_own_dial_independently_of_phone() {
         // The memory is per MODE, not one slot: a CW QSY must come back on the CW side
@@ -42234,6 +44433,100 @@ mod tests {
             e.settings().dial_mhz
         );
         assert!(e.tx_allowed());
+    }
+
+    /// EVERY BAND A PICKER LISTS TUNES. The Phone and CW pickers list a band whether or not the
+    /// class may transmit there (receiving needs no licence), but a pick used to read a segment
+    /// start of its own and did nothing when there was none: `Open` clicking 30 m in Phone, or
+    /// 9 cm, and a US General clicking 4 m, stayed where they were. The pick now lands on the
+    /// row the list published, and the transmit gate, which this does not touch, answers there
+    /// exactly as the row's lock said it would.
+    #[test]
+    fn every_band_a_picker_lists_tunes_and_locks_as_listed() {
+        let mut picks = 0;
+        for class in crate::privileges::US_CLASSES
+            .into_iter()
+            .chain([crate::settings::LicenseClass::Open])
+        {
+            for (om, name) in [
+                (crate::settings::OperatingMode::Phone, "phone"),
+                (crate::settings::OperatingMode::Cw, "cw"),
+            ] {
+                for row in crate::bandplan::licensed_bands(class, om) {
+                    let mut e = Engine::new("N0CALL", "EN52", 0);
+                    e.settings.license_class = class;
+                    e.set_operating_mode(name, false);
+                    e.pick_band(&row.band, Some(name));
+                    assert!(
+                        (e.settings().dial_mhz - row.dial_mhz).abs() < 1e-9
+                            && e.settings().band == row.band,
+                        "{class:?} {name} {}: the pick must land on the listed {} MHz, got {} {}",
+                        row.band,
+                        row.dial_mhz,
+                        e.settings().dial_mhz,
+                        e.settings().band
+                    );
+                    assert_eq!(
+                        e.tx_allowed(),
+                        row.tx,
+                        "{class:?} {name} {}: the gate must answer as the row's lock said",
+                        row.band
+                    );
+                    picks += 1;
+                }
+            }
+        }
+        assert!(
+            picks > 200,
+            "the sweep must cover every class, mode and band"
+        );
+    }
+
+    /// The cases that were silent no-ops, by name, with their controls.
+    #[test]
+    fn the_bands_that_used_to_do_nothing_now_tune() {
+        let pick = |class: &str, band: &str, mode: &str| {
+            let mut e = Engine::new("N0CALL", "EN52", 0);
+            e.set_license_class(class);
+            e.set_operating_mode(mode, false);
+            e.set_frequency(14.250, "20m", "USB");
+            e.pick_band(band, Some(mode));
+            e
+        };
+        // 30 m Phone for a non-US operator: 10.120 USB, and it keys.
+        let e = pick("open", "30m", "phone");
+        assert!((e.settings().dial_mhz - 10.120).abs() < 1e-9);
+        assert_eq!(e.settings().band, "30m");
+        assert!(e.tx_allowed());
+        // Control: a US General is taken to the same dial to listen, and stays locked there.
+        let e = pick("general", "30m", "phone");
+        assert!((e.settings().dial_mhz - 10.120).abs() < 1e-9);
+        assert!(!e.tx_allowed(), "no US class may use phone on 30 m");
+        // 9 cm for a non-US operator, both modes.
+        for mode in ["phone", "cw"] {
+            let e = pick("open", "9cm", mode);
+            assert!((e.settings().dial_mhz - 3400.0).abs() < 1e-9, "{mode}");
+            assert!(e.tx_allowed(), "{mode}");
+        }
+        // A US General clicking 4 m: it tunes, and it is receive-only, which is what the list says.
+        for mode in ["phone", "cw"] {
+            let e = pick("general", "4m", mode);
+            assert_eq!(e.settings().band, "4m", "{mode}");
+            assert!(!e.tx_allowed(), "{mode}: no US class may key 4 m");
+        }
+        // 60 m is in the pickers now. Open parks clear of the 5.357 FT8 dial.
+        let e = pick("open", "60m", "phone");
+        assert!((e.settings().dial_mhz - 5.363).abs() < 1e-9);
+        assert_eq!(e.settings().sideband, "USB");
+        assert!(e.tx_allowed());
+        // A US General parks in the same 5351.5-5366.5 kHz segment, where the rule lets it talk
+        // on upper sideband; a Technician holds no 60 m at all and stays locked.
+        let e = pick("general", "60m", "phone");
+        assert!((e.settings().dial_mhz - 5.363).abs() < 1e-9);
+        assert!(e.tx_allowed());
+        let e = pick("technician", "60m", "phone");
+        assert!((e.settings().dial_mhz - 5.363).abs() < 1e-9);
+        assert!(!e.tx_allowed());
     }
 
     #[test]
@@ -42993,6 +45286,120 @@ mod tests {
             marks(&e, "W3CCC"),
             (true, false),
             "under the mode fold, a CW contact is not a B4 for FT8"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A LoTW user heard HASHED keeps its LoTW mark: the resolver is asked about K1ABC, not
+    /// `<K1ABC>` — WSJT-X checks LoTW on the bracket-stripped call (`displaytext.cpp`,
+    /// `lotw_users ().user (decodedText.CQersCall())`). The unresolved `<...>` is never asked.
+    #[test]
+    fn a_hashed_lotw_user_keeps_its_lotw_mark() {
+        let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        let log = Arc::clone(&asked);
+        e.set_lotw_resolver(move |c| {
+            log.lock().unwrap().push(c.to_string());
+            c == "K1ABC"
+        });
+        let rows: Vec<modes::Decode> = ["PJ4/W9XYZ <K1ABC> RR73", "PJ4/W9XYZ <...> RR73"]
+            .iter()
+            .map(|m| dec_snr(m, -8))
+            .collect();
+        e.ingest_decodes_for_test(&rows, 2);
+        let snap = e.snapshot();
+        let row = |call: &str| {
+            snap.recent_decodes
+                .iter()
+                .find(|d| d.from.as_deref() == Some(call))
+                .unwrap_or_else(|| panic!("a decode row shown as sent, {call}"))
+                .lotw_user
+        };
+        let st = |call: &str| {
+            snap.stations
+                .iter()
+                .find(|s| s.call == call)
+                .unwrap_or_else(|| panic!("a roster row shown as sent, {call}"))
+                .lotw_user
+        };
+        assert!(row("<K1ABC>"), "the feed lost a hashed LoTW user's mark");
+        assert!(st("<K1ABC>"), "the roster lost a hashed LoTW user's mark");
+        assert!(
+            !row("<...>") && !st("<...>"),
+            "an unresolved hash is nobody's LoTW user"
+        );
+        let asked = asked.lock().unwrap();
+        assert!(
+            asked.iter().all(|c| !c.contains('<') && c != "..."),
+            "the resolver was asked a bracketed or unresolved call: {asked:?}"
+        );
+    }
+
+    /// A station heard HASHED (`<K1ABC>`, an i3=4 frame) is the station the log knows as K1ABC:
+    /// the feed and the roster mark it B4 as they mark its plain form, and keep showing it as
+    /// sent. A compound `<PJ4/K1ABC>` is PJ4/K1ABC, whole — WSJT-X strips the brackets and
+    /// matches the call exactly, so a K1ABC contact is not a B4 for it. The unresolved `<...>`
+    /// names no station and is never marked.
+    #[test]
+    fn a_hashed_call_is_marked_worked_before_as_its_plain_call() {
+        let dir = std::env::temp_dir().join(format!("nexus-b4-hashed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        e.set_log_path(dir.join("log.adi"));
+        assert_eq!(e.settings.band, "20m", "fixture: the band scope is 20m");
+        e.log_qso(qrec("K1ABC", "20m"));
+        let rows: Vec<modes::Decode> = [
+            "PJ4/W9XYZ <K1ABC> RR73",
+            "W9XYZ <PJ4/K1ABC> RR73",
+            "PJ4/W9XYZ <...> RR73",
+        ]
+        .iter()
+        .map(|m| dec_snr(m, -8))
+        .collect();
+        e.ingest_decodes_for_test(&rows, 2);
+        let marks = |e: &Engine, call: &str| -> (bool, bool) {
+            let snap = e.snapshot();
+            let row = snap
+                .recent_decodes
+                .iter()
+                .find(|d| d.from.as_deref() == Some(call))
+                .unwrap_or_else(|| panic!("a decode row shown as sent, {call}"));
+            let st = snap
+                .stations
+                .iter()
+                .find(|s| s.call == call)
+                .unwrap_or_else(|| panic!("a roster row shown as sent, {call}"));
+            assert_eq!(
+                (st.worked, st.worked_band),
+                (row.worked, row.worked_band),
+                "{call}: the roster and the feed disagree"
+            );
+            (row.worked, row.worked_band)
+        };
+        assert_eq!(
+            marks(&e, "<K1ABC>"),
+            (true, true),
+            "<K1ABC> is K1ABC, worked on 20m"
+        );
+        assert_eq!(
+            marks(&e, "<PJ4/K1ABC>"),
+            (false, false),
+            "a compound call is its whole self: K1ABC's contact is not PJ4/K1ABC's"
+        );
+        assert_eq!(
+            marks(&e, "<...>"),
+            (false, false),
+            "an unresolved hash matches nothing"
+        );
+
+        e.log_qso(qrec("PJ4/K1ABC", "40m"));
+        assert_eq!(
+            marks(&e, "<PJ4/K1ABC>"),
+            (true, false),
+            "…and is B4 once PJ4/K1ABC is in the log (on 40m, so not this band)"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -43892,6 +46299,90 @@ mod tests {
         let s = e.settings().clone();
         e.apply_settings(s);
         assert_ne!(e.tx_gate_gen, generation);
+        let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    /// THE MACRO COUNTS (8, 12 or 16 keys per keyboard dock) are the SETTINGS FORM'S to write, and
+    /// the cockpits' macro saves keep them: a form save sets each mode's count while the RTTY and
+    /// PSK sets the cockpits saved stay as they are, and a cockpit save of keys F1–F16 (the
+    /// round-trip-exactly contract) leaves every count where the form put it and persists both.
+    /// Written against the JSON so it compiles, and fails, on a build without the counts.
+    #[test]
+    fn the_form_writes_the_macro_counts_and_the_cockpit_saves_keep_them() {
+        let (mut e, path, _lock) = rtty_macro_engine("counts");
+        let sixteen = |prefix: &str| -> serde_json::Value {
+            serde_json::json!([{"name": "everyday", "macros": (1..=16)
+                .map(|i| serde_json::json!({"key": format!("F{i}"), "label": format!("{prefix}{i}"), "text": format!("{prefix} {i}")}))
+                .collect::<Vec<_>>()}])
+        };
+        let mut panel = serde_json::to_value(e.settings()).unwrap(); // read BEFORE the cockpit edit
+        e.save_rtty_macros(sixteen("R"), serde_json::json!("everyday"))
+            .expect("sixteen RTTY keys save");
+        e.save_psk_macros(sixteen("P"), serde_json::json!(""))
+            .expect("sixteen PSK keys save");
+
+        panel["macros"]["cwMacroCount"] = serde_json::json!(12);
+        panel["macros"]["rttyMacroCount"] = serde_json::json!(16);
+        panel["macros"]["pskMacroCount"] = serde_json::json!(12);
+        e.apply_settings(serde_json::from_value(panel).unwrap());
+        let live = serde_json::to_value(&e.settings().macros).unwrap();
+        assert_eq!(
+            live["cwMacroCount"], 12,
+            "the form did not write CW's count"
+        );
+        assert_eq!(
+            live["rttyMacroCount"], 16,
+            "the form did not write RTTY's count"
+        );
+        assert_eq!(
+            live["pskMacroCount"], 12,
+            "the form did not write PSK's count"
+        );
+        assert_eq!(
+            live["rttyProfiles"],
+            sixteen("R"),
+            "the form save reverted the RTTY keys"
+        );
+        assert_eq!(
+            live["pskProfiles"],
+            sixteen("P"),
+            "the form save reverted the PSK keys"
+        );
+
+        // A cockpit save after the form's: the counts stay, the keys past F8 round-trip exactly.
+        let mut edited = sixteen("R");
+        edited[0]["macros"][15]["text"] = serde_json::json!("RTTY 16 EDITED");
+        e.save_rtty_macros(edited.clone(), serde_json::json!("everyday"))
+            .expect("the edit of key 16 saves");
+        let live = serde_json::to_value(&e.settings().macros).unwrap();
+        assert_eq!(live["rttyProfiles"], edited);
+        for (field, want) in [
+            ("cwMacroCount", 12),
+            ("rttyMacroCount", 16),
+            ("pskMacroCount", 12),
+        ] {
+            assert_eq!(live[field], want, "the cockpit save moved `{field}`");
+        }
+        let on_disk = serde_json::to_value(Settings::load(&path)).unwrap();
+        assert_eq!(on_disk["macros"]["rttyProfiles"], edited, "persisted");
+        assert_eq!(
+            on_disk["macros"]["rttyMacroCount"], 16,
+            "the count persisted"
+        );
+
+        // Back to 8 through the form: the count goes, the keys past F8 are kept, hidden.
+        let mut panel = serde_json::to_value(e.settings()).unwrap();
+        panel["macros"]["rttyMacroCount"] = serde_json::json!(8);
+        e.apply_settings(serde_json::from_value(panel).unwrap());
+        let live = serde_json::to_value(&e.settings().macros).unwrap();
+        assert!(
+            live.get("rttyMacroCount").is_none(),
+            "8 is the default and is not written"
+        );
+        assert_eq!(
+            live["rttyProfiles"], edited,
+            "choosing 8 deleted the keys past F8"
+        );
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
     }
 
@@ -45221,6 +47712,127 @@ mod tests {
             e.cw_keyer_error().is_some(),
             "the next refusal is noticed again"
         );
+    }
+
+    /// ⛔ #434: a Serial keyline or a WinKeyer picked with its port box blank REFUSES CW, and
+    /// keys through nothing else. It used to fall to the radio's own CAT keyer without a word, so
+    /// the screen said "sending" over a keyer the operator never chose. Refused at the send (an
+    /// F-key's and Enter's), nothing armed or queued, and at keying time for what was queued
+    /// before the port was cleared. The CW screen's warning line says where to pick the port.
+    #[test]
+    fn a_keyline_or_winkeyer_with_no_port_refuses_cw_and_keys_nothing_else() {
+        for (backend, says) in [
+            ("serial", "Pick the keyline serial port in Settings ▸ CW"),
+            ("winkeyer", "Pick the WinKeyer port in Settings ▸ CW"),
+        ] {
+            for blank in ["", "   "] {
+                let mut e = Engine::new("KD9TAW", "EN52", 0);
+                e.set_license_class("extra");
+                e.set_operating_mode("cw", false);
+                e.set_frequency(7.030, "40m", "CW");
+                e.settings.cw_key_port = blank.into();
+                e.settings.winkeyer_port = blank.into();
+                e.set_cw_keyer(backend, 600.0);
+                e.send_cw("TEST");
+                assert_eq!(e.poll_cw_one(), None, "{backend} {blank:?}: nothing keys");
+                assert!(
+                    e.cw_keyer_error().is_some_and(|w| w.contains(says)),
+                    "{backend} {blank:?}: the CW screen says where: {:?}",
+                    e.cw_keyer_error()
+                );
+                let enter = e.send_cw_armed("TEST");
+                assert!(
+                    enter.as_ref().is_err_and(|w| w.contains(says)),
+                    "{backend} {blank:?}: Enter is refused too: {enter:?}"
+                );
+                assert_eq!(e.poll_cw_one(), None, "{backend} {blank:?}: nothing queued");
+
+                // ⛔ After Stop TX, the refused F-key send writes nothing of the transmit state:
+                // the latch stays down with its stop hold, and the Stop TX the loop has not yet
+                // taken (the CW abort, the slot-TX abort) is still pending. A send that keys
+                // re-arms all of this; a refused one must not.
+                e.halt_tx();
+                e.send_cw("TEST");
+                assert_eq!(
+                    (
+                        e.tx_enabled(),
+                        e.tx_stop_hold,
+                        e.take_cw_abort(),
+                        e.take_slot_tx_abort()
+                    ),
+                    (false, true, true, true),
+                    "{backend} {blank:?}: (TX on, the stop hold, the CW abort, the slot-TX abort)"
+                );
+                assert_eq!(e.poll_cw_one(), None, "{backend} {blank:?}: nothing keys");
+
+                // Queued with the port set, then the port cleared: dropped at keying time.
+                let mut e = Engine::new("KD9TAW", "EN52", 0);
+                e.set_license_class("extra");
+                e.set_operating_mode("cw", false);
+                e.set_frequency(7.030, "40m", "CW");
+                e.settings.cw_key_port = "COM5".into();
+                e.settings.winkeyer_port = "COM6".into();
+                e.set_cw_keyer(backend, 600.0);
+                e.send_cw("CQ TEST");
+                assert_eq!(e.poll_cw_one().as_deref(), Some("CQ"));
+                e.settings.cw_key_port = blank.into();
+                e.settings.winkeyer_port = blank.into();
+                assert_eq!(
+                    e.poll_cw_one(),
+                    None,
+                    "{backend} {blank:?}: the rest is dropped"
+                );
+                assert!(e.cw_keyer_error().is_some_and(|w| w.contains(says)));
+                e.settings.cw_key_port = "COM5".into();
+                e.settings.winkeyer_port = "COM6".into();
+                assert_eq!(e.poll_cw_one(), None, "{backend}: dropped, never held");
+            }
+        }
+    }
+
+    /// The control for the refusal above: with the port set, and on the keyers that have no
+    /// port, CW keys as it always did, and the loop is handed the port it keys on.
+    #[test]
+    fn cw_with_its_keyer_port_set_keys_as_before() {
+        for backend in ["serial", "winkeyer", "cat", "soundcard"] {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.set_license_class("extra");
+            e.set_operating_mode("cw", false);
+            e.set_frequency(7.030, "40m", "CW");
+            e.settings.cw_key_port = "COM5".into();
+            e.settings.winkeyer_port = "COM6".into();
+            e.set_cw_keyer(backend, 600.0);
+            e.send_cw("TEST");
+            assert_eq!(e.poll_cw_one().as_deref(), Some("TEST"), "{backend}");
+            assert_eq!(e.cw_keyer_error(), None, "{backend}");
+            assert!(e.send_cw_armed("TEST").is_ok(), "{backend}: Enter");
+            assert_eq!(e.poll_cw_one().as_deref(), Some("TEST"), "{backend}: Enter");
+            assert_eq!(
+                (e.cw_serial_key_port(), e.cw_winkeyer_port()),
+                match backend {
+                    "serial" => (Some("COM5".into()), None),
+                    "winkeyer" => (None, Some("COM6".into())),
+                    _ => (None, None),
+                },
+                "{backend}: the port the loop keys on"
+            );
+        }
+        // The keyers with no port never refuse for one.
+        for backend in ["cat", "soundcard"] {
+            let mut e = Engine::new("KD9TAW", "EN52", 0);
+            e.set_license_class("extra");
+            e.set_operating_mode("cw", false);
+            e.set_frequency(7.030, "40m", "CW");
+            e.settings.cw_key_port = String::new();
+            e.settings.winkeyer_port = String::new();
+            e.set_cw_keyer(backend, 600.0);
+            e.send_cw("TEST");
+            assert_eq!(
+                e.poll_cw_one().as_deref(),
+                Some("TEST"),
+                "{backend}, no ports"
+            );
+        }
     }
 
     /// ⭐ THE PADDLE'S STOP IS NOT STOP TX (operator ruling, 2026-10-12: the paddle wins). When the
@@ -48452,6 +51064,74 @@ mod tests {
         assert!(!r.take_pending_tx_disable(), "a run never self-disarms");
     }
 
+    /// #416: our RR73 in a contact we did not reach by calling CQ goes once, and "Disable Tx after
+    /// sending 73" follows it as it follows our 73. WSJT-X 3.0.2 counts RR73 as a 73 message
+    /// (`message_is_73`, `widgets/mainwindow.cpp` 315-321), and at its key either that option or
+    /// auto-sequencing turns Enable Tx off (8125-8141). Controls: with the option off the RR73
+    /// still goes once; an RRR, not a 73 message, repeats and leaves Enable Tx alone; a CQ run's
+    /// RR73 goes once and the run calls CQ again, as before.
+    #[test]
+    fn our_rr73_goes_once_and_disables_tx_like_our_73() {
+        // The over keyed at `slot`, as text, or None when nothing keys.
+        let sent = |e: &mut Engine, slot: u64| -> Option<String> {
+            (!e.poll_tx(slot).is_empty()).then(|| e.wsjtx_tx_status().tx_message.trim().to_string())
+        };
+        // W9XYZ answers our call with its roger and report straight away: we owe RR73.
+        let snp = |disable: bool, rrr: bool| {
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            e.settings.disable_tx_after_73 = disable;
+            e.settings.prefer_rrr = rrr;
+            e.call_station("W9XYZ");
+            e.ingest_decodes_for_test(&[dec_snr("K2DEF W9XYZ R-10", -7)], 3);
+            e
+        };
+        let rr73 = Some("W9XYZ K2DEF RR73".to_string());
+        let mut e = snp(true, false);
+        assert_eq!(sent(&mut e, 4), rr73, "premise: our RR73 keys");
+        assert!(e.tx_enabled(), "not disabled mid-over (deferred)");
+        assert!(e.take_pending_tx_disable(), "Disable Tx after 73 armed");
+        let mut off = snp(false, false);
+        assert_eq!(sent(&mut off, 4), rr73);
+        assert!(
+            !off.take_pending_tx_disable(),
+            "option off: Enable Tx stays"
+        );
+        for (what, e) in [("option on", &mut e), ("option off", &mut off)] {
+            e.ingest_decodes_for_test(&[], 5); // W9XYZ has gone silent
+            assert_eq!(sent(e, 6), None, "{what}: one RR73 at a silent station");
+            e.ingest_decodes_for_test(&[], 7);
+            assert_eq!(sent(e, 8), None, "{what}: and no more");
+        }
+        let mut rrr = snp(true, true);
+        for slot in [4, 6, 8] {
+            assert_eq!(
+                sent(&mut rrr, slot).as_deref(),
+                Some("W9XYZ K2DEF RRR"),
+                "RRR repeats, over {slot}"
+            );
+            assert!(!rrr.take_pending_tx_disable(), "an RRR is not a 73 message");
+            rrr.ingest_decodes_for_test(&[], slot + 1);
+        }
+        let mut r = Engine::new("W9XYZ", "EN37", 0);
+        r.set_mode("qso-run").unwrap();
+        let _ = r.poll_tx(0);
+        r.ingest_decodes_for_test(&[dec_snr("W9XYZ K1ABC FN42", -8)], 1);
+        let _ = r.poll_tx(2); // report
+        r.ingest_decodes_for_test(&[dec_snr("W9XYZ K1ABC R-05", -8)], 3);
+        assert_eq!(
+            sent(&mut r, 4).as_deref(),
+            Some("K1ABC W9XYZ RR73"),
+            "the run's RR73"
+        );
+        assert!(!r.take_pending_tx_disable(), "a run never self-disarms");
+        r.ingest_decodes_for_test(&[], 5);
+        assert_eq!(
+            sent(&mut r, 6).as_deref(),
+            Some("CQ W9XYZ EN37"),
+            "the run calls CQ again"
+        );
+    }
+
     /// The WSJT-X UDP Status's transmit side as `statusUpdate` fills it (mainwindow.cpp:13979-13989):
     /// the over on the air and after it (`m_currentMessage`), the DX call and grid, the report sent,
     /// the Enable Tx latch and a tripped watchdog. A CQ run answered by K1ABC, by value.
@@ -48577,6 +51257,42 @@ mod tests {
         e.broadcast("CQ W9XYZ EN37");
         assert!(!e.poll_tx(12).is_empty());
         assert_eq!(e.take_tx_dial_shift(), 0, "None = stock raw-offset TX");
+    }
+
+    /// The radio loop's look ahead at the next over's dial shift is the shift that over takes, and
+    /// takes nothing: `None` only where Split Operation does not apply to the mode at all.
+    #[test]
+    fn the_planned_dial_shift_is_the_next_overs_and_consumes_nothing() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_tier(Tier::Ft8);
+        e.settings.split_mode = crate::settings::SplitMode::Rig;
+        e.set_tx_enabled(true);
+        for (tx_hz, shift) in [(1441.0, -500), (750.0, -1000), (1700.0, 0), (2600.0, 1000)] {
+            e.set_tx_offset(tx_hz);
+            assert_eq!(
+                e.planned_tx_dial_shift(),
+                Some(shift),
+                "{tx_hz} Hz, planned"
+            );
+            assert_eq!(
+                e.planned_tx_dial_shift(),
+                Some(shift),
+                "{tx_hz} Hz, asked twice"
+            );
+            e.broadcast("CQ W9XYZ EN37");
+            assert!(!e.poll_tx(0).is_empty());
+            assert_eq!(e.take_tx_dial_shift(), shift, "{tx_hz} Hz, the over's own");
+        }
+        e.set_tx_offset(1441.0);
+        e.settings.split_mode = crate::settings::SplitMode::None;
+        assert_eq!(e.planned_tx_dial_shift(), Some(0), "Split Operation None");
+        e.settings.split_mode = crate::settings::SplitMode::Rig;
+        e.set_tier(Tier::TempoFast);
+        assert_eq!(
+            e.planned_tx_dial_shift(),
+            None,
+            "a mode Split Operation does not apply to"
+        );
     }
 
     #[test]
@@ -49107,6 +51823,36 @@ mod tests {
         // The parks-worked index picked it up — the NEW PARK badge flips off.
         assert!(e.park_worked("k-1234"), "case-insensitive park index");
         assert!(!e.park_worked("K-9999"));
+    }
+
+    /// A WWFF spot clicked on the hunter board hunts like a POTA one: the next contact with the
+    /// activator is filed under WWFF with the area's reference (exported `SIG`=WWFF and
+    /// `WWFF_REF`), which is what the Awards page's WWFF count reads. A malformed reference is
+    /// refused, as a malformed park is, and an unknown programme still is.
+    #[test]
+    fn a_wwff_hunt_tags_the_matching_qso_as_wwff() {
+        let mut e = Engine::new("W9XYZ", "EN37", 0);
+        e.set_hunt_target("DL0XYZ", "wwff", " dlff-0001 ", Vec::new())
+            .unwrap();
+        assert_eq!(
+            e.hunt_target(),
+            Some(("WWFF".into(), "DLFF-0001".into(), "DL0XYZ".into()))
+        );
+        let mut rec = e.qso_record("DL0XYZ/P".into(), None, Some(-7));
+        rec.when_unix = 2;
+        e.log_qso(rec);
+        let log = e.stored_log();
+        let hit = log.iter().find(|r| r.call == "DL0XYZ/P").unwrap();
+        assert_eq!(hit.ota.their_program.as_deref(), Some("WWFF"));
+        assert_eq!(hit.ota.their_ref.as_deref(), Some("DLFF-0001"));
+        assert!(e.park_worked("DLFF-0001"));
+        // Refusals: a POTA-shaped reference is no WWFF one, and the programme list is closed.
+        assert!(e
+            .set_hunt_target("DL0XYZ", "WWFF", "DE-0001", Vec::new())
+            .is_err());
+        assert!(e
+            .set_hunt_target("DL0XYZ", "IOTA", "EU-001", Vec::new())
+            .is_err());
     }
 
     pub(super) fn dec_snr(msg: &str, snr: i32) -> Decode {
@@ -49771,17 +52517,19 @@ mod tests {
         assert_eq!(of("N0CALL").my_rig, None);
         assert_eq!(of("N0CALL").my_grid, None);
 
-        // THE LoTW UPLOAD, both modes: the filled grid is not sent; the arrived one is.
+        // THE LoTW UPLOAD. With a named Station Location the filled grid is not sent; the
+        // arrived one is. Signing from the ADIF, each contact goes with the grid stored on it,
+        // never the live one (EN52 here): the filled FN31 too.
         let batch = [of("W9XYZ"), of("K9AAA")];
         let named = crate::station::lotw_batch_adif(&batch, false, "K2DEF", "FN31");
         assert_eq!(named.matches("<MY_GRIDSQUARE:").count(), 1, "{named}");
         assert!(named.contains("<MY_GRIDSQUARE:4>EM10"), "{named}");
         let located = crate::station::lotw_batch_adif(&batch, true, "K2DEF", "EN52");
         assert!(
-            located.contains("<MY_GRIDSQUARE:4>EN52") && located.contains("<MY_GRIDSQUARE:4>EM10"),
-            "ADIF-location mode stamps the live grid as it always did: {located}"
+            located.contains("<MY_GRIDSQUARE:4>FN31") && located.contains("<MY_GRIDSQUARE:4>EM10"),
+            "ADIF-location mode sends each contact's own grid: {located}"
         );
-        assert!(!located.contains("FN31"), "{located}");
+        assert!(!located.contains("EN52"), "{located}");
     }
 
     /// A logged contact carries the station's power (ADIF `TX_PWR`) — the watts the
@@ -49921,6 +52669,174 @@ mod tests {
             logged(&icom(3073), &plain),
             Some(25.0),
             "an IC-7300 on its own curve"
+        );
+    }
+
+    /// Set an amplifier up on the active radio (Settings ▸ Radio ▸ Amplifier).
+    fn with_amp(e: &mut Engine) {
+        e.settings.ensure_radio_profiles();
+        e.settings.sync_active_from_flat();
+        let id = e.settings.active_radio;
+        let p = e.settings.radios.iter_mut().find(|p| p.id == id).unwrap();
+        p.amp_model = "spe".into();
+        p.amp_port = "COM7".into();
+    }
+
+    /// One amplifier poll answer for the active radio.
+    fn amp_poll(e: &mut Engine, operate: bool, watts: u16) {
+        let id = e.settings.active_radio;
+        e.observe_amp_status(
+            id,
+            crate::dto::AmpStatusDto {
+                family: "spe".into(),
+                linked: true,
+                operate: Some(operate),
+                output_watts: Some(watts),
+                ..Default::default()
+            },
+        );
+    }
+
+    /// With an amplifier on the radio, the power on the air is the AMPLIFIER's: a contact logs
+    /// the peak output the amplifier reported on its over (the radio's figure is only the drive),
+    /// on the same over and slack rules as the radio's figure. Where the amplifier said nothing
+    /// usable for this contact it falls back to Settings ▸ Station power: an amplifier that never
+    /// answered, one whose reading is an earlier contact's, and one that went quiet (a missed
+    /// poll clears its watts). Without an amplifier set up, an amplifier reading is no one's
+    /// power and the radio's figure stands.
+    #[test]
+    fn with_an_amplifier_a_contact_logs_the_amplifiers_output_on_its_over() {
+        let logged = |setup: &dyn Fn(&mut Engine), over: &dyn Fn(&mut Engine)| {
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            e.settings.station_power_w = Some(100.0);
+            setup(&mut e);
+            let rec = e.qso_record("W9XYZ".into(), None, None);
+            over(&mut e);
+            e.log_qso(rec);
+            e.stored_log()[0].tx_power
+        };
+        // The radio drives 40 W; the amplifier puts out up to 950 W. The radio loop sees the rig
+        // keyed over CAT, then the unkey.
+        let amp_over = |e: &mut Engine| {
+            e.observe_rig_ptt(true);
+            for w in [0, 610, 950, 920] {
+                amp_poll(e, true, w);
+                e.observe_rig_tx_meters(None, None, Some(40.0), None);
+            }
+            e.observe_rig_ptt(false);
+            e.clear_rig_tx_meters();
+            amp_poll(e, true, 0);
+        };
+        assert_eq!(
+            logged(&with_amp, &amp_over),
+            Some(950.0),
+            "the amplifier's peak, not the radio's drive or Settings"
+        );
+        // Set up, but never linked: no poll ever answered.
+        let unlinked = |e: &mut Engine| an_over(e, &[40.0]);
+        assert_eq!(logged(&with_amp, &unlinked), Some(100.0));
+        // A missed poll: the amplifier went quiet, its readings are gone.
+        let quiet = |e: &mut Engine| {
+            let id = e.settings.active_radio;
+            e.observe_amp_miss(id, "spe", "noAnswer");
+            an_over(e, &[40.0]);
+        };
+        assert_eq!(logged(&with_amp, &quiet), Some(100.0));
+        // An earlier contact's amplifier over.
+        let stale = |e: &mut Engine| {
+            amp_over(e);
+            e.measured_over.as_mut().unwrap().last_unix -= MEASURED_OVER_SLACK_SECS + 60;
+        };
+        assert_eq!(
+            logged(&with_amp, &stale),
+            Some(100.0),
+            "an earlier contact's"
+        );
+        // A tune-up through the amplifier is not the contact's power, nor is a sample of it the
+        // amplifier delivers after the tune carrier has gone.
+        let tune = |e: &mut Engine| {
+            e.tuning = true;
+            amp_poll(e, true, 500);
+            e.tuning = false;
+            e.clear_rig_tx_meters();
+            amp_poll(e, true, 480);
+        };
+        assert_eq!(logged(&with_amp, &tune), Some(100.0), "a late tune sample");
+        // A poll sampled on the air but delivered after the unkey (or a meter still falling)
+        // is the over's tail: it never replaces the peak.
+        let late = |e: &mut Engine| {
+            amp_over(e);
+            amp_poll(e, true, 300);
+            amp_poll(e, true, 0);
+        };
+        assert_eq!(
+            logged(&with_amp, &late),
+            Some(950.0),
+            "a late poll after the unkey"
+        );
+        // Nexus's own over (an FT slot, a mic key) counts as keyed without a CAT PTT read-back;
+        // readings with nothing keyed and no open over count for nothing.
+        let unkeyed = |e: &mut Engine| {
+            amp_poll(e, true, 700);
+            e.clear_rig_tx_meters();
+        };
+        assert_eq!(logged(&with_amp, &unkeyed), Some(100.0), "nothing keyed");
+        // Another radio's amplifier is not this radio's.
+        let other = |e: &mut Engine| {
+            let id = e.settings.active_radio + 7;
+            e.observe_amp_status(
+                id,
+                crate::dto::AmpStatusDto {
+                    linked: true,
+                    operate: Some(true),
+                    output_watts: Some(800),
+                    ..Default::default()
+                },
+            );
+            e.clear_rig_tx_meters();
+        };
+        assert_eq!(logged(&with_amp, &other), Some(100.0));
+        // No amplifier set up: unchanged, the radio's figure.
+        assert_eq!(
+            logged(&|_| {}, &amp_over),
+            Some(40.0),
+            "no amp: the radio's"
+        );
+    }
+
+    /// An amplifier in STANDBY passes the drive straight through: the radio's figure IS the power
+    /// on the air, so it is logged again, while the amplifier is linked and says standby. In
+    /// OPERATE the radio's figure stays drive (the control).
+    #[test]
+    fn with_the_amplifier_in_standby_the_radios_figure_is_the_power() {
+        let logged = |operate: bool| {
+            let mut e = Engine::new("K2DEF", "FN31", 0);
+            e.settings.station_power_w = Some(100.0);
+            with_amp(&mut e);
+            let rec = e.qso_record("W9XYZ".into(), None, None);
+            amp_poll(&mut e, operate, 0);
+            an_over(&mut e, &[0.0, 38.6, 40.2]);
+            e.log_qso(rec);
+            e.stored_log()[0].tx_power
+        };
+        assert_eq!(logged(false), Some(40.0), "standby: the radio's own output");
+        assert_eq!(logged(true), Some(100.0), "operate: the radio's is drive");
+
+        // Standby, then the amplifier goes quiet: a missed poll clears its standby reading, so
+        // the radio's figure is drive again for all Nexus knows, and Settings is logged.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.settings.station_power_w = Some(100.0);
+        with_amp(&mut e);
+        let rec = e.qso_record("W9XYZ".into(), None, None);
+        amp_poll(&mut e, false, 0);
+        let id = e.settings.active_radio;
+        e.observe_amp_miss(id, "spe", "noAnswer");
+        an_over(&mut e, &[40.0]);
+        e.log_qso(rec);
+        assert_eq!(
+            e.stored_log()[0].tx_power,
+            Some(100.0),
+            "quiet after standby"
         );
     }
 
@@ -50696,6 +53612,26 @@ mod tests {
             "a gridless QSO must reuse the grid we already logged for that call, or the grid \
              can never be credited and NewGrid fires forever"
         );
+    }
+
+    /// The grid the Needed board scores a decoded station with is the grid logging would credit:
+    /// the session roster's, else one the station sent on another band this session, else one
+    /// logged before. Never invented.
+    #[test]
+    fn a_decoded_stations_credited_grid_is_the_one_logging_takes() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        // Logged before, on another band, with the grid it sent then.
+        let mut first = e.qso_record("W9XYZ".into(), Some("EN37".into()), None);
+        first.grid = Some("EN37".into());
+        first.band = "40m".into();
+        e.log_qso(first);
+        assert_eq!(e.credited_grid("W9XYZ").as_deref(), Some("EN37"));
+        // Sent on the air this session, then the roster forgot it at a band change: still that.
+        e.ingest_decodes_for_test(&[dec_snr("CQ K1ABC FN42", -7)], 1);
+        e.app.inbox.roster.clear();
+        assert_eq!(e.credited_grid("K1ABC").as_deref(), Some("FN42"));
+        // Negative control: a station never heard with a grid and never logged has none.
+        assert_eq!(e.credited_grid("DL1XYZ"), None);
     }
 
     /// A SATELLITE QSO's grid must not mute the terrestrial per-band NEW GRID decode badge.
@@ -52854,6 +55790,246 @@ mod tests {
             next.to_uppercase().starts_with("CQ"),
             "back to CQ after the single answer, got {next:?}"
         );
+    }
+
+    /// #163 — A SATELLITE CONTACT IS LOGGED WITH BOTH LEGS, AND GOES TO LOTW AS TQSL READS ONE.
+    ///
+    /// A contact through a held bird arrives at the log with the downlink it was heard on. The
+    /// stamp that names the satellite writes the uplink too: FREQ the uplink at the same place in
+    /// the passband (no Doppler; mirrored on an inverting bird), FREQ_RX the downlink. The
+    /// record's band stays the downlink, the band awards, Needed, B4 and dupes count it on, and
+    /// the LoTW upload carries BAND = the uplink's band and BAND_RX = the downlink's.
+    #[test]
+    fn a_satellite_contact_logs_both_legs_and_uploads_the_uplink_band() {
+        // SO-50, an FM channel: 145.850 up, 436.795 down.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_sat_transponder(Some((
+            "SAUDISAT 1C (SO-50)|FM Voice Repeater".into(),
+            0,
+            tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000),
+        )));
+        let mut rec = e.qso_record("W1AW".into(), None, None);
+        rec.band = "70cm".into();
+        rec.mode = "FM".into();
+        rec.freq_mhz = 436.795;
+        rec.freq_rx_mhz = None;
+        e.log_qso(rec);
+        let logged = e.stored_log()[0].as_ref().clone();
+        assert_eq!(
+            logged.sat_name.as_deref(),
+            Some("SO-50"),
+            "the stamp applied"
+        );
+        assert_eq!(logged.band, "70cm", "counted on the downlink, as before");
+        assert!(
+            (logged.freq_mhz - 145.85).abs() < 1e-9,
+            "FREQ is the uplink: {}",
+            logged.freq_mhz
+        );
+        assert_eq!(logged.freq_rx_mhz, Some(436.795), "FREQ_RX the downlink");
+
+        let lotw = crate::station::lotw_batch_adif(&[logged], false, "K2DEF", "FN31");
+        for want in [
+            "<BAND:2>2m",
+            "<BAND_RX:4>70cm",
+            "<FREQ:10>145.850000",
+            "<FREQ_RX:10>436.795000",
+            "<PROP_MODE:3>SAT",
+            "<SAT_NAME:5>SO-50",
+        ] {
+            assert!(lotw.contains(want), "LoTW upload lacks {want}: {lotw}");
+        }
+        assert_eq!(lotw.matches("<BAND:").count(), 1, "one BAND: {lotw}");
+
+        // An inverting linear bird (RS-44-class): 10 kHz up the downlink passband is 10 kHz DOWN
+        // the uplink one.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_sat_transponder(Some((
+            "RS-44 & BREEZE-KM R/B|linear".into(),
+            0,
+            tempo_core::doppler::Transponder {
+                uplink_centre_hz: 145_965_000,
+                downlink_centre_hz: 435_640_000,
+                invert: true,
+                half_width_hz: 30_000,
+            },
+        )));
+        let mut rec = e.qso_record("W1AW".into(), None, None);
+        rec.band = "70cm".into();
+        rec.mode = "CW".into();
+        rec.freq_mhz = 435.650;
+        rec.freq_rx_mhz = None;
+        e.log_qso(rec);
+        let logged = &e.stored_log()[0];
+        assert_eq!(logged.sat_name.as_deref(), Some("RS-44"));
+        assert!(
+            (logged.freq_mhz - 145.955).abs() < 1e-9,
+            "mirrored: {}",
+            logged.freq_mhz
+        );
+        assert_eq!(logged.freq_rx_mhz, Some(435.650));
+
+        // NEGATIVE CONTROL: a 20 m contact made with the bird still held is not a satellite
+        // contact, and keeps its one frequency.
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_sat_transponder(Some((
+            "SAUDISAT 1C (SO-50)|FM Voice Repeater".into(),
+            0,
+            tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000),
+        )));
+        let mut rec = e.qso_record("W1AW".into(), None, None);
+        rec.band = "20m".into();
+        rec.freq_mhz = 14.074;
+        rec.freq_rx_mhz = None;
+        e.log_qso(rec);
+        let logged = &e.stored_log()[0];
+        assert_eq!(logged.prop_mode, None);
+        assert!((logged.freq_mhz - 14.074).abs() < 1e-9);
+        assert_eq!(logged.freq_rx_mhz, None);
+    }
+
+    /// #163 review: Log Check must judge a satellite contact's band against its RECEIVE leg. FREQ
+    /// is now the uplink (145.850) while the band is the downlink (70cm), and a check of FREQ
+    /// against the band called every new satellite contact a mismatch and offered to "fix" it onto
+    /// the uplink band — moving it in awards, Needed, B4 and dupes, and dropping its BAND_RX.
+    #[test]
+    fn log_check_does_not_flag_a_satellite_contact_logged_with_both_legs() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_sat_transponder(Some((
+            "SAUDISAT 1C (SO-50)|FM Voice Repeater".into(),
+            0,
+            tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000),
+        )));
+        let mut rec = e.qso_record("W1AW".into(), None, None);
+        rec.band = "70cm".into();
+        rec.mode = "FM".into();
+        rec.freq_mhz = 436.795;
+        rec.freq_rx_mhz = None;
+        e.log_qso(rec);
+        let r = e.stored_log()[0].as_ref().clone();
+        assert!((r.freq_mhz - 145.85).abs() < 1e-9, "fixture: both legs");
+        let probs = crate::logtools::problems_of(&r, &|_, _| None, now_unix_secs());
+        assert!(
+            !probs
+                .iter()
+                .any(|p| p.kind == crate::logtools::ProblemKind::BandFreq),
+            "a satellite contact is not a band/frequency mismatch: {probs:?}"
+        );
+        // CONTROL: a terrestrial contact whose frequency really is off its band is still flagged.
+        let mut wrong = r.clone();
+        wrong.freq_rx_mhz = None;
+        wrong.freq_mhz = 14.074;
+        let probs = crate::logtools::problems_of(&wrong, &|_, _| None, now_unix_secs());
+        assert!(probs
+            .iter()
+            .any(|p| p.kind == crate::logtools::ProblemKind::BandFreq));
+    }
+
+    /// #163 review: Log Check pairs each frequency with its own band. A row whose BAND_RX is
+    /// parked and which carries no FREQ_RX (the reader left it unmapped) has FREQ on its band and
+    /// is not a mismatch; judging FREQ against the parked BAND_RX flagged it with a "fix" that
+    /// changed nothing. A legacy foreign row with FREQ_RX is judged on the band it is counted on.
+    #[test]
+    fn log_check_pairs_each_frequency_with_its_own_band() {
+        let parse = |t: &str| {
+            tempo_core::logbook::parse_adif(&format!(
+                "<EOH>\n<CALL:4>W1AW<QSO_DATE:8>20240101<TIME_ON:4>0100{t}<EOR>\n"
+            ))
+            .remove(0)
+        };
+        let band_freq = |r: &QsoRecord| {
+            // Log Check judges stored rows, which carry an id.
+            let mut r = r.clone();
+            r.id = Some(tempo_core::logbook::Minter::default().mint());
+            crate::logtools::problems_of(&r, &|_, _| None, now_unix_secs())
+                .into_iter()
+                .filter(|p| p.kind == crate::logtools::ProblemKind::BandFreq)
+                .count()
+        };
+        let unmapped = parse(
+            "<MODE:2>FM<BAND:2>2m<BAND_RX:4>70cm<FREQ:7>145.850<PROP_MODE:3>SAT<SAT_NAME:5>SO-50",
+        );
+        assert_eq!(unmapped.band, "2m", "fixture: not mapped");
+        assert_eq!(band_freq(&unmapped), 0, "FREQ is on its own band");
+
+        let mut legacy =
+            parse("<MODE:2>FM<BAND:2>2m<FREQ:7>145.850<FREQ_RX:7>436.795<PROP_MODE:3>SAT<SAT_NAME:5>SO-50");
+        legacy.extra.push(("BAND_RX".into(), "70cm".into()));
+        assert_eq!(
+            band_freq(&legacy),
+            0,
+            "FREQ_RX is on the band it is counted on"
+        );
+
+        // CONTROL: FREQ off its band, with no receive leg, is still a mismatch.
+        let wrong = parse("<MODE:3>SSB<BAND:3>40m<FREQ:6>14.250");
+        assert_eq!(band_freq(&wrong), 1);
+
+        // A parked BAND_RX whose FREQ_RX disagrees with it is a real inconsistency and is flagged,
+        // but never with a "fix" that sets the band it already has.
+        let mut odd = parse("<MODE:2>FM<BAND:2>2m<FREQ:7>145.850<FREQ_RX:7>145.900");
+        odd.extra.push(("BAND_RX".into(), "70cm".into()));
+        let mut o = odd.clone();
+        o.id = Some(tempo_core::logbook::Minter::default().mint());
+        let fixes: Vec<_> = crate::logtools::problems_of(&o, &|_, _| None, now_unix_secs())
+            .into_iter()
+            .filter(|p| p.kind == crate::logtools::ProblemKind::BandFreq)
+            .map(|p| p.fix.map(|c| c.value))
+            .collect();
+        assert_eq!(fixes, vec![None], "flagged, with no no-op fix: {fixes:?}");
+    }
+
+    /// #451: the SSTV screen's own tune never arms Phone's Enable-TX latch; the operator's pick of
+    /// the same channel arms it as it always has.
+    #[test]
+    fn the_sstv_open_tune_never_arms_tx() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_license_class("extra");
+        assert!(!e.tx_enabled(), "fixture: unarmed");
+        assert!(e.sstv_tune_on_open(14.230, "20m", "USB"));
+        assert!(!e.tx_enabled(), "the app's own tune armed TX");
+        let mut c = Engine::new("KD9TAW", "EN52", 0);
+        c.set_license_class("extra");
+        c.sstv_tune(14.230, "20m", "USB");
+        assert!(c.tx_enabled(), "CONTROL: the operator's pick arms");
+    }
+
+    /// #163 review: the operator taking SAT off a contact in the popup takes the satellite's
+    /// uplink with it. The stamp wrote FREQ = the bird's uplink and moved the heard frequency to
+    /// FREQ_RX; a contact that is not a satellite one has only the frequency it was heard on.
+    #[test]
+    fn taking_sat_off_in_the_popup_puts_back_the_heard_frequency() {
+        let mut e = Engine::new("K2DEF", "FN31", 0);
+        e.set_sat_transponder(Some((
+            "SAUDISAT 1C (SO-50)|FM Voice Repeater".into(),
+            0,
+            tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000),
+        )));
+        let mut rec = e.qso_record("W1AW".into(), None, None);
+        rec.band = "70cm".into();
+        rec.mode = "FM".into();
+        rec.freq_mhz = 436.795;
+        rec.freq_rx_mhz = None;
+        e.stamp_satellite(&mut rec);
+        assert_eq!(rec.prop_mode.as_deref(), Some("SAT"));
+        assert!((rec.freq_mhz - 145.85).abs() < 1e-9, "fixture: split");
+        e.take_popup_prop_mode(&mut rec, Some(""));
+        assert_eq!(rec.prop_mode, None);
+        assert!(
+            (rec.freq_mhz - 436.795).abs() < 1e-9,
+            "FREQ is the heard one: {}",
+            rec.freq_mhz
+        );
+        assert_eq!(rec.freq_rx_mhz, None);
+        // Another propagation mode in its place does the same.
+        let mut rec2 = rec.clone();
+        rec2.freq_mhz = 145.85;
+        rec2.freq_rx_mhz = Some(436.795);
+        rec2.prop_mode = Some("SAT".into());
+        rec2.sat_name = Some("SO-50".into());
+        e.take_popup_prop_mode(&mut rec2, Some("ES"));
+        assert!((rec2.freq_mhz - 436.795).abs() < 1e-9);
+        assert_eq!(rec2.freq_rx_mhz, None);
     }
 
     /// #163 — A SPLIT CONTACT LOGS BOTH FREQUENCIES; A SATELLITE CONTACT IS LEFT ALONE.
@@ -63763,6 +66939,75 @@ mod tests {
         );
     }
 
+    /// THE AUDIO VIEW UNDER A LIVE RADIO SCOPE. The CW and Phone cockpits can draw the radio's
+    /// scope and the sound-card audio view at once, one above the other. The audio view asks for
+    /// its narrow window while a native RF row is fresh, and it must get that window. It must not
+    /// get the RF row (that is the pane above it), and it must not get the full row in its place.
+    #[test]
+    fn the_audio_view_keeps_its_window_while_the_radio_scope_streams() {
+        let feed = SpectrumFeed::default();
+        feed.publish_audio(spec(0.0, 4000.0, "audio"));
+        feed.publish_rf(spec(14_000_000.0, 14_100_000.0, "civ"));
+
+        // Control: the rig scope's own read still hands out the RF row and asks for nothing.
+        let rf = feed
+            .scope_frame_after(300.0, 1100.0, spectrum::WindowN::Balanced, 0, || {
+                unreachable!("published")
+            })
+            .expect("a frame");
+        assert_eq!(
+            rf.source, "civ",
+            "control: the rig scope read prefers the RF row"
+        );
+        assert_eq!(
+            feed.scope_request(),
+            None,
+            "control: and requests no audio window"
+        );
+
+        // The audio view: never the RF row, and its request stands although RF is live.
+        let first = feed
+            .audio_scope_frame_after(300.0, 1100.0, spectrum::WindowN::Balanced, 0, || {
+                unreachable!("published")
+            })
+            .expect("a frame");
+        assert_eq!(
+            first.source, "audio",
+            "the audio view never draws the RF row"
+        );
+        assert_eq!(
+            first.hi_hz, 4000.0,
+            "answered wide until the window is produced"
+        );
+        assert_eq!(
+            feed.scope_request(),
+            Some((300.0, 1100.0, spectrum::WindowN::Balanced.into())),
+            "the request stands while RF is live, so the producer computes the window"
+        );
+        feed.publish_scope(spec(300.0, 1100.0, "audio"));
+        let narrow = feed
+            .audio_scope_frame_after(300.0, 1100.0, spectrum::WindowN::Balanced, 0, || {
+                unreachable!("published")
+            })
+            .expect("a frame");
+        assert_eq!(
+            (narrow.lo_hz, narrow.hi_hz),
+            (300.0, 1100.0),
+            "then the narrow window"
+        );
+        assert_eq!(narrow.source, "audio");
+        // Nothing newer than the frame drawn: nothing, as the rig scope read does.
+        assert!(feed
+            .audio_scope_frame_after(
+                300.0,
+                1100.0,
+                spectrum::WindowN::Balanced,
+                narrow.seq,
+                || unreachable!("published")
+            )
+            .is_none());
+    }
+
     /// A WINDOW-LENGTH CHANGE MUST DROP THE ACCUMULATED AVERAGE — and nothing else can catch it.
     ///
     /// `RowAverage::push` restarts on span, bin count, source and a publish gap. Two analysis
@@ -64528,6 +67773,375 @@ mod tests {
         assert!(
             feed.rf_frame_after(drawn.seq).is_some(),
             "key-up: the next sweep"
+        );
+    }
+
+    /// ⭐ EVERY SWEEP PUBLISHED BETWEEN TWO POLLS IS DRAWN, IN ORDER. The radio loop publishes
+    /// every CI-V sweep that completed during a tick at once, and a scope that read only the
+    /// newest frame drew one of them. Both readers of the RF slot (the cockpit scope's poll and the
+    /// RF pane's) are handed the oldest sweep they have not drawn, then the next, then nothing new.
+    #[test]
+    fn every_sweep_published_between_two_polls_is_drawn_in_order() {
+        type Poll = fn(&SpectrumFeed, u64) -> Option<SpectrumFrame>;
+        let polls: [(&str, Poll); 2] = [
+            ("scope", scope_poll),
+            ("rf pane", |f: &SpectrumFeed, s| f.rf_frame_after(s)),
+        ];
+        for (name, poll) in polls {
+            let feed = SpectrumFeed::default();
+            civ_sweep(&feed, 0.1);
+            let first = poll(&feed, 0).expect("the first sweep");
+            for v in [0.2, 0.3, 0.4] {
+                civ_sweep(&feed, v);
+            }
+            let mut drawn = Vec::new();
+            let mut last = first.seq;
+            while let Some(f) = poll(&feed, last) {
+                drawn.push(f.bins[0]);
+                last = f.seq;
+                assert!(drawn.len() <= 3, "{name}: no sweep twice");
+            }
+            assert_eq!(
+                drawn,
+                vec![0.2, 0.3, 0.4],
+                "{name}: each sweep, oldest first"
+            );
+            assert_eq!(feed.rf_dropped(), 0, "{name}: nothing dropped");
+        }
+    }
+
+    /// A reader that has drawn nothing yet starts at the LIVE picture, not at the backlog.
+    #[test]
+    fn a_reader_that_has_drawn_nothing_starts_at_the_newest_sweep() {
+        let feed = SpectrumFeed::default();
+        for v in [0.1, 0.2, 0.3] {
+            civ_sweep(&feed, v);
+        }
+        assert_eq!(scope_poll(&feed, 0).expect("live").bins[0], 0.3);
+        assert_eq!(feed.rf_frame_after(0).expect("live").bins[0], 0.3);
+    }
+
+    /// BOUNDED BACK-PRESSURE, COUNTED. The backlog holds [`SpectrumFeed::RF_BACKLOG`] sweeps
+    /// behind the newest; one more pushes the oldest out, counted as dropped when no scope drew it
+    /// while a scope was drawing. A sweep a scope already drew, or one published while no scope
+    /// was reading at all, is not a drop.
+    #[test]
+    fn a_full_rf_backlog_drops_its_oldest_and_counts_the_undrawn() {
+        // Nobody reading: the backlog stays bounded and nothing is called a drop.
+        let feed = SpectrumFeed::default();
+        for _ in 0..40 {
+            civ_sweep(&feed, 0.5);
+        }
+        assert_eq!(feed.rf_dropped(), 0, "no scope on screen, no drop");
+
+        // A scope drawing, then a burst it cannot keep up with.
+        let feed = SpectrumFeed::default();
+        civ_sweep(&feed, 0.0);
+        let first = feed.rf_frame_after(0).expect("drawn");
+        let burst = SpectrumFeed::RF_BACKLOG + 5;
+        for i in 1..=burst {
+            civ_sweep(&feed, i as f32 / 100.0);
+        }
+        // 1 + burst published, the newest and RF_BACKLOG behind it kept: five left, the first
+        // of them drawn, so four drops.
+        assert_eq!(feed.rf_dropped(), 4);
+        let next = feed.rf_frame_after(first.seq).expect("the oldest kept");
+        assert_eq!(next.bins[0], 5.0 / 100.0, "sweeps 1-4 are gone, 5 is next");
+        let mut n = 1;
+        let mut last = next.seq;
+        while let Some(f) = feed.rf_frame_after(last) {
+            last = f.seq;
+            n += 1;
+        }
+        assert_eq!(
+            n,
+            SpectrumFeed::RF_BACKLOG + 1,
+            "every kept sweep drawn once"
+        );
+    }
+
+    /// A reader that fell more than [`SpectrumFeed::RF_CATCHUP`] behind steps over the old sweeps
+    /// to the live one, and the sweep it stepped over is counted when it leaves the backlog.
+    #[test]
+    fn a_reader_that_fell_behind_steps_to_the_live_sweep() {
+        let feed = SpectrumFeed::default();
+        civ_sweep(&feed, 0.1);
+        let first = feed.rf_frame_after(0).expect("drawn");
+        civ_sweep(&feed, 0.2);
+        feed.backdate_rf_for_test(SpectrumFeed::RF_CATCHUP + Duration::from_millis(200));
+        civ_sweep(&feed, 0.3);
+        let next = feed.rf_frame_after(first.seq).expect("live");
+        assert_eq!(next.bins[0], 0.3, "the stale sweep is stepped over");
+        assert_eq!(feed.rf_frame_after(next.seq), None);
+        for _ in 0..SpectrumFeed::RF_BACKLOG {
+            civ_sweep(&feed, 0.5);
+            let _ = feed.rf_frame_after(next.seq);
+        }
+        assert_eq!(feed.rf_dropped(), 1, "the one sweep never drawn");
+    }
+
+    /// Publish `n` frames from a FAST panadapter (a Flex pan, 30 fps), each `v` high.
+    fn flex_frame(feed: &SpectrumFeed, v: f32) {
+        let mut s = spec(14_000_000.0, 14_200_000.0, "flex");
+        s.row = vec![v; 64];
+        feed.publish_rf_frame(s, SpectrumScale::Relative, Some(0));
+    }
+
+    /// ⭐ A FAST PANADAPTER IS DRAWN LIVE, as before the CI-V backlog. A Flex pan at 30 fps and a scope
+    /// polling a little slower (25 Hz, one frame a poll, as the UI draws): every poll draws the NEWEST
+    /// frame, 0 behind. Only a CI-V scope, whose sweeps come slower than the poll, keeps a backlog;
+    /// for a source at or above the poll rate drawing in order would only add lag.
+    #[test]
+    fn a_fast_panadapter_is_drawn_live_by_a_slightly_slower_poll() {
+        let feed = SpectrumFeed::default();
+        flex_frame(&feed, 0.0);
+        let mut last = feed.rf_frame_after(0).expect("live").seq;
+        let t0 = Instant::now();
+        let (mut next_pub, mut next_poll) = (t0, t0);
+        let mut n = 0u32;
+        let mut behind = Vec::new();
+        while t0.elapsed() < Duration::from_millis(1500) {
+            let now = Instant::now();
+            if now >= next_pub {
+                n += 1;
+                flex_frame(&feed, n as f32);
+                next_pub += Duration::from_micros(33_333);
+            }
+            if now >= next_poll {
+                if let Some(f) = feed.rf_frame_after(last) {
+                    last = f.seq;
+                    behind.push(n as f32 - f.bins[0]);
+                }
+                next_poll += Duration::from_millis(40);
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            behind.len() >= 20,
+            "premise: the poll drew ({})",
+            behind.len()
+        );
+        assert!(
+            behind.iter().all(|b| *b == 0.0),
+            "frames behind the newest at each poll: {behind:?}"
+        );
+        assert_eq!(feed.rf_dropped(), 0, "a latest-wins source drops nothing");
+    }
+
+    /// ⭐ A CI-V READER MORE THAN [`SpectrumFeed::RF_CATCHUP`] BEHIND JUMPS TO THE LIVE SWEEP, not to
+    /// the oldest sweep still inside the window: a backlog spanning well over the window, read once,
+    /// hands out the newest; and the reader is then live (nothing newer is waiting).
+    #[test]
+    fn a_civ_reader_more_than_the_catchup_behind_jumps_to_the_newest() {
+        let feed = SpectrumFeed::default();
+        civ_sweep(&feed, 0.0);
+        let first = feed.rf_frame_after(0).expect("drawn");
+        for i in 1..=5 {
+            civ_sweep(&feed, i as f32);
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let next = feed.rf_frame_after(first.seq).expect("live");
+        assert_eq!(
+            next.bins[0], 5.0,
+            "the newest, not the oldest inside the window"
+        );
+        assert_eq!(
+            feed.rf_frame_after(next.seq),
+            None,
+            "and nothing is left behind it"
+        );
+        // Inside the window, the reader still draws every sweep in order.
+        for i in 6..=8 {
+            civ_sweep(&feed, i as f32);
+        }
+        let mut got = Vec::new();
+        let mut last = next.seq;
+        while let Some(f) = feed.rf_frame_after(last) {
+            last = f.seq;
+            got.push(f.bins[0]);
+        }
+        assert_eq!(got, vec![6.0, 7.0, 8.0]);
+    }
+
+    /// ⭐ REDUCED MOTION DRAWS THE LIVE SWEEP, as before the backlog. A CI-V scope at 12 sweeps a
+    /// second and a scope polling every 120 ms (the reduced-motion poll, slower than the radio):
+    /// every poll draws the NEWEST sweep, never one from the backlog. Thinning is that reader's
+    /// choice; trailing the radio is not.
+    #[test]
+    fn a_reduced_motion_reader_draws_the_newest_civ_sweep() {
+        let feed = SpectrumFeed::default();
+        civ_sweep(&feed, 0.0);
+        let mut last = feed.rf_frame_after(0).expect("live").seq;
+        let t0 = Instant::now();
+        let (mut next_pub, mut next_poll) = (t0, t0 + Duration::from_millis(120));
+        let mut n = 0u32;
+        let mut behind = Vec::new();
+        while t0.elapsed() < Duration::from_millis(2000) {
+            let now = Instant::now();
+            if now >= next_pub {
+                n += 1;
+                civ_sweep(&feed, n as f32);
+                next_pub += Duration::from_micros(83_333);
+            }
+            if now >= next_poll {
+                if let Some(f) = feed.rf_frame_after(last) {
+                    last = f.seq;
+                    behind.push(n as f32 - f.bins[0]);
+                }
+                next_poll += Duration::from_millis(120);
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            behind.len() >= 10,
+            "premise: the poll drew ({})",
+            behind.len()
+        );
+        assert!(
+            behind.iter().all(|b| *b == 0.0),
+            "sweeps behind the newest at each reduced-motion poll: {behind:?}"
+        );
+        // Thinned by choice, not dropped: once every thinned sweep has left the backlog, none is
+        // counted, so the Settings figure and the diagnostic log stay quiet under reduced motion.
+        for i in 0..=SpectrumFeed::RF_BACKLOG {
+            civ_sweep(&feed, 1000.0 + i as f32);
+        }
+        assert_eq!(
+            feed.rf_dropped(),
+            0,
+            "reduced-motion thinning counted as drops"
+        );
+    }
+
+    /// A scope polling every 50-60 ms (a busy UI, still faster than the slow-reader line) is not a
+    /// slow reader: a 3-sweep burst published after a long tick is drawn in order.
+    #[test]
+    fn a_scope_polling_every_55_ms_draws_a_burst_in_order() {
+        let feed = SpectrumFeed::default();
+        civ_sweep(&feed, 0.0);
+        let mut last = feed.rf_frame_after(0).expect("live").seq;
+        for v in [1.0, 2.0, 3.0] {
+            civ_sweep(&feed, v);
+        }
+        let mut got = Vec::new();
+        for _ in 0..3 {
+            std::thread::sleep(Duration::from_millis(55));
+            if let Some(f) = feed.rf_frame_after(last) {
+                last = f.seq;
+                got.push(f.bins[0]);
+            }
+        }
+        assert_eq!(got, vec![1.0, 2.0, 3.0]);
+        assert_eq!(feed.rf_dropped(), 0);
+    }
+
+    /// One 90 ms stall in a 33 ms poll (a frame the UI took long to draw) loses nothing: the reader
+    /// is still not slow, and draws every sweep in order.
+    #[test]
+    fn a_single_90_ms_stall_in_a_33_ms_poll_draws_every_sweep() {
+        let feed = SpectrumFeed::default();
+        civ_sweep(&feed, 0.0);
+        let mut last = feed.rf_frame_after(0).expect("live").seq;
+        let mut got = Vec::new();
+        let mut poll = |feed: &SpectrumFeed, got: &mut Vec<f32>| {
+            if let Some(f) = feed.rf_frame_after(last) {
+                last = f.seq;
+                got.push(f.bins[0]);
+            }
+        };
+        for v in [1.0, 2.0] {
+            civ_sweep(&feed, v);
+            std::thread::sleep(Duration::from_millis(33));
+            poll(&feed, &mut got);
+        }
+        civ_sweep(&feed, 3.0);
+        civ_sweep(&feed, 4.0);
+        std::thread::sleep(Duration::from_millis(90)); // the stall
+        for _ in 0..3 {
+            poll(&feed, &mut got);
+            std::thread::sleep(Duration::from_millis(33));
+        }
+        assert_eq!(got, vec![1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(feed.rf_dropped(), 0);
+    }
+
+    /// A FAST SCOPE WAITING BETWEEN SLOW SWEEPS IS STILL FAST. A radio on its Slow SPEED sends a
+    /// sweep every few hundred ms; a scope polling every 30 ms finds nothing new in between, and a
+    /// burst published after a long tick must still be drawn in order, not skipped as if that scope
+    /// were a slow reader. Through both readers.
+    #[test]
+    fn a_fast_scope_between_slow_sweeps_still_draws_a_burst_in_order() {
+        type Poll = fn(&SpectrumFeed, u64) -> Option<SpectrumFrame>;
+        let polls: [(&str, Poll); 2] = [
+            ("scope", scope_poll),
+            ("rf pane", |f: &SpectrumFeed, s| f.rf_frame_after(s)),
+        ];
+        for (name, poll) in polls {
+            let feed = SpectrumFeed::default();
+            civ_sweep(&feed, 0.0);
+            let mut last = poll(&feed, 0).expect("live").seq;
+            for _ in 0..8 {
+                std::thread::sleep(Duration::from_millis(30));
+                assert_eq!(poll(&feed, last), None, "{name}: nothing new");
+            }
+            for v in [1.0, 2.0, 3.0] {
+                civ_sweep(&feed, v);
+            }
+            let mut got = Vec::new();
+            while let Some(f) = poll(&feed, last) {
+                last = f.seq;
+                got.push(f.bins[0]);
+            }
+            assert_eq!(got, vec![1.0, 2.0, 3.0], "{name}: the burst, in order");
+        }
+    }
+
+    /// Sweeps published while no scope was reading are not drops, even once a scope opens and they
+    /// leave the backlog. The scope starts at the newest and misses nothing after it.
+    #[test]
+    fn sweeps_published_before_any_reader_are_not_drops() {
+        let feed = SpectrumFeed::default();
+        for i in 0..5 {
+            civ_sweep(&feed, i as f32); // nobody reading
+        }
+        let mut last = feed.rf_frame_after(0).expect("a scope opens").seq;
+        for i in 5..25 {
+            civ_sweep(&feed, i as f32);
+            while let Some(f) = feed.rf_frame_after(last) {
+                last = f.seq;
+            }
+        }
+        assert_eq!(feed.rf_dropped(), 0);
+    }
+
+    /// A sweep a scope drew from the backlog is never a drop when it later leaves it; only the
+    /// undrawn ones are counted.
+    #[test]
+    fn a_sweep_drawn_from_the_backlog_is_never_counted_as_dropped() {
+        let feed = SpectrumFeed::default();
+        civ_sweep(&feed, 0.0);
+        let mut last = feed.rf_frame_after(0).expect("drawn").seq;
+        for i in 1..=3 {
+            civ_sweep(&feed, i as f32);
+        }
+        let mut drawn = Vec::new();
+        while let Some(f) = feed.rf_frame_after(last) {
+            last = f.seq;
+            drawn.push(f.bins[0]);
+        }
+        assert_eq!(
+            drawn,
+            vec![1.0, 2.0, 3.0],
+            "two from the backlog, then the newest"
+        );
+        // The reader stops; 18 more push the first six frames out: four drawn, two not.
+        for i in 4..=21 {
+            civ_sweep(&feed, i as f32);
+        }
+        assert_eq!(
+            feed.rf_dropped(),
+            2,
+            "only sweeps 4 and 5, which nobody drew"
         );
     }
 
@@ -69736,6 +73350,62 @@ mod tests {
         assert!(Engine::is_lotw_sat_name(" so-50 "));
     }
 
+    /// The linear-transponder and geostationary birds people actually work are on LoTW's list,
+    /// so the picker must offer them — before this the picker held only the handful of names
+    /// the pass-prediction catalog happened to share with LoTW, and RS-44 could not be picked.
+    #[test]
+    fn the_satellite_picker_offers_the_birds_lotw_lists() {
+        let offered = Engine::lotw_accepted_sat_names();
+        for name in [
+            "RS-44", "AO-7", "FO-29", "IO-86", "QO-100", "AO-73", "CAS-4A", "XW-2A", "IO-117",
+            "SO-124", "UKUBE1",
+        ] {
+            assert!(offered.contains(&name), "{name} missing from the picker");
+            assert!(Engine::is_lotw_sat_name(name), "{name} refused by the gate");
+        }
+        // The whole of LoTW's published list, no more and no less.
+        assert_eq!(offered.len(), 110);
+    }
+
+    /// Every name the automatic stamp can write is one the picker offers and the gate accepts,
+    /// so the stamp can never put a name on a record that TQSL would reject.
+    #[test]
+    fn every_automatic_satellite_stamp_is_on_lotws_list() {
+        for (ours, lotw) in Engine::LOTW_SAT_NAMES {
+            assert!(
+                Engine::is_lotw_sat_name(lotw),
+                "{ours} stamps {lotw}, which LoTW does not list"
+            );
+        }
+    }
+
+    /// The catalog's names for the popular birds now stamp LoTW's designator on their own,
+    /// whether the designator is in the name or the catalog calls the bird something else.
+    #[test]
+    fn the_popular_birds_stamp_their_lotw_names_from_the_catalog() {
+        for (label, want) in [
+            ("OSCAR 7 (AO-7)|Mode B", "AO-7"),
+            ("JAS-2 (FO-29)|linear", "FO-29"),
+            ("FUNCUBE-1 (AO-73)|linear", "AO-73"),
+            ("RS-44 & BREEZE-KM R/B|linear", "RS-44"),
+            ("ES'HAIL 2|NB transponder", "QO-100"),
+            ("LAPAN-A2|FM", "IO-86"),
+            ("GREENCUBE|digipeater", "IO-117"),
+            ("FOX-1A|FM", "AO-85"),
+            ("RADFXSAT (FOX-1B)|FM", "AO-91"),
+            ("LILACSAT-2|FM", "CAS-3H"),
+            ("MESAT1|linear", "MO-122"),
+            ("UKUBE-1|linear", "UKUBE1"),
+            ("ESEO|FM", "ESEO"),
+        ] {
+            assert_eq!(Engine::lotw_sat_name(label), Some(want), "{label}");
+        }
+        // Negative controls: a near-name that is a different bird still stamps nothing.
+        assert_eq!(Engine::lotw_sat_name("LAPAN-A3|FM"), None);
+        assert_eq!(Engine::lotw_sat_name("NEXSAT-1|FM"), None);
+        assert_eq!(Engine::lotw_sat_name("AISAT|FM"), None);
+    }
+
     /// The repair the guide used to send an operator to a text editor for, end to end through
     /// the engine: correct a wrong designator, then take the tag off entirely.
     #[test]
@@ -71301,6 +74971,55 @@ mod tests {
         assert!(
             e.settings.dial_mhz > 30.0,
             "MSK144 from HF still moves to its VHF calling channel, got {}",
+            e.settings.dial_mhz
+        );
+    }
+
+    /// #184: an HF rig set to 160 m–4 m and a dual-bander set to 2 m/70 cm. Picking FST4 from
+    /// 20 m FT8 sent the dial to 2200 m, a band neither radio is set for, because the fallback
+    /// took the mode's FIRST channel. It now takes the first channel a radio in the shack covers.
+    #[test]
+    fn a_specialty_mode_falls_back_to_a_channel_a_radio_covers() {
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.settings.ensure_radio_profiles();
+        let hf: Vec<String> = [
+            "160m", "80m", "60m", "40m", "30m", "20m", "17m", "15m", "12m", "10m", "6m", "4m",
+        ]
+        .iter()
+        .map(|b| b.to_string())
+        .collect();
+        e.set_radio_bands(0, hf);
+        let vhf = e.add_radio();
+        e.set_radio_bands(vhf, vec!["2m".into(), "70cm".into()]);
+        e.set_active_radio(0);
+        e.set_tier(Tier::Ft8);
+        e.set_frequency(14.074, "20m", "USB");
+
+        e.set_tier(Tier::Fst4);
+        assert!(
+            (e.settings.dial_mhz - 1.839).abs() < 1e-9,
+            "FST4 lands on 160 m, the one FST4 band a radio here is set for, got {}",
+            e.settings.dial_mhz
+        );
+        // FST4W carries WSJT-X's whole table, 20 m included, so from 20 m it stays on 20 m.
+        e.set_tier(Tier::Ft8);
+        e.set_frequency(14.074, "20m", "USB");
+        e.set_tier(Tier::Fst4w);
+        assert!(
+            (e.settings.dial_mhz - 14.0956).abs() < 1e-9,
+            "FST4W has a 20 m channel, got {}",
+            e.settings.dial_mhz
+        );
+
+        // CONTROL: one radio with no bands set covers everything, so the mode's first channel
+        // stays the answer (FST4 → 2200 m), as before.
+        let mut e = Engine::new("KD9TAW", "EN52", 0);
+        e.set_tier(Tier::Ft8);
+        e.set_frequency(14.074, "20m", "USB");
+        e.set_tier(Tier::Fst4);
+        assert!(
+            (e.settings.dial_mhz - 0.136).abs() < 1e-9,
+            "a catch-all radio keeps FST4's first channel, got {}",
             e.settings.dial_mhz
         );
     }
@@ -77342,6 +81061,10 @@ mod digital_side_licence_tests {
         /// The carrier on the side the transmit VFO's commanded word names; `None` for a word
         /// that names no side (FM).
         commanded: Option<bool>,
+        /// Away from a pass, in Keyboard and RTTY: the verdict before PSK was judged across its
+        /// occupied width, PSK at ONE point at its centre ([`Soundcard::old_as_a_point`]), which
+        /// is RTTY's own `stored`. `None` everywhere else.
+        point: Option<bool>,
         case: String,
     }
 
@@ -77439,6 +81162,7 @@ mod digital_side_licence_tests {
                                     stored: side_allows(class, tx, off, stored_lsb),
                                     commanded: named_side(word)
                                         .map(|lsb| side_allows(class, tx, off, lsb)),
+                                    point: None,
                                     case,
                                 });
                             }
@@ -77480,6 +81204,7 @@ mod digital_side_licence_tests {
                                 got: e.tx_allowed(),
                                 stored,
                                 commanded: Some(stored),
+                                point: None,
                                 case,
                             });
                         }
@@ -77580,8 +81305,8 @@ mod digital_side_licence_tests {
     /// table alone.
     #[derive(Clone, Copy, Debug)]
     enum Soundcard {
-        /// PSK31: one narrow signal at the netted centre; the old model put it ABOVE the dial
-        /// always, by the section's USB convention.
+        /// PSK31: its occupied width, the netted centre ± the sub-mode's symbol rate; the old
+        /// model put it ABOVE the dial always, by the section's USB convention.
         Psk,
         /// RTTY by AFSK: the mark/space pair from `mark` to `mark + shift` off the dial; the old
         /// model took the side the rig reports or, failing that, the dial's own word, and both
@@ -77711,14 +81436,33 @@ mod digital_side_licence_tests {
         }
 
         /// May `class` key this section's signal from transmit dial `tx` (MHz) on the side `lsb`
-        /// names? PSK31 one point at the centre, CW one at the pitch; AFSK both edges of the
-        /// mark/space span.
+        /// names? PSK both edges of its occupied width, the centre ± the sub-mode's baud; CW one
+        /// point at the pitch; AFSK both edges of the mark/space span.
         fn side_ok(self, e: &Engine, class: LicenseClass, tx: f64, lsb: bool) -> bool {
+            self.side_judged(e, class, tx, lsb, true)
+        }
+
+        /// [`Self::side_ok`], with PSK judged across its width (`wide`) or, as it was before, at
+        /// one point at its centre.
+        fn side_judged(
+            self,
+            e: &Engine,
+            class: LicenseClass,
+            tx: f64,
+            lsb: bool,
+            wide: bool,
+        ) -> bool {
             let allow = |f: f64| crate::privileges::tx_allowed(class, f, self.mode());
             match self {
                 Soundcard::Psk => {
                     let c = f64::from(e.psk_center_hz()) / 1e6;
-                    allow(if lsb { tx - c } else { tx + c })
+                    let c = if lsb { tx - c } else { tx + c };
+                    let half = if wide {
+                        f64::from(e.psk_mode().0.baud()) / 1e6
+                    } else {
+                        0.0
+                    };
+                    allow(c - half) && allow(c + half)
                 }
                 Soundcard::CwTone | Soundcard::CwKeyer => {
                     let p = f64::from(e.cw_pitch_hz()) / 1e6;
@@ -77754,6 +81498,15 @@ mod digital_side_licence_tests {
                 Soundcard::CwTone | Soundcard::CwKeyer => {
                     crate::privileges::tx_allowed(class, tx, self.mode())
                 }
+            }
+        }
+
+        /// [`Self::old`] as it was before PSK was judged across its width: PSK at one point at its
+        /// centre, above the dial. Every other section's `old`.
+        fn old_as_a_point(self, e: &Engine, class: LicenseClass, tx: f64, dial_word: &str) -> bool {
+            match self {
+                Soundcard::Psk => self.side_judged(e, class, tx, false, false),
+                _ => self.old(e, class, tx, dial_word),
             }
         }
 
@@ -78006,6 +81759,7 @@ mod digital_side_licence_tests {
                                     got: e.tx_allowed(),
                                     stored: sc.old(&e, class, tx, dial_word),
                                     commanded: sc.commanded(&e, class, tx, tx_word),
+                                    point: None,
                                     case,
                                 });
                             }
@@ -78057,6 +81811,7 @@ mod digital_side_licence_tests {
                                 got: e.tx_allowed(),
                                 stored: sc.old(&e, class, dial, word),
                                 commanded: sc.commanded(&e, class, dial, word),
+                                point: Some(sc.old_as_a_point(&e, class, dial, word)),
                                 case,
                             });
                         }
@@ -78070,17 +81825,278 @@ mod digital_side_licence_tests {
     /// Away from a pass Keyboard and RTTY are judged exactly as they were, at every data edge,
     /// for every class and centre, while the rig reports nothing (for when it reports the other
     /// side, see [`rtty_judges_the_commanded_side_even_when_the_rig_reports_the_other`]).
+    ///
+    /// ⚠️ RE-PINNED ON PURPOSE, FOR PSK ONLY: PSK is judged across its occupied width now (the
+    /// netted centre ± the sub-mode's baud, [`Engine::keyboard_emission_span_hz`]), not at one
+    /// point at its centre. So its verdict CHANGES wherever that centre sits within one baud of a
+    /// data edge — in this sweep, a centre exactly ON an edge — from allowed to refused: the half
+    /// of the signal on the far side of that edge is outside (the lower half at the bottom of a
+    /// segment, the upper half at the top of one). Those changes are counted and pinned below,
+    /// each is a refusal where the point allowed, and every other verdict, PSK's and RTTY's, is
+    /// still what it was.
     #[test]
     fn away_from_a_pass_psk_and_rtty_are_judged_as_they_were() {
         let v = soundcard_terrestrial_verdicts();
         let (moved, first) = first_cases(v.iter().filter(|r| r.got != r.stored), 20);
         assert_eq!(moved, 0, "verdicts moved away from a pass: {first:#?}");
+        let (rtty_moved, first) = first_cases(
+            v.iter()
+                .filter(|r| !r.case.starts_with("Psk ") && Some(r.got) != r.point),
+            20,
+        );
+        assert_eq!(rtty_moved, 0, "RTTY verdicts moved: {first:#?}");
+        let widened: Vec<&Verdict> = v
+            .iter()
+            .filter(|r| r.point.is_some_and(|p| p != r.got))
+            .collect();
+        let (not_a_psk_refusal, first) = first_cases(
+            widened
+                .iter()
+                .copied()
+                .filter(|r| !(r.case.starts_with("Psk ") && r.point == Some(true) && !r.got)),
+            20,
+        );
+        assert_eq!(
+            not_a_psk_refusal, 0,
+            "the width may only refuse PSK where its centre was allowed: {first:#?}"
+        );
+        assert_eq!(
+            widened.len(),
+            WIDENED_PSK_VERDICTS,
+            "PSK verdicts the width refuses: {:#?}",
+            widened.iter().map(|r| r.case.as_str()).collect::<Vec<_>>()
+        );
         let allowed = v.iter().filter(|r| r.stored).count();
         assert!(
             allowed > 1_000 && v.len() - allowed > 1_000,
             "the sweep must straddle the edges: {allowed} allowed of {}",
             v.len()
         );
+    }
+
+    /// How many of [`away_from_a_pass_psk_and_rtty_are_judged_as_they_were`]'s PSK verdicts the
+    /// occupied width turns from allowed to refused: each a centre exactly on a data edge.
+    const WIDENED_PSK_VERDICTS: usize = 84;
+
+    /// A General in the Keyboard section keying `mode`, netted at 1000 Hz, TX armed.
+    fn psk_station(mode: tempo_core::psk::PskModeKind) -> Engine {
+        let mut e = Engine::new("W9XYZ", "EN61", 0);
+        e.settings.license_class = LicenseClass::General;
+        e.set_operating_mode("keyboard", false);
+        e.set_psk_mode(mode, false)
+            .expect("unkeyed: the sub-mode is taken");
+        e.psk_net(1_000.0);
+        e
+    }
+
+    /// A General's 20 m data segment, from 14.025 up to (not including) 14.150 MHz.
+    const DATA_20M: (f64, f64) = (14.025, 14.150);
+
+    /// Each sub-mode with its symbol rate, the closest whole-Hz distance from a segment edge at
+    /// which its centre keeps the whole signal inside (`inside`), and the farthest at which the
+    /// edge is inside its width (`across`): ±31.25 Hz for PSK31 and QPSK31, ±62.5 Hz for PSK63.
+    /// Each rate is a literal, so a wrong [`tempo_core::psk::PskModeKind::baud`] — the one input
+    /// the gate and the sweeps' model share — fails here for every sub-mode.
+    const PSK_WIDTHS: [(tempo_core::psk::PskModeKind, f32, f64, f64); 3] = [
+        (tempo_core::psk::PskModeKind::Bpsk31, 31.25, 32.0, 31.0),
+        (tempo_core::psk::PskModeKind::Qpsk31, 31.25, 32.0, 31.0),
+        (tempo_core::psk::PskModeKind::Bpsk63, 62.5, 63.0, 62.0),
+    ];
+
+    /// ⭐ PSK IS JUDGED ACROSS ITS OCCUPIED WIDTH, at the top and the bottom of a segment, on
+    /// either side of the dial. A General's 20 m data runs 14.025–14.150: PSK31 netted 31 Hz
+    /// inside an edge puts its signal 0.25 Hz across it and is refused, 32 Hz inside is allowed;
+    /// PSK63 the same at 62 and 63 Hz. The centre itself is inside in every case, so each refusal
+    /// is the width's. Comfortably inside, both are allowed, and the frequency a contact logs is
+    /// still the netted centre.
+    #[test]
+    fn psk_is_judged_across_its_occupied_width_at_both_edges_on_both_sides() {
+        let (general, kb) = (LicenseClass::General, OperatingMode::Keyboard);
+        let (bottom, top) = DATA_20M;
+        for (mode, baud, inside, across) in PSK_WIDTHS {
+            let mut e = psk_station(mode);
+            assert_eq!(e.psk_mode().0.baud(), baud, "precondition: {mode:?}'s rate");
+            assert_eq!(e.psk_center_hz(), 1_000.0, "precondition: the centre");
+            for (centre, want, at) in [
+                (top - inside / 1e6, true, "just inside the top"),
+                (top - across / 1e6, false, "across the top"),
+                (bottom + inside / 1e6, true, "just inside the bottom"),
+                (bottom + across / 1e6, false, "across the bottom"),
+            ] {
+                assert!(
+                    crate::privileges::tx_allowed(general, centre, kb),
+                    "precondition, {mode:?} {at}: the centre {centre:.6} itself is inside"
+                );
+                for (word, dial) in [("PKTUSB", centre - 0.001), ("PKTLSB", centre + 0.001)] {
+                    assert_eq!(
+                        e.keyboard_emission_allowed(dial, word),
+                        want,
+                        "{mode:?} {at}, centre {centre:.6}, {word} dial {dial:.6}"
+                    );
+                }
+                // The section's own USB side, end to end through the gate the cockpit reads.
+                let dial = centre - 0.001;
+                assert_eq!(
+                    e.psk_emission_ok(dial),
+                    want,
+                    "{mode:?} {at}: USB convention"
+                );
+                e.set_frequency(dial, "20m", "USB");
+                assert_eq!(
+                    e.tx_mode_effective(),
+                    "PKTUSB",
+                    "precondition, {mode:?} {at}"
+                );
+                assert_eq!(
+                    e.tx_allowed(),
+                    want,
+                    "{mode:?} {at}: tx_allowed, dial {dial:.6}"
+                );
+            }
+
+            // Comfortably inside: unchanged, on either side.
+            e.set_frequency(14.070, "20m", "USB");
+            assert!(e.tx_allowed(), "{mode:?}: 14.071 is well inside");
+            assert!(
+                e.keyboard_emission_allowed(14.072, "PKTLSB"),
+                "{mode:?}: LSB inside"
+            );
+
+            // The gate judges the centre ± one baud; the logged frequency is still the netted
+            // centre, not the gate's widened low edge.
+            let half = f64::from(baud);
+            assert_eq!(
+                e.keyboard_emission_span_hz(),
+                (1_000.0 - half, 1_000.0 + half),
+                "{mode:?}: the gate judges the centre ± one baud"
+            );
+            assert_eq!(
+                e.keyboard_span_hz(),
+                (1_000.0, 1_000.0),
+                "{mode:?}: the signal's own span is the centre"
+            );
+            assert_eq!(
+                e.logged_signal_offset(),
+                (0.001, false),
+                "{mode:?}: a contact logs dial + the netted centre"
+            );
+        }
+    }
+
+    /// ⛔ A PSK SIGNAL WHOSE WIDTH CROSSES AN EDGE NEVER REACHES PTT, AND A REFUSAL NEVER ARMS THE
+    /// LATCH. Netted 31 Hz (PSK31) or 62 Hz (PSK63) under the top of a General's 20 m data, a send
+    /// is refused up front with nothing queued for the radio loop to key, and continuous TX stays
+    /// down. An over queued just inside, then netted 1 Hz up into that width, is dropped at the
+    /// poll — the last step before the loop keys — instead of keyed. The control: just inside,
+    /// both key.
+    #[test]
+    fn a_psk_signal_across_an_edge_is_refused_before_ptt_and_never_latches() {
+        let top = DATA_20M.1;
+        for (mode, _, inside, across) in PSK_WIDTHS {
+            let mut e = psk_station(mode);
+            assert!(e.tx_enabled, "precondition, {mode:?}: TX is armed");
+            e.set_frequency(top - across / 1e6 - 0.001, "20m", "USB");
+            assert!(
+                !e.tx_allowed(),
+                "{mode:?}: netted {across} Hz under the top, the signal crosses it"
+            );
+            let err = e.psk_send_text("cq cq").unwrap_err();
+            assert!(
+                err.contains("outside your license privileges"),
+                "{mode:?}: the send says why: {err}"
+            );
+            assert!(e.psk_queue.is_empty(), "{mode:?}: nothing queued");
+            assert_eq!(
+                e.poll_psk_one(),
+                None,
+                "{mode:?}: nothing for the loop to key"
+            );
+            assert!(
+                e.set_psk_latched(true).is_err(),
+                "{mode:?}: the latch is refused"
+            );
+            assert!(!e.psk_latched(), "{mode:?}: a refusal never arms the latch");
+            assert!(
+                e.psk_type("cq").is_err(),
+                "{mode:?}: no typing into a latch that is down"
+            );
+
+            // Control: just inside, a send keys and the latch arms.
+            e.set_frequency(top - inside / 1e6 - 0.001, "20m", "USB");
+            assert!(e.tx_allowed(), "control, {mode:?}: just inside the top");
+            e.psk_send_text("cq cq").unwrap();
+            assert_eq!(
+                e.poll_psk_one().as_deref(),
+                Some("cq cq"),
+                "control, {mode:?}"
+            );
+            e.set_psk_latched(true).unwrap();
+            assert!(e.psk_latched(), "control, {mode:?}: the latch arms");
+            e.psk_stop();
+
+            // Queued just inside, then netted 1 Hz up: the width is across, the over drops.
+            e.psk_send_text("de w9xyz").unwrap();
+            e.psk_net(1_000.0 + (inside - across) as f32);
+            assert!(
+                !e.tx_allowed(),
+                "precondition, {mode:?}: netted across the top"
+            );
+            assert_eq!(
+                e.poll_psk_one(),
+                None,
+                "{mode:?}: the netted-up over never keys"
+            );
+            assert_eq!(
+                e.psk_state().keyer_error.as_deref(),
+                Some(PSK_REFUSED_PRIVILEGES),
+                "{mode:?}: the cockpit says it was dropped"
+            );
+        }
+    }
+
+    /// ⛔ A LATCHED STREAM NETTED INTO THE WIDTH IS DROPPED ON ITS NEXT TICK. Continuous TX up just
+    /// inside the top of a General's 20 m data, then the waterfall netted 1 Hz up so the edge is
+    /// inside the signal's width: the next stream tick ([`Engine::poll_psk_stream`], the only path
+    /// from the latch to the transmitter) hands the loop nothing to send, drops the latch with
+    /// what was typed, and raises the abort that flushes the audio and releases PTT.
+    #[test]
+    fn a_latched_psk_stream_netted_into_the_width_is_dropped() {
+        let top = DATA_20M.1;
+        for (mode, _, inside, across) in PSK_WIDTHS {
+            let mut e = psk_station(mode);
+            e.set_frequency(top - inside / 1e6 - 0.001, "20m", "USB");
+            assert!(
+                e.tx_allowed(),
+                "precondition, {mode:?}: just inside the top"
+            );
+            e.set_psk_latched(true).unwrap();
+            assert_eq!(
+                e.poll_psk_stream(2),
+                PskStreamTick::Diddle,
+                "control, {mode:?}: the latched stream runs just inside"
+            );
+            e.psk_type("cq cq").unwrap();
+            e.psk_net(1_000.0 + (inside - across) as f32);
+            assert!(
+                !e.tx_allowed(),
+                "precondition, {mode:?}: netted across the top"
+            );
+            assert_eq!(
+                e.poll_psk_stream(2),
+                PskStreamTick::Idle,
+                "{mode:?}: nothing more is keyed once the width is across"
+            );
+            assert!(!e.psk_latched(), "{mode:?}: the latch is dropped");
+            assert!(
+                e.take_psk_abort(),
+                "{mode:?}: the loop is told to flush and unkey"
+            );
+            assert_eq!(
+                e.poll_psk_stream(2),
+                PskStreamTick::Idle,
+                "{mode:?}: what was typed never keys"
+            );
+        }
     }
 
     /// ⛔ THE INVARIANT FOR KEYBOARD AND RTTY: knowing the commanded side only ever refuses MORE,
@@ -80632,6 +84648,8 @@ mod dedup_gate_tests {
                             mode: "FT8".into(),
                             end_unix: 0,
                             confirm_only: false,
+                            station: None,
+                            station_callsign: None,
                         });
                         let got =
                             matches!(e.log_qso_for_sync(rec.clone()), LogWriteOutcome::Duplicate);
@@ -82336,5 +86354,45 @@ mod band_change_ends_ft_contact_tests {
                 "band change {change_band}: resent to W9ABC {resent}"
             );
         }
+    }
+}
+
+/// The fallback waterfall row (the Companion/UDP path, no local capture) spans the same 0–5000 Hz
+/// at the same 7.8125 Hz per bin as the rx-dsp row, so a waterfall draws the same axis whichever
+/// path fed it.
+#[cfg(test)]
+mod spectrum_span_tests {
+    use super::*;
+
+    fn tone(hz: f32) -> Vec<f32> {
+        (0..2048)
+            .map(|i| (std::f32::consts::TAU * hz * i as f32 / tempo_fast::SAMPLE_RATE).sin() * 0.5)
+            .collect()
+    }
+
+    fn peak(row: &[f32]) -> usize {
+        row.iter()
+            .enumerate()
+            .max_by(|a, b| a.1.total_cmp(b.1))
+            .map(|(i, _)| i)
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn the_fallback_row_reaches_5000_hz_at_the_same_resolution() {
+        let s = Engine::compute_spectrum(&tone(4500.0));
+        assert_eq!((s.lo_hz, s.hi_hz), (0.0, 5000.0));
+        assert_eq!(s.row.len(), SPECTRUM_BINS);
+        assert_eq!(
+            s.hi_hz / s.row.len() as f64,
+            7.8125,
+            "the bins kept their width"
+        );
+        let want = (4500.0 / 7.8125) as usize;
+        assert!(
+            peak(&s.row).abs_diff(want) <= 2,
+            "a 4500 Hz tone peaks near bin {want}, got {}",
+            peak(&s.row)
+        );
     }
 }

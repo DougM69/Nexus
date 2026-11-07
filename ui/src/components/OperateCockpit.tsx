@@ -29,13 +29,12 @@ import { isRxOnly, isBeacon } from '../types'
 import type { NeedBandScopes } from '../features/needs'
 import { bandKey, modeKey } from '../features/callHistory'
 import { potaDupe } from '../features/potaActivation'
-import { sameCall } from '../callsign'
+import { lookupCall, sameCall } from '../callsign'
 import { emptyAnswer } from '../features/logAnswers'
 import { useLogAnswer } from '../features/logSource'
 import { contestDupe } from '../features/contestDupe'
 import { bandLabelForMhz } from '../band'
 import {
-  clampOffsetHz,
   cqDirFromText,
   cqSuggestionFromText,
   genStdMessages,
@@ -55,6 +54,7 @@ import { qrzLookup, resolveEntity } from '../api'
 import { pushToast, withErrorToast } from '../toast'
 import { SplitControl } from './SplitControl'
 import { RotorStrip } from './RotorStrip'
+import { DfField, DF_RX, DF_TX } from './DfField'
 import { pointedTo } from './rotorPointAt'
 import { FastGraph } from './FastGraph'
 import { Waterfall, type WaterfallTag } from './Waterfall'
@@ -65,7 +65,7 @@ import { TX_SPLIT_MAX, TX_SPLIT_MIN } from '../features/paneSeam'
 import { buildHighlightMap, OperateDecodes } from './OperateDecodes'
 import { DecodeHistory, type DecodeSort } from '../decodeHistory'
 import { OperateQsoStrip } from './OperateQsoStrip'
-import { TxMeters, TX_METERS_WHEN } from './TxMeters'
+import { TxMetersCell, TX_METERS_WHEN } from './TxMeters'
 import { SpotDialog } from './SpotDialog'
 import { DEFAULT_ROSTER_SORT, OperateRoster, type RosterSort } from './OperateRoster'
 import { RecallPanel } from './RecallPanel'
@@ -150,7 +150,7 @@ interface Props {
   /** Toggle a call on the persistent blocklist (api.setBlockedCalls — the narrow write).
    * When absent, Alt-double-click falls back to the session-only dimming set. */
   onToggleBlocked?: (call: string) => void
-  /** Set the TX audio drive level (0.0–1.0) — the Pwr slider. */
+  /** Set the TX audio drive level (0.0–1.0) — the Drive slider. */
   onSetTxLevel: (level: number) => void
   /** Band plan (channel select) shown in the header — FT8/FT4 freq+band moved
    * out of the global TopBar into the cockpit header. */
@@ -295,11 +295,6 @@ const SOURCE_COMPANION = 'Companion'
  *  belongs inside a translatable sentence — it is interpolated in, like a frequency. */
 const DEFAULT_COMPANION_ADDR = '127.0.0.1:2237'
 
-/** The two audio-offset spinners: WSJT-X's Rx/Tx Hz fields. `Rx`/`Tx` are direction tokens
- *  that also read out in each field's accessible name, and `Hz` is a unit symbol. */
-const DF_RX = 'Rx'
-const DF_TX = 'Tx'
-const HZ_UNIT = 'Hz'
 
 /** Is this saved special-op value Hound? `superhound` is a RETIRED alias that the engine
  *  treats as plain Hound (settings.rs), so a settings file carrying it reads as Hound ON —
@@ -709,7 +704,8 @@ export function OperateCockpit({
   // so a clear never outlives the thing it cleared. The ref exists so `clearDx` (created once)
   // can read the current value without taking it as a dependency.
   recallCallRef.current = recallCall
-  const shownRecallCall = recallCall && recallCall === dismissedCall ? null : recallCall
+  // An unresolved hash (`<...>`) names no station (`lookupCall`): no card, so no slot and no question.
+  const shownRecallCall = !recallCall || !lookupCall(recallCall) || recallCall === dismissedCall ? null : recallCall
   // #204: the callsign card joins the side rail — and Classic's third column — only while
   // there is a card to show. panelHost counts any listed side panel that is not removed, so a
   // standing 'recall' entry would mount an EMPTY rail with Stations hidden and nothing selected.
@@ -1320,7 +1316,7 @@ export function OperateCockpit({
     shown('stats') ? (
       <CallStatsFrame
         close={closeProps('stats')}
-        call={shownRecallCall}
+        call={shownRecallCall && lookupCall(shownRecallCall)}
         band={snap.radio.band}
         mode={tier}
         logTick={snap.logTick}
@@ -1493,6 +1489,7 @@ export function OperateCockpit({
         return entry != null && boxes && isBoxId(id) ? (
           <CockpitBox
             box={id}
+            cockpit="operate"
             entry={entry}
             source={boxes}
             selection={boxSel}
@@ -1986,6 +1983,8 @@ export function OperateCockpit({
                   onPopOut={popOutWaterfall}
                   fixedWindow={tier === 'WSPR' ? WSPR_WATERFALL_WINDOW : undefined}
                   transmitting={snap.radio.transmitting}
+                  passbandHz={snap.radio.filterWidthHz ?? null}
+                  passbandMode={snap.radio.rigMode || snap.radio.sideband}
                   rxOffsetHz={snap.radio.rxOffsetHz}
                   txOffsetHz={snap.radio.txOffsetHz}
                   theme={theme}
@@ -2136,8 +2135,9 @@ export function OperateCockpit({
           // gone (the operator's "eating up a whole line" complaint) — the same
           // pinned semantics (live while keyed, last readings dimmed between overs)
           // now render into the strip's fixed-width telemetry cell, so the FT TX
-          // cycle still cannot bounce the layout. Still a ⊞ Panels entry.
-          telemetry={shown('txmeters') ? <TxMeters radio={snap.radio} inline /> : undefined}
+          // cycle still cannot bounce the layout. Still a ⊞ Panels entry. #446: the cell opens
+          // the same live meters at full size in a dialog (TxMetersCell), a readout as the cell is.
+          telemetry={shown('txmeters') ? <TxMetersCell radio={snap.radio} /> : undefined}
         />
 
         {/* data-cols collapses the grid to ONE column once the main cell or the whole
@@ -2492,7 +2492,9 @@ function OperateRecall({
   /** #204: open the card of the station this one is calling. */
   onShowCall?: (call: string) => void
 }) {
-  const cu = call.trim().toUpperCase()
+  // The call the LOG knows (`lookupCall`): a station heard hashed, `<K1ABC>`, is K1ABC — its prior
+  // contacts, its callbook entry, its dupe — and the unresolved `<...>` is nobody, so it gets no card.
+  const cu = lookupCall(call)
   const [book, setBook] = useState<QrzLookup | null>(null)
   const [entity, setEntity] = useState<string | null>(null)
 
@@ -2530,7 +2532,7 @@ function OperateRecall({
     }
   }, [cu])
 
-  const station = snap.stations.find((s) => s.call.trim().toUpperCase() === cu) ?? null
+  const station = (cu && snap.stations.find((s) => lookupCall(s.call) === cu)) || null
   // ⭐ THE CONTEST-SCOPED DUPE, the second verdict on this card — and the only one that is
   // right during a contest. `hist.dupeThisBand` below it asks the GENERAL log "ever worked on
   // this band", which lights for a 2019 QSO that is a perfectly fresh contest contact; the
@@ -2634,66 +2636,5 @@ function OperateRecall({
       paneTitle={paneTitle}
       grip={grip}
     />
-  )
-}
-
-/**
- * A compact labeled DF (audio offset) entry: tracks the snapshot value while
- * idle, commits on Enter/blur (rounded + clamped 200–4000 Hz), and reverts on
- * garbage input. Enter just blurs — the single commit happens in onBlur.
- */
-function DfField({
-  label,
-  hz,
-  onCommit,
-}: {
-  label: string
-  hz: number
-  onCommit: (hz: number) => void
-}) {
-  const [text, setText] = useState(() => String(Math.round(hz)))
-  const [editing, setEditing] = useState(false)
-  const editingRef = useRef(editing)
-  editingRef.current = editing
-  // Track the live prop ONLY when it actually changes — keying the effect on
-  // `editing` too made the blur's clamped value flash back to the stale prop
-  // for the IPC round-trip (commit sets text + editing in the same render).
-  useEffect(() => {
-    if (!editingRef.current) setText(String(Math.round(hz)))
-  }, [hz])
-  const commit = () => {
-    setEditing(false)
-    const n = Number(text)
-    if (text.trim() !== '' && Number.isFinite(n)) {
-      const clamped = clampOffsetHz(n)
-      setText(String(clamped))
-      if (clamped !== Math.round(hz)) onCommit(clamped)
-    } else {
-      setText(String(Math.round(hz))) // revert garbage
-    }
-  }
-  return (
-    <label className="df-field" title={t('operate.header.df.title', { label })}>
-      <span className="df-label">{label}</span>
-      <input
-        type="number"
-        inputMode="numeric"
-        min={200}
-        max={4000}
-        step={1}
-        value={text}
-        aria-label={t('operate.header.df.aria', { label })}
-        onFocus={() => setEditing(true)}
-        onChange={(e) => setText(e.target.value)}
-        onBlur={commit}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') {
-            e.preventDefault()
-            ;(e.target as HTMLInputElement).blur()
-          }
-        }}
-      />
-      <span className="df-unit">{HZ_UNIT}</span>
-    </label>
   )
 }

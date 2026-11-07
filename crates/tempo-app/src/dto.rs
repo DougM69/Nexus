@@ -165,6 +165,12 @@ pub struct ActivationDto {
     /// The activation was taken up at launch from the one the last session left running.
     #[serde(default)]
     pub restored: bool,
+    /// Only on the Stop pressed at the station that ended it, and only when Stop could not take
+    /// the station back to the "My station" profile it was on before the park's (a run, a contact
+    /// or a queued message under way): that profile, which the operator picks in the top bar to
+    /// go back. Absent otherwise, and on a station with no profiles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub station_profile_back: Option<StationProfileChoice>,
 }
 
 /// One park of an activation, and what it holds today ([`ActivationDto::parks`]).
@@ -307,6 +313,30 @@ pub struct DecodeRow {
     /// that many retransmissions; -1 = not applicable (e.g. DX1). Lets the UI
     /// badge HARQ-recovered decodes.
     pub rv: i32,
+}
+
+/// What a decode pane missed while it was not taking the feed in (#452), from the decodes the
+/// engine still holds (`Engine::decode_refill`). The snapshot's feed is the CURRENT period only, so
+/// a pane that was closed, or a window the OS stopped painting, came back with the periods in
+/// between gone for good while our own overs (a 30-deep ring) came back whole: a contact that read
+/// as never answered. A read of history; nothing in the station changes for asking.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DecodeRefill {
+    /// The oldest slot whose decodes are all still held. A missed period before it can no longer
+    /// be refilled, and the pane marks it as not received. 0 while nothing has been dropped.
+    pub covered_from: u64,
+    /// The held decodes in the slots asked for, oldest first, each with the slot it was ingested
+    /// at (the snapshot's `radio.slot` numbering).
+    pub rows: Vec<RefillRow>,
+}
+
+/// One refilled decode and the slot it was ingested at.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefillRow {
+    pub slot: u64,
+    pub row: DecodeRow,
 }
 
 /// A period heard before a band or mode change, as [`AppSnapshot::late_decodes`] carries it.
@@ -1077,6 +1107,11 @@ pub struct RadioSummary {
     pub is_active: bool,
     /// Live CAT health for the active radio; `None` for a not-connected radio.
     pub cat_ok: Option<bool>,
+    /// A NON-active radio whose CAT Nexus refused to start: a declared Hardware serial handshake
+    /// on a port where RTS keys a transmitter. The switcher pill gives that reason. ABSENT when
+    /// false, so every snapshot without a refusal is byte-identical.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub cat_refused: bool,
     /// Live S-meter (dB rel S9) for the active radio; `None` otherwise.
     pub smeter_db: Option<i32>,
     pub transmitting: bool,
@@ -1645,6 +1680,10 @@ pub enum PcMicCause {
     DeviceLost,
     /// No audio came from the microphone for longer than the over's gap.
     NoAudio,
+    /// PTT was held and let go, and the microphone sent nothing but digital silence the whole
+    /// time, or nothing at all (muted, or kept from Nexus by the system's privacy setting): the
+    /// radio was never keyed.
+    Silent,
     /// The over reached its 10-minute ceiling.
     Ceiling,
     /// The TX watchdog tripped.
@@ -1669,6 +1708,9 @@ pub enum PcMicCause {
     Interrupted,
     /// The radio did not accept the key.
     KeyRefused,
+    /// The radio's transmit audio output (the sound card that carries the voice to the radio)
+    /// would not open, so the radio was not keyed: it would have gone on the air with no audio.
+    TxAudio,
     /// The chosen microphone cannot be told apart from an input that may carry the band (a sound
     /// server's default input, receive on the system default, an input routed by a sound
     /// configuration file, or a card by a number this computer cannot resolve).
@@ -1727,6 +1769,20 @@ pub struct SlotOverDropped {
     pub late: String,
     /// How many in a row, this one included.
     pub count: u32,
+}
+
+/// The radio's own scope stream, measured: see [`RadioStatus::scope_rate`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScopeRate {
+    /// Complete sweeps a second over the last measuring window (a few seconds).
+    pub sweeps_per_sec: f32,
+    /// Sweeps that never reached a scope on screen since the stream started: pushed out of a full
+    /// queue on their way from the radio, or out of the backlog a scope draws from.
+    pub dropped: u64,
+    /// The radio's scope SWEEP SPEED as read from it: `"fast"`, `"mid"` or `"slow"`. `None` when
+    /// the radio did not answer the read. Nexus only reads it, never sets it.
+    pub speed: Option<String>,
 }
 
 /// Current radio / slot-timing status.
@@ -2244,6 +2300,12 @@ pub struct RadioStatus {
     /// not: stating a start and seeing the waterfall stay on sound-card audio has two very
     /// different causes, and the control should say which side of it we are on.
     pub scope_fix_start_mhz: Option<f64>,
+    /// The radio's own scope stream (an Icom's CI-V `27 00` waveform), MEASURED where it arrives:
+    /// how many sweeps a second it really sends, how many never reached the waterfall, and the
+    /// scope SPEED the radio is set to. ABSENT unless that stream is running, so every other
+    /// snapshot is byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_rate: Option<ScopeRate>,
     /// Set when two enabled radios are configured on the SAME serial COM port — the
     /// monitor radio's CAT can't open the busy port and shows a confusing red pill.
     /// A config warning (self-clears once the ports differ); surfaced in the status lane.
@@ -2386,6 +2448,22 @@ pub struct RadioStatus {
     /// transmits on too. Tune then keys nothing, and the screen says why beside it.
     #[serde(default, skip_serializing_if = "is_false")]
     pub flex_tune_refused: bool,
+    /// While Tune is Nexus's own tone, the licence refuses it here though it allows the mode's own
+    /// emission: the tone goes out 1500 Hz from the transmit dial, outside the privileges there
+    /// (`Engine::tune_tone_allowed`). Tune then keys nothing, and the screen says why beside it.
+    /// Absent when false, so every other snapshot is byte for byte what it was.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub tune_tone_refused: bool,
+    /// A Tune press was refused because a slot over (FT8, FT4, JS8…) was on the air with Split
+    /// Operation Rig or Fake It, which may have moved the TX dial for it: shown beside Tune for the
+    /// rest of that over's period (`Engine::set_tune_for`). Absent when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub tune_over_refused: bool,
+    /// While the radio reports a tuner and the licence refuses the radio's own ATU carrier at the
+    /// transmit dial (this MHz) though it allows the section's emission (`Engine::atu_tune_gate`):
+    /// an ATU press keys nothing, and the note beside the ATU says why. Absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub atu_carrier_refused_mhz: Option<f64>,
     /// While Nexus's own Flex client runs the radio's own ATU (Beta, off until a tester's bench)
     /// and the radio reports a tuner fitted: what is shown beside the ATU, the radio's tune power
     /// and transmit timeout as beside Tune, and the ATU line. See `Engine::observe_flex_atu`.
@@ -3012,6 +3090,11 @@ pub struct FieldDayStatus {
     // over rows therefore has the right value in hand and no reason to reach out here.
     pub running: bool,
     pub state: String,
+    /// The call this contest entry is operated and logged under (`FieldDayLog::mycall`, the
+    /// Cabrillo `CALLSIGN:`): Settings names it when a save would change the station's call
+    /// mid-entry. `""` from a build that predates it.
+    #[serde(default)]
+    pub entry_call: String,
     /// The station currently being worked (the FD sequencer's partner) — lets
     /// the UI quiet decode popups about them mid-contact, like QsoStatus.dxcall.
     #[serde(default)]
@@ -4477,6 +4560,33 @@ pub struct UploadReportDto {
     /// connection log, rather than dropped inside TQSL. LoTW only; 0 elsewhere.
     #[serde(default)]
     pub held_mode: usize,
+    /// Contacts signed with the Station Location in Settings because they fit two station
+    /// profiles naming different locations. LoTW only; 0 elsewhere.
+    #[serde(default)]
+    pub location_tie: usize,
+    /// Contacts signed with the Station Location in Settings because they fit none of the station
+    /// profiles, while one names a location. LoTW only; 0 elsewhere.
+    #[serde(default)]
+    pub location_unmatched: usize,
+    /// The tie and no-match contacts above were signed from the call, grid and place fields in
+    /// their own records (signing from the ADIF), not with the Station Location in Settings. LoTW only.
+    #[serde(default)]
+    pub location_from_adif: bool,
+    /// Contacts not sent because a later TQSL run could not run (TQSL gone or timed out, the
+    /// upload file not written), or did not start after a run whose stamps were not confirmed on
+    /// disk (`unconfirmed_after_error`), once earlier runs had sent theirs: left unsent and
+    /// unstamped, and offered again with the next upload. LoTW only; 0 elsewhere.
+    #[serde(default)]
+    pub unsent_after_error: usize,
+    /// What stopped them, when `unsent_after_error` or `unconfirmed_after_error` is not 0.
+    #[serde(default)]
+    pub unsent_error: Option<String>,
+    /// Contacts of a later TQSL run that TQSL signed and sent, whose stamp could not be shown to be
+    /// on disk: they went to LoTW and are counted in `dispatched` (one whose stamp the disk refused
+    /// stays owed and is sent again), and the runs after theirs did not start. LoTW only; 0
+    /// elsewhere.
+    #[serde(default)]
+    pub unconfirmed_after_error: usize,
 }
 
 /// Result of importing an external ADIF logbook (deduped merge).
@@ -5136,6 +5246,21 @@ pub struct AutoRadioSwitch {
     pub band: String,
     /// The mode class the routing decided on.
     pub mode: crate::settings::RouteMode,
+    /// The routing chose `to_id`, but another Nexus window is running that radio, so the station
+    /// stayed on `from_id` ([`crate::radio_claim`]). The screen says so instead of "switched".
+    #[serde(default)]
+    pub refused: bool,
+}
+
+/// One "My station" profile as the top bar offers it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StationProfileChoice {
+    pub id: String,
+    /// The operator's name for it; blank for Home, which the screen names in its language.
+    pub name: String,
+    /// The call it transmits under.
+    pub call: String,
 }
 
 /// The full application snapshot the UI renders from.
@@ -5156,6 +5281,18 @@ pub struct AppSnapshot {
     /// Peg-lock state (band selection won't auto-switch when true).
     #[serde(default)]
     pub radio_pegged: bool,
+    /// The "My station" profiles the top bar picks from, in their order; empty (and absent on the
+    /// wire) for a station that has made none, which sees no picker.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub station_profiles: Vec<StationProfileChoice>,
+    /// The id of the profile the station is on (one of `station_profiles`); empty with none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub active_station_profile: String,
+    /// The profile cannot change now: a run, a contact or an over is under way
+    /// (`Engine::station_profile_switch_refusal`). The top bar's picker waits, saying why. Never
+    /// set (and absent on the wire) for a station with no profiles.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub station_profile_locked: bool,
     /// The last time Nexus switched the active radio BY ITSELF, for the switch notice. Absent
     /// until a band or mode the routing hands to another radio has switched one this session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -5340,6 +5477,12 @@ pub struct AppSnapshot {
     /// receives this field.
     #[serde(default, skip_serializing_if = "is_false")]
     pub contest_cq_typed: bool,
+    /// FreeDV's own app beside Nexus ([`crate::freedv`]): its two listeners, the last contact it
+    /// logged and the calls it heard. `None`, and then not sent at all, while neither listener is
+    /// wanted, so every other snapshot is the one it always was. For the screens on this
+    /// computer: the Remote never receives this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub freedv: Option<crate::freedv::FreedvDto>,
 }
 
 /// A transmitter alarm, on screen until the operator dismisses it — see

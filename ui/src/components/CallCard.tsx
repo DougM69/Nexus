@@ -55,14 +55,14 @@ import { planReturn, giveBack } from '../focusReturn'
 import { withErrorToast } from '../toast'
 import { fmtDistanceKm, useUnits } from '../units'
 import { t } from '../i18n'
+import { lookupCall } from '../callsign'
+import { TX_AVOID } from '../features/txSurfaces'
 
 // ---- where the card may never stand ----------------------------------------------------------
 
-/** Every transmit surface the card keeps off: the TX strip under each cockpit's scope, the TX dock,
- *  FT's QSO strip (its Stop TX and sequencer), SSTV's pinned transmit bar, and any Stop button
- *  wherever it is drawn (the top bar's cluster, the log confirm). A hidden keep-alive cockpit's copies
- *  have no box and drop out. */
-export const TX_AVOID = '.cockpit-txstrip, .cockpit-txdock, .cockpit-qso, .sstv-tx-bar, .op-controls, .op-btn.stop'
+/** Every transmit surface the card keeps off (features/txSurfaces.ts; the pop-up column keeps off
+ *  the same ones). */
+export { TX_AVOID }
 
 export interface Box {
   left: number
@@ -174,7 +174,8 @@ const readOpened = () => opened
 
 export function openCallCard(call: string, anchor: HTMLElement, keyboard = false, hover = false): void {
   const cu = call.trim().toUpperCase()
-  if (!cu) return
+  // An unresolved hash, `<...>`, names no station: there is nothing to show a card about.
+  if (!lookupCall(cu)) return
   opened = { call: cu, anchor, keyboard, hover }
   emit()
 }
@@ -507,9 +508,12 @@ export function CallCardView({ data, onClose }: { data: CallCardData; onClose: (
 function useCardData(call: string, snap: AppSnapshot, spots: readonly SpotRow[], needAlertsByCall: ReadonlyMap<string, NeedAlert[]>): CallCardData {
   const band = snap.radio.band
   const mode = liveMode(snap)
+  // The card shows `call` as it was heard, and asks about the call the log knows (`lookupCall`): a
+  // station heard hashed, `<K1ABC>`, is K1ABC. The Needed board keys its rows as heard.
+  const key = lookupCall(call)
   // Nothing asked of the callbook on open: only the operator's Look up asks it. Any lookup of the call
   // in this window, the card's own or another surface's, lands here (`qrzLookup` keeps the answer).
-  const book = useSyncExternalStore(subscribeCallbookAnswers, () => callbookAnswer(call))
+  const book = useSyncExternalStore(subscribeCallbookAnswers, () => callbookAnswer(key))
   const [looking, setLooking] = useState(false)
   const live = useRef(true)
   useEffect(() => {
@@ -520,27 +524,27 @@ function useCardData(call: string, snap: AppSnapshot, spots: readonly SpotRow[],
   }, [])
   const onLookup = () => {
     setLooking(true)
-    void withErrorToast(() => qrzLookup(call), t('callbook.lookupFailed')).then(() => {
+    void withErrorToast(() => qrzLookup(key), t('callbook.lookupFailed')).then(() => {
       if (live.current) setLooking(false)
     })
   }
   const [stats, setStats] = useState<{ key: string; s: CallStats | null } | null>(null)
-  const statsKey = `${call} ${band} ${mode} ${snap.logTick ?? 0}`
+  const statsKey = `${key} ${band} ${mode} ${snap.logTick ?? 0}`
   useEffect(() => {
     let live = true
-    getCallStats(call, band, mode).then(
+    getCallStats(key, band, mode).then(
       (s) => live && setStats({ key: statsKey, s }),
       () => live && setStats({ key: statsKey, s: null }),
     )
     return () => {
       live = false
     }
-  }, [call, band, mode, statsKey])
-  const q = { kind: 'callHistory', call, band, mode, matchMode: snap.b4MatchMode ?? false } as const
+  }, [key, band, mode, statsKey])
+  const q = { kind: 'callHistory', call: key, band, mode, matchMode: snap.b4MatchMode ?? false } as const
   const hist = useLogAnswer(q, snap.logTick) ?? emptyAnswer(q)
-  const aim = useCallBearings([call]).get(call)
+  const aim = useCallBearings([key]).get(key)
   const needs = [...new Set((needAlertsByCall.get(call) ?? []).filter((a) => a.band === band).flatMap((a) => a.tags))]
-  const spot = spots.filter((s) => s.call.toUpperCase() === call).sort((a, b) => a.ageSecs - b.ageSecs)[0] ?? null
+  const spot = spots.filter((s) => s.call.toUpperCase() === key).sort((a, b) => a.ageSecs - b.ageSecs)[0] ?? null
   return {
     call,
     book,

@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AppSnapshot, BandChannel, KeyboardMacroProfile, PskState, Settings } from '../types'
 import { CockpitHeader } from './CockpitHeader'
-import { CockpitTxStrip } from './CockpitTxStrip'
+import { CockpitTxStrip, keepInSight, revealAfterPress } from './CockpitTxStrip'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { PaneSeam } from './PaneSeam'
 import { WATERFALL_SPLIT_MAX, WATERFALL_SPLIT_MIN } from '../features/paneSeam'
@@ -49,14 +49,15 @@ import { pushToast, withErrorToast } from '../toast'
 import { pollSingleFlight } from '../singleFlight'
 import { IS_MAC, FN_KEY_HINT } from '../platform'
 import { usePinnedScroll } from '../usePinnedScroll'
+import { useRegionCols } from '../useRegionCols'
 import { confidenceRuns } from '../transcript'
 import { PSK_MODES, PSK_MODE_BY_SLUG } from '../pskModes'
 import { t } from '../i18n'
 import { showWhenDriving } from '../features/drivingRefusal'
 import { useEscStop } from '../useEscStop'
 import { PskMacroButton, PskMacroEditor, PskMacroSetSwitch, isEmptyPskSlot } from './PskMacroEditor'
-import type { MacroEditorFocus } from './MacroEditor'
-import { macroEditChordKey } from '../features/macroSets'
+import { MacroBank, type MacroEditorFocus } from './MacroEditor'
+import { dockMacroKey, macroCount, macroEditChordKey, macroKeyCaption } from '../features/macroSets'
 import {
   expandPskMacro,
   pskSetId,
@@ -417,7 +418,9 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
     setMacroSets({ profiles: macros?.pskProfiles ?? [], active: macros?.activePskProfile ?? '' })
   }, [macros?.pskProfiles, macros?.activePskProfile])
   const macroSet = pskSetId(macroSets.active)
-  const slots = resolvePskSet(macroSets.profiles, macroSet, t)
+  // How many keys the dock shows (Settings ▸ PSK ▸ Macro keys): 8, 12 or 16. Only what shows:
+  // a saved key past the count is kept, hidden, and is never sent by a key or a press.
+  const slots = resolvePskSet(macroSets.profiles, macroSet, t, macroCount(macros?.pskMacroCount))
   const [editing, setEditing] = useState<PskMacroKey | null>(null)
   const [editorFocus, setEditorFocus] = useState<MacroEditorFocus>('title')
   const [editorLeft, setEditorLeft] = useState(0)
@@ -439,9 +442,15 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
     setConfirmSetReset(false)
     // The caret goes back to the key the editor was opened from, not to the top of the page.
     if (key) {
-      dockRef.current
-        ?.querySelector<HTMLElement>(`[data-psk-macro="${key}"] .cw-macro`)
-        ?.focus({ preventScroll: true })
+      const back = dockRef.current?.querySelector<HTMLElement>(`[data-psk-macro="${key}"] .cw-macro`)
+      back?.focus({ preventScroll: true })
+      // While the dock is folded the key scrolls with the panes: it may be off screen or behind the keep row.
+      if (back) {
+        revealAfterPress(back, () => {
+          back.scrollIntoView?.({ block: 'nearest' })
+          keepInSight(back)
+        })
+      }
     }
   }
   const saveMacroSets = async (profiles: KeyboardMacroProfile[], activeSet: string): Promise<boolean> => {
@@ -513,15 +522,16 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
     const slot = slots.find((s) => s.key === key)
     if (slot && sendMacro({ ...slot, text: message })) closeEditor()
   }
-  /** A key's hover text: the message with what is known filled in, tokens left where not. */
-  const macroTitle = (message: string) => {
+  /** A key's hover text: the message with what is known filled in, tokens left where not — and,
+   *  on a Mac, how to press its F-key there (keys 13–16 have none). */
+  const macroTitle = (message: string, key: string) => {
     const mycall = snap?.mycall?.trim() || '{MYCALL}'
     const call = hisCall.trim().toUpperCase() || '{CALL}'
     const filled = message
       .replace(/\{MYCALL\}/gi, mycall)
       .replace(/\{CALL\}/gi, call)
       .replace(/\{RST\}/gi, '599')
-    return `${filled}${IS_MAC ? `\n${FN_KEY_HINT}` : ''}`
+    return `${filled}${IS_MAC && macroKeyCaption(key) ? `\n${FN_KEY_HINT}` : ''}`
   }
 
   // THE KEYBOARD — Esc, and F1–F8. Bound only while this is the VISIBLE view: the cockpit stays
@@ -569,16 +579,19 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
         e.preventDefault()
         return
       }
-      const chord = macroEditChordKey(e)
+      // F1–F8, and F9–F12 when the dock shows them (keys 13–16 have no F-key: `dockMacroKey`).
+      const shown = k.slots.map((s) => s.key)
+      const chord = macroEditChordKey(e, shown)
       if (chord) {
         e.preventDefault()
         if (!e.repeat) k.openEditor(chord, 'message')
         return
       }
-      if (!/^F[1-8]$/.test(e.key) || e.altKey || e.ctrlKey || e.metaKey) return
+      const key = dockMacroKey(e, shown)
+      if (!key) return
       e.preventDefault()
       if (e.repeat || k.editorOpen) return
-      const slot = k.slots.find((s) => s.key === e.key)
+      const slot = k.slots.find((s) => s.key === key)
       if (slot) k.sendMacro(slot)
     }
     window.addEventListener('keydown', onKey)
@@ -592,11 +605,14 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   // App re-renders unconditionally and this cockpit stays mounted).
   const runs = useMemo(() => confidenceRuns(text_rx, psk?.charConf ?? []), [text_rx, psk?.charConf])
   const streamPin = usePinnedScroll<HTMLDivElement>()
+  // The one pane region: one column group, so it fills at every width (see the region below).
+  const { ref: panesRef } = useRegionCols<HTMLDivElement>(1, true)
 
   return (
     <main className="layout single psk-cockpit">
       {snap && (
         <CockpitHeader
+          pinned
           snap={snap}
           onSnap={onSnap}
           power={{
@@ -720,7 +736,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           convention), and a click NETS THE DECODER (pskNet — engine RX state), never the
           rig. Its divider (layout L6, RTTY's) sits under it and sets its height, stored per
           surface; hiding the strip takes the divider with it and hands the height to the pane
-          frames below, the shell's growers. */}
+          region below, the shell's grower. */}
       {psk && shown('scope') && (
         <>
         <Waterfall
@@ -734,6 +750,8 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           // NO `txBlanks` — RTTY's ruling: a latched over runs to the 10-minute
           // ceiling and the dark band would read as a dead waterfall.
           transmitting={snap?.radio.transmitting ?? false}
+          passbandHz={snap?.radio.filterWidthHz ?? null}
+          passbandMode={snap?.radio.rigMode || snap?.radio.sideband}
           // #230, RTTY's reason: the slot flag never sees a PSK over — and a tune carrier
           // holds the picture exactly as an over does (see RttyCockpit's note).
           keyed={sending || latched || (snap?.radio.tuning ?? false)}
@@ -791,8 +809,14 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
         </div>
       )}
 
+      {/* THE PANE REGION — RTTY's: the shell contract's one `.cockpit-panes` region with a single
+          column (the RF scope pane, the stream, the log strip, the Stats pane, in the order they always
+          stood). One column group, so it fills at every width (useRegionCols `oneGroup`), and the
+          region, not the shell, takes the deficit until its own floor. */}
+      <div className="cockpit-panes" ref={panesRef}>
+      <div className="cockpit-col">
       {/* THE RF SCOPE PANE — RTTY's placement and reasons: the radio's own panadapter, hidden until
-          ticked, a bare fill frame first under the TX strip, display only (THE STOP LINE). */}
+          ticked, a fill frame first in the region under the TX strip, display only (THE STOP LINE). */}
       {shown('rfScope') && (
         <RfScopePane
           closeProps={closeProps('rfScope')}
@@ -804,8 +828,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
         />
       )}
 
-      {/* THE DECODED STREAM — RTTY's region-less shape: a bare CockpitPaneFrame as a shell
-          child, transcript scrolling inside. Every control in the head is a DECODER control
+      {/* THE DECODED STREAM — a fill frame in the region's column, transcript scrolling inside. Every control in the head is a DECODER control
           (arm / re-acquire / clear) — none touches PTT.
           NO `weight`, deliberately: since #159 there is a second fill frame below it (the log
           strip), and the share that matters is declared THERE, measured. See that frame. */}
@@ -892,7 +915,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           exists — RTTY looks similar and is NOT the model: it logs through its auto-sequencer
           and has no strip.
 
-          NOT ⊞-REMOVABLE, and it renders as the shell's second bare pane frame. `paneId` is a
+          NOT ⊞-REMOVABLE, and it renders as the region column's frame after the stream. `paneId` is a
           test/pop-out handle, not a vocabulary id: PSK's vocabulary is {scope, stream}, so
           this pane has no menu entry and no ✕ (CockpitPaneFrame: "a pane with no id in the
           view's vocabulary stays put"). It hosts no stop control either — every one of those
@@ -931,6 +954,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           onCommit={(stream) => panels.setShares({ stream })}
           onReset={() => panels.setShares({ stream: null })}
           label={t('psk.seam.streamLog.label')}
+          className="in-column"
         />
       )}
       {snap && (
@@ -1011,6 +1035,8 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
       {snap && shown('stats') && (
         <CallStatsFrame close={closeProps('stats')} call={statsCall} band={snap.radio.band} mode={mode.name} logTick={snap.logTick} />
       )}
+      </div>
+      </div>
 
       {/* TX DOCK — the macros (each a one-click transmit), the continuous-TX latch, Stop
           and the compose bar, pinned OUTSIDE any pane so nothing can scroll them out of
@@ -1032,25 +1058,31 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           class names verbatim — the eight-key row was measured in a real browser there, and
           jsdom cannot see layout, so PSK inherits the measured result rather than a guess. */}
       <div className="rtty-dock-keys psk-dock-keys">
-      {/* THE KEYS, in keyboard order, eight across at every width but the narrowest. Senders,
-          every one — the rule is indifferent to senders, and none of them may be captioned as a
-          stop (the editor refuses it). Default Mac keyboards eat bare F-keys as media keys, so
-          each key's tooltip carries the cure there. */}
-      <div className="cw-macros rtty-macros psk-macros" role="group" aria-label={t('psk.macros.aria')}>
+      {/* THE KEYS, in keyboard order, eight across at every width but the narrowest — or, at 12
+          or 16 (Settings ▸ PSK ▸ Macro keys), in groups of four that wrap by width (`MacroBank`,
+          RTTY's). Senders, every one — the rule is indifferent to senders, and none of them may
+          be captioned as a stop (the editor refuses it). Default Mac keyboards eat bare F-keys as
+          media keys, so each key's tooltip carries the cure there. */}
+      <MacroBank
+        label={t('psk.macros.aria')}
+        gridClass="cw-macros rtty-macros psk-macros dock-fkeys"
+        bankClass={`cw-macros macro-bank macro-bank-shared-${slots.length} psk-macros`}
+        quadClass="rtty-macros"
+      >
         {slots.map((slot) => (
           <PskMacroButton
             key={slot.key}
             slot={slot}
             editing={editing === slot.key}
-            title={macroTitle(slot.text)}
+            title={macroTitle(slot.text, slot.key)}
             onSend={() => sendMacro(slot)}
             onEdit={(focus) => openEditor(slot.key, focus)}
           />
         ))}
-      </div>
+      </MacroBank>
 
-      {/* THE FIXED ROW: the Call box, the set switch, and — at the right, together, outside
-          every pane and outside the editable set — the continuous-TX latch and Esc/Stop. */}
+      {/* THE FIXED ROW: the Call box and the set switch (the latch and Esc/Stop stand in the send
+          row below, the dock's keep row). */}
       <div className="rtty-dock-row psk-dock-row">
         <input
           className="settings-input rtty-hiscall"
@@ -1069,39 +1101,6 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           onSwitch={switchMacroSet}
           onReset={resetMacroSet}
         />
-        {/* ⚠️ NOT MIGRATED — the continuous-TX latch is a transmit-path control, and its
-            tooltip is the wording that states what clicking it off does NOT do (it lets
-            what was typed finish keying). Label and tooltips move with the stop line. */}
-        <button
-          type="button"
-          className={`cw-macro rtty-tx-latch psk-tx-latch${latched ? ' on' : ''}`}
-          aria-pressed={latched}
-          onClick={toggleLatch}
-          title={
-            latched
-              ? 'Continuous TX ON — the transmitter stays keyed and idles on PSK reversals; type and it goes out as you type. Click to stop transmitting once what you have typed has gone out. (Stop TX or Esc cuts immediately.)'
-              : 'Continuous TX — key up and stay keyed, then type into the live transmission (the classic PSK31 ragchew flow), instead of pressing Enter for every line'
-          }
-        >
-          <span className="cw-macro-key">TX</span>
-          <span className="cw-macro-label">{latched ? 'On air' : 'Continuous'}</span>
-        </button>
-        {/* ⚠️ NOT MIGRATED — the Esc/Stop macro is on PSK's stop-line census and is found by
-            ACCESSIBLE NAME by components/stop-line.test.tsx (/^esc\s*stop$/i). Both spans and
-            the tooltip move in the transmit-path batch, with that sweep re-run. */}
-        <button
-          type="button"
-          className="cw-macro rtty-stop psk-stop"
-          onClick={stop}
-          // `sending || latched`, NOT `sending` alone — RTTY's rule: this is on
-          // the PSK stop-line census, and it must be live from the instant the
-          // latch goes up, before the first chunk is keyed.
-          disabled={!(sending || latched)}
-          title="Stop PSK — abort the transmission in progress, drop anything queued, unkey"
-        >
-          <span className="cw-macro-key">Esc</span>
-          <span className="cw-macro-label">Stop</span>
-        </button>
       </div>
       </div>
 
@@ -1124,7 +1123,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
         />
       )}
 
-      <div className="cw-send">
+      <div className="cw-send cw-send-wrap cockpit-txdock-keep">
         <input
           ref={composeRef}
           className="settings-input cw-type"
@@ -1161,6 +1160,43 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
         >
           {t('psk.compose.send.label')}
         </button>
+        {/* THE STOPS — the latch and Esc/Stop at the right end of the send row, RTTY's arrangement and
+            reason: this is the dock's keep row, the one row still parked while the dock is folded. */}
+        <span className="rtty-send-stops">
+          {/* ⚠️ NOT MIGRATED — the continuous-TX latch is a transmit-path control, and its
+              tooltip is the wording that states what clicking it off does NOT do (it lets
+              what was typed finish keying). Label and tooltips move with the stop line. */}
+          <button
+            type="button"
+            className={`cw-macro rtty-tx-latch psk-tx-latch send-row-stop${latched ? ' on' : ''}`}
+            aria-pressed={latched}
+            onClick={toggleLatch}
+            title={
+              latched
+                ? 'Continuous TX ON — the transmitter stays keyed and idles on PSK reversals; type and it goes out as you type. Click to stop transmitting once what you have typed has gone out. (Stop TX or Esc cuts immediately.)'
+                : 'Continuous TX — key up and stay keyed, then type into the live transmission (the classic PSK31 ragchew flow), instead of pressing Enter for every line'
+            }
+          >
+            <span className="cw-macro-key">TX</span>
+            <span className="cw-macro-label">{latched ? 'On air' : 'Continuous'}</span>
+          </button>
+          {/* ⚠️ NOT MIGRATED — the Esc/Stop macro is on PSK's stop-line census and is found by
+              ACCESSIBLE NAME by components/stop-line.test.tsx (/^esc\s*stop$/i). Both spans and
+              the tooltip move in the transmit-path batch, with that sweep re-run. */}
+          <button
+            type="button"
+            className="cw-macro rtty-stop psk-stop send-row-stop"
+            onClick={stop}
+            // `sending || latched`, NOT `sending` alone — RTTY's rule: this is on
+            // the PSK stop-line census, and it must be live from the instant the
+            // latch goes up, before the first chunk is keyed.
+            disabled={!(sending || latched)}
+            title="Stop PSK — abort the transmission in progress, drop anything queued, unkey"
+          >
+            <span className="cw-macro-key">Esc</span>
+            <span className="cw-macro-label">Stop</span>
+          </button>
+        </span>
       </div>
 
       {/* THE DRIVE HINT (the plan's ALC sentence): PSK31's shaped envelope IS the

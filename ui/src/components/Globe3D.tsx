@@ -57,6 +57,12 @@ import { STANDARD_SKY, type SkyToken } from '../features/skins'
 import { bandColor, openingModeColor } from '../bandColors'
 import { bandRings, flareFootprint, sunWarmth, warmSunInk, type FlareNoaa } from '../flareNow'
 import { FlareChip } from './prop/FlareChip'
+import { AuroraChip, PcaChip } from './prop/CapsChips'
+import { auroraPicture, auroraStorm, auroraStormWhy, capPicture, capShown, heldUntil, kpAlert, setAuroraDismissal, useAuroraDismissal, useWakeAt } from '../capsNow'
+import { ARRIVAL_OUTLOOK, KP_FORECAST, SOLAR_REGIONS, useFeed } from '../features/connectFeeds'
+import { clampReplay, replayFlux, replayStart, replayWindow, REPLAY_SPAN_SECS } from '../replay'
+import { regionsUntil } from '../sunRegions'
+import { ReplayBar, ReplayButton } from './prop/ReplayBar'
 import {
   subsolarPoint,
   moonAt,
@@ -74,7 +80,7 @@ import type { RibbonInk } from '../features/pathRoute'
 import { t, type MessageKey } from '../i18n'
 import { fmtDistanceKm, useUnits } from '../units'
 import { MapInsightRail } from './prop/MapInsightRail'
-import { ArrivalChip } from './prop/ArrivalChip'
+import { WxChipStack } from './prop/WxChipStack'
 import { MapLayersPanel, OVERLAYS_SIDE_BY_SIDE_PX } from './MapLayersPanel'
 import { MapLegend, MufLegend } from './MapLegend'
 import { GlobePaused, useGlobeWebgl } from './globeWebgl'
@@ -82,6 +88,7 @@ import type {
   PropagationSnapshot,
   PathPrediction,
   MufStation,
+  AuroraOval,
   AuroraPoint,
   PcaView,
   SatView,
@@ -223,6 +230,8 @@ function syncCloud(
       blending: THREE.AdditiveBlending,
     })
     pts = new THREE.Points(new THREE.BufferGeometry(), mat)
+    // Named by its key, like the line groups, so the scene can be read back.
+    pts.name = `cloud:${key}`
     store[key] = pts
     g.scene().add(pts)
   }
@@ -367,6 +376,16 @@ function ribbonInk(i: RibbonInk | null): string {
 }
 /** The polar stretch on the globe: the dark theme's aurora violet, for the same reason. */
 const GLOBE_ROUTE_POLAR = '#c77dff'
+/** Every ribbon stretch on the globe, drawn in this order (later on top): the polar cap, the grey
+ * line, then what a flare or a proton event hits NOW on the drawn band (features/pathNow) — the
+ * dark theme's inks, as above. */
+const GLOBE_STRETCHES = [
+  ['polar', GLOBE_ROUTE_POLAR],
+  ['grey', '#ffc86e'],
+  ['flareWeak', '#ffa64d'],
+  ['flareOut', '#ff4d4d'],
+  ['pca', '#ff5ce1'],
+] as const
 /** A ribbon label's size (world units; the globe's radius is 100): larger than the opening
  * labels, so a heading is found at a glance. */
 const RIBBON_LABEL_SCALE: [number, number] = [30, 5.6]
@@ -590,13 +609,35 @@ function Globe3DView({
   const [nowMs, setNowMs] = useState(() => Date.now())
   // The flare footprint and its per-band rings (flareNow.ts): NOAA's D-RAP grid while it is current,
   // else the analytic field — the same numbers the 2-D map draws, and null below M1.
-  const flareFoot = useMemo(() => flareFootprint(nowMs, xrayLong ?? null, flareNoaa?.drap), [nowMs, xrayLong, flareNoaa])
-  const flareRings = useMemo(() => (flareFoot ? bandRings(flareFoot, nowMs) : []), [flareFoot, nowMs])
+  // THE REPLAY (replay.ts), the 2-D map's: the last six hours of the sun, the night side and the
+  // flare from the GOES trace the fast lane holds; the flare is the analytic field from the replayed
+  // flux at the replayed sun (never NOAA's grid). Never saved; a remount is back at now.
+  const [replayMs, setReplayMs] = useState<number | null>(null)
+  const replayWin = useMemo(() => replayWindow(flareNoaa?.series, nowMs), [flareNoaa, nowMs])
+  const replayAt =
+    replayMs == null ? null : clampReplay(replayMs, replayWin ?? { loMs: nowMs - REPLAY_SPAN_SECS * 1000, hiMs: nowMs })
+  const replayX = useMemo(
+    () => (replayAt == null ? null : replayFlux(flareNoaa?.series, replayAt, nowMs)),
+    [replayAt, flareNoaa, nowMs],
+  )
+  // The sky's time (sun light, sun and moon sprites, the greyline): the replay's, else now.
+  const skyMs = replayAt ?? nowMs
+  const replayAtRef = useRef(replayAt)
+  replayAtRef.current = replayAt
+  const flareFoot = useMemo(
+    () =>
+      replayAt != null
+        ? flareFootprint(replayAt, replayX?.flux ?? null, null)
+        : flareFootprint(nowMs, xrayLong ?? null, flareNoaa?.drap),
+    [replayAt, replayX, nowMs, xrayLong, flareNoaa],
+  )
+  const flareRings = useMemo(() => (flareFoot ? bandRings(flareFoot, skyMs) : []), [flareFoot, skyMs])
   // Self-fetched space-weather feeds (aurora + PCA come from their own polls, like the 2-D map).
   const [nativeAuroraPts, setAuroraPts] = useState<AuroraPoint[]>([])
   const auroraPts=nativeAuroraPts
   const [nativePca, setPca] = useState<PcaView | null>(null)
   const pca=nativePca
+  const [auroraOval, setAuroraOval] = useState<AuroraOval | null>(null)
   const [nativeSats, setSats] = useState<SatView | null>(null)
   const sats=nativeSats
   // ★/All chip state + star-set revision, synced by SAT_CHASE_EVENT. Without
@@ -632,6 +673,38 @@ function Globe3DView({
     setSeenLayersRev(layersRev)
     setShow(loadGlobeLayers(showStates))
   }
+  // THE STORM TURNS THE AURORA LAYER ON — the 2-D map's rule (capsNow `auroraStorm`), never saved,
+  // and the operator's untick during the storm sticks until it is over.
+  const kpFc = useFeed(KP_FORECAST).value ?? null
+  const arrival = useFeed(ARRIVAL_OUTLOOK).value ?? null
+  // The Kp to warn on (capsNow `kpAlert`), as on the 2-D map.
+  const kn = useMemo(() => kpAlert(prop?.spaceWx, kpFc, nowMs), [prop, kpFc, nowMs])
+  const storm = auroraStorm(kn, arrival)
+  // The storm's untick is ONE for the window (capsNow `useAuroraDismissal`): it holds across every
+  // map surface and a remount, and clears when the storm ends: here only when this map SEES it end
+  // (on, then off — a map mounting before its data has arrived sees "no storm" for a moment, and that
+  // must not throw the untick away), and in App's poll whether or not a map is on screen.
+  const auroraDismissed = useAuroraDismissal()
+  const stormSeen = useRef(storm)
+  useEffect(() => {
+    if (stormSeen.current && !storm) setAuroraDismissal(false)
+    stormSeen.current = storm
+  }, [storm])
+  const auroraAuto = storm && !auroraDismissed && !show.aurora
+  const auroraOn = show.aurora || auroraAuto
+  const auroraPic = useMemo(() => (auroraOn ? auroraPicture(auroraOval, nowMs) : null), [auroraOn, auroraOval, nowMs])
+  // The cap: NOAA's D-RAP grid while current, else the model with its approximate edge.
+  // The cap goes at the moment its event stops being held (the shack's `protonEventUntil`), not at
+  // the next 60 s tick: one timer wakes the clock then (capsNow `useWakeAt`).
+  useWakeAt(heldUntil(pca), setNowMs)
+  // NOAA's active regions for the flare chip's sun disc (sunRegions.ts): polled only while the sun or
+  // the flare layer is on, drawn only while the shack holds the list, dropped at its own `until`.
+  const solarRegions = useFeed(SOLAR_REGIONS, show.sunMoon || show.flare).value ?? null
+  useWakeAt(regionsUntil(solarRegions), setNowMs)
+  const capPic = useMemo(
+    () => (show.pca ? capPicture(pca, flareNoaa?.drap, flareNoaa ? xrayLong ?? null : null, nowMs) : null),
+    [show.pca, pca, flareNoaa, xrayLong, nowMs],
+  )
 
   // Measure the container BEFORE paint so the globe is never sized to the whole window
   // (react-globe.gl's default when width/height are undefined) — that was painting over
@@ -1078,13 +1151,24 @@ function Globe3DView({
       if (!g) return
       const sun = g.lights().find((l) => l instanceof THREE.DirectionalLight) as THREE.DirectionalLight | undefined
       if (!sun) return
-      const ss = subsolarPoint(Date.now())
+      const ss = subsolarPoint(replayAtRef.current ?? Date.now())
       const p = g.getCoords(ss.lat, ss.lon, 2)
       sun.position.set(p.x, p.y, p.z)
       frameRef.current()
     }, 60_000)
     return () => clearInterval(id)
   }, [ready])
+  // A replay moves the light at once (and back to now when it ends).
+  useEffect(() => {
+    const g = globeRef.current
+    if (!g || !ready) return
+    const sun = g.lights().find((l) => l instanceof THREE.DirectionalLight) as THREE.DirectionalLight | undefined
+    if (!sun) return
+    const ss = subsolarPoint(replayAt ?? Date.now())
+    const p = g.getCoords(ss.lat, ss.lon, 2)
+    sun.position.set(p.x, p.y, p.z)
+    frameRef.current()
+  }, [ready, replayAt])
 
   // Slow clock for the flare field + sun position (60 s, like the 2-D map's tick).
   useEffect(() => {
@@ -1117,7 +1201,7 @@ function Globe3DView({
   }, [ready])
   // Below the flare gate a C-class flare warms the sun toward orange (the 2-D map's rule, flareNow
   // `sunWarmth`), with the flare layer on: repainted only when the colour changes.
-  const sunInk = warmSunInk(skyInkNow('--map-sun'), show.flare ? sunWarmth(xrayLong) : 0)
+  const sunInk = warmSunInk(skyInkNow('--map-sun'), show.flare && replayAt == null ? sunWarmth(xrayLong) : 0)
   useEffect(() => {
     const sky = skyRef.current
     if (!ready || !sky) return
@@ -1155,10 +1239,10 @@ function Globe3DView({
     const g = globeRef.current
     const sky = skyRef.current
     if (!g || !ready || !sky) return
-    const ss = subsolarPoint(nowMs)
+    const ss = subsolarPoint(skyMs)
     const sc = g.getCoords(ss.lat, ss.lon, SKY_ALT)
     sky.sun.position.set(sc.x, sc.y, sc.z)
-    const moon = moonAt(nowMs)
+    const moon = moonAt(skyMs)
     const mc = g.getCoords(moon.sublunar.lat, moon.sublunar.lon, SKY_ALT)
     sky.moon.position.set(mc.x, mc.y, mc.z)
     const south = (qth?.lat ?? 0) < 0
@@ -1168,7 +1252,7 @@ function Globe3DView({
     )
     sky.sun.visible = show.sunMoon
     sky.moon.visible = show.sunMoon
-  }, [ready, nowMs, show.sunMoon, qth])
+  }, [ready, skyMs, show.sunMoon, qth])
 
   // Gated 1 s pulse tick — the 2-D map's pattern: only while a layer that
   // BREATHES is visible and something is actually open, and never for a hidden
@@ -1188,14 +1272,19 @@ function Globe3DView({
 
   // Self-fetch aurora while its layer is on (server caches ~10 min).
   useEffect(() => {
-    if (!show.aurora) {
+    if (!auroraOn) {
       setAuroraPts([])
+      setAuroraOval(null)
       return
     }
     let live = true
     const poll = () =>
       getAurora()
-        .then((a) => live && setAuroraPts(a?.points ?? []))
+        .then((a) => {
+          if (!live) return
+          setAuroraPts(a?.points ?? [])
+          setAuroraOval(a ?? null)
+        })
         .catch(() => {})
     poll()
     const id = setInterval(poll, 600_000)
@@ -1203,7 +1292,7 @@ function Globe3DView({
       live = false
       clearInterval(id)
     }
-  }, [show.aurora])
+  }, [auroraOn])
 
   // Self-fetch PCA while its layer is on (~5 min).
   useEffect(() => {
@@ -1245,11 +1334,12 @@ function Globe3DView({
       g,
       store,
       'aurora',
-      auroraPts
-        .filter((a) => a.prob >= 8)
-        .map((a) => ({ lat: a.lat, lng: a.lon, rgb: auroraRgb(a.prob), alt: 0.01 })),
+      // The dots only while OVATION is the picture (capsNow `auroraPicture`).
+      auroraPic?.mode === 'ovation'
+        ? auroraPts.filter((a) => a.prob >= 8).map((a) => ({ lat: a.lat, lng: a.lon, rgb: auroraRgb(a.prob), alt: 0.01 }))
+        : [],
       4,
-      show.aurora,
+      auroraOn,
     )
     // Ionosonde MUF (measured stations).
     syncCloud(
@@ -1267,7 +1357,7 @@ function Globe3DView({
       g,
       store,
       'pca',
-      (pca?.points ?? []).map((p) => ({ lat: p.lat, lng: p.lon, rgb: [0.72, 0.34, 1] as RGB, alt: 0.009 })),
+      (capPic?.points ?? []).map((p) => ({ lat: p.lat, lng: p.lon, rgb: [0.72, 0.34, 1] as RGB, alt: 0.009 })),
       5,
       show.pca,
     )
@@ -1305,7 +1395,21 @@ function Globe3DView({
         glowSprite(),
       )
     }
-  }, [ready, nowMs, flareFoot, show.flare, show.aurora, show.muf, show.pca, show.heat, auroraPts, muf, pca, spots])
+  }, [ready, nowMs, flareFoot, show.flare, auroraOn, auroraPic, show.muf, show.pca, show.heat, auroraPts, muf, capPic, spots])
+
+  // THE EDGES — the aurora oval's equatorward edge (OVATION's own, only while it is current) and the
+  // polar cap's approximate edge (dashed, beside the model's shading only), as line groups like the
+  // flare rings: no new WebGL context, redrawn only when the picture changes.
+  useEffect(() => {
+    const g = globeRef.current
+    if (!g || !ready) return
+    const flip = (line: [number, number][]) => line.map(([lon, lat]) => [lat, lon] as [number, number])
+    const aurora = auroraPic?.mode === 'ovation' ? auroraPic.edge : []
+    syncLines(g, linesRef.current, 'auroraEdge', aurora.map(flip), 'rgb(120, 230, 140)', 0.9, auroraOn && aurora.length > 0, 0.011)
+    const cap = capPic?.edge && capPic.points.length > 0 ? capPic.edge : []
+    syncLines(g, linesRef.current, 'capEdge', cap.map(flip), 'rgb(200, 110, 240)', 0.9, show.pca && cap.length > 0, 0.01, true)
+    frameRef.current()
+  }, [ready, auroraOn, auroraPic, show.pca, capPic])
 
   // THE BREATH — the only per-second work: two material writes, no geometry,
   // no rebuild. The heat cloud dims/brightens and the opening wedges pulse,
@@ -1751,7 +1855,7 @@ function Globe3DView({
     // subsolar point, in the 2-D map's warm gold. Follows the sun via the nowMs tick.
     const greylineLines: [number, number][][] = []
     if (show.greyline) {
-      const ss = subsolarPoint(nowMs)
+      const ss = subsolarPoint(skyMs)
       const QUARTER_KM = (EARTH_KM * Math.PI) / 2
       const circle: [number, number][] = []
       for (let b = 0; b <= 360; b += 4) {
@@ -1829,7 +1933,7 @@ function Globe3DView({
       4,
       show.coverage,
     )
-  }, [ready, nowMs, qth, show.rings, show.cqzones, show.coverage, show.greyline, show.openings, cqzones, workedGrids, prop])
+  }, [ready, nowMs, skyMs, qth, show.rings, show.cqzones, show.coverage, show.greyline, show.openings, cqzones, workedGrids, prop])
 
   // The selected station's path ribbon (features/pathRibbon — the 2-D map draws the same lines):
   // the short path solid and the long path dashed, in their modelled reliability inks on the band
@@ -1858,11 +1962,10 @@ function Globe3DView({
       const dashed = l.route === 'long'
       keys.push(key)
       syncLines(g, linesRef.current, key, [asLatLng(l.points)], ribbonInk(l.ink), 0.95, true, PATH_ALT, dashed)
-      for (const kind of ['polar', 'grey'] as const) {
+      for (const [kind, ink] of GLOBE_STRETCHES) {
         const parts = l.stretches.filter((st) => st.kind === kind).map((st) => asLatLng(st.points))
         const k = `${key}-${kind}`
         keys.push(k)
-        const ink = kind === 'polar' ? GLOBE_ROUTE_POLAR : '#ffc86e'
         syncLines(g, linesRef.current, k, parts, ink, 1, parts.length > 0, PATH_ALT + 0.001, dashed)
       }
     }
@@ -2029,11 +2132,25 @@ function Globe3DView({
               <label>
                 <input
                   type="checkbox"
-                  checked={show[row.k]}
-                  onChange={(e) => setShow((s) => ({ ...s, [row.k]: e.target.checked }))}
+                  checked={row.k === 'aurora' ? auroraOn : show[row.k]}
+                  onChange={(e) => {
+                    // Unticking the aurora during a storm is the operator's off, in one click (the
+                    // 2-D map's rule); their own choice is written unless the storm alone had it on.
+                    if (row.k === 'aurora' && storm && !e.target.checked) setAuroraDismissal(true)
+                    if (!(row.k === 'aurora' && auroraAuto)) setShow((s) => ({ ...s, [row.k]: e.target.checked }))
+                  }}
                 />
                 {'labelKey' in row ? t(row.labelKey) : row.label}
               </label>
+              {row.k === 'flare' && (
+                <ReplayButton
+                  on={replayAt != null}
+                  win={replayWin}
+                  startMs={replayStart(flareNoaa?.series, nowMs)}
+                  onStart={setReplayMs}
+                  onStop={() => setReplayMs(null)}
+                />
+              )}
               {row.k === 'sats' && show.sats && (
                 // The ★/All chip on the 3-D surface too — same reachability
                 // argument as the 2-D Layers panel (the Passes pane that also
@@ -2062,20 +2179,55 @@ function Globe3DView({
       {/* The space-weather chip stack beside the Layers panel — the 2-D map's, the same chips: the
           flare chip, then NOAA's storm-watch countdown (a chip, not a 3-D object: nothing on the way
           is drawn as if it were measured). Always rendered: the storm-watch chip decides for itself
-          whether it shows, and an empty stack lets the pointer through and takes no room. */}
-      <div className="wx-chip-stack">
-        {show.flare && flareFoot && xrayLong != null && (
-          <FlareChip
-            xrayLong={xrayLong}
-            foot={flareFoot}
-            noaa={flareNoaa}
-            qth={qth}
-            nowMs={nowMs}
-            snapAt={prop?.spaceWx?.xrayAt ?? null}
-          />
-        )}
-        <ArrivalChip compact={size.w > 0 && size.w < OVERLAYS_SIDE_BY_SIDE_PX} />
-      </div>
+          whether it shows, and an empty stack lets the pointer through and takes no room. On a
+          narrow globe it shows two chips and one "+N more" for the rest (WxChipStack). */}
+      <WxChipStack
+        compact={size.w > 0 && size.w < OVERLAYS_SIDE_BY_SIDE_PX}
+        chips={[
+          replayAt != null && {
+            key: 'replay',
+            node: (
+              <ReplayBar
+                atMs={replayAt}
+                win={replayWin}
+                nowMs={nowMs}
+                series={flareNoaa?.series ?? []}
+                flux={replayX}
+                footDrawn={show.flare && flareFoot != null}
+                onScrub={setReplayMs}
+                onBack={() => setReplayMs(null)}
+              />
+            ),
+          },
+          replayAt == null &&
+            show.flare &&
+            flareFoot &&
+            xrayLong != null && {
+              key: 'flare',
+              node: (
+                <FlareChip
+                  xrayLong={xrayLong}
+                  foot={flareFoot}
+                  noaa={flareNoaa}
+                  qth={qth}
+                  nowMs={nowMs}
+                  snapAt={prop?.spaceWx?.xrayAt ?? null}
+                  regions={solarRegions}
+                />
+              ),
+            },
+          show.pca &&
+            pca &&
+            capPic &&
+            capShown(pca, capPic) && { key: 'pca', node: <PcaChip pca={pca} pic={capPic} nowMs={nowMs} /> },
+          auroraPic &&
+            auroraOval != null &&
+            (storm || auroraPic.mode !== 'ovation') && {
+              key: 'aurora',
+              node: <AuroraChip pic={auroraPic} stormWhy={storm ? auroraStormWhy(kn, arrival) : null} />,
+            },
+        ]}
+      />
       {satAllHidden > 0 && (
         // The 2-D map renders this same hint word for word — one key, deliberately.
         <div className="map-empty-hint sats">{t('map.sats.allHidden', { count: satAllHidden })}</div>

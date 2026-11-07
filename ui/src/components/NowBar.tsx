@@ -32,6 +32,9 @@ interface Props {
    *  beside an operating cockpit and only where the window can show the rail (`lg` and up), so the
    *  bar never offers a button that changes nothing. Omitted = no button. */
   rail?: { on: boolean; onToggle: () => void }
+  /** Ridden inside the top bar (md and up, the 1080p pass): the bar draws the frame, so this one
+   *  draws none of its own (`.now-bar-inbar`, cockpit-panes.css). */
+  inBar?: boolean
 }
 
 /** Compact relative age, e.g. "12s" / "4m" / "2h". The unit letter rides inside the message
@@ -48,13 +51,24 @@ function agoText(secs: number | null): string {
  * separate "healthy but quiet" (connected — normal on a still band) from "can't
  * reach the server" (connecting/reconnecting) — previously both rendered as an
  * identical, broken-looking "waiting". */
-function FeedPill({ name, status, detail }: { name: string; status: FeedStatus; detail?: string }) {
+function FeedPill({
+  name,
+  status,
+  detail,
+  via = false,
+}: {
+  name: string
+  status: FeedStatus
+  detail?: string
+  /** The feed reaches this window through another Nexus window's cluster logins. */
+  via?: boolean
+}) {
   if (!status.enabled) return null
   const ago = agoText(status.lastEventSecs)
   // Each state is a WHOLE sentence, not a stem with a tail glued on: "retrying" and
   // "retrying, last event 4m ago" are two statements, and a language that orders them
   // differently must be able to.
-  const [cls, val, title] =
+  const [cls, stateVal, stateTitle] =
     status.state === 'live'
       ? [
           'good',
@@ -85,6 +99,10 @@ function FeedPill({ name, status, detail }: { name: string; status: FeedStatus; 
                 ]
               : // Defensive: an unknown future backend state renders visibly, not as a fake idle.
                 ['weak', status.state, t('nowbar.feed.unknown.title', { name, state: status.state })]
+  // A window that holds no cluster login of its own says so on the pill itself, connected or not:
+  // what it shows is the other window's connection, under that window's cluster list and SSID.
+  const val = via ? t('nowbar.feed.via.value', { value: stateVal }) : stateVal
+  const title = via ? t('nowbar.feed.via.title', { title: stateTitle }) : stateTitle
   return (
     <span
       className={`nb-chip nb-feed ${cls}`}
@@ -145,7 +163,7 @@ function NbChip({
 // English word in every language (operator, 2026-09-29), so there is no catalog entry for them.
 const BAND_CLASS: Record<string, string> = { 'var(--band-open)': 'good', 'var(--band-marginal)': 'ok' }
 
-export function NowBar({ snap, prop, feedHealth, connectEnabled, dxpedEnabled, onNavigate, emphasis, needsAvailable = true, rail }: Props) {
+export function NowBar({ snap, prop, feedHealth, connectEnabled, dxpedEnabled, onNavigate, emphasis, needsAvailable = true, rail, inBar = false }: Props) {
   const band = snap.radio.band
   const report = prop?.advisory.bands.find((b) => b.band === band) ?? null
   const condition = useBandConditions()(band)
@@ -258,7 +276,7 @@ export function NowBar({ snap, prop, feedHealth, connectEnabled, dxpedEnabled, o
   }
 
   return (
-    <div className="now-bar" role="status" aria-label={t('nowbar.aria')}>
+    <div className={`now-bar${inBar ? ' now-bar-inbar' : ''}`} role="status" aria-label={t('nowbar.aria')}>
       <span className="nb-label">{t('nowbar.label')}</span>
       {order.map((k) => chips[k])}
 
@@ -279,13 +297,14 @@ export function NowBar({ snap, prop, feedHealth, connectEnabled, dxpedEnabled, o
 
       {feedHealth && (
         <>
-          <FeedPill name="Cluster" status={feedHealth.cluster} />
+          <FeedPill name="Cluster" status={feedHealth.cluster} via={feedHealth.clusterViaOtherWindow} />
           {/* The SSB/phone source on its own — RBN keeps the Cluster pill green even when
               this is down, so "is my phone source up?" needs its own at-a-glance pill. */}
           <FeedPill
             name="Phone"
             status={feedHealth.phoneCluster}
             detail={feedHealth.phoneClusterHost ?? undefined}
+            via={feedHealth.clusterViaOtherWindow}
           />
           <FeedPill name="PSKR" status={feedHealth.pskr} />
         </>

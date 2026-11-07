@@ -69,7 +69,7 @@ pub(crate) struct Slot<T> {
 }
 
 impl<T> Slot<T> {
-    const fn new() -> Self {
+    pub(crate) const fn new() -> Self {
         Self {
             value: None,
             fetched_at: None,
@@ -92,6 +92,11 @@ impl<T> Slot<T> {
         self.fetched_at = Some(now);
         self.failures = 0;
         self.next_try = now + ttl;
+    }
+
+    /// The last good value and when it came, however old (the caller decides what it may serve).
+    pub(crate) fn kept(&self) -> Option<(&T, i64)> {
+        Some((self.value.as_ref()?, self.fetched_at?))
     }
 
     /// A failure keeps the last good value and retries 60 s, 120 s, 240 s … later, never later
@@ -225,6 +230,12 @@ pub(crate) fn assemble(s: &State, now: i64) -> ArrivalOutlook {
         l1,
         rationale: s.rationale.value.clone(),
     }
+}
+
+/// The watch [`assemble`] would serve at `now`, from what is held — never fetched here (the
+/// band outlook's "now" line reads it beside the climatology).
+pub(crate) fn watch_now(now: i64) -> Option<Watch> {
+    STATE.lock().ok().and_then(|s| assemble(&s, now).watch)
 }
 
 /// Everything "coming": NOAA's watch, the model run, the measured wind at L1

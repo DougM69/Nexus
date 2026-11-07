@@ -11,7 +11,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AppSnapshot, BandChannel, KeyboardMacroProfile, RttyState, Settings } from '../types'
 import { CockpitHeader } from './CockpitHeader'
-import { CockpitTxStrip } from './CockpitTxStrip'
+import { CockpitTxStrip, keepInSight, revealAfterPress } from './CockpitTxStrip'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { PaneSeam } from './PaneSeam'
 import { WATERFALL_SPLIT_MAX, WATERFALL_SPLIT_MIN } from '../features/paneSeam'
@@ -22,8 +22,8 @@ import { ContestScoreChip } from './ContestScoreChip'
 import { RotorStrip } from './RotorStrip'
 import { rotorPointAt } from './rotorPointAt'
 import { RttyMacroButton, RttyMacroEditor, RttyMacroSetSwitch, isEmptyRttySlot } from './RttyMacroEditor'
-import type { MacroEditorFocus } from './MacroEditor'
-import { macroEditChordKey } from '../features/macroSets'
+import { MacroBank, type MacroEditorFocus } from './MacroEditor'
+import { dockMacroKey, macroCount, macroEditChordKey, macroKeyCaption } from '../features/macroSets'
 import { PanelsMenu } from './PanelsMenu'
 import { panelHost } from '../features/panelHost'
 import { RTTY_PANEL_IDS, RTTY_PANELS, type RttyPanelId, type PanelLayoutApi } from '../features/panelState'
@@ -31,6 +31,7 @@ import { FrequencyControl } from './FrequencyControl'
 import { Waterfall } from './Waterfall'
 import { RfScopePane } from './RfScopePane'
 import { RttyTuningScope } from './RttyTuningScope'
+import { useRegionCols } from '../useRegionCols'
 import {
   atuBypass,
   atuTune,
@@ -790,7 +791,9 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     setMacroSets({ profiles: macros?.rttyProfiles ?? [], active: macros?.activeRttyProfile ?? '' })
   }, [macros?.rttyProfiles, macros?.activeRttyProfile])
   const macroSet = rttySetId(macroSets.active)
-  const slots = resolveRttySet(macroSets.profiles, macroSet, t)
+  // How many keys the dock shows (Settings ▸ RTTY ▸ Macro keys): 8, 12 or 16. Only what shows:
+  // a saved key past the count is kept, hidden, and is never sent by a key or a press.
+  const slots = resolveRttySet(macroSets.profiles, macroSet, t, macroCount(macros?.rttyMacroCount))
   // ⭐ ENTER SENDS MESSAGE in this cockpit's contest strip (`features/esmHost.ts`): the set the
   // F-keys send, with its own step mapping over the built-in table (`macros.rttyEsmRoles`), and
   // THE ONE PATH above to send through. The auto sequence and Continuous TX make it step aside
@@ -842,9 +845,15 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     setConfirmSetReset(false)
     // The caret goes back to the key the editor was opened from, not to the top of the page.
     if (key) {
-      dockRef.current
-        ?.querySelector<HTMLElement>(`[data-rtty-macro="${key}"] .cw-macro`)
-        ?.focus({ preventScroll: true })
+      const back = dockRef.current?.querySelector<HTMLElement>(`[data-rtty-macro="${key}"] .cw-macro`)
+      back?.focus({ preventScroll: true })
+      // While the dock is folded the key scrolls with the panes: it may be off screen or behind the keep row.
+      if (back) {
+        revealAfterPress(back, () => {
+          back.scrollIntoView?.({ block: 'nearest' })
+          keepInSight(back)
+        })
+      }
     }
   }
   const saveMacroSets = async (profiles: KeyboardMacroProfile[], activeSet: string): Promise<boolean> => {
@@ -894,18 +903,19 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     const slot = slots.find((s) => s.key === key)
     if (slot && sendMacro({ ...slot, text: message })) closeEditor()
   }
-  /** A key's hover text: the message with what is known filled in, tokens left where not. */
-  const macroTitle = (message: string) => {
+  /** A key's hover text: the message with what is known filled in, tokens left where not — and,
+   *  on a Mac, how to press its F-key there (keys 13–16 have none). */
+  const macroTitle = (message: string, key: string) => {
     const mycall = snap?.mycall?.trim().toUpperCase() || '{MYCALL}'
     const call = hisCall.trim().toUpperCase() || '{CALL}'
     const filled = message
       .replace(/\{MYCALL\}/gi, mycall)
       .replace(/\{CALL\}/gi, call)
       .replace(/\{RST\}/gi, '599')
-    return `${filled}${IS_MAC ? `\n${FN_KEY_HINT}` : ''}`
+    return `${filled}${IS_MAC && macroKeyCaption(key) ? `\n${FN_KEY_HINT}` : ''}`
   }
 
-  // THE KEYBOARD — Esc, and F1–F8. Bound only while this is the VISIBLE view: the cockpit stays
+  // THE KEYBOARD — Esc, and F1–F8 (F1–F12 when the dock shows 12 or 16 keys). Bound only while this is the VISIBLE view: the cockpit stays
   // mounted in the keep-alive host, so an unconditional listener would fire from inside another
   // section. One listener bound per visit, reading the live state through `keys`.
   //
@@ -918,7 +928,8 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // on its next step and has its own Abort live in the dock. Anything live, Esc stops, editor or
   // no editor.
   //
-  // F1–F8 send through the same `sendMacro` → `send()` → `rtty_send` a click does. They work
+  // F1–F8 (and F9–F12 when the dock shows them; keys 13–16 have no F-key, `dockMacroKey`) send
+  // through the same `sendMacro` → `send()` → `rtty_send` a click does. They work
   // with the caret in the compose bar, the Call box or the log strip; not while the editor is
   // open; not on a held key's repeats (one press, one over); and never with Alt, Ctrl or Cmd,
   // which belong to the system (Alt+F4). A bound F-key's default is cancelled even while the
@@ -950,16 +961,18 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         e.preventDefault()
         return
       }
-      const chord = macroEditChordKey(e)
+      const shown = k.slots.map((s) => s.key)
+      const chord = macroEditChordKey(e, shown)
       if (chord) {
         e.preventDefault()
         if (!e.repeat) k.openEditor(chord, 'message')
         return
       }
-      if (!/^F[1-8]$/.test(e.key) || e.altKey || e.ctrlKey || e.metaKey) return
+      const key = dockMacroKey(e, shown)
+      if (!key) return
       e.preventDefault()
       if (e.repeat || k.editorOpen) return
-      const slot = k.slots.find((s) => s.key === e.key)
+      const slot = k.slots.find((s) => s.key === key)
       if (slot) k.sendMacro(slot)
     }
     window.addEventListener('keydown', onKey)
@@ -984,11 +997,14 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // scroll-back impossible — the pane reset to the bottom before the operator
   // could re-read a callsign. Pinned follows new copy; scrolled-up reads.
   const streamPin = usePinnedScroll<HTMLDivElement>()
+  // The one pane region: one column group, so it fills at every width (see the region below).
+  const { ref: panesRef } = useRegionCols<HTMLDivElement>(1, true)
 
   return (
     <main className="layout single rtty-cockpit">
       {snap && (
         <CockpitHeader
+          pinned
           snap={snap}
           onSnap={onSnap}
           power={{
@@ -1088,7 +1104,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           dock) intact — one kind is conditional, as `stream` already was. Its divider (layout
           L6) sits under it and sets its height (`--rtty-wf-h`, stored per surface), the scope
           dividers' kind; hiding the strip takes the divider with it and hands the height to the
-          pane frames below, the shell's growers, and the stored height stays for its return.
+          pane region below, the shell's grower, and the stored height stays for its return.
 
           It hosts no stop control — the cursors and click-to-net are the tuning aid. A net moves
           the decoder AND the AFSK transmit tone (the transmitter follows the netted centre since
@@ -1125,6 +1141,8 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           // scroll solid black for all of it, which field reports (2026-08-17) read as a dead
           // waterfall. See the prop's doc in Waterfall.tsx.
           transmitting={snap?.radio.transmitting ?? false}
+          passbandHz={snap?.radio.filterWidthHz ?? null}
+          passbandMode={snap?.radio.rigMode || snap?.radio.sideband}
           // #230: our OWN keyed state — `radio.transmitting` is the slot-TX indicator and stays
           // false through an RTTY over, including a latched one.
           // …and a TUNE carrier holds it just the same: the backend's hold is
@@ -1222,9 +1240,17 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         </div>
       )}
 
+      {/* THE PANE REGION — the cockpit shell contract's ONE region (CW's and JTTY's `.cockpit-panes`),
+          holding a single column: the RF scope pane, the transcript, the log strip and the Stats pane,
+          in that order, as they always stood. One column group, so the region FILLS at every width
+          (useRegionCols `oneGroup`): its fill panes split the height, its column is the scroller, and
+          the region — not the shell — takes the deficit until its own floor. The header (pinned), the
+          waterfall strip, the TX strip and the dock stay shell children, so no pane can move them. */}
+      <div className="cockpit-panes" ref={panesRef}>
+      <div className="cockpit-col">
       {/* THE RF SCOPE PANE — the radio's own panadapter, hidden until ticked (RF_SCOPE_PANEL_ID).
-          A bare fill frame like the transcript's, the first under the TX strip, so it can never push
-          the strip down; display only, it hosts no stop control and no sender (THE STOP LINE). */}
+          A fill frame like the transcript's, the first in the region under the TX strip, so it can
+          never push the strip down; display only, it hosts no stop control and no sender (THE STOP LINE). */}
       {shown('rfScope') && (
         <RfScopePane
           closeProps={closeProps('rfScope')}
@@ -1236,11 +1262,9 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         />
       )}
 
-      {/* THE ONE CONTENT PANE. RTTY adopts CockpitPaneFrame (per-pane scroll, the shipped
-          thin scrollbar) but deliberately NO .cockpit-panes region: with a single content
-          block every column template leaves a track empty, which is the dead space this
-          rebuild deletes rather than relocates. The frame is the shell's grower
-          (`.rtty-cockpit > .pane-frame`, styles.css) and the transcript scrolls inside it.
+      {/* THE TRANSCRIPT. A fill frame in the region's one column (per-pane scroll, the shipped
+          thin scrollbar); it shares the column's height with the log strip by weight and the
+          divider between them, and the transcript scrolls inside it.
 
           THIS PANE HOSTS A STOP CONTROL, and that is allowed. The "Auto on" toggle below,
           clicked off, is rttySetAuto(false) → seq.abort() + Engine::rtty_stop(): the queue is
@@ -1382,7 +1406,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           actually on the air, so the export emits RTTY/RY rather than the FT tier the engine
           would otherwise fill in.
 
-          NOT ⊞-REMOVABLE, and it renders as the shell's second bare pane frame. `paneId` is a
+          NOT ⊞-REMOVABLE, and it renders as the region column's frame after the transcript. `paneId` is a
           test/pop-out handle, not a vocabulary id: RTTY's vocabulary is {stream}, so this pane
           has no menu entry and no ✕. It hosts NO stop control — the four that hold the stop
           line up (Stop TX, the dock's Esc/Stop macro, the TX-enable latch, the sequencer's
@@ -1390,7 +1414,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
 
           `titled={false}` and `weight={1.5}`: PSK's ruling and PSK's MEASUREMENT, which apply
           here unchanged because the two shells share one declaration in styles.css
-          (`.layout.single.rtty-cockpit, .layout.single.psk-cockpit`), floor knob included.
+          (`.layout.single.rtty-cockpit, .layout.single.psk-cockpit`) and one region shape.
           The strip needs 296 px of pane height to put its Log button on screen; an even 1:1
           split gives 292 px at 1920×1080 and misses it by four pixels, and `fit="content"`
           (488 px with a recall card open) drives the SHELL onto its deficit valve in the
@@ -1416,6 +1440,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           onCommit={(stream) => panels.setShares({ stream })}
           onReset={() => panels.setShares({ stream: null })}
           label={t('rtty.seam.streamLog.label')}
+          className="in-column"
         />
       )}
       {snap && (
@@ -1476,6 +1501,8 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
       {snap && shown('stats') && (
         <CallStatsFrame close={closeProps('stats')} call={statsCall} band={snap.radio.band} mode={RTTY} logTick={snap.logTick} />
       )}
+      </div>
+      </div>
 
       {/* TX DOCK — the auto-sequencer row, the macros (each one a one-click transmit), the
           continuous-TX latch, Stop and the compose bar, pinned OUTSIDE any pane so nothing
@@ -1561,26 +1588,32 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
       {/* THE KEYS AND THE FIXED ROW, which share one line where the dock is wide enough for
           both and fold into two where it is not (styles.css `.rtty-dock-keys`). */}
       <div className="rtty-dock-keys">
-      {/* THE KEYS, in keyboard order, eight across at every width but the narrowest. Senders,
-          every one — the rule is indifferent to senders, and none of them may be captioned as a
-          stop (the editor refuses it). Default Mac keyboards eat bare F-keys as media keys, so
-          each key's tooltip carries the cure there. */}
-      <div className="cw-macros rtty-macros" role="group" aria-label={t('rtty.macros.aria')}>
+      {/* THE KEYS, in keyboard order, eight across at every width but the narrowest — or, at 12
+          or 16 (Settings ▸ RTTY ▸ Macro keys), in groups of four that wrap by width (`MacroBank`).
+          Senders, every one — the rule is indifferent to senders, and none of them may be
+          captioned as a stop (the editor refuses it). Default Mac keyboards eat bare F-keys as
+          media keys, so each key's tooltip carries the cure there. */}
+      <MacroBank
+        label={t('rtty.macros.aria')}
+        gridClass="cw-macros rtty-macros dock-fkeys"
+        bankClass={`cw-macros macro-bank macro-bank-shared-${slots.length}`}
+        quadClass="rtty-macros"
+      >
         {slots.map((slot) => (
           <RttyMacroButton
             key={slot.key}
             slot={slot}
             editing={editing === slot.key}
             lit={esmLit.includes(slot.key)}
-            title={macroTitle(slot.text)}
+            title={macroTitle(slot.text, slot.key)}
             onSend={() => sendMacro(slot)}
             onEdit={(focus) => openEditor(slot.key, focus)}
           />
         ))}
-      </div>
+      </MacroBank>
 
-      {/* THE FIXED ROW: the Call box, the set switch, and — at the right, together, outside
-          every pane and outside the editable set — the continuous-TX latch and Esc/Stop. */}
+      {/* THE FIXED ROW: the Call box and the set switch (the latch and Esc/Stop stand in the send
+          row below, the dock's keep row). */}
       <div className="rtty-dock-row">
         <input
           className="settings-input rtty-hiscall"
@@ -1609,42 +1642,6 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             preview={esm.preview}
           />
         )}
-        {/* ⚠️ NOT MIGRATED — the continuous-TX latch is a transmit-path control, and its
-            tooltip is the wording that states what clicking it off does NOT do (it lets
-            what was typed finish keying). Label and tooltips move with the stop line. */}
-        <button
-          type="button"
-          className={`cw-macro rtty-tx-latch${latched ? ' on' : ''}`}
-          aria-pressed={latched}
-          onClick={toggleLatch}
-          title={
-            latched
-              ? 'Continuous TX ON — the transmitter stays keyed and idles on diddle; type and it goes out as you type. Click to stop transmitting once what you have typed has gone out. (Stop TX or Esc cuts immediately.)'
-              : 'Continuous TX — key up and stay keyed, then type into the live transmission, instead of pressing Enter for every line'
-          }
-        >
-          <span className="cw-macro-key">TX</span>
-          <span className="cw-macro-label">{latched ? 'On air' : 'Continuous'}</span>
-        </button>
-        {/* ⚠️ NOT MIGRATED — the Esc/Stop macro is on RTTY's stop-line census and is found
-            by ACCESSIBLE NAME by components/stop-line.test.tsx (/^esc\s*stop$/i). Both spans
-            and the tooltip move in the transmit-path batch, with that sweep re-run. */}
-        <button
-          type="button"
-          className="cw-macro rtty-stop"
-          onClick={stop}
-          // `sending || latched`, NOT `sending` alone. `sending` is stamped by the
-          // radio loop from the audio actually in flight, so it is false for the
-          // tick between the latch going up and the first chunk being keyed — and
-          // false for good if the FSK keyline never opens. This control is on
-          // RTTY's stop-line census; a census stop control that is mounted and
-          // disabled is the same loss as one that is gone.
-          disabled={!(sending || latched)}
-          title="Stop RTTY — abort the transmission in progress, drop anything queued, unkey"
-        >
-          <span className="cw-macro-key">Esc</span>
-          <span className="cw-macro-label">Stop</span>
-        </button>
       </div>
       </div>
 
@@ -1667,7 +1664,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         />
       )}
 
-      <div className="cw-send">
+      <div className="cw-send cw-send-wrap cockpit-txdock-keep">
         {/* THE TX LINE (#379): what this station is sending, at the bottom of the cockpit —
             in the compose row, so the dock gains no height. Display only; see RttyTxLine. */}
         <RttyTxLine rtty={rtty} />
@@ -1713,6 +1710,50 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
         >
           {t('rtty.compose.send.label')}
         </button>
+        {/* THE STOPS — the continuous-TX latch and Esc/Stop, together at the right end of the send row,
+            outside every pane and outside the editable set. In the send row, not beside the keys,
+            because this is the dock's KEEP ROW: on a small window at a large zoom the dock folds and
+            this row alone stays parked at the bottom (cockpit-panes.css `.cockpit-txdock[data-fold]`),
+            so Esc/Stop and the latch must be in it. The row wraps them onto a line of their own where
+            it is narrow. */}
+        <span className="rtty-send-stops">
+          {/* ⚠️ NOT MIGRATED — the continuous-TX latch is a transmit-path control, and its
+              tooltip is the wording that states what clicking it off does NOT do (it lets
+              what was typed finish keying). Label and tooltips move with the stop line. */}
+          <button
+            type="button"
+            className={`cw-macro rtty-tx-latch send-row-stop${latched ? ' on' : ''}`}
+            aria-pressed={latched}
+            onClick={toggleLatch}
+            title={
+              latched
+                ? 'Continuous TX ON — the transmitter stays keyed and idles on diddle; type and it goes out as you type. Click to stop transmitting once what you have typed has gone out. (Stop TX or Esc cuts immediately.)'
+                : 'Continuous TX — key up and stay keyed, then type into the live transmission, instead of pressing Enter for every line'
+            }
+          >
+            <span className="cw-macro-key">TX</span>
+            <span className="cw-macro-label">{latched ? 'On air' : 'Continuous'}</span>
+          </button>
+          {/* ⚠️ NOT MIGRATED — the Esc/Stop macro is on RTTY's stop-line census and is found
+              by ACCESSIBLE NAME by components/stop-line.test.tsx (/^esc\s*stop$/i). Both spans
+              and the tooltip move in the transmit-path batch, with that sweep re-run. */}
+          <button
+            type="button"
+            className="cw-macro rtty-stop send-row-stop"
+            onClick={stop}
+            // `sending || latched`, NOT `sending` alone. `sending` is stamped by the
+            // radio loop from the audio actually in flight, so it is false for the
+            // tick between the latch going up and the first chunk being keyed — and
+            // false for good if the FSK keyline never opens. This control is on
+            // RTTY's stop-line census; a census stop control that is mounted and
+            // disabled is the same loss as one that is gone.
+            disabled={!(sending || latched)}
+            title="Stop RTTY — abort the transmission in progress, drop anything queued, unkey"
+          >
+            <span className="cw-macro-key">Esc</span>
+            <span className="cw-macro-label">Stop</span>
+          </button>
+        </span>
       </div>
       </div>
     </main>

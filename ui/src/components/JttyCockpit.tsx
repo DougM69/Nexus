@@ -628,8 +628,9 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   }
 
   // The line under the dock: the transmitter's notice, else why a send would be refused right now
-  // (the engine's words), else how to send.
-  const dockHint = tx?.notice ?? tx?.refusal ?? t('jtty.compose.hint')
+  // (the engine's words), else how to send. The first two stand in the keep row, because the operator
+  // must be able to see why a send was refused while the dock is folded and its other rows scroll away.
+  const dockReason = tx?.notice ?? tx?.refusal ?? null
 
   const lines = jtty?.lines ?? []
   const allLines = useMemo(() => jttyAllPane(lines), [lines])
@@ -952,6 +953,8 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             active={active}
             rowMs={50}
             transmitting={snap?.radio.transmitting ?? false}
+            passbandHz={snap?.radio.filterWidthHz ?? null}
+            passbandMode={snap?.radio.rigMode || snap?.radio.sideband}
             keyed={snap?.radio.tuning ?? false}
             rxOffsetHz={rxHz}
             txOffsetHz={txHz}
@@ -1032,7 +1035,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           here, at the end of the compose row, is on the stop line too (THE STOP LINE). */}
       <div className="cockpit-txdock">
         <div className="rtty-dock-keys jtty-dock-keys">
-          <div className="cw-macros rtty-macros jtty-macros" role="group" aria-label={t('jtty.macros.aria')}>
+          <div className="cw-macros rtty-macros jtty-macros dock-fkeys" role="group" aria-label={t('jtty.macros.aria')}>
             {FKEY_NAMES.map((name, i) => {
               const template = fkeys[i] ?? ''
               return editingKeys ? (
@@ -1142,7 +1145,7 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             </button>
           </div>
         </div>
-        <div className="cw-send">
+        <div className="cw-send cw-send-wrap cockpit-txdock-keep">
           {committed && (
             <span className="jtty-committed" title={t('jtty.compose.committed.title')}>
               {committed}
@@ -1198,10 +1201,15 @@ export function JttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
             <span className="cw-macro-key">{ESC_KEY}</span>
             <span className="cw-macro-label">{t('jtty.stop.label')}</span>
           </button>
+          {dockReason && (
+            <div className="psk-drive-hint jtty-dock-reason" role="status" title={dockReason} onClick={() => pushToast(dockReason, 'info')}>
+              {dockReason}
+            </div>
+          )}
         </div>
-        {dockHint && (
+        {!dockReason && (
           <div className="psk-drive-hint" role="status">
-            {dockHint}
+            {t('jtty.compose.hint')}
           </div>
         )}
       </div>

@@ -51,6 +51,8 @@ pub enum NeedTag {
     Pota,
     /// The call is a live SOTA activator right now (appended, like Dxped).
     Sota,
+    /// The call is a live WWFF activator right now (appended, like Dxped).
+    Wwff,
     /// The call belongs to an ACTIVE announced DXpedition — a limited-time window
     /// (appended alongside the award tags; never the primary row color).
     Dxped,
@@ -77,6 +79,7 @@ impl NeedTag {
             NeedTag::Dxped => "DXpedition",
             NeedTag::Pota => "POTA",
             NeedTag::Sota => "SOTA",
+            NeedTag::Wwff => "WWFF",
             NeedTag::Wanted => "Wanted",
         }
     }
@@ -111,7 +114,7 @@ impl NeedTag {
             // award need; its priority effect is the explicit bump applied there.
             NeedTag::Dxped => 0,
             // Appended program chips (live activator) — same rule as Dxped.
-            NeedTag::Pota | NeedTag::Sota => 0,
+            NeedTag::Pota | NeedTag::Sota | NeedTag::Wwff => 0,
         }
     }
 }
@@ -182,7 +185,7 @@ pub enum StateSource {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParkRef {
-    /// "POTA" | "SOTA" — the programme, as the hunt target is set with it.
+    /// "POTA" | "SOTA" | "WWFF" — the programme, as the hunt target is set with it.
     pub program: String,
     /// The reference itself: "US-0001", "W7A/MN-001".
     pub reference: String,
@@ -238,6 +241,18 @@ pub struct NeedAlert {
     /// chip's tooltip says which.
     #[serde(default)]
     pub state_from: Option<StateSource>,
+    /// The US state itself (ADIF STATE code), when something placed the station in one — the
+    /// same value [`Self::state_from`] says the source of. The Needed board's state chips filter
+    /// on it, as the Spots board's do on a spot's. `None` otherwise, and then not sent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+    /// The operator may TRANSMIT here under their licence class — the Needed board's "My
+    /// privileges" chip, the Spots board's `licensed` flag for a need. Set by the command layer,
+    /// which holds the licence class, from the same tables as the TX lockout; true until it does
+    /// (and always for the Open class). A FLAG, NOT A FILTER: the row is sent either way. Sent
+    /// only when false, so a row nothing restricts is on the wire exactly as before.
+    #[serde(default = "licensed_unless_told", skip_serializing_if = "is_licensed")]
+    pub licensed: bool,
     /// The WPX prefix this station would be new on this band in this mode class, when the
     /// operator has turned on "Show WPX prefix needs" ([`crate::awards_more::mark_award_needs`]).
     /// `None` otherwise, and then not sent, so a board with the setting off is unchanged.
@@ -251,6 +266,40 @@ pub struct NeedAlert {
     /// row can name the group; `None` otherwise, and then not sent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub iota: Option<String>,
+}
+
+/// A row from a station that never judged [`NeedAlert::licensed`] is kept, never hidden.
+fn licensed_unless_told() -> bool {
+    true
+}
+
+/// `licensed` goes on the wire only when it restricts something.
+fn is_licensed(licensed: &bool) -> bool {
+    *licensed
+}
+
+/// For a station YOUR radio is decoding, the grid it sent on the air is the grid every other
+/// record of it on that band scores with: each record in `heard` on the band and call of a
+/// record in `own` takes the grid those records carry (the first that carries one, since every
+/// own record is the station's own word: one decoder heard a grid where another heard none), or
+/// `None` when none of them does.
+///
+/// Why: a contact is credited with the grid the station sent on the air. A callbook's grid on a
+/// gridless contact counts for the map and the distance only, and so would a third party's. A PSK
+/// Reporter record carries the DX's locator as the reporter had it, and [`rank`] keeps only the
+/// best record per call and band — so a DXpedition that never sends a grid, decoded here with
+/// none, wore "New grid" off a PSK Reporter locator, and the contact then logged without one.
+/// Stations your radio is not decoding keep their records' grids (a lead to go and find).
+pub fn grids_from_own_decodes(heard: &mut [Heard], own: &[Heard]) {
+    for h in heard.iter_mut() {
+        let mut mine = own
+            .iter()
+            .filter(|o| o.band == h.band && o.call.eq_ignore_ascii_case(&h.call))
+            .peekable();
+        if mine.peek().is_some() {
+            h.grid = mine.find_map(|o| o.grid.clone());
+        }
+    }
 }
 
 /// Build a [`Heard`] from a spot frequency (MHz) — maps the frequency to a band
@@ -595,6 +644,7 @@ pub fn score_heard(
         NeedTag::Dxped => format!("Active DXpedition — {}", info.entity),
         NeedTag::Pota => format!("POTA activator — {}", info.entity),
         NeedTag::Sota => format!("SOTA activator — {}", info.entity),
+        NeedTag::Wwff => format!("WWFF activator — {}", info.entity),
         // Wanted is applied by [`mark_watched`] (which owns its headline), never by
         // score(); this arm exists only for match exhaustiveness.
         NeedTag::Wanted => format!("Wanted — {}", info.entity),
@@ -632,6 +682,8 @@ pub fn score_heard(
         grid: grid.map(str::to_string),
         park: None, // set by activation_alert; a scored award row names no activation
         state_from: None, // set by rank and activation_alert, which know where the state came from
+        state: None,
+        licensed: true,
         wpx_need: None,
         wae_need: None,
         iota,
@@ -672,6 +724,7 @@ pub fn rank(spots: &[Heard], needs: &dyn OperatorNeeds, slots: &AwardSlots) -> V
                 a.admitted_at = s.admitted_at;
                 a.evidence = s.evidence.clone();
                 a.state_from = s.us_state.as_ref().map(|(_, from)| *from);
+                a.state = s.us_state.as_ref().map(|(state, _)| state.clone());
                 a
             })
         })
@@ -789,7 +842,7 @@ impl HuntedActivations {
 /// comment, the OTA feeds carry a STRUCTURED `mode` field, so `USB`/`LSB`/`FM`/`AM`/`DV`
 /// unambiguously mean voice here (whereas [`crate::model::classify_spot_mode`] must ignore
 /// them in prose). Empty/unknown ("Other") falls back to the band-plan segment.
-fn ota_mode_class(mode: &str, freq_mhz: f64) -> ModeClass {
+fn ota_mode_class(mode: &str, freq_mhz: f64, call: &str) -> ModeClass {
     match mode.trim().to_ascii_uppercase().as_str() {
         "CW" => ModeClass::Cw,
         "SSB" | "USB" | "LSB" | "PHONE" | "PH" | "AM" | "FM" | "DV" => ModeClass::Phone,
@@ -800,7 +853,7 @@ fn ota_mode_class(mode: &str, freq_mhz: f64) -> ModeClass {
         "FT8" | "FT4" | "FT2" | "TEMPOFAST" | "TEMPODEEP" | "FT1" | "DX1" | "Q65" | "FST4"
         | "RTTY" | "PSK" | "PSK31" | "PSK63" | "PSK125" | "QPSK31" | "JT65" | "JT9" | "JS8"
         | "JTTY" | "MFSK" | "MSK144" | "OLIVIA" | "DATA" | "DIGI" | "SSTV" => ModeClass::Digital,
-        _ => crate::model::classify_spot_mode(freq_mhz),
+        _ => crate::model::classify_spot_mode(freq_mhz, call),
     }
 }
 
@@ -858,7 +911,19 @@ pub fn activator_state<'a>(
         .or_else(|| states().min())
 }
 
-/// Build a Needed-board alert for a LIVE POTA/SOTA activator. Unlike [`score`] (which
+/// The chip and the programme CODE (what a hunt target is set with) for a hunter-feed spot's
+/// programme: SOTA and WWFF are their own, and anything else is POTA, as it always was.
+pub fn program_chip(program: &str) -> (NeedTag, &'static str) {
+    if program.eq_ignore_ascii_case("SOTA") {
+        (NeedTag::Sota, "SOTA")
+    } else if program.eq_ignore_ascii_case("WWFF") {
+        (NeedTag::Wwff, "WWFF")
+    } else {
+        (NeedTag::Pota, "POTA")
+    }
+}
+
+/// Build a Needed-board alert for a LIVE POTA/SOTA/WWFF activator. Unlike [`score`] (which
 /// returns `None` unless the station advances a DXCC/zone/grid award), an active
 /// park/summit is ITSELF the opportunity a chaser wants — so this ALWAYS yields an alert
 /// (when the frequency is on a band), carrying the program tag PLUS any award the
@@ -887,19 +952,13 @@ pub fn activation_alert(
 ) -> Option<NeedAlert> {
     let freq_mhz = spot.freq_khz / 1000.0;
     let band = Band::from_mhz(freq_mhz)?;
-    let mode = ota_mode_class(&spot.mode, freq_mhz);
+    let mode = ota_mode_class(&spot.mode, freq_mhz, &spot.activator);
     // The need is judged on the one mode the feed names, as every other row's is, and on the class
     // when the feed names only a class or nothing ([`feed_mode`]). The row keeps the class as its
     // label (below): the board drops an activation row that repeats a cluster row by call, band
     // and that label.
     let heard = feed_mode(&spot.mode).unwrap_or_else(|| mode.label().to_string());
-    let is_sota = spot.program.eq_ignore_ascii_case("SOTA");
-    let program_tag = if is_sota {
-        NeedTag::Sota
-    } else {
-        NeedTag::Pota
-    };
-    let prog = if is_sota { "SOTA" } else { "POTA" };
+    let (program_tag, prog) = program_chip(&spot.program);
 
     // Any award this activator ALSO satisfies (ATNO / new band / zone / grid / state). The state
     // is the park's or summit's, which is the one a contact hunted there logs.
@@ -944,6 +1003,8 @@ pub fn activation_alert(
         grid: spot.grid.clone(),
         park: None, // filled in below, on the merged row as well as this one
         state_from: None,
+        state: None,
+        licensed: true,
         wpx_need: None,
         wae_need: None,
         iota: None,
@@ -953,6 +1014,7 @@ pub fn activation_alert(
     alert.mode = mode.label().to_string();
     // The row's state, when it has one, is the park's or the summit's, on the merged row as well.
     alert.state_from = state.map(|_| StateSource::Park);
+    alert.state = state.map(str::to_string);
     // The NEED first, then the LABEL. Order matters: `tags[0]` picks the row's colour and its
     // chip everywhere downstream, and a park still to be worked is a reason, not a decoration.
     if reference_needed && !alert.tags.contains(&NeedTag::NewPark) {
@@ -1063,6 +1125,8 @@ pub fn watched_alert(
         grid: grid.map(str::to_string),
         park: None,
         state_from: None,
+        state: None,
+        licensed: true,
         wpx_need: None,
         wae_need: None,
         iota: None,
@@ -2200,6 +2264,88 @@ mod tests {
         }
     }
 
+    /// A grid-less DXpedition your radio is decoding wears no "New grid" off a PSK Reporter
+    /// locator, because the contact would log without that grid. Controls: a grid it DID send
+    /// still scores, and a station you are not decoding keeps its report's grid.
+    #[test]
+    fn a_decoded_station_scores_the_grid_it_sent_not_a_reports() {
+        let n = LogNeeds::new();
+        let (z, g, s) = (HashSet::new(), HashSet::new(), HashSet::new());
+        let on_20 = |call: &str, grid: Option<&str>| Heard {
+            grid: grid.map(str::to_string),
+            freq_mhz: None,
+            ..heard_from_freq(call, 14.074, "FT8").unwrap()
+        };
+        let grid_need = |heard: &[Heard], call: &str| {
+            rank(heard, &n, &slots(&z, &g, &s))
+                .iter()
+                .any(|a| a.call == call && a.tags.contains(&NeedTag::NewGrid))
+        };
+
+        // Decoded with no grid; PSK Reporter has one.
+        let own = vec![on_20("KH8X", None)];
+        let mut heard = own.clone();
+        heard.push(on_20("KH8X", Some("AH45")));
+        assert!(grid_need(&heard, "KH8X"), "the report alone scores a grid");
+        grids_from_own_decodes(&mut heard, &own);
+        assert!(
+            !grid_need(&heard, "KH8X"),
+            "decoded without a grid, so the log will credit none"
+        );
+
+        // Decoded WITH a grid: that grid scores, whatever the report says.
+        let own = vec![on_20("K1ABC", Some("FN42"))];
+        let mut heard = own.clone();
+        heard.push(on_20("K1ABC", Some("EM10")));
+        grids_from_own_decodes(&mut heard, &own);
+        assert!(heard.iter().all(|h| h.grid.as_deref() == Some("FN42")));
+        assert!(grid_need(&heard, "K1ABC"));
+
+        // Not decoded here (another call, or the same call on another band): untouched.
+        let own = vec![on_20("K1ABC", None)];
+        let mut heard = vec![
+            on_20("DL1XYZ", Some("JO62")),
+            Heard {
+                grid: Some("FN42".into()),
+                ..heard_from_freq("K1ABC", 21.074, "FT8").unwrap()
+            },
+        ];
+        grids_from_own_decodes(&mut heard, &own);
+        assert_eq!(heard[0].grid.as_deref(), Some("JO62"));
+        assert_eq!(heard[1].grid.as_deref(), Some("FN42"));
+    }
+
+    /// Two of this radio's own decoders, one grid: a station JTTY heard with its grid, and the FT
+    /// roster has without one, keeps the grid it sent; no own record wipes another's grid.
+    #[test]
+    fn an_own_decode_with_a_grid_is_not_wiped_by_one_without() {
+        let n = LogNeeds::new();
+        let (z, g, s) = (HashSet::new(), HashSet::new(), HashSet::new());
+        let on_20 = |call: &str, mode: &str, grid: Option<&str>| Heard {
+            grid: grid.map(str::to_string),
+            freq_mhz: None,
+            ..heard_from_freq(call, 14.074, mode).unwrap()
+        };
+        let ft = on_20("KH8X", "FT8", None);
+        let jtty = on_20("KH8X", "JTTY", Some("AH45"));
+        let pskr = on_20("KH8X", "FT8", Some("AH45"));
+        for own in [
+            vec![ft.clone(), jtty.clone()],
+            vec![jtty.clone(), ft.clone()],
+        ] {
+            let mut heard = own.clone();
+            heard.push(pskr.clone());
+            grids_from_own_decodes(&mut heard, &own);
+            assert!(
+                heard.iter().all(|h| h.grid.as_deref() == Some("AH45")),
+                "{heard:?}"
+            );
+            assert!(rank(&heard, &n, &slots(&z, &g, &s))
+                .iter()
+                .any(|a| a.call == "KH8X" && a.tags.contains(&NeedTag::NewGrid)));
+        }
+    }
+
     /// A ROW CARRIES THE GRID ITS EVIDENCE CARRIED, for the station's watch-list match (operator
     /// 2026-09-24: "watched counts as needed"). A GRID entry names a station by the grid it sent,
     /// as the WATCH tile does on the roster — and a row with no grid could never answer one while
@@ -3305,6 +3451,26 @@ mod tests {
         .unwrap();
         assert!(s.tags.contains(&NeedTag::Sota), "SOTA chip: {:?}", s.tags);
         assert_eq!(s.mode, "CW");
+        // A WWFF activation is WWFF's, never filed as a POTA park: its own chip, its own
+        // programme on the row's park (what a Work from the board hunts with) and headline.
+        let w = activation_alert(
+            &ota("WWFF", "KFF-1234", "K1ABC", 14_244.0, "SSB"),
+            &needs,
+            &slots(needs.worked_zones(), needs.worked_grids(), &HashSet::new()),
+            true,
+            true,
+        )
+        .unwrap();
+        assert!(w.tags.contains(&NeedTag::Wwff), "WWFF chip: {:?}", w.tags);
+        assert!(!w.tags.contains(&NeedTag::Pota), "{:?}", w.tags);
+        assert_eq!(
+            w.park,
+            Some(ParkRef {
+                program: "WWFF".into(),
+                reference: "KFF-1234".into()
+            })
+        );
+        assert!(w.headline.contains("WWFF KFF-1234"), "{}", w.headline);
         // 2.5 MHz is off the amateur band plan → no alert (never a bogus row).
         assert!(activation_alert(
             &ota("POTA", "K-1", "K1ABC", 2_500.0, "SSB"),
@@ -3371,7 +3537,11 @@ mod tests {
             let class = ModeClass::from_adif(&key);
             // A CW, a phone and a data frequency: the class must not move with any of them.
             for mhz in [14.025, 14.250, 14.074] {
-                assert_eq!(ota_mode_class(token, mhz), class, "{token:?} at {mhz}");
+                assert_eq!(
+                    ota_mode_class(token, mhz, "W1AW"),
+                    class,
+                    "{token:?} at {mhz}"
+                );
             }
         }
         assert_eq!(
@@ -4040,6 +4210,45 @@ mod tests {
         );
         assert_eq!(ranked[0].priority, 60);
         assert_eq!(ranked[0].state_from, Some(StateSource::License));
+        // …and the state itself, which the Needed board's state chips filter on.
+        assert_eq!(ranked[0].state.as_deref(), Some("VT"));
+    }
+
+    #[test]
+    fn licensed_is_on_the_wire_only_when_it_restricts() {
+        // The Needed board's "My privileges" chip hides a row only on an explicit `false`; a row
+        // nothing restricts — and one from a station that never judged it — must read as allowed.
+        let row = |licensed: bool| NeedAlert {
+            call: "W1XY".into(),
+            entity: "United States".into(),
+            band: "20m".into(),
+            zone: 5,
+            tags: vec![NeedTag::NewState],
+            priority: 60,
+            headline: "New state".into(),
+            mode: "Phone".into(),
+            exact_mode: None,
+            freq_mhz: Some(14.160),
+            admitted_at: None,
+            evidence: None,
+            grid_rarity: None,
+            grid: None,
+            park: None,
+            state_from: None,
+            state: None,
+            licensed,
+            wpx_need: None,
+            wae_need: None,
+            iota: None,
+        };
+        let allowed = serde_json::to_value(row(true)).unwrap();
+        assert!(allowed.get("licensed").is_none(), "{allowed}");
+        assert!(allowed.get("state").is_none(), "{allowed}");
+        let refused = serde_json::to_value(row(false)).unwrap();
+        assert_eq!(refused["licensed"], serde_json::json!(false));
+        // An older station's row carries no flag: kept.
+        let old: NeedAlert = serde_json::from_value(allowed).unwrap();
+        assert!(old.licensed);
     }
 
     #[test]
@@ -4077,6 +4286,8 @@ mod tests {
                 grid: None,
                 park: None,
                 state_from: None,
+                state: None,
+                licensed: true,
                 wpx_need: None,
                 wae_need: None,
                 iota: None,

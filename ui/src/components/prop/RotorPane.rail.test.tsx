@@ -23,6 +23,8 @@ vi.mock('../../api', async (importOriginal) => {
     getSettings: vi.fn(async () => ({ ...settingsFixture, mygrid: 'EN52', rotatorModel: 603 })),
     readRotator: vi.fn(async () => 123),
     readRotatorState: vi.fn(async () => ({ azDeg: 123, reading: 'position', elDeg: 45, elRange: [0, 180] })),
+    getMoonStatus: vi.fn(async () => null),
+    startMoonTrack: vi.fn(async () => ({ state: 'following', elevation: true, azDeg: null, elDeg: null })),
     rotatorBearingToCall: vi.fn(async () => ({ pointed: { bearing: 227.4, to: 'grid', grid: 'IN52TK', country: null }, km: 1530.6 })),
     getSatTrackStatus: vi.fn(async () => null),
     getDeclination: vi.fn(async () => null),
@@ -271,7 +273,9 @@ describe('everywhere else the pane keeps its own layout', () => {
       expect(css(p.rose, 'width'), 'the rose is drawn smaller here too').toBeNull()
       expect(css(p.rose, 'grid-row')).toBeNull()
       expect(css(p.aim, 'grid-column')).toBeNull()
-      expect(css(p.input, 'min-height')).toBe('44px')
+      // The stock `.settings-input` floor, `--touch` at Standard: 30 px since the 1080p pass (it was 44).
+      // The rail's own rule (0 px, above) is what must not reach here.
+      expect(css(p.input, 'min-height')).toBe('30px')
       expect(css(p.aim, 'flex-wrap')).toBe('wrap')
       expect(css(p.az, 'font-size')).toBe('1.6em')
       expect(css(await stationLine(p.row.closest<HTMLElement>('.rotor-pane')!), 'vector-effect'), 'the rail’s fixed widths reach the line').toBeNull()

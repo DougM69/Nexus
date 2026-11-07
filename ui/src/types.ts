@@ -4,6 +4,7 @@
 
 import type { EsmRoleMap } from './features/esmRoles'
 import type { MacroSetId } from './features/macroSets'
+import type { PopupCorner } from './features/popupCorner'
 
 export type Presence = 'active' | 'idle' | 'stale'
 
@@ -414,6 +415,79 @@ export interface PathPrediction {
   routes?: RouteCall[]
   /** The request's day as the path-over-the-day strip draws it; per-path outlook only. */
   day?: PathDay
+  /** What a flare or a proton event does to this route NOW (propagation::pathnow), display only:
+   * never folded into the model's numbers. Per-path outlook only; absent when nothing is happening. */
+  overlay?: PathHourOverlay
+  /** The "now" line beside the climatology (propagation::pathnow::space_now): a flare, a proton
+   * event, a NOAA watch, each with its own time. Absent when nothing is happening. */
+  spaceNow?: SpaceNow
+}
+/** Where a flare footprint came from: NOAA's current D-RAP grid, or the analytic field from GOES. */
+export type HafSource = 'noaa' | 'goes'
+/** When HF is estimated to recover, and whose estimate: NOAA's own (its grid), or NOAA's rule of
+ * thumb from the X-ray level. */
+export interface FlareRecoveryAt {
+  at: number
+  source: 'noaa' | 'ruleOfThumb'
+}
+/** One band's overlay on a route now. Every figure is an estimate from NOAA's inputs. */
+export interface BandNow {
+  band: string
+  /** Hops the D-region crossings were counted for; `hopsModelled` false = assumed 4000 km F2 hops. */
+  hops: number
+  hopsModelled: boolean
+  /** Estimated flare absorption over the path (dB), while a flare (M1+) footprint stands. */
+  flareDb?: number
+  /** Estimated polar-cap (proton) absorption over the path (dB), during an S1+ event. */
+  pcaDb?: number
+  /** Where `flareDb` came from: NOAA's grid at every crossing, the GOES estimate (no current grid,
+   * or the split kept the grid's proton part out), or both. Absent from an older shack. */
+  flareFrom?: 'noaa' | 'goes' | 'both'
+  /** Stretches the map draws on the ribbon for this band now. */
+  segments?: PathSegmentNow[]
+}
+export interface PathSegmentNow {
+  from: number
+  to: number
+  kind: 'polar' | 'grey' | 'flareWeak' | 'flareOut' | 'pca'
+}
+/** A route's "now" overlay (propagation::pathnow::PathHourOverlay). */
+export interface PathHourOverlay {
+  unix: number
+  kp: number | null
+  kpSource: PathGeoHour['kpSource']
+  capLatDeg: number | null
+  source: {
+    xrayAt?: number
+    xrayLong?: number
+    haf?: HafSource
+    drapValidAt?: number
+    recovery?: FlareRecoveryAt
+    protonsAt?: number
+    j10?: number
+    sScale?: number
+    /** During a proton event with NOAA's grid as the footprint: the geomagnetic latitude poleward
+     * of which the flare figure took no more than the GOES X-ray part (the grid's proton part is
+     * counted once, as polar-cap absorption). */
+    flareCapGeomag?: number
+  }
+  bands: BandNow[]
+}
+/** The "now" line's facts (propagation::pathnow::SpaceNow). */
+export interface SpaceNow {
+  flare?: {
+    r: number
+    xrayLong: number
+    xrayAt: number
+    haf: HafSource
+    drapValidAt?: number
+    hafSubMhz: number
+    out?: string
+    weak?: string
+    recovery?: FlareRecoveryAt
+  }
+  protons?: { s: number; j10: number; at: number }
+  watch?: { g: number; from: number; to: number; issued: number }
 }
 /** One band at one UTC hour of a path's day (propagation::pathday). Modelled, never measured. */
 export interface PathDayCell {
@@ -495,6 +569,10 @@ export interface AuroraOval {
   observedAt: number | null
   forecastAt: number | null
   fetchedAt?: number | null
+  /** OVATION's own equatorward edge (its 10 % line): one latitude per 15° of longitude from
+   *  −180 (bin centres −172.5 + 15·i), null where OVATION never reaches it. Absent from an older
+   *  station. */
+  edge?: { north: (number | null)[]; south: (number | null)[] }
 }
 /** A forward-calendar entry — an announced DXpedition to plan for. */
 export interface CalendarEntry {
@@ -560,6 +638,21 @@ export interface PcaView {
   points: { lat: number; lon: number; db30: number }[]
   /** The GOES proton sample's own time (Unix seconds); absent from an older station. */
   protonsAt?: number | null
+  /** NOAA's S-scale from `j10`; absent from an older station. */
+  sScale?: number
+  /** NOAA's rule of thumb for how long the event lasts (hours); null where it says nothing. */
+  sepRecoveryH?: number | null
+  /** The approximate cap edge at `cutoffDeg`, [north, south] closed [lon, lat] rings; null without
+   *  a measured Kp. */
+  edge?: [number, number][][] | null
+  /** Whether a proton event is held now, by the shack's one rule (`pca::proton_event`: S1+, dated,
+   *  under 30 min). Absent from an older station, which counts as no event. */
+  protonEvent?: boolean
+  /** When the held event stops being held (the sample time + 30 min, from the shack); present exactly
+   *  when `protonEvent` is. The map stops drawing it then on its own clock. */
+  protonEventUntil?: number | null
+  /** The shack's reason (`pca::proton_state`): held, or why not. Absent from an older station. */
+  protonWhy?: 'held' | 'quiet' | 'stale' | 'ahead' | 'undated'
 }
 
 /** Satellites view (get_satellites): amateur-bird subpoints now + next-24h passes
@@ -1314,6 +1407,34 @@ export interface ArrivalL1 {
     btAfter: number | null
   } | null
 }
+/** One of NOAA's numbered active regions on the visible disc (the shack's `get_solar_regions`). */
+export interface SolarRegion {
+  region: number
+  /** Heliographic latitude, degrees (positive north). */
+  latDeg: number
+  /** Heliographic longitude from the central meridian, degrees (positive EAST, as NOAA gives it). */
+  lonDeg: number
+  location: string | null
+  magClass: string | null
+  spotClass: string | null
+  area: number | null
+  numberSpots: number | null
+  mFlareProbability: number | null
+  xFlareProbability: number | null
+}
+
+/** NOAA's region list as the shack judges it on its own clock: regions only while `held`. */
+export interface SolarRegionsView {
+  held: boolean
+  /** `held`, `stale`, `ahead`, or `none` (no list held). */
+  why: 'held' | 'stale' | 'ahead' | 'none' | string
+  /** The observed day, Unix seconds of its 00:00 UTC. */
+  observedDay: number | null
+  /** Until when a held list is drawn (Unix seconds); present exactly when `held` is. */
+  until: number | null
+  regions: SolarRegion[]
+}
+
 export interface ArrivalOutlook {
   watch: ArrivalWatch | null
   model: ArrivalModel | null
@@ -1362,6 +1483,10 @@ export interface Activation {
    *  operator answers "Still activating" (`resumeActivation`): nothing is tagged with the park,
    *  keyed or spotted meanwhile. */
   restored?: boolean
+  /** Only on the answer to a Stop pressed here that could not take the station back to the
+   *  "My station" profile it was on before the park's (a run, a contact or a queued message under
+   *  way): that profile, to pick in the top bar once it has ended. */
+  stationProfileBack?: StationProfileChoice
 }
 
 /** One park of the running activation and what it holds today. */
@@ -1696,6 +1821,9 @@ export interface TxHold {
   leftSecs?: number
 }
 
+/** The radio scope's delivery rate (`RadioStatus.scopeRate`). */
+export type ScopeRate = { sweepsPerSec: number; dropped: number; speed: 'slow' | 'mid' | 'fast' | null }
+
 export interface RadioStatus {
   dialMhz: number
   band: string
@@ -1837,6 +1965,17 @@ export interface RadioStatus {
    * (judged as CW there too) though it allows the mode's own emission: Tune keys nothing, and the
    * note beside it says why. Absent when false. */
   flexTuneRefused?: boolean
+  /** Tune is Nexus's own tone here, and the licence refuses it where the tone goes out (1500 Hz
+   * from the transmit dial) though it allows the mode's own emission: Tune keys nothing, and the
+   * note beside it says why. Absent when false. */
+  tuneToneRefused?: boolean
+  /** A Tune press was refused because a slot over was on the air with Split Operation Rig or Fake
+   * It: shown beside Tune while that over is on the air. Absent when false. */
+  tuneOverRefused?: boolean
+  /** The radio reports a tuner, and the licence refuses its own ATU carrier at the transmit dial
+   * (this MHz) though it allows the section's emission: an ATU press keys nothing, and the note
+   * beside it says why. Absent otherwise. */
+  atuCarrierRefusedMhz?: number | null
   /** While Nexus's own Flex client runs the radio's own ATU (Beta, off until a tester's bench)
    * and the radio reports a tuner fitted: the radio's tune power and transmit timeout, as beside
    * Tune, and the ATU line (a cycle's result, or why a press started none), shown beside the ATU
@@ -2038,6 +2177,13 @@ export interface RadioStatus {
    * rejected (#275: an IC-7300 with its scope in Fixed mode rejects a span).
    */
   scopeSpanRefused?: string | null
+  /**
+   * How fast the radio's own scope reaches Nexus: sweeps a second, sweeps dropped, and the radio's
+   * scope SPEED setting where it can be read (null when it cannot). null = no rig scope streaming.
+   * Absent from a station that does not report it yet; the scope's slow hint then falls back to the
+   * rate it measures itself (`spectrum/sweepRate.ts` `scopeIsSlow`).
+   */
+  scopeRate?: ScopeRate | null
   /** The rig scope's MODE code (`SS` P3) as read back, or null before one is known. */
   scopeModeCode?: number | null
   /** The FIX start the operator stated, in MHz — null until they do. */
@@ -2070,7 +2216,7 @@ export interface RadioStatus {
   /** Skip Tx1: answering a CQ opens with the report. The station's own session flag, so a
    *  computer driving it shows the station's value. Absent from an older station: off. */
   skipTx1?: boolean
-  /** TX audio drive level (0.0–1.0) — the "Pwr" slider. */
+  /** TX audio drive level (0.0–1.0) — the "Drive" slider. */
   txLevel: number
   /** Measured PC-clock-vs-UTC offset in ms (positive = fast) that Nexus **is
    *  already applying** to TX keying and decode windows. Not a "go fix your
@@ -2286,7 +2432,7 @@ export interface PskState {
   signal: boolean
   /** Audio center (Hz) the decoder is netted on (the waterfall cursor). */
   centerHz: number
-  /** Selected sub-mode slug ('psk31' | 'qpsk31') — engine truth for the
+  /** Selected sub-mode slug ('psk31' | 'qpsk31' | 'psk63') — engine truth for the
    * cockpit's selector. Optional: absent reads as 'psk31' (the default). */
   mode?: string
   /** QPSK sideband-reverse (LSB) toggle state. Optional: absent = normal. */
@@ -2896,6 +3042,16 @@ export interface LateDecodes {
   rows: DecodeRow[]
 }
 
+/** The received decodes a decode pane missed (#452), from the station's decode history
+ *  (`get_decode_refill`). Mirrors dto.rs `DecodeRefill`. */
+export interface DecodeRefill {
+  /** The oldest slot whose decodes are all still held; a missed period before it cannot be
+   *  refilled. 0 while nothing has been dropped. */
+  coveredFrom: number
+  /** Oldest first, each with the slot it was ingested at (`radio.slot` numbering). */
+  rows: { slot: number; row: DecodeRow }[]
+}
+
 /** A single decoded signal in the most-recent RX slot (WSJT-X style row). */
 export interface DecodeRow {
   from: string | null
@@ -3115,7 +3271,8 @@ export interface UploadStatus {
   whenUnix: number
   /**
    * The failure CLASS as a token — "credentials" | "cert" | "station-location" | "record" |
-   * "partial" | "unclassified" | "declared" | "account-dates" | "qth-nickname" — not prose. It
+   * "partial" | "unclassified" | "declared" | "account-dates" | "qth-nickname" | "resend" (not a
+   * failure: corrected, not sent yet) — not prose. It
    * rides `log.adi`, which is what TQSL signs and uploads to ARRL, so it is never the service's
    * own words; anything else is dropped on the way back into Rust. Render it through a label of
    * your own, not verbatim.
@@ -3143,6 +3300,25 @@ export interface UploadReport {
   /** Contacts held back because TQSL does not know their mode yet (a JTTY contact, written
    *  `MODE=MFSK SUBMODE=JTTY`): not sent, still marked not uploaded. Absent from an older station. */
   heldMode?: number
+  /** Contacts signed with the Station Location in Settings because they fit two station profiles
+   *  naming different TQSL Station Locations. Absent from an older station. */
+  locationTie?: number
+  /** Contacts signed with the Station Location in Settings because they fit none of the station
+   *  profiles while one names a location. Absent from an older station. */
+  locationUnmatched?: number
+  /** The tie and no-match contacts were signed from the call, grid and place fields they carry
+   *  (signing from the ADIF), not with the Station Location in Settings. Absent from an older station. */
+  locationFromAdif?: boolean
+  /** Contacts not sent because a later TQSL run could not run after earlier runs had sent
+   *  theirs: still marked not uploaded. Absent from an older station. */
+  unsentAfterError?: number
+  /** What stopped them (English, from the station), when `unsentAfterError` or
+   *  `unconfirmedAfterError` is not 0. */
+  unsentError?: string | null
+  /** Contacts of a later TQSL run that went to LoTW, whose upload mark could not be shown to be
+   *  saved to disk (one not saved is sent again). Counted in `dispatched`. Absent from an older
+   *  station. */
+  unconfirmedAfterError?: number
 }
 
 /** A confirmation in a synced report with no matching logged QSO (diagnostic). */
@@ -3379,6 +3555,8 @@ export type NeedTag =
   | 'Dxped'
   | 'Pota'
   | 'Sota'
+  /** A live WWFF (World Wide Flora & Fauna) activator — a label, like Pota/Sota. */
+  | 'Wwff'
   | 'Wanted'
 
 /** One phone voice-keyer slot: an F-key-numbered label bound to a recorded WAV.
@@ -3427,6 +3605,13 @@ export interface NeedAlert {
    *  station is activating, its licence, or its grid. The STATE chip's tooltip says which. Absent
    *  from an older station, and a newer one may send a value this window does not know. */
   stateFrom?: 'park' | 'license' | 'grid' | null
+  /** The US state itself (ADIF STATE code), when something placed the station in one — what the
+   *  board's state chips filter on, as the Spots board's do on a spot's. Absent otherwise. */
+  state?: string | null
+  /** The operator may transmit here under their licence class (the Spots row's `licensed`, from
+   *  the same tables). Sent only when FALSE: absent means allowed, and an older station's row
+   *  is kept — the "My privileges" chip tests `=== false`, never falsiness. */
+  licensed?: boolean
   /** The WPX prefix this station would be new on this band in this mode class. Sent only while
    *  "Show WPX prefix needs" is on (off as it ships); the board shows a WPX chip for it. */
   wpxNeed?: string | null
@@ -3583,6 +3768,25 @@ export interface RotatorState {
    *  that question this time, so the pane keeps what it last knew instead of blinking the
    *  elevation out while a busy rotctld catches up. */
   elRange?: [number, number] | null
+}
+
+/** The rotator's Moon follow (`MoonTrackDto`): following, holding while the Moon is below the
+ *  horizon, or waiting on a rotator that stopped answering. `elevation` is whether the elevation is
+ *  driven; `azDeg`/`elDeg` where the antenna was last commanded (absent until a command went out). */
+export interface MoonTrack {
+  state: 'following' | 'belowHorizon' | 'rotorLost'
+  elevation: boolean
+  azDeg: number | null
+  elDeg: number | null
+}
+
+/** The Moon from the station (`moon_status`): topocentric, geometric. `window` is the next EME window
+ *  with the grid asked about (unix seconds), null when none was asked for or there is none in 48 h. */
+export interface MoonStatus {
+  azDeg: number
+  elDeg: number
+  track: MoonTrack | null
+  window: { start: number; end: number; openNow: boolean } | null
 }
 
 /** What a point-at-call aimed at (`point_rotator_at_call`): the bearing, and what it was taken
@@ -3762,6 +3966,9 @@ export interface ClusterNodes {
   /** The SAVED choice — the form may hold an unsaved one. */
   auto: boolean
   nodes: ClusterNode[]
+  /** Another Nexus window on this computer holds this callsign's cluster logins: its node list
+   * and SSID are the ones in use, and this window logs into no node. */
+  viaOtherWindow?: boolean
 }
 
 /** Liveness of the background live feeds (DX cluster/RBN + PSK Reporter MQTT). */
@@ -3779,6 +3986,10 @@ export interface FeedHealth {
    * "N SSB spots" diagnostic (0 = SSB not arriving; >0 with no phone rows = arriving but
    * not a need). */
   phoneSpotsSeen: number
+  /** This window holds no cluster login of its own: another Nexus window on this computer holds
+   * them for this callsign, under its own cluster list and SSID, and relays its spots here.
+   * `cluster` and `phoneCluster` then say what reaches THIS window. */
+  clusterViaOtherWindow?: boolean
 }
 
 /** Worked All States progress (50 US states; LoTW/paper confirmed). */
@@ -4398,6 +4609,9 @@ export interface FieldDayStatus {
      a row's own sent exchange is `FieldDayQso.mex`. */
   running: boolean
   state: string
+  /** The call this contest entry is operated and logged under (its Cabrillo CALLSIGN). Settings
+   *  names it when a save would change the station's call mid-entry. */
+  entryCall?: string
   /** The station currently being worked (quiets decode popups about them). */
   dxcall?: string | null
   qsoCount: number
@@ -5001,10 +5215,13 @@ export interface Settings {
   /** Serial port for the FSK keying line (e.g. the FTDX10's USB Enhanced COM).
    * Empty = the CAT serial port. */
   rttyFskPort?: string
-  /** RTTY baud rate — true 45.45 by default (never 45); 75 is the other common rate. */
+  /** RTTY baud rate — true 45.45 by default (never 45); 50 and 75 are the other rates offered. */
   rttyBaud?: number
   /** RTTY mark/space shift in Hz (170 = the HF standard). TX + RX demod both. */
   rttyShiftHz?: number
+  /** The saved RTTY tone pair's LOWER tone (Hz; 2125 = 2125/2295). Where the decoder and the
+   * AFSK transmitter sit until a waterfall net; a change re-homes both onto it. */
+  rttyLowToneHz?: number
   /** Reverse the mark/space sense (TX tones + RX demod) — for copying an
    * upside-down station. The sideband is `rttyAfskSideband`'s job. */
   rttyReverse?: boolean
@@ -5413,6 +5630,24 @@ export interface Settings {
   sdrconnectPort?: number
   /** How the SDR's centre follows the rig's dial: `centre` (default) or `scroll`. */
   sdrconnectFollow?: string
+  /** Listen on 127.0.0.1:`freedvLogPort` for the contacts FreeDV's own app logs, and put each
+   *  in the log as a FreeDV contact (`tempo_app::freedv`). ON by default; receive only. */
+  freedvLog?: boolean
+  /** UDP port for FreeDV's logged contacts (2239; 2237 is Nexus's own telemetry). Since the port
+   *  takes every program's logged contacts (`tempo_app::log_intake`), `freedvLog` /
+   *  `freedvLogPort` are "Accept contacts other programs log". */
+  freedvLogPort?: number
+  /** "Accept from devices on my network": bind the contact port on every adapter and take
+   *  contacts from private network addresses too. OFF by default. */
+  logIntakeLan?: boolean
+  /** The one network address allowed to send contacts while `logIntakeLan` is on; empty = any
+   *  private address. */
+  logIntakePeer?: string
+  /** List the calls FreeDV hears (its callsign broadcast) in the Phone FreeDV pane. OFF by
+   *  default: it joins FreeDV's group, so Windows may ask once about the network. */
+  freedvHeard?: boolean
+  /** UDP port of FreeDV's callsign broadcast (FreeDV's default 7177). */
+  freedvHeardPort?: number
   /** The rig's serial HANDSHAKE as the operator DECLARES it (`cat_serial_handshake`):
    *  `auto` | `none` | `hardware` | `xonxoff`. `auto` (the default) is today's behaviour to the
    *  byte — Nexus infers it exactly as before. Anything else REPLACES that inference.
@@ -5468,6 +5703,10 @@ export interface Settings {
   audioIn: string
   /** Output (TX) audio device name. "" = system default. */
   audioOut: string
+  /** The USB model of the sound card each TX device was on when it was chosen (Linux), written by
+   *  the station only. A form may name a device it just chose with "" to have the station read its
+   *  card now; any other value it sends is ignored (`tx_card_models_after`, notify_sound.rs). */
+  txCardModels?: Record<string, string>
   /** Microphone device for RECORDING voice-keyer messages. "" (default) = record from
    * audioIn (the shared input) — but on a digital setup that's the rig's RX codec, so a
    * voice message would capture the band, not the operator. Set to the real mic and each
@@ -5543,6 +5782,9 @@ export interface Settings {
   wsjtxUdp: boolean
   /** Address:port for the WSJT-X UDP API. */
   wsjtxUdpAddr: string
+  /** Take a Reply, FreeText or Location from another computer ("Accept requests from other
+   * computers"). Off by default; a program sending from loopback never needs it. */
+  wsjtxUdpAcceptOtherComputers?: boolean
   /** Append every decode to a WSJT-X-format ALL.TXT decode log (loggers/GridTracker tail it). */
   writeAllTxt: boolean
   /** Write the DEBUG tier to the diagnostic log. Off by default; a session switch, not a
@@ -5800,6 +6042,9 @@ export interface Settings {
    * behaviour), so an ABSENT key must read as on — `!== false`, never `!!`. The gate
    * is in the engine; the ISS pass arm is an explicit act and is unaffected. */
   sstvRxAutoArm?: boolean
+  /** #451: opening the SSTV view tunes to the band's SSTV frequency (off by default; an absent
+   * key reads as off). The view decides the channel (`sstvChannelOnOpen`). */
+  sstvTuneOnOpen?: boolean
   /** The transmit mode the SSTV screen starts on: a `sstvModes.ts` slug, or 'auto'
    * for the band-aware pick. Named `default` because `SstvState.txMode` is the live
    * "mode currently going out" and the two must not be confusable. */
@@ -5874,6 +6119,9 @@ export interface Settings {
   /** #321: the least time, in seconds, a pop-up stays before it goes by itself. 0 or absent
    *  (an old station, the Remote page) leaves each pop-up its own time; see `setPopupMinSeconds`. */
   popupMinSecs?: number
+  /** #445: the window corner the pop-ups stand in. Optional: absent (an old station, the Remote
+   *  page) or a value this build does not know is bottom right (`popupCornerOf` in features/popupCorner.ts). */
+  popupCorner?: PopupCorner
   /** Band scope for a new DXCC: 'off' | 'hf' | 'vhf' | 'all'. The Needed boards and the need icons
    *  follow it, and so does the alert while `alertNew` is on. */
   alertDxccBands: string
@@ -6057,6 +6305,12 @@ export interface Settings {
     pskProfiles?: KeyboardMacroProfile[]
     /** The PSK set the cockpit shows: `contest`, or Everyday for anything else. */
     activePskProfile?: string
+    /** How many macro keys each keyboard dock shows: 8 (absent — the default), 12 or 16
+     *  (`features/macroSets.ts` `macroCount`). The Settings form writes them; the cockpits'
+     *  macro saves keep them. Fewer hides the keys past the count and keeps what they hold. */
+    cwMacroCount?: number
+    rttyMacroCount?: number
+    pskMacroCount?: number
   }
   // --- dual-radio ---
   /** Configured radios (dual-radio). Migrated to a single profile for a one-radio station; the flat
@@ -6066,6 +6320,12 @@ export interface Settings {
   activeRadio?: number
   /** Peg-lock: band selection won't auto-switch the active radio when true. */
   radioPegged?: boolean
+  /** "My station" profiles (Home, a portable kit, a club call). Absent until the operator makes
+   *  one. Written only by their own verbs (`saveStationProfile`, `switchStationProfile`,
+   *  `removeStationProfile`); a settings save keeps the live list and active id. */
+  stationProfiles?: StationProfile[]
+  /** The id of the profile the station is on; the flat call, grid, state and power are its. */
+  activeStationProfile?: string
   /** Opt-in: run two radios at once (one per window). When on with ≥2 radios, launch shows a
    *  "which radio?" picker. Off by default so single-radio stations are never bothered. */
   simultaneousRadios?: boolean
@@ -6110,6 +6370,9 @@ export interface AutoRadioSwitch {
   /** The band asked for ("2m"); empty for a dial off the band plan. */
   band: string
   mode: RouteMode
+  /** The routing chose `toId`, but another Nexus window runs that radio: the station stayed on
+   *  `fromId`. Said always, whatever the switch-notice policy. */
+  refused?: boolean
 }
 
 /** Non-mode context a routing rule can be DESIGNATED for instead of a mode class: satellite work.
@@ -6241,11 +6504,47 @@ export interface RadioSummary {
   isActive: boolean
   /** Live CAT health for the active radio; null for a not-connected radio. */
   catOk: boolean | null
+  /** A non-active radio whose CAT Nexus refused to start (Hardware handshake where RTS keys a
+   * transmitter). Absent when false. */
+  catRefused?: boolean
   /** Live S-meter (dB rel S9) for the active radio; null otherwise. */
   smeterDb: number | null
   transmitting: boolean
   /** Bands this radio covers (empty = all) — for auto-routing (P4) + a coverage hint. */
   bands: string[]
+}
+
+/** The id of the implicit Home profile: today's Settings ▸ Station. */
+export const HOME_STATION_PROFILE = 'home'
+
+/** One "My station" profile (`crates/tempo-app/src/settings/station_profiles.rs`). Blank fields
+ *  stamp nothing on a contact. */
+export interface StationProfile {
+  /** `home` for Home, `p1`… for the others; empty when adding one. */
+  id: string
+  /** Blank for Home, which the screen names in its language. */
+  name: string
+  call: string
+  grid: string
+  state: string
+  county: string
+  cqZone: number | null
+  ituZone: number | null
+  iota: string
+  park: string
+  powerW: number | null
+  rig: string
+  antenna: string
+  /** The TQSL Station Location its contacts are signed with on a LoTW upload; blank = the
+   *  station's own (Settings ▸ Logging). */
+  lotwLocation: string
+}
+
+/** One profile as the top bar offers it. */
+export interface StationProfileChoice {
+  id: string
+  name: string
+  call: string
 }
 
 export interface AppSnapshot {
@@ -6259,6 +6558,12 @@ export interface AppSnapshot {
   activeRadioId?: number
   /** Peg-lock: band selection won't auto-switch the active radio when true. */
   radioPegged?: boolean
+  /** The "My station" profiles the top bar picks from; absent for a station with none. */
+  stationProfiles?: StationProfileChoice[]
+  /** The id of the profile the station is on. */
+  activeStationProfile?: string
+  /** A run, a contact or an over is under way, so the profile cannot change now. */
+  stationProfileLocked?: boolean
   /** The last radio switch Nexus made by itself this session (absent until one happens). */
   autoRadioSwitch?: AutoRadioSwitch
   /** Mirror of Settings b4MatchMode — the B4/Dupe scope every surface applies. */
@@ -6390,6 +6695,48 @@ export interface AppSnapshot {
    *  its direction to that Running. Absent everywhere else, from the Remote, and from an older
    *  station. */
   contestCqTyped?: boolean
+  /** FreeDV's own app beside Nexus (`tempo_app::freedv`): its two listeners, the last contact it
+   *  logged, the last refusal and the calls it heard. Absent while neither listener is wanted,
+   *  from the Remote, and from an older station. */
+  freedv?: FreedvState
+}
+
+/** What the screens show of FreeDV's app beside Nexus (`FreedvDto`). */
+export interface FreedvState {
+  /** The port the contact listener is bound to on 127.0.0.1, while it is. */
+  logPort: number | null
+  /** Why the contact listener is not listening, when its bind was refused. */
+  logError: string | null
+  /** When FreeDV last sent anything on the contact port (Unix seconds). */
+  aliveUnix: number | null
+  /** The last contact FreeDV logged, as the screen names it. */
+  lastContact: string | null
+  lastContactUnix: number | null
+  /** The last contact refused, and why. */
+  notice: string | null
+  heardPort: number | null
+  heardError: string | null
+  /** The calls FreeDV heard this session, newest first. */
+  heard: FreedvHeard[]
+  /** The contact port is bound on every adapter ("Accept from devices on my network"). */
+  logLan?: boolean
+  /** The program the last contact added through the contact port came from (FreeDV, WSJT-X,
+   *  N1MM, a network device's address), its call and when. */
+  intakeProgram?: string | null
+  intakeCall?: string | null
+  intakeUnix?: number | null
+  /** Moves once per contact added through the contact port: the shell toasts each. */
+  intakeTick?: number
+}
+
+/** One call FreeDV heard. */
+export interface FreedvHeard {
+  call: string
+  /** FreeDV's mode name (RADEV1); empty when it did not say. */
+  mode: string
+  snr: number | null
+  frequencyHz: number | null
+  heardUnix: number
 }
 
 /** The contest strip's contact in progress, shared by the main window and the contest logger
@@ -6832,6 +7179,7 @@ export type PcMicCause =
   | 'openFailed'
   | 'deviceLost'
   | 'noAudio'
+  | 'silent'
   | 'ceiling'
   | 'watchdog'
   | 'busy'
@@ -6841,6 +7189,7 @@ export type PcMicCause =
   | 'gateDown'
   | 'interrupted'
   | 'keyRefused'
+  | 'txAudio'
   | 'unsure'
 
 export interface PcMicEnded {

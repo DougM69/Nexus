@@ -51,6 +51,14 @@ describe('filterAlerts — needType', () => {
     expect(filterAlerts(ALERTS, { ...DEFAULT_FILTERS, needTypes: ['newGrid'] })).toHaveLength(0)
   })
 
+  // A live WWFF activator is its own chip on the Needed board, never filed under POTA: the WWFF
+  // chip finds it, and the POTA and SOTA chips do not.
+  it('wwff: returns only Wwff-tagged rows, and pota/sota never do', () => {
+    const rows = [...ALERTS, a('DL0XYZ', ['Wwff'], '20m', 'Phone')]
+    expect(filterAlerts(rows, { ...DEFAULT_FILTERS, needTypes: ['wwff'] }).map((x) => x.call)).toEqual(['DL0XYZ'])
+    expect(filterAlerts(rows, { ...DEFAULT_FILTERS, needTypes: ['pota', 'sota'] }).map((x) => x.call)).toEqual(['K1ABC', 'W7B'])
+  })
+
   it('pota: returns only Pota-tagged rows', () => {
     const r = filterAlerts(ALERTS, { ...DEFAULT_FILTERS, needTypes: ['pota'] })
     expect(r.map((a) => a.call)).toEqual(['K1ABC'])
@@ -147,30 +155,30 @@ describe('filterAlerts — mode (multi-select)', () => {
 
 describe('filterAlerts — AND composition', () => {
   it('atno + 20m', () => {
-    const f: NeededFilters = { needTypes: ['atno'], bands: ['20m'], modes: ALL_MODES_ON }
+    const f: NeededFilters = { ...DEFAULT_FILTERS, needTypes: ['atno'], bands: ['20m'], modes: ALL_MODES_ON }
     const r = filterAlerts(ALERTS, f)
     expect(r.map((a) => a.call)).toEqual(['3Y0J'])
   })
 
   it('atno + CW', () => {
-    const f: NeededFilters = { needTypes: ['atno'], bands: [], modes: only('CW') }
+    const f: NeededFilters = { ...DEFAULT_FILTERS, needTypes: ['atno'], bands: [], modes: only('CW') }
     const r = filterAlerts(ALERTS, f)
     expect(r.map((a) => a.call)).toEqual(['K7RX'])
   })
 
   it('newMode + CW + 40m = empty (VK2AB is on 15m)', () => {
-    const f: NeededFilters = { needTypes: ['newMode'], bands: ['40m'], modes: only('CW') }
+    const f: NeededFilters = { ...DEFAULT_FILTERS, needTypes: ['newMode'], bands: ['40m'], modes: only('CW') }
     expect(filterAlerts(ALERTS, f)).toHaveLength(0)
   })
 
   it('pota + 20m = K1ABC', () => {
-    const f: NeededFilters = { needTypes: ['pota'], bands: ['20m'], modes: ALL_MODES_ON }
+    const f: NeededFilters = { ...DEFAULT_FILTERS, needTypes: ['pota'], bands: ['20m'], modes: ALL_MODES_ON }
     const r = filterAlerts(ALERTS, f)
     expect(r.map((a) => a.call)).toEqual(['K1ABC'])
   })
 
   it('sota + 20m = empty (W7B is on 40m)', () => {
-    const f: NeededFilters = { needTypes: ['sota'], bands: ['20m'], modes: ALL_MODES_ON }
+    const f: NeededFilters = { ...DEFAULT_FILTERS, needTypes: ['sota'], bands: ['20m'], modes: ALL_MODES_ON }
     expect(filterAlerts(ALERTS, f)).toHaveLength(0)
   })
 })

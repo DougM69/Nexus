@@ -31,6 +31,10 @@ export const PER_SURFACE = [
   // its own. The main window's spelling is the bare key an earlier build kept for the whole station.
   'nexus.cw.rfSpan',
   'nexus.phone.rfSpan',
+  // The scope view chip (RF / Audio / Both in CW, RF / Audio in Phone; spectrum/rfSpan.ts): what THIS
+  // window's scope draws, per window like the span chips beside it.
+  'nexus.cw.scopeView',
+  'nexus.phone.scopeView',
   'nexus-ui-scale-mode',
   // APRS's body (layout L7): the station list column's width and the side the map stands on —
   // statements about THIS window's shape, like Connect's rail widths and Operate's rail side.
@@ -51,6 +55,9 @@ export const PER_SURFACE = [
   // The Getting Out box's Start fresh time (features/getoutSince): an antenna test in THIS window. A
   // pop-out starts on the main window's and diverges at its first press; a restart keeps it.
   'nexus.connect.getout.since',
+  // The Getting Out list's sort, one record of every box's choice keyed by the box's place
+  // (features/getoutSort): what THIS window's boxes show, like the POTA/SOTA box's sort below.
+  'nexus.connect.getout.sort',
   'nexus.connect.globe3d.layers',
   'nexus.connect.insights.collapsed',
   'nexus.connect.intent',
@@ -115,6 +122,9 @@ export const PER_SURFACE = [
   'nexus.jtty.includeTime',
   'nexus.jtty.lowerCase',
   'nexus.logbook.globespin',
+  // The 2-D maps' style, Atlas or Dark (features/mapStyle): how THIS window's flat map and 2-D globe
+  // look, one record for Connect's map and the APRS map, like the Layers panel's fold.
+  'nexus.map.style',
   'nexus.operate.layout',
   // Which side Operate's rail stands on (layout L5): a layout choice of THIS window, like the
   // Classic / Roster pick on either side of it.
@@ -190,6 +200,9 @@ export const PER_SURFACE = [
 /** Keys that describe the STATION or the PERSON and must never be scoped. Listed rather
  *  than inferred so a failure names the key that leaked. */
 const SHARED = [
+  // SSTV's "My picture already shows my callsign", remembered per picture by the hash of its bytes
+  // (features/sstvIdInImage): a fact about a picture, so the same in every window.
+  'nexus.sstv.idInImage',
   // Spot me's last comment for each mode on the Spots board (SpotsSpotMe): what the operator says about
   // themselves on a mode, the same whichever window's board they spot from.
   'nexus.spotMe.comments',
@@ -212,6 +225,9 @@ const SHARED = [
   'nexus.locale',
   // Wildcard call-hide: a standing display preference across windows (features/hideCalls).
   'nexus.decodes.hideCalls',
+  // The row menu's narrower call hides (#346: one band, or for a while), beside the list above and
+  // shared on the same ruling: hiding a call in one window's roster hides it in every window's.
+  'nexus.decodes.hideCallsScoped',
   // Arbitrary-entity country excludes, stored beside the curated keys (F4MQS).
   'nexus.decodes.countryExclude.entities',
   // Whole continents hidden from band activity (#229), stored beside the entity picks and
@@ -237,6 +253,9 @@ const SHARED = [
   // The optional local-time clock beside UTC (#253). Per MACHINE, like density and field mode:
   // local time is a fact about this computer's time zone, and every window of it agrees.
   'nexus-local-clock',
+  // How the TX meters are drawn, Bars or Needle (#343, txMeterStyle.ts): a display preference about
+  // this screen, so a popped-out cockpit draws its meters as the main window does.
+  'nexus-txmeter-style',
   // The colour roles (Settings ▸ Appearance ▸ Colours), one key per role: a preference about this
   // screen and the eyes in front of it, the same class as the theme, so every window agrees. The
   // role table is their one source (`classifies every colour-role key`, below).
@@ -250,6 +269,9 @@ const SHARED = [
   'nexus-skin',
   'nexus-motion',
   'nexus-ui-scale-cap',
+  // The answer to the one-time scaled-display prompt (useScale.ts): about the station's screen
+  // and the eyes in front of it, like the cap; only the main window ever asks or reads it.
+  'nexus-ui-scale-fit-rule',
   'nexus.connect.chaseDefault.v1',
   'nexus.connect.mode',
   'nexus.cw.sensitivity',
@@ -318,6 +340,10 @@ const SHARED = [
   // is: per-surface, a second window would find "never seeded" and star ten
   // birds on top of whatever the operator had settled on.
   'nexus.sats.seeded',
+  // The transponder picked last on each bird and its ★ favorite (features/satTransponderPref).
+  // SHARED and durable, like the ★ set: which one this operator works on a bird is the station's,
+  // not a window's.
+  'nexus.sats.transponders',
   // Which received picture the viewer pop-out is showing. SHARED on purpose and it is the
   // whole mechanism: the main window writes it and the viewer's `storage` listener follows,
   // so clicking a second thumbnail re-points the window that is already open instead of
@@ -339,6 +365,9 @@ const SHARED = [
   // The Flex DAX note in the voice keyer (features/flexDaxNote), dismissed once for this computer like
   // the work-in hint above.
   'nexus.phone.flexDaxNote',
+  // Phone's Tune note on a Yaesu with USB audio (features/yaesuTuneNote), dismissed once for this
+  // computer like the Flex DAX note above.
+  'nexus.phone.yaesuTuneNote',
   'nexus.freqMarkers.changed',
   'nexus.waterfall.detached',
   'nexus.waterfall.gain',
@@ -384,7 +413,8 @@ const DEDUPE = [
 ]
 
 /**
- * Keys held in sessionStorage through SpotsPanel's `useSessionState`. sessionStorage is
+ * Keys held in sessionStorage through `useSessionState` (useSessionState.ts: the Spots board's
+ * filters, the Needed board's search). sessionStorage is
  * already per-webview by the platform, so these need no scope suffix — the same guarantee
  * PER_SURFACE buys, by a different mechanism (windowScope.test.ts leans on it for seenSet).
  * Their lifetime is deliberately shorter: the Spots filters are meant to survive a view
@@ -421,6 +451,9 @@ const SESSION_SCOPED = [
   'nexus.spots.spotterEntities',
   'nexus.spots.states',
   'nexus.spots.workedWindow',
+  // The Needed board's search box: the Spots board's, with the same session lifetime. A pane keeps
+  // its own copy, `<key>.<filterKey>`.
+  'nexus.needed.query',
 ]
 
 describe('zero migration: the main window keeps the exact key strings already on disk', () => {

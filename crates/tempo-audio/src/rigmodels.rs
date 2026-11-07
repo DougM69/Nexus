@@ -376,6 +376,59 @@ pub fn hamlib_atu_start_tune_value(model: u32) -> u8 {
     }
 }
 
+/// The `L AGC <n>` value to send this radio for the Hamlib AGC enum `hamlib` (#403): the enum
+/// itself for every model but the Yaesu FTX-1, which gets its own `GT` code.
+///
+/// Hamlib's enum (`include/hamlib/rig.h`, `enum agc_level_e`): OFF 0, SUPERFAST 1, FAST 2, SLOW 3,
+/// USER 4, MEDIUM 5, AUTO 6. rigctld passes `L AGC <n>` through as that int (`rigctl_parse.c`
+/// `set_level`, `sscanf("%d")`), and the other Yaesus' `newcat_set_level` turns it into the
+/// radio's code (`newcat.c:4136`: OFF→`GT00`, FAST→`GT01`, MEDIUM→`GT02`, SLOW→`GT03`,
+/// AUTO→`GT04`). Hamlib 4.7.1's FTX-1 backend does not: `ftx1_set_level` hands the int straight
+/// to `ftx1_set_agc` (`ftx1/ftx1_func.c:360`), which writes `"GT%d%d;"` with it as P2
+/// (`ftx1/ftx1_audio.c:631`). So FAST went out as `GT02` (the radio's MID) and MEDIUM/AUTO as
+/// `GT05`/`GT06`, which are not set values.
+///
+/// Yaesu's FTX-1 CAT manual (2508-C, `GT` AGC FUNCTION), Set P2: 0 OFF, 1 FAST, 2 MID, 3 SLOW,
+/// 4 AUTO. This sends those codes, so Hamlib's pass-through puts the right one on the wire.
+/// ⚠️ Recheck when the bundled Hamlib changes: a Hamlib that maps the enum itself would make this
+/// a double translation.
+pub fn hamlib_agc_to_wire(model: u32, hamlib: u8) -> u8 {
+    if model != FTX1 {
+        return hamlib;
+    }
+    match hamlib {
+        2 => 1,         // FAST
+        5 => 2,         // MEDIUM → MID
+        6 => 4,         // AUTO
+        other => other, // OFF 0 and SLOW 3 are the same number on both sides
+    }
+}
+
+/// The Hamlib AGC enum for the `l AGC` reply `wire` from this radio: the reply itself for every
+/// model but the FTX-1, whose reply is its own `GT` code ([`hamlib_agc_to_wire`] has the
+/// sources). `None` when the FTX-1 answers a code its manual does not define.
+///
+/// `ftx1_get_agc` (`ftx1/ftx1_audio.c:636`) returns the answer's P3 unchanged. The manual's
+/// Answer P3 is 0 OFF, 1 FAST, 2 MID, 3 SLOW, 4 AUTO-FAST, 5 AUTO-MID, 6 AUTO-SLOW; the three
+/// AUTO answers all read as AUTO, as `newcat_get_level` reads them for the other Yaesus
+/// (`newcat.c:5902`).
+pub fn hamlib_agc_from_wire(model: u32, wire: u8) -> Option<u8> {
+    if model != FTX1 {
+        return Some(wire);
+    }
+    Some(match wire {
+        0 => 0,     // OFF
+        1 => 2,     // FAST
+        2 => 5,     // MID → MEDIUM
+        3 => 3,     // SLOW
+        4..=6 => 6, // AUTO-FAST / AUTO-MID / AUTO-SLOW → AUTO
+        _ => return None,
+    })
+}
+
+/// `RIG_MODEL_FTX1`, `RIG_MAKE_MODEL(RIG_YAESU, 51)` in `include/hamlib/riglist.h`.
+const FTX1: u32 = 1051;
+
 /// Does Hamlib WRITE this radio's power to answer a READ of it (`get_level RFPOWER`)? (#381)
 ///
 /// ⚠️ A READ THAT WRITES. `rigs/kenwood/kenwood.c`, `kenwood_get_level`: the `RIG_LEVEL_RFPOWER`
@@ -561,13 +614,15 @@ pub fn portless_rig_models() -> Vec<u32> {
 /// Models where the **CAT CW keyer is unproven and cannot report its own failure** — so the
 /// operator is told BEFORE he spends an evening on it, rather than watching a radio not key.
 ///
-/// Today that is the Yaesu FTX-1 (1051) alone. The measurement behind it, and the sharp limit on
-/// what it claims, are written out on
-/// `tests::the_ftx1_is_flagged_because_its_cat_keyer_cannot_report_its_own_failure` — read that
+/// Today that is the Yaesu FTX-1 (1051) and FT-710 (1049). The evidence behind each, and the sharp
+/// limit on what it claims, are written out on
+/// `tests::the_ftx1_is_flagged_because_its_cat_keyer_cannot_report_its_own_failure` and
+/// `tests::the_ft710_is_flagged_because_its_manual_has_no_trigger_hamlib_sends_it` — read those
 /// before adding a model here. The short version: the FTX-1 has its own Beta Hamlib backend that
-/// emits a different `send_morse` wire form from the newcat one every other modern Yaesu uses,
-/// and it returns `RPRT 0` whether or not the radio did anything. Nexus has no second source of
-/// truth — the CAT keyer sends and the rig keys itself, so there is no PTT of ours to check.
+/// emits a different `send_morse` wire form from the newcat one every other modern Yaesu uses, the
+/// FT-710 is sent that newcat form but its manual does not list the trigger, and both return
+/// `RPRT 0` whether or not the radio did anything. Nexus has no second source of truth — the CAT
+/// keyer sends and the rig keys itself, so there is no PTT of ours to check.
 ///
 /// **This is a NOTICE, never a block.** The keyer stays selectable and keeps working if it works:
 /// the flag is unproven, not broken, and an operator whose radio keys fine must not be stopped.
@@ -579,7 +634,7 @@ pub fn portless_rig_models() -> Vec<u32> {
 /// not keep a copy for that reason too: membership here changes as backends are fixed upstream,
 /// and a stale TypeScript duplicate would warn about a radio that had started working.
 pub fn cat_cw_unproven_rig_models() -> Vec<u32> {
-    vec![1051]
+    vec![1049, 1051]
 }
 
 /// Recognise a CAT server that **names itself** in the greeting it sends on connect, and
@@ -1017,12 +1072,11 @@ mod tests {
             "the FTX-1 (1051) is the model the field report names"
         );
 
-        // NARROW, deliberately. The newcat Yaesus emit the two-command form that works, and
+        // NARROW, deliberately. These newcat Yaesus emit the two-command form that works, and
         // flagging a backend that keys fine trains the operator to ignore the notice.
         for (m, who) in [
             (1042u32, "FTDX10"),
             (1035, "FT-991/991A"),
-            (1049, "FT-710"),
             (1036, "FT-891"),
             (3073, "Icom IC-7300"),
             (2037, "Kenwood TS-590SG"),
@@ -1042,6 +1096,20 @@ mod tests {
                 "model {m} is flagged but not in the catalog"
             );
         }
+    }
+
+    /// The FT-710 is on the shared newcat backend, so its case is not the FTX-1's: Hamlib sends it
+    /// the same `KM1<TEXT>;` then `KY6;` as the others. But Yaesu's FT-710 CAT reference (rev
+    /// 2306-C, page 14) defines `KY P1 P2;` with P1 `0` or `1` and P2 `0` to `5`, so `KY6;` is not in
+    /// its table. Hamlib never reads the answer to `KY`, so `b <text>` returns `RPRT 0` either way,
+    /// and two field reports describe an FT-710 that showed sending with nothing on the air.
+    ///
+    /// ⚠️ NOT PROVEN BROKEN. The firmware might accept an undocumented `KY6;`, and no bench has
+    /// settled it, so this is the same claim as the FTX-1's: UNPROVEN, and cannot report its own
+    /// failure.
+    #[test]
+    fn the_ft710_is_flagged_because_its_manual_has_no_trigger_hamlib_sends_it() {
+        assert!(cat_cw_unproven_rig_models().contains(&1049));
     }
 
     /// The CAT port names the slice Nexus operates (audit #1014/#1026).

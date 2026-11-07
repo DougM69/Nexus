@@ -451,6 +451,12 @@ Nexus is **free software under the [GNU GPL v3](COPYING)** (GPL-3.0-only).
   (Costas arrays, LDPC(174,87) parity tables from WSJT-X, alphabets, command and group tables,
   the JSC dictionary) are credited in **[NOTICE](NOTICE)**. No JS8Call code is copied.
 - **TempoFast / TempoDeep** — the native weak-signal waveforms by **KD9TAW**.
+- **Translations** — the **[Russian](translations/ru/)** translation is by **loloka**; the
+  **[Simplified Chinese](translations/zh/)** and **[Traditional Chinese](translations/zh-hant/)**
+  (Taiwan wording) translations are by **BG5EQA**.
+- **Computer microphone safety design** — the transmit-path guards behind Phone's Use this computer's
+  microphone were first set out by **[on8st](https://github.com/on8st)** in their pull request for a
+  live microphone path ([#277](https://github.com/kd9taw/Nexus/pull/277)).
 - **[AetherSDR](https://github.com/aethersdr/AetherSDR)** (GPLv3) — the native FlexRadio
   client's protocol core (the SmartSDR session, status decoding, VITA-49 streams and the
   transmit-state readback; `crates/tempo-net/src/flex/`) is ported from AetherSDR's FlexRadio backend, and the waterfall's

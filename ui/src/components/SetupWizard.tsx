@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Dialog } from './ui/Dialog'
 import { useFocusReturn } from '../focusReturn'
 import { t } from '../i18n'
+import { catDetailText } from '../features/catDetail'
 import { T } from '../i18n/T'
 import type { MessageKey } from '../i18n'
 import type { ProfileId } from '../features/profiles'
@@ -44,6 +45,7 @@ import { STARTER_PACKS, importPack } from '../features/packs'
 import { memoriesStore } from '../features/memories'
 import { TCI_DEFAULT_HOST, TCI_DEFAULT_PORT, TCI_RIG_MODEL, TCI_RIG_MODEL_NAME, tciProbeMessage, tciServerName } from '../tci'
 import { upperTyped } from '../typedInput'
+import { showHiddenSpaces } from '../features/audioDeviceTwin'
 
 /** What the wizard collects beyond the goal profiles: station identity + rig.
  * Only the fields the operator actually touched are set — App merges this into
@@ -127,7 +129,8 @@ interface Props {
 }
 
 // License class → sets the transmit-privilege lockout + the licensed-segment band dropdown.
-// "Outside the US" = Open (no transmit limits). Single-select; defaults to Open so the
+// "Outside the US" = Open (never blocks a band; the band picker warns outside the usual band
+// plan). Single-select; defaults to Open so the
 // lockout is opt-in (a US op declares their class to turn it on).
 // The `id` is the stored token; the class NAME and its blurb are prose, exactly as they are in
 // Settings ▸ Station, so they resolve from the catalog at the call site.
@@ -688,7 +691,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
   const audioLabel = (name: string, kind: 'input' | 'output') =>
     audio[kind].includes(name)
       ? (audioLabels[kind][name] ?? name)
-      : t('settings.audio.device.notInList', { device: name })
+      : t('settings.audio.device.notInList', { device: showHiddenSpaces(name) })
 
   const runDetect = () => {
     setDetecting(true)
@@ -1376,7 +1379,7 @@ export function SetupWizard({ settings, radio, onApply, onTestCat, onProveTx, on
             {catResult && (
               <span className={`wizard-field-hint${catResult.ok ? '' : ' bad'}`}>
                 {catResult.ok ? '✓ ' : '✗ '}
-                {catResult.detail}
+                {catResult.detail && catDetailText(catResult.detail)}
               </span>
             )}
           </div>

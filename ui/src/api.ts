@@ -70,6 +70,7 @@ import type {
   QrzPushResult,
   RouteMode,
   RadioSwitchPolicy,
+  StationProfile,
   ExperienceLevel,
   RoutingRule,
   Settings,
@@ -260,6 +261,12 @@ export async function getSnapshot(): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('get_snapshot')
 }
 
+/** The received decodes the station still holds for slots `fromSlot..=toSlot`, for a decode pane
+ *  that missed those periods (#452). A read: it raises no alert and changes nothing. */
+export async function getDecodeRefill(fromSlot: number, toSlot: number): Promise<import('./types').DecodeRefill> {
+  return invoke('get_decode_refill', { fromSlot, toSlot })
+}
+
 /** The propagation & opening-intelligence nowcast (adaptive bands, openings,
  *  DXpedition cards, space weather). */
 export async function getPropagation(): Promise<PropagationSnapshot> {
@@ -399,6 +406,18 @@ export async function stopSatTrack(): Promise<void> {
 /** The live auto-track state (poll while the section is open); null = idle. */
 export async function getSatTrackStatus(): Promise<import('./types').SatTrackStatus | null> {
   return invoke<import('./types').SatTrackStatus | null>('sat_track_status')
+}
+
+/** Where the Moon stands from the station, and the rotator's Moon follow (`moon_status`); null when
+ *  the station's grid is not set. `dxGrid` also asks for the next EME window with that grid. */
+export async function getMoonStatus(dxGrid?: string | null): Promise<import('./types').MoonStatus | null> {
+  return invoke<import('./types').MoonStatus | null>('moon_status', { dxGrid: dxGrid ?? null })
+}
+
+/** Turn the rotator to follow the Moon (`start_moon_track`). It ends with stopSatTrack — the one
+ *  Stop for whatever tracker owns the mast — or when a pass is armed. */
+export async function startMoonTrack(): Promise<import('./types').MoonTrack> {
+  return invoke<import('./types').MoonTrack>('start_moon_track')
 }
 
 /** Put the radio under Doppler control for one transponder on `name`; `null`
@@ -2446,6 +2465,18 @@ export async function uploadLotwReportByIds(ids: string[]): Promise<UploadReport
   return invoke<UploadReport>('upload_lotw_report', { indices: null, ids })
 }
 
+/** #163: the ids of the past satellite QSOs that went to LoTW with the wrong band (the downlink's)
+ *  and can go again corrected. Asks only; changes nothing. */
+export async function lotwSatBandFixes(): Promise<string[]> {
+  return invoke<string[]>('lotw_sat_band_fixes')
+}
+
+/** #163: correct those satellite QSOs (each bird's uplink filled in) and re-upload them to LoTW
+ *  through TQSL — only ever on the operator's click. Answers as an ordinary LoTW upload does. */
+export async function lotwFixSatBands(ids: string[]): Promise<UploadReport> {
+  return invoke<UploadReport>('lotw_fix_sat_bands', { ids })
+}
+
 /** Ask the engine one of the UI's log questions (SPEC-2 v3 C17a): a page of the Logbook, where a
  *  row sits in it, one call's history, an entity's slots, a roster's summary, the band map's
  *  worked calls, the squares and bands worked, the statistics, the LoTW backlog. The answer is
@@ -2864,6 +2895,10 @@ export interface RadioLaunchOption {
 export interface RadioLaunchInfo {
   showPicker: boolean
   radios: RadioLaunchOption[]
+  /** What the picker does when nobody answers within `autoSeconds`: the operator's last answer,
+   *  'windows' (each radio in its own window) or 'one' (this window runs one radio). */
+  autoChoice: 'windows' | 'one'
+  autoSeconds: number
 }
 /** Ask the backend whether this window should show the radio picker (simultaneous-radios on,
  *  ≥2 radios, launched without a profile). Single-radio stations get showPicker=false. */
@@ -2879,6 +2914,19 @@ export async function chooseRadio(radioId: number): Promise<void> {
  *  as the single band-following window — the pre-picker behavior. */
 export async function useSingleRadio(): Promise<void> {
   await invoke('use_single_radio')
+}
+
+/** Nobody answered the picker in time: the backend repeats the last answer (opening the radio
+ *  windows and exiting, or starting this window's radio). Rejects with the reason when the radio is
+ *  open in another Nexus window. */
+export async function radioPickerTimedOut(): Promise<void> {
+  await invoke('radio_picker_timed_out')
+}
+
+/** This window could not ask whether to show the picker: the backend starts this window's radio, as
+ *  the window did before the picker held it, and logs why. */
+export async function radioPickerUnavailable(): Promise<void> {
+  await invoke('radio_picker_unavailable')
 }
 
 /** Reveal ALL.TXT (or its folder) in the OS file manager. */
@@ -3093,6 +3141,17 @@ export async function sstvTune(
   mode: string,
 ): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('sstv_tune', { dialMhz, band, mode })
+}
+
+/** #451: the SSTV screen's own tune on opening — `sstvTune` as the APP's tune, so the channel is
+ * never remembered as the operator's Phone dial (theirs is banked). The engine refuses the ISS
+ * downlink and a dial a satellite pass owns, and then tunes nothing. */
+export async function sstvTuneOnOpen(
+  dialMhz: number,
+  band: string,
+  mode: string,
+): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('sstv_tune_on_open', { dialMhz, band, mode })
 }
 
 /** Park the dial on one of the APP's OWN fixed channels (the ISS SSTV auto-arm's 145.800 FM).
@@ -3569,7 +3628,7 @@ export async function setTxEnabled(enabled: boolean): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_tx_enabled', { enabled })
 }
 
-/** Set the TX audio drive level (0.0–1.0) — the "Pwr" slider. Returns the snapshot. */
+/** Set the TX audio drive level (0.0–1.0) — the "Drive" slider. Returns the snapshot. */
 export async function setTxLevel(level: number): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_tx_level', { level })
 }
@@ -3631,6 +3690,22 @@ export async function setDefaultRadio(id: number | null): Promise<AppSnapshot> {
  * `radioSwitchPolicy` (a settings save keeps the live value, as for `setBetaUpdates`). */
 export async function setRadioSwitchPolicy(policy: RadioSwitchPolicy): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('set_radio_switch_policy', { policy })
+}
+
+/** Put the station on a "My station" profile — the ONE writer of `activeStationProfile`. Its call,
+ * grid, state and power become the station's, as a Settings save of them would. */
+export async function switchStationProfile(id: string): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('switch_station_profile', { id })
+}
+
+/** Save one "My station" profile (an empty id adds one) — the ONE writer of `stationProfiles`. */
+export async function saveStationProfile(profile: StationProfile): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('save_station_profile', { profile })
+}
+
+/** Remove one "My station" profile; Home and the one the station is on stay. */
+export async function removeStationProfile(id: string): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('remove_station_profile', { id })
 }
 
 /** The first-run wizard's experience answer (also Settings ▸ Station) — the ONE writer of
@@ -4444,7 +4519,7 @@ export async function pskNet(hz: number): Promise<PskState> {
   return invoke<PskState>('psk_net', { hz })
 }
 
-/** Select the PSK sub-mode ('psk31' | 'qpsk31') + the QPSK sideband-reverse
+/** Select the PSK sub-mode ('psk31' | 'qpsk31' | 'psk63') + the QPSK sideband-reverse
  * polarity — the cockpit's selector and Reverse toggle. The engine refuses a
  * switch while any PSK transmission is active (returns why); a change
  * re-acquires the RX demodulator on the new mode. */
@@ -4859,8 +4934,12 @@ export async function sstvSend(
   height: number,
   mode: string,
   /** #50: the operator affirms THIS picture already shows their callsign (a pre-made QSO
-   *  card), so the ID plate is skipped rather than drawn over it. Per-image, never sticky. */
+   *  card), so the ID plate is skipped rather than drawn over it. Per-image: the view remembers
+   *  it for that same picture only (by content, features/sstvIdInImage), never for another. */
   idInImage?: boolean,
+  /** The station calls the picture's preset text carries (`OverlayItem.call`): the backend
+   *  refuses the picture when one is not the station's call now. */
+  overlayCalls?: string[],
 ): Promise<SstvState> {
   return invoke<SstvState>('sstv_send', {
     mode,
@@ -4868,6 +4947,7 @@ export async function sstvSend(
     height,
     rgbBase64: rgbB64,
     idInImage: idInImage ?? false,
+    overlayCalls: overlayCalls ?? [],
   })
 }
 
@@ -5176,7 +5256,7 @@ export async function getPortlessRigModels(): Promise<number[]> {
 }
 
 /** Models whose CAT CW keyer is UNPROVEN and cannot report its own failure (today: the Yaesu
- *  FTX-1). Drives a caution on the CW settings page — never a block, the keyer stays selectable.
+ *  FTX-1 and FT-710). Drives a caution on the CW settings page — never a block, the keyer stays selectable.
  *  The rule lives in Rust (`rigmodels::cat_cw_unproven_rig_models`) and is fetched rather than
  *  duplicated here: membership changes as backends are fixed upstream, and a stale copy would
  *  keep warning about a radio that had started working. An empty array means the rule could not
@@ -5211,7 +5291,7 @@ export async function detectRigs(): Promise<DetectedRig[]> {
   return invoke<DetectedRig[]>('detect_rigs')
 }
 
-/** Activators on the air now for the program ("POTA" | "SOTA") — the hunter feed. */
+/** Activators on the air now for the program ("POTA" | "SOTA" | "WWFF") — the hunter feed. */
 export async function getOtaSpots(program: string, cached = false): Promise<OtaSpot[]> {
   // `cached`: re-derive what the LOG says over the rows the last fetch left in the shared cache,
   // instead of fetching. The board asks for that when the log changes — which is several times
@@ -5231,6 +5311,12 @@ export async function getKpForecast(): Promise<KpForecast> {
  *  each kept and backed off on its own server-side (see src-tauri arrival_outlook.rs). */
 export async function getArrivalOutlook(): Promise<import('./types').ArrivalOutlook> {
   return invoke<import('./types').ArrivalOutlook>('get_arrival_outlook')
+}
+
+/** NOAA's numbered active regions for the sun disc: asked of NOAA at most hourly, and served only
+ *  while the list is current on the shack's clock (`held`). */
+export async function getSolarRegions(): Promise<import('./types').SolarRegionsView> {
+  return invoke<import('./types').SolarRegionsView>('get_solar_regions')
 }
 
 /** NOAA's daily solar indices: the last thirty days of SFI and sunspot number. Cached an hour
@@ -5554,6 +5640,21 @@ export async function getScopeFrame(
       ? { loHz, hiHz, window, lastSeq, rfLoHz: rfView.loHz, rfHiHz: rfView.hiHz }
       : { loHz, hiHz, window, lastSeq },
   )
+}
+
+/**
+ * The AUDIO VIEW's poll, drawn under the radio's own scope in the CW and Phone cockpits: the audio
+ * row over `loHz..hiHz` newer than `lastSeq`, never the radio's RF row (that one has its own pane,
+ * `getRfFrame`). The window request stands while the radio's scope streams, so the narrow CW window
+ * and HiDef still work beside it. Null and the empty frame mean what they mean for `getScopeFrame`.
+ */
+export async function getAudioScopeFrame(
+  loHz: number,
+  hiHz: number,
+  window: ScopeAnalysis | undefined,
+  lastSeq: number,
+): Promise<SpectrumFrameWire | null> {
+  return invoke<SpectrumFrameWire | null>('get_scope_frame', { loHz, hiHz, window, lastSeq, audioOnly: true })
 }
 
 /**

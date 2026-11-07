@@ -11,7 +11,13 @@
     monospace;
   --radius: 12px;
   --radius-sm: 8px;
-  --touch: 44px;
+  /* The floor of a desktop control (form fields, the keyboard docks' send and key rows, Settings,
+     the Logbook toolbar). 30 px at Standard and Dense: a mouse target, WSJT-X's and a desktop form's
+     size, clear of the 24 px WCAG 2.2 minimum. Comfortable keeps the 44 px it always had, Touch 48
+     (the density blocks below). Set per density by the operator, 2026-11-01. */
+  --touch: 30px;
+  /* The Logbook row's vertical padding before `--density-scale` (`.log-row`): 4 px, 10 at Comfortable. */
+  --log-row-pad-y: 4px;
   --gap: 12px;
   --transition: 140ms ease;
   /* Workspace layout (overridden live by usePaneWidths / useScale; the
@@ -66,6 +72,10 @@
 /* Density (compactness) — distinct from --ui-zoom (magnification). */
 [data-density='guided'] {
   --density-scale: 1.18;
+  /* Comfortable: the roomy 44 px controls and 10 px Logbook rows Nexus shipped with until the 1080p
+     pass. */
+  --touch: 44px;
+  --log-row-pad-y: 10px;
 }
 [data-density='standard'] {
   --density-scale: 1;
@@ -77,8 +87,8 @@
 /* TOUCH — Settings ▸ Workspace ▸ Density ▸ Touch: Comfortable (useDensity also sets
    data-density='guided') plus targets sized for a finger. An explicit attribute, never
    `@media (pointer: coarse)` — a touchscreen laptop driven by a mouse reports `fine`, and the
-   responsive vocabulary forbids reaching for the device. The controls already floored at
-   --touch grow to 48px; the chip buttons the app renders (19–26px at Standard, measured in
+   responsive vocabulary forbids reaching for the device. The controls floored at --touch grow to
+   48px (from Comfortable's 44; this block comes after it, so it wins the tie); the chip buttons the app renders (19–26px at Standard, measured in
    a real browser) get a 36px floor and roomier padding. `:root` lifts these to (0,3,0) so
    they outrank every chip's own padding at any source position. */
 [data-touch] {
@@ -260,7 +270,11 @@ html {
      buttons turn pointer events back on. */
   pointer-events: none;
   position: fixed;
-  bottom: var(--space-4);
+  /* #445: `--toast-inset` / `--toast-max-h` are the room Toasts.tsx MEASURES for the column, clear
+     of every transmit surface (the TX dock, the TX strip, FT's QSO strip, the top bar's cluster;
+     features/toastRoom.ts): a toast's own buttons take clicks, and one stood on Phone's PTT. Unset
+     (nothing measured yet), the corner is the 16 px it always was. Every corner below reads them. */
+  bottom: var(--toast-inset, var(--space-4));
   right: var(--space-4);
   display: flex;
   flex-direction: column;
@@ -272,7 +286,7 @@ html {
   list-style: none;
   /* Cap to the viewport and scroll when a burst of toasts (band opening / pileup) stacks up, so the
      oldest toasts + their buttons don't grow off the top edge unreachable. --vh-eff is zoom-corrected. */
-  max-height: calc(var(--vh-eff, 100vh) - 2 * var(--space-4));
+  max-height: var(--toast-max-h, calc(var(--vh-eff, 100vh) - 2 * var(--space-4)));
   overflow-y: auto;
   z-index: 80;
 }
@@ -280,8 +294,32 @@ html {
    totally covers the NEWEST toast (z 80, column-appended) — including its `Work →` button.
    Lift the whole toast stack above the banner's ~60px + a gap for that window; both live
    inside `.app`, so :has() sees the banner directly. */
-.app:has(.update-banner) .ui-toast-viewport {
-  bottom: calc(var(--space-4) + 72px);
+.app:has(.update-banner) .ui-toast-viewport:not([data-corner^='top']) {
+  /* Never lower than the banner's own lift: the measured room (which keeps off the banner too) may
+     date from before a banner that has just arrived. */
+  bottom: max(var(--toast-inset, var(--space-4)), calc(var(--space-4) + 72px));
+}
+/* #445: THE POP-UP CORNER (Settings ▸ Spots & Alerts ▸ Alerts ▸ Pop-up corner, `data-corner` from
+   Toasts.tsx). Bottom right is the rule above, as it always was; each other corner moves the column's
+   two insets and keeps everything else, the zoom-corrected caps included. An inset a corner does not
+   use is `auto`, never left set: a column with both `top` and `bottom` would stretch. */
+.ui-toast-viewport[data-corner='bottom-left'] {
+  right: auto;
+  left: var(--space-4);
+}
+.ui-toast-viewport[data-corner='top-right'] {
+  bottom: auto;
+  top: var(--toast-inset, var(--space-4));
+}
+.ui-toast-viewport[data-corner='top-left'] {
+  bottom: auto;
+  right: auto;
+  top: var(--toast-inset, var(--space-4));
+  left: var(--space-4);
+}
+/* A toast slides in from its corner's own edge (`ui-toast-in`): from the right, or from the left. */
+.ui-toast-viewport[data-corner$='left'] .ui-toast {
+  --toast-in-x: -16px;
 }
 /* CLICK-THROUGH (D#19). An error toast stays 12 s, and for those 12 s it sits over whatever is
    beneath it — on a 390 px screen that is a control the operator cannot reach (the Remote
@@ -291,6 +329,7 @@ html {
    replaces swipe-to-dismiss (Radix swipes the body), so the × close button is now the only
    pointer dismissal and must always render. */
 .ui-toast {
+  --toast-in-x: 16px;
   pointer-events: none;
   display: flex;
   align-items: flex-start;
@@ -363,7 +402,7 @@ html {
 @keyframes ui-toast-in {
   from {
     opacity: 0;
-    transform: translateX(16px) scale(0.97);
+    transform: translateX(var(--toast-in-x, 16px)) scale(0.97);
   }
   to {
     opacity: 1;
@@ -1376,6 +1415,16 @@ button.nb-chip:hover {
   stroke-width: 1;
   stroke-dasharray: 3 3;
 }
+/* A stale reading (features/rotorLiveness): the last bearing the rotator reported, kept through a missed
+   poll or two, drawn in the dim ink so it does not read as live. */
+.rotor-needle.stale {
+  stroke: var(--text-dim);
+}
+.rotor-az.stale,
+.rotor-el.stale,
+.rotor-aim-off.stale {
+  color: var(--text-dim);
+}
 /* The station's bearing (line 2's call; RotorPane's header): told from the needle and the dashed target
    needle by its shape, dotted with a bug on the rim, and by its colour, the amber role in either theme.
    Drawn under both needles, and never a click's target, so a click on it slews as the rose does.
@@ -1486,6 +1535,21 @@ button.nb-chip:hover {
 .rotor-aim-point:hover {
   border-color: var(--accent);
 }
+/* The Moon's line (EME): where it stands, Follow / Stop following, the follow's state and the EME window with
+   line 2's station. Under the controls for the reason line 2 is: above them it would move ■ STOP. */
+.rotor-moon {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+}
+.rotor-moon-at {
+  white-space: nowrap;
+}
+.rotor-moon-state,
+.rotor-moon-window {
+  color: var(--text-dim);
+}
 .rotor-hint {
   margin: 0;
   font-size: var(--fs-micro);
@@ -1546,6 +1610,7 @@ button.nb-chip:hover {
   grid-column: 2;
 }
 .dash-boxes .pane-body .rotor-aim,
+.dash-boxes .pane-body .rotor-moon,
 .dash-boxes .pane-body .rotor-slewing,
 .dash-boxes .pane-body .rotor-hint {
   grid-column: 1 / -1;
@@ -1810,6 +1875,19 @@ button.nb-chip:hover {
    classes: `.flare-chip`'s border shorthand comes later in this sheet and would win at one. */
 .flare-chip.pca-chip {
   border-left-color: #a855f7;
+}
+/* The aurora chip (CapsChips.tsx) — the aurora layer's green, the same two-class weight. */
+.flare-chip.aurora-chip {
+  border-left-color: #34d399;
+}
+/* The cap and aurora chips' head line takes the pointer (for their hover), as the flare chip's does;
+   the rest of the chip lets it through to the Layers rows under the stack. */
+.caps-chip-head {
+  pointer-events: auto;
+}
+/* A proton sample past its cadence: the chip says how old and dims, as the gauges dim an old reading. */
+.flare-chip[data-stale] .caps-chip-head {
+  color: var(--text-dim);
 }
 /* Per-mode workable-now chips on path/outlook band rows (P.533 only). */
 .cp-modes {
@@ -2672,8 +2750,81 @@ button.nb-chip:hover {
   text-transform: none;
   letter-spacing: 0;
 }
-.amp-model,
-.amp-state {
+.amp-model {
+  font-size: var(--fs-micro);
+  color: var(--text-dim);
+}
+/* THE PANE'S ONE CONTROL: Operate/Standby (AmpPane `OperateButton`). The operator's colours, "red being
+   ready to operate and green being on standby" — the reverse of the header strip's quiet green Operate,
+   on purpose. Both colours are locked tokens of both themes: Operate takes the TX red (`--tx`, never
+   re-coloured by a preset), Standby the good-state green (`--state-good`, the OK role's). The colour is
+   the border and a strong tint of the face; the word stays the theme's text colour, because a status
+   colour is held to 3:1 and lettering needs 4.5:1 (the strip's light-theme fix). Colour is never the
+   only cue: the word, a second word and a shape (lamp / pause) say it too. AmpPane.contrast.test.tsx
+   measures every mode, preset and backdrop. Full width of the box and wrapping, so it holds from the
+   dashboard rail's 200 px floor to a wide Connect strip; sized by the text, never by the viewport. */
+.amp-op-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+.amp-opbtn {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1) var(--space-2);
+  width: 100%;
+  min-width: 0;
+  min-height: 2.6em;
+  padding: var(--space-2) var(--space-3);
+  font: inherit;
+  font-size: var(--fs-title);
+  font-weight: 700;
+  line-height: 1.15;
+  color: var(--text);
+  background: var(--panel);
+  border: 2px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.amp-opbtn.is-operate {
+  border-color: var(--tx);
+  background: color-mix(in srgb, var(--tx) 26%, var(--panel));
+}
+.amp-opbtn.is-standby {
+  border-color: var(--state-good);
+  background: color-mix(in srgb, var(--state-good) 26%, var(--panel));
+}
+/* Locked while keyed or unlinked: a DASHED border, not a dimming. The word and its colour are the
+   amplifier's own state, which matters most during an over, and a dimmed green face read under 4.5:1 at
+   Night; a broken edge says "not now" without fading the state. */
+.amp-opbtn:disabled {
+  border-style: dashed;
+  cursor: not-allowed;
+}
+.amp-opbtn-icon {
+  display: inline-flex;
+  flex: none;
+}
+.amp-opbtn-icon svg {
+  width: 1em;
+  height: 1em;
+}
+.amp-opbtn-word {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  overflow-wrap: anywhere;
+}
+.amp-opbtn-sub {
+  font-size: var(--fs-body);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+/* "Sent — waiting for the amplifier", under the button while a queued press holds it. Quiet: it is
+   a note about our own keystroke, not the amplifier's state, which stays on the button. */
+.amp-op-waiting {
   font-size: var(--fs-micro);
   color: var(--text-dim);
 }
@@ -3547,6 +3698,44 @@ body.resizing-row {
 .pd-swatch.ceil {
   background: var(--text);
 }
+/* The current hour's cell hit NOW by a flare or a proton event (the shack's overlay, an estimate):
+   hatched over the modelled colour, which stays as it is. */
+.pd-cell.now-hit {
+  position: relative;
+}
+.pd-cell.now-hit::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: repeating-linear-gradient(-45deg, var(--now-hatch) 0 2px, transparent 2px 5px);
+}
+.pd-cell.now-flare,
+.pd-swatch.now-flare {
+  --now-hatch: var(--route-flare-out);
+}
+.pd-cell.now-pca,
+.pd-swatch.now-pca {
+  --now-hatch: var(--route-pca);
+}
+.pd-swatch.now-flare,
+.pd-swatch.now-pca {
+  height: 8px;
+  background: repeating-linear-gradient(-45deg, var(--now-hatch) 0 2px, transparent 2px 5px);
+}
+/* The band outlook's and the band-condition strip's "now" line (features/pathNow spaceNowLines):
+   what is happening that the modelled climatology below it does not include. */
+.space-now {
+  margin: 0;
+  padding: 0 0 0 var(--space-1);
+  list-style: none;
+  border-left: 2px solid var(--state-warn);
+  color: var(--text);
+  font-size: var(--fs-micro);
+}
+.space-now li + li {
+  margin-top: 2px;
+}
 .pd-modelled {
   font-style: italic;
 }
@@ -3815,6 +4004,41 @@ body.resizing-row {
 .getout-summary strong {
   color: var(--band-open);
   font-family: var(--font-mono);
+}
+/* The list's sort bar (connect/GetoutList): a radio group drawn as one pill of chips, wrapping onto a
+   second line in a narrow box. Each chip is the label of a visually hidden native radio (`.sr-only`,
+   absolutely placed — the chip is its containing block), so the ring shows on the chip when the
+   keyboard has the group. */
+.getout-sort {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin: 0 0 var(--space-2);
+  padding: 2px;
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+}
+.getout-sort-opt {
+  position: relative;
+  padding: 0 var(--space-2);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: var(--fs-micro);
+  line-height: 1.5;
+  color: var(--text-dim);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.getout-sort-opt:hover {
+  background: var(--border-soft);
+}
+.getout-sort-opt.active {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.getout-sort-opt:has(:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 .getout-list {
   list-style: none;
@@ -4780,6 +5004,42 @@ body.resizing-row {
   overflow-y: auto;
   pointer-events: none;
 }
+/* The "+N more" chip (WxChipStack.tsx): on a narrow map it stands for the chips past the first two
+   and opens them in a list. A chip's surface with a neutral rule, as wide as its words; being a
+   button, the whole of it takes the pointer. The theme's :focus-visible ring marks it for the
+   keyboard. */
+.wx-chip-more {
+  align-self: flex-start;
+  max-width: 100%;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--text-dim);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  font: inherit;
+  font-size: calc(11px * var(--text-scale));
+  color: var(--text);
+  cursor: pointer;
+  pointer-events: auto;
+}
+.wx-chip-more:hover {
+  border-color: var(--accent);
+}
+/* The list it opens: a ui/Dialog box narrower than the 640px default (the sanctioned raw-unit box,
+   see .ui-dialog), the chips stacked as on a wide map. In here every chip takes the pointer, so each
+   one's hover (its sources and times) works over the whole chip. */
+.ui-dialog.wx-more-dialog {
+  width: min(360px, calc(100vw - 2 * var(--space-4)));
+}
+.wx-more-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.wx-more-list .flare-chip,
+.wx-more-list .arrival-chip {
+  pointer-events: auto;
+}
 /* Live solar-flare readout (D-RAP layer) — warm accent, only rendered while a flare is actually
    degrading HF. */
 .flare-chip {
@@ -4852,6 +5112,54 @@ body.resizing-row {
 }
 .flare-spark-mark.peak {
   stroke: #ff8c3a;
+}
+/* Where the replay stands on the six-hour trace (ReplayBar). */
+.flare-spark-cursor {
+  stroke: #60a5fa;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+/* THE REPLAY BAR (ReplayBar.tsx) heads the chip stack while a replay is on. It must never read as
+   now: its own blue edge, DASHED where every live chip's is solid, and a bold head in capitals.
+   Two classes: `.flare-chip`'s border shorthand comes earlier in this sheet, so this one wins. */
+.flare-chip.replay-chip {
+  border: 1px dashed #60a5fa;
+  border-left: 3px dashed #60a5fa;
+}
+.replay-chip-head {
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+/* Only the slider and the back button take the pointer (the stack lets it through elsewhere). */
+.replay-slider {
+  display: block;
+  width: calc(100% - 1em);
+  margin: 2px 0 0 1em;
+  pointer-events: auto;
+}
+.flare-preview.replay-back {
+  margin: 2px 0 1px 1em;
+  pointer-events: auto;
+}
+.flare-preview.replay-start[disabled] {
+  opacity: 0.5;
+  cursor: default;
+}
+/* The sun disc with NOAA's active regions, in the unfolded flare chip (SunRegionsDisc.tsx). */
+.sun-regions-disc {
+  display: block;
+  width: 84px;
+  height: 84px;
+  margin: 2px 0;
+  pointer-events: auto;
+}
+.sun-regions-face {
+  fill: rgba(255, 200, 80, 0.18);
+  stroke: #ffb347;
+  stroke-width: 1;
+}
+.sun-regions-dot {
+  fill: #ff8c3a;
 }
 .muf-legend-bar {
   height: 6px;
@@ -5005,6 +5313,21 @@ body.resizing-row {
   background: transparent;
   color: var(--text);
 }
+/* The Map style row (MapStylePick): its words on one line (they wrapped under a theme with wider
+   type), and its select beside them, taking the rest of the row. */
+.map-style-label {
+  white-space: nowrap;
+}
+.map-style-pick {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--fs-label);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+}
 
 
 /* Logbook header action buttons (Import ADIF / Log QSO). */
@@ -5102,6 +5425,12 @@ body.resizing-row {
   --band-closed: #747b81;
   --route-polar: #c77dff; /* the map's aurora violet: a path stretch inside the polar cap */
   --route-grey: rgba(255, 200, 110, 0.95); /* the terminator's gold: a path stretch on the grey line */
+  /* A path stretch hit NOW (features/pathNow): under a flare, the band weakened (≥ 1 dB) / out
+     (≥ 10 dB) on a vertical pass — the map's flare rings; inside a proton event's polar-cap
+     absorption. Drawn over the polar / grey stretches. */
+  --route-flare-weak: #ffa64d;
+  --route-flare-out: #ff4d4d;
+  --route-pca: #ff5ce1;
   --alert-critical: #ff6100;
   --alert-warning: #f7c243;
   --alert-info: #79c0f1;
@@ -5221,6 +5550,9 @@ body.resizing-row {
   --band-closed: #80878d;
   --route-polar: #7c44c3;
   --route-grey: #e08a00;
+  --route-flare-weak: #b85c00;
+  --route-flare-out: #c4001a;
+  --route-pca: #a3168c;
   --alert-critical: #9c0000;
   --alert-warning: #a76d00;
   --alert-info: #0070a6;
@@ -7068,6 +7400,10 @@ body.resizing {
   gap: var(--space-1);
   width: 100%;
   min-height: var(--touch);
+  /* Never squeezed below its icon + label when the section list overflows: a declared
+     min-height replaces the flex item's content minimum, so at --touch 30 px Phone and CW
+     (the bare buttons atop the scroller) shrank and spilled past its top edge. */
+  flex-shrink: 0;
   padding: var(--space-2) var(--space-1);
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
@@ -7158,8 +7494,9 @@ body.resizing {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 18px;
-  padding: 10px 14px;
+  /* 18 px and 10 px 14 px, tighter on a short window (cockpit-panes.css, the short-window tier). */
+  gap: var(--chrome-bar-gap, 18px);
+  padding: var(--chrome-bar-pad, 10px 14px);
   background: var(--bg-elev);
   border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
@@ -7756,9 +8093,14 @@ select optgroup {
   border-radius: 999px;
   padding: 3px;
 }
+/* A BUTTON LOOKS PRESSABLE (#455). TX Off, Tune and ATU were bare words — no face, no outline — so
+   in the dark theme they read like the status lights beside them. Every .op-btn now wears a raised
+   face and an outline 3:1 against what it sits on, and the outline goes to the accent on hover. A
+   status indicator wears neither (`.op-btn.readonly`, the header chips). ButtonsVsIndicators
+   .test.tsx computes both halves in every theme. */
 .op-btn {
-  border: 1px solid transparent;
-  background: transparent;
+  border: 1px solid var(--text-faint);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
   color: var(--text-dim);
   font-size: calc(12px * var(--text-scale));
   font-weight: 700;
@@ -7769,14 +8111,31 @@ select optgroup {
 }
 .op-btn:hover {
   color: var(--text);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+/* A button that cannot be pressed says so, as a disabled settings switch does. */
+.op-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.op-btn:disabled:hover {
+  color: var(--text-dim);
+  border-color: var(--text-faint);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
 }
 .op-btn.monitor.on {
   background: color-mix(in srgb, var(--rx) 18%, transparent);
-  border-color: color-mix(in srgb, var(--rx) 45%, transparent);
-  color: var(--state-good);
+  /* At full strength, so the lit latch keeps a button's 3:1 outline (#455; a 45 % mix was 2.25:1 in
+     the light theme). */
+  border-color: var(--rx);
+  /* The green a step toward the theme's ink, so the word reads 4.5:1 on the green tint (the light
+     theme's plain green was 3.68:1 on it). */
+  color: color-mix(in srgb, var(--state-good) 70%, var(--text));
 }
+/* TX Off in the buttons' own ink: the faint ink read under 4.5:1 on the button's face. */
 .op-btn.monitor:not(.on) {
-  color: var(--text-faint);
+  color: var(--text-dim);
 }
 /* ATU ON (#344): the radio reports its tuner in line. Lit like Hold Tx's latch, from variables
    both themes define. The menu that switches it out is anchored on an empty span inside the
@@ -7784,7 +8143,8 @@ select optgroup {
 .op-btn.atu.on {
   background: color-mix(in srgb, var(--accent) 22%, var(--bg-elev));
   color: var(--text);
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  /* The accent at full strength: a button's 3:1 outline while lit (#455). */
+  border-color: var(--accent);
 }
 /* The anchor sits on the button's bottom-left corner, so the menu opens below (or, without room, above)
    the strip's row and never over Stop TX beside it (measured by `scripts/browser-probe --desktop atu`). */
@@ -7933,7 +8293,7 @@ select optgroup {
 .op-btn.hold.on {
   background: color-mix(in srgb, var(--accent) 22%, var(--bg-elev));
   color: var(--text);
-  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  border-color: var(--accent);
 }
 
 .tier-toggle {
@@ -8458,6 +8818,17 @@ select optgroup {
      feed (one look for one list). The one hue on those rows nothing else uses — the nearest
      need, rarity or row-state colour is ΔE2000 ≥ 15 away here and ≥ 10 in the light ink. */
   --need-watch: #a3e635;
+  /* #299 — the colours an operator can give one watch entry (Settings ▸ Spots & Alerts), so the call
+     they care about most is not the same lime as the rest. A fixed palette, each defined here for the
+     dark themes and again in the light block below: the entry's mark re-points --need-watch at one of
+     these (watchlist.ts `watchColorStyle`), so the tile and the Band Activity row repaint and nothing
+     else changes. watchColor.test.tsx measures each in every mode, with the lime as its control. */
+  --watch-pink: #f472b6;
+  --watch-red: #f87171;
+  --watch-orange: #fb923c;
+  --watch-yellow: #facc15;
+  --watch-cyan: #22d3ee;
+  --watch-violet: #a78bfa;
   /* Needed-board submode hues (RTTY/FT4 get their own so an RTTY opportunity
      reads apart from an FT8 one). Declared rather than left to a var() fallback:
      a fallback is a DARK value that fires in both themes, which is the whole of
@@ -8500,6 +8871,13 @@ select optgroup {
      3.35:1, a step lighter and with half its chroma. */
   --pota-dim: #52836a;
   --need-watch: #3f6212; /* lime — on your watch list (the WATCH tile) */
+  --watch-pink: #be185d;
+  /* One step lighter than #b91c1c: a grey LoTW chip's border on a red-tinted watch row read 2.99:1 in light night. */
+  --watch-red: #c62828;
+  --watch-orange: #c2410c;
+  --watch-yellow: #a16207;
+  --watch-cyan: #0e7490;
+  --watch-violet: #6d28d9;
   --need-mode-rtty: #8a5200;
   --need-mode-ft4: #0f7038;
   --need-ink: #ffffff;
@@ -9188,7 +9566,9 @@ select optgroup {
   font-weight: 700;
   font-size: calc(14px * var(--text-scale));
   padding: 0 var(--space-5);
-  min-height: var(--touch);
+  /* The Tempo composer's Send transmits: it keeps the 44 px it had when `--touch` dropped to 30 at
+     Standard (the 1080p pass), and still grows with Touch's 48. */
+  min-height: max(var(--touch), 44px);
   transition: var(--transition);
 }
 .send-btn:disabled {
@@ -10115,13 +10495,15 @@ select optgroup {
   gap: var(--space-4);
   flex-wrap: wrap;
 }
+/* A READ-ONLY badge, so it wears no outline (#455): an accent outline on an accent tint is what a lit
+   toggle button wears. The tint stays; the transparent border keeps the badge's box. */
 .cw-mode-badge {
   font-weight: 800;
   font-size: var(--fs-label);
   letter-spacing: 0.08em;
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 14%, transparent);
-  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
   padding: 3px 10px;
 }
@@ -10133,7 +10515,8 @@ select optgroup {
   color: var(--text-dim);
 }
 .cw-wpm input[type='range'] {
-  width: 160px;
+  /* 160 px; 80 where the header folds to one row (cockpit-panes.css `.cw-wpm-compact`). */
+  width: var(--cw-wpm-w, 160px);
 }
 /* CW pitch entry. Uses `input.cw-pitch` (0,1,1) deliberately: the element carries
    `settings-input cw-pitch`, and `.settings-input` (0,1,0) is declared LATER in this file, so
@@ -10233,6 +10616,25 @@ input.cw-pitch::-webkit-inner-spin-button {
 .radio-tune-note.warn {
   color: var(--state-weak);
   font-weight: 700;
+}
+/* #441: Phone's ⓘ for the Tune note, right after the TX cluster (never between its controls): a small
+   round button that opens the note's line. Both variables exist in each theme. */
+.tune-note-info {
+  flex: none;
+  align-self: center;
+  padding: 0 var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: none;
+  color: var(--text-dim);
+  font-size: var(--fs-label);
+  line-height: 1.3;
+  cursor: pointer;
+}
+.tune-note-info:hover,
+.tune-note-info[aria-expanded='true'] {
+  color: var(--text);
+  border-color: var(--accent);
 }
 /* Tune (ATU/amp carrier) + Stop-TX utilities — shared look across the Phone & CW cockpits.
    Restored after the de-FT8 pass dropped them; reuse the Operate cockpit's set_tune/halt_tx. */
@@ -10724,6 +11126,11 @@ input.cw-pitch::-webkit-inner-spin-button {
 }
 .cw-send-btn {
   padding: var(--space-2) 18px;
+  /* SEND KEEPS ITS HIT AREA when the send row drops from 44 to 30 px (`--touch` at Standard, the
+     1080p pass): measured at 1920×1040 it was 76×44 and is 76×33 at the new row height, so it is
+     widened to keep at least the area it had (76 × 44 / 33 ≈ 102). A wider target on a horizontal
+     row is the easier one for a mouse; the button stays the row's last, beside the text it sends. */
+  min-width: 104px;
   border-radius: var(--radius-sm);
   font-weight: 800;
   color: var(--accent-ink);
@@ -11334,6 +11741,21 @@ input.cw-pitch::-webkit-inner-spin-button {
 }
 .le-lookup:hover:not(:disabled) {
   color: var(--text);
+}
+/* #438: Start's two labels ("Start", "Start 14:33") share one grid cell, so the wider sizes the
+   button from the start and a press widens nothing after it; tabular digits keep every time as wide
+   as the placeholder's 00:00. The label not shown keeps its room, unseen (LogEntry.tsx). */
+.le-start {
+  font-variant-numeric: tabular-nums;
+}
+.le-start-label {
+  display: inline-grid;
+}
+.le-start-label > * {
+  grid-area: 1 / 1;
+}
+.le-start-label > [data-off] {
+  visibility: hidden;
 }
 .le-log-btn {
   flex: 0 0 auto;
@@ -12245,6 +12667,16 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   border-radius: var(--radius-sm);
   white-space: nowrap;
 }
+/* Band-plan advice beside the band: amber, display only, never a lock (bandPlanAdvice.ts). */
+.band-plan-advice {
+  padding: 2px var(--space-2);
+  font-size: calc(10px * var(--text-scale));
+  font-weight: 700;
+  color: var(--bg);
+  background: var(--state-warn);
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
 .ph-ptt:disabled {
   opacity: 0.6;
   cursor: not-allowed;
@@ -12742,6 +13174,72 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   gap: 1px var(--space-2);
   padding: 0;
 }
+/* The TX strip's cell (Phone and CW in the compact dock, `md` and up): AT MOST TWO ROWS, filled down
+   then across, so a rig with more readings (COMP's controls, a temperature) makes the cell wider and
+   never the strip taller — two compact rows are the height of the strip's own buttons. The cell's
+   box is cockpit-panes.css's (`.cockpit-txstrip-meters`); this is only how the meters sit in it. */
+.ph-txmeters.inline.strip {
+  grid-template-columns: none;
+  grid-template-rows: repeat(2, auto);
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+}
+/* #446: OPERATE'S CELL OPENS LARGER (TxMetersCell). The opener is the cell's own block wrapper, so
+   the fixed-width cell keeps its geometry; its focus ring is drawn INSIDE, since the cell clips.
+   The dialog (`ui/Dialog`, its box the default .ui-dialog) shows the same meters one per row at
+   full size. Declared after the pinned/inline rules at the same specificity, so source order is
+   what carries them, and scoped to `.txmeters-large`, which only the dialog renders. */
+.txmeters-open {
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.txmeters-open:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+.txmeters-large .ph-txmeters {
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-3);
+  padding: var(--space-2) 0;
+}
+.txmeters-large .ph-txmeters .ph-txmeter-track {
+  height: 22px;
+  border-radius: 6px;
+}
+.txmeters-large .ph-txmeters .ph-txmeter-label {
+  font-size: calc(16px * var(--text-scale));
+  min-width: 3.6em;
+}
+.txmeters-large .ph-txmeters .ph-txmeter-value {
+  font-size: calc(18px * var(--text-scale));
+  min-width: 4.5em;
+}
+/* The needle faces (#343) at the dialog's size too. The cockpit hosts share one 5em face, sized to the
+   TX strip's buttons; the dialog is opened to read the meters, so its faces take the room it has and
+   their name and value grow as the bars' do. They still wrap onto a second line on a narrow window. */
+.txmeters-large .ph-txneedle {
+  width: 12em;
+}
+.txmeters-large .ph-txneedle-label {
+  font-size: calc(14px * var(--text-scale));
+}
+.txmeters-large .ph-txneedle-value {
+  font-size: calc(16px * var(--text-scale));
+}
+/* Beside faces that large, COMP and the temperatures take a line of their own, at the dialog's bar size. */
+.txmeters-large .ph-txmeters.needle .ph-txmeter {
+  flex: 1 1 100%;
+}
+/* The dialog's own spacing around the meters, which the dock's one-box rule would otherwise take. */
+.txmeters-large .ph-txmeters.needle {
+  padding: var(--space-2) 0;
+  gap: var(--space-3);
+}
+.txmeters-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: var(--space-3);
+}
 /* The COMP row in Phone SETS the processor level as well as metering compression: the fill is
    the meter, the marker line is the level, and the track is the slider (drag / arrow keys).
    `touch-action: none` keeps a finger drag on a touch screen from scrolling the dock instead. */
@@ -12812,6 +13310,148 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   font-size: calc(10px * var(--text-scale));
   color: var(--text-dim);
   padding: 1px var(--space-1);
+}
+/* THE NEEDLE METERS (#343, components/TxNeedles.tsx): PO, ALC and SWR as analog faces, in place of
+   their bars, when Settings ▸ Workspace ▸ TX meters is Needle. Each face is a display well: a dial
+   (an SVG whose viewBox is the dial's own shape, so it scales with the face) over a band carrying the
+   meter's name and value, laid over the dial's lower half (the needle's pivot sits under it).
+
+   THE FACE'S SIZE IS ITS WIDTH, ONE SIZE IN EVERY HOST; its height is the dial's, from the dial's
+   aspect ratio, so the whole face is in em and follows --ui-zoom and the text size as the bars' type
+   does. It never changes with the TX cycle: the faces are drawn from the first moment the bars'
+   slots would be, at rest until a reading arrives, and the bars' compact/full switch does not reach
+   them. The size is the strip's: no taller than its buttons (measured in Chrome at 1920×1080 and
+   1366×768), and narrow enough that its COMP row keeps the room it has beside the bars.
+   - The dock (Phone and CW below md): the faces and the bars left (COMP, the temperatures) share
+     one wrapping line instead of the bars' grid, so the bottom-anchored dock grows by the faces'
+     extra height over a bar row and no more.
+   - Operate's cell (`inline`): the faces take the first row of its grid.
+   - The TX strip (`strip`): the faces take a first column across both of its rows. */
+.ph-txmeters.needle {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  /* ONE BOX THROUGH THE TX CYCLE. The bars' container takes `.pinned`'s compact padding between
+     overs and the full one while keyed; the dock is bottom-anchored, so with needles that 2 px
+     swing moved Stop TX on every key and unkey. The faces never change size, so the box doesn't. */
+  padding: 2px var(--space-2);
+  gap: 2px var(--space-3);
+}
+/* Before the first reading the hint shares the faces' line, as it shares the bars' grid, instead of
+   wrapping onto a line of its own that the first reading would then take away. */
+.ph-txmeters.needle .ph-txmeters-hint {
+  flex: 1 1 150px;
+  min-width: 0;
+}
+.ph-txmeters.needle .ph-txmeter {
+  flex: 1 1 150px;
+}
+.ph-txmeters.needle .ph-txmeter.has-ctl {
+  flex-basis: 300px;
+}
+.ph-txmeters.inline.needle {
+  display: grid;
+  /* …and the one box above is the dock's: Operate's cell and the TX strip own their spacing
+     (`.ph-txmeters.inline`), with needles as with bars. */
+  padding: 0;
+  gap: 1px var(--space-2);
+}
+.ph-txmeters.needle .ph-txneedles {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px var(--space-1);
+  min-width: 0;
+}
+.ph-txneedle {
+  flex: none;
+  width: 5em;
+  min-width: 0;
+}
+.ph-txneedle-face {
+  position: relative;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  overflow: hidden;
+}
+.ph-txneedle-dial {
+  position: relative;
+  aspect-ratio: 100 / 38;
+}
+.ph-txneedle-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.ph-txneedle-scale,
+.ph-txneedle-tick {
+  fill: none;
+  stroke: var(--text-dim);
+  stroke-width: 1.2;
+}
+.ph-txneedle-zone {
+  fill: none;
+  stroke-width: 3;
+}
+.ph-txneedle-peak {
+  fill: none;
+  /* The Cyan role: a signal colour no theme retunes, so in every theme and skin it stays apart from
+     the needle's ink (styles-wells.test.ts measures the pair). */
+  stroke: var(--alert-info);
+  stroke-width: 2.4;
+  stroke-linecap: round;
+}
+.ph-txneedle-needle {
+  stroke: var(--text);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+.ph-txneedle-band {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-1);
+  padding: 0 3px;
+  line-height: 1.15;
+  background: var(--bg-elev);
+  border-top: 1px solid var(--border);
+  white-space: nowrap;
+}
+.ph-txneedle-label {
+  font-family: var(--font-mono);
+  font-size: calc(10px * var(--text-scale));
+  font-weight: 800;
+  color: var(--text-dim);
+}
+.ph-txneedle-value {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.74rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* The strip's two rows: the faces take both, in a first column of their own width; COMP and the
+   temperatures fill the columns after it as they do beside the bars. */
+.ph-txmeters.inline.strip.needle {
+  grid-template-columns: max-content;
+}
+.ph-txmeters.inline.strip.needle .ph-txneedles {
+  grid-column: auto;
+  grid-row: 1 / -1;
+  flex-wrap: nowrap;
+}
+/* Between overs the needle rests and the marker holds the last over's peak, dimmed like the bars. */
+.ph-txmeters.idle .ph-txneedle-value,
+.ph-txmeters.idle .ph-txneedle-label,
+.ph-txmeters.idle .ph-txneedle-peak {
+  opacity: 0.55;
 }
 /* THE TRANSMIT CONTRACT — the dock's top line (2026-09-20). ONE LINE, ALWAYS: `nowrap` is
    not tidiness, it is the whole reason this sits where it does. The dock is bottom-anchored,
@@ -15034,8 +15674,10 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   display: grid;
   grid-template-columns: 0.6fr 1fr 0.6fr 3fr;
   gap: 10px;
-  /* Density-aware row packing (see .decode-row) — ×1 at 'standard'. */
-  padding: calc(10px * var(--density-scale)) var(--space-4);
+  /* Density-aware row packing (see .decode-row) — ×1 at 'standard'. The base is `--log-row-pad-y`:
+     4 px at Standard and Dense (the 1080p pass: with the 32 px row buttons a row is 40 px, not 52, and
+     a 1080p window shows about half as many more contacts), 10 px at Comfortable, as before. */
+  padding: calc(var(--density-scale) * var(--log-row-pad-y)) var(--space-4);
   align-items: center;
   border-bottom: 1px solid var(--border-soft);
   font-size: calc(13px * var(--text-scale));
@@ -15482,6 +16124,14 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .settings-grid--lone {
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
 }
+/* A grid that CONTINUES the fields of a disabling group above it (Station: Units after the
+   station fields) keeps their row gap. Grid `gap` only separates items inside one grid, so the
+   split left 0 between the two, and at 1080p/150% the State hint ran into the UNITS label
+   (SettingsStation.spacing.test.tsx). On the grid, not on `.settings-fieldgroup`, which must
+   carry no box of its own. */
+.settings-fieldgroup + .settings-grid {
+  margin-top: var(--space-4);
+}
 /* `auto-fit` IS A TRAP ONCE THE PANEL IS UNBOUND (2026-08-12, with the md+ widening).
    auto-fit collapses the tracks that ended up empty and hands the freed space to the
    `1fr` tracks that survive, so a track's width is (container ÷ number of ITEMS), not
@@ -15783,6 +16433,26 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .watchlist-notes:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+/* #299 — an entry's colour: a swatch painted with the very token its marks use (--need-watch, which
+   the entry's style re-points), beside a compact picker. */
+.watchlist-color {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.watchlist-swatch {
+  width: calc(12px * var(--text-scale));
+  height: calc(12px * var(--text-scale));
+  border-radius: 999px;
+  background: var(--need-watch);
+  border: 1px solid var(--border);
+}
+.watchlist-color-select {
+  flex: 0 0 auto;
+  width: auto;
+  padding: 1px var(--space-2);
+  font-size: var(--fs-label);
 }
 .watchlist-remove {
   margin-left: auto;
@@ -16310,6 +16980,15 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .toggle.on .toggle-knob {
   background: var(--accent);
   transform: translateX(20px);
+}
+/* A switch that cannot be used here (Settings ▸ Rig & CAT's Flex native panadapter off the
+   network connection): dimmed, flat-rimmed and not-allowed, so "greyed out" is true and not only
+   the note beside it. `[disabled]`, not `:disabled`: same match for a native button, and the
+   attribute is what the cascade guard (styles-toggle-disabled.test.ts) can resolve. */
+.toggle[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  border-color: var(--border);
 }
 /* Core "always on" features aren't toggleable, so they render a static status
    badge instead of a switch — no fake control next to the real settings. */
@@ -17638,6 +18317,16 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   background: color-mix(in srgb, var(--bg) 62%, transparent);
   pointer-events: none;
   user-select: none;
+  /* Never down over the frequency scale: on a short waterfall (a large UI zoom, a dragged-down
+     strip) the legend stops 6px above the scale's strip (its 18px, which the UI zoom scales with
+     it), its bar giving up height first, and anything that still cannot fit is clipped. */
+  max-height: calc(100% - 30px);
+  overflow: hidden;
+}
+/* Squeezed to no bar at all (Waterfall's `legendBarRef`): hidden whole, so a clipped tick never
+   stands alone in the corner reading like a frequency. */
+.wf-legend[data-squeezed] {
+  visibility: hidden;
 }
 .wf-legend-bar {
   width: 8px;
@@ -18240,6 +18929,10 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   opacity: 0.3;
   filter: grayscale(0.8);
 }
+/* #452: a row filled in afterwards from the station's history — its time reads as history. */
+.decode-row.refilled .decode-utc {
+  font-style: italic;
+}
 .decode-tag {
   font-size: calc(10px * var(--text-scale));
   font-weight: 800;
@@ -18415,6 +19108,18 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .radio-picker-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+.radio-picker-auto {
+  margin: var(--space-3) 0 0;
+  color: var(--text-dim);
+  font-size: calc(13px * var(--text-scale));
+  text-align: center;
+}
+.radio-picker-error {
+  margin: var(--space-3) 0 0;
+  color: var(--state-bad);
+  font-size: calc(13px * var(--text-scale));
+  text-align: center;
 }
 .radio-picker-tag {
   font-size: calc(12px * var(--text-scale));
@@ -18894,6 +19599,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--state-good);
 }
 .log-upload.waiting,
+.log-upload.resend,
 .log-upload.none {
   color: var(--text-faint);
 }
@@ -19435,9 +20141,6 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   color: var(--text-dim);
   margin-top: 2px;
 }
-.roam-enable .op-btn {
-  border-color: var(--border);
-}
 
 /* role / status pill */
 .roam-chip {
@@ -19493,9 +20196,6 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   flex-wrap: wrap;
   gap: var(--space-2);
   margin: var(--space-2) 0 var(--space-3);
-}
-.roam-controls .op-btn {
-  border: 1px solid var(--border);
 }
 .roam-controls .op-btn:disabled {
   opacity: 0.4;
@@ -19578,7 +20278,8 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
 .cockpit-header {
   display: flex;
   align-items: center;
-  gap: var(--gap);
+  /* The stock gap, tighter on a short window (cockpit-panes.css, the short-window tier). */
+  gap: var(--chrome-head-gap, var(--gap));
   flex-wrap: wrap;
   min-width: 0;
   /* NO min-height HERE, and that is the whole safety mechanism — see `.ch-identity`
@@ -19679,7 +20380,7 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--chrome-extras-gap, var(--space-3));
   flex-wrap: wrap;
 }
 /* The band control + Tune as one unit: it wraps as a whole, so Tune stays beside the band
@@ -19780,6 +20481,16 @@ button.recall-avatar:focus-visible .recall-avatar-qrz {
      itself, so the footer the operator needs after a mis-tick is always reachable. */
   max-height: calc(0.7 * var(--vh-eff, 100vh));
   overflow-y: auto;
+  /* …and never wider than the window it is clamped into (PanelsMenu shifts it back inside). */
+  max-width: calc(var(--vw-eff, 100vw) - 2 * var(--space-2));
+}
+/* …OPENING UPWARD where there is more room above the button than below it and the menu does not fit below
+   (PanelsMenu `fitMenu`, which also sets its max-height to that room). */
+.panels-menu-pop[data-up] {
+  top: auto;
+  bottom: 100%;
+  margin-top: 0;
+  margin-bottom: var(--space-1);
 }
 .panels-menu-item {
   display: flex;
@@ -20872,9 +21583,12 @@ button.cq-skiptx1.on {
    covers the scrollport's first rows, so anything scrolled to the START — `scrollIntoView`, a focus
    moving into the log form — would land under it (the hosted RTTY call field at 1024×768, 175 %).
    The strip writes its own height on its shell (`--cockpit-txstrip-h`); a shell without one pads
-   nothing. */
+   nothing. …and clear of a FOLDED dock's parked keep row, whose height the strip writes too
+   (`--cockpit-txdock-keep-h`, set only while folded): Tab through the macro keys stopped behind it, and
+   Enter sent a key the operator could not see (RTTY at 900×600 at 175 %: 15 of 18 controls, measured). */
 .layout.single {
   scroll-padding-top: var(--cockpit-txstrip-h, 0px);
+  scroll-padding-bottom: var(--cockpit-txdock-keep-h, 0px);
 }
 .cq-txctl .op-btn {
   display: inline-flex;
@@ -20896,9 +21610,20 @@ button.cq-skiptx1.on {
 .cq-txctl .op-btn.atu {
   min-width: 7em;
 }
-/* The latch's READ-ONLY twin (Phone, CW): the same box, nothing to press. */
-.cq-txctl .op-btn.readonly {
+/* The latch's READ-ONLY twin (Phone, CW): the same box, nothing to press, so it looks like the
+   status it is (#455): no outline and no face, lit or not. Armed, it keeps the green word on a
+   tint, a lamp rather than a key. The buttons' hover does not reach it. */
+.cq-txctl .op-btn.monitor.readonly,
+.cq-txctl .op-btn.monitor.readonly:hover {
   cursor: default;
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-faint);
+}
+.cq-txctl .op-btn.monitor.readonly.on,
+.cq-txctl .op-btn.monitor.readonly.on:hover {
+  background: color-mix(in srgb, var(--rx) 18%, transparent);
+  color: color-mix(in srgb, var(--state-good) 70%, var(--text));
 }
 /* The TX state after the cluster on the other screens' strips: Operate's colours, carried by the
    cap itself because those strips wear no rx/tx wash of their own. */
@@ -21322,10 +22047,12 @@ button.cq-skiptx1.on {
 }
 .cockpit-decodes-side {
   /* The full decode window dominates the rail; Rx Frequency keeps a slimmer share. Share is
-     drag-resizable via the seam (--pane-share, default 1.6); flex-grow so a sole survivor
-     auto-fills. NO px min-height floor (cockpit-floors guards this — px floors were the
-     root cause of the old vertical-clipping bug). */
-  flex: var(--pane-share, 1.6) 1 0;
+     drag-resizable via the seam (--pane-share, default 3 : Rx Frequency's 1 — it was 1.6 until the
+     1080p pass, which left Band Activity 8 rows at 1920×1040 under the callsign card while Rx
+     Frequency, a handful of lines, held a third of the rail); flex-grow so a sole survivor
+     auto-fills. A stored share (the seam's drag) still wins. NO px min-height floor (cockpit-floors
+     guards this — px floors were the root cause of the old vertical-clipping bug). */
+  flex: var(--pane-share, 3) 1 0;
   min-height: 0;
   display: flex;
   /* Scrolls rather than clips — see .cockpit-rxfreq. */
@@ -21430,6 +22157,34 @@ button.cq-skiptx1.on {
   font-size: 0.85rem;
   line-height: 1.2;
   min-height: 24px;
+}
+/* The CW and Phone headers' ⋯ (components/HeaderOverflow): the icon buttons' look, and what is on
+   behind it (REC, SPLIT) as small plates beside the glyph. */
+.ch-overflow-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px 7px;
+  min-height: 24px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  line-height: 1.2;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev-2);
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ch-overflow-btn:hover,
+.ch-overflow-btn.on {
+  border-color: var(--accent);
+}
+.ch-overflow-badge {
+  font-family: var(--font-mono);
+  font-size: calc(10px * var(--text-scale));
+  font-weight: 800;
+  color: var(--accent);
 }
 /* The 2D/3D map-mode toggle — groups to the right next to Pop-out. */
 /* 3D globe lazy-load placeholder (three.js chunk loading). */
@@ -21838,6 +22593,23 @@ button.cq-skiptx1.on {
 .sp-grid .np-row {
   grid-template-columns: 52px minmax(72px, 1fr) minmax(88px, 1.3fr) 34px 50px 70px 64px minmax(48px, 1fr) minmax(86px, 1.6fr) 32px;
 }
+/* Phone's FreeDV pane, its content (components/FreedvPane): the heard list reads as rows, not a
+   bulleted list, and a refusal or bind failure (role="alert") carries the theme's warning colour.
+   Its size and its scroller are structural and live in cockpit-panes.css (`.freedv-pane`,
+   `.freedv-heard`), which this sheet never names. */
+.freedv-calls {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.freedv-calls > li {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+.freedv-notice {
+  color: var(--state-warn);
+}
 /* ── THE TWO BOARDS AS PHONE AND CW PANES (#345) ──────────────────────────────────────────
    The Spots and Needed boards render inside a CockpitPaneFrame on the Phone and CW cockpits, as
    fill panes. This is the content half of that, in the sanctioned place (`.pane-body >
@@ -21969,11 +22741,13 @@ button.cq-skiptx1.on {
 .cn-spots .np-board > .np-grid {
   overflow: visible;
 }
-.cn-spots .np-search {
+.cn-spots .np-search,
+.cn-needed .np-search {
   flex: 1 1 6em;
   min-width: 0;
 }
-.cn-spots .np-search input {
+.cn-spots .np-search input,
+.cn-needed .np-search input {
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
@@ -22031,7 +22805,9 @@ button.cq-skiptx1.on {
    basis grid, the rail's Needed box was 2 px of list, drawing its count and its Filter button and no
    row at all. So the board takes its natural height, the pane body scrolls it, and the grid is no
    scroller of its own (its sticky column headings stick to the pane body). Its columns stay the
-   pane's, so a box narrower than they are scrolls sideways inside its own body. */
+   pane's, so a box narrower than they are scrolls sideways inside its own body. Its search box (the
+   Spots board's, shared) takes the Spots box's rule above: it shrinks with the head rather than
+   holding 240 px in a 175 px rail. */
 .cn-needed .np-board,
 .cn-needed .np-board > .np-grid {
   flex: none;
@@ -22462,6 +23238,18 @@ button.cq-skiptx1.on {
   background: color-mix(in srgb, var(--accent) 18%, transparent);
   color: var(--accent);
 }
+/* A chip that states a rule the board always applies (the Needed board's "Heard on my continent"):
+   not a control, and never drawn like a lit toggle — a dashed outline with no fill, no pointer,
+   no hover change. It takes focus (for its tooltip), so focus shows the usual ring. */
+.np-chip-fixed {
+  cursor: default;
+  border-style: dashed;
+  background: transparent;
+}
+.np-chip-fixed:hover {
+  border-color: var(--border);
+  color: var(--text-dim);
+}
 /* Clear all filters chip — visually distinct (danger-muted). */
 .np-chip-clear {
   border-color: var(--alert-warning);
@@ -22590,6 +23378,18 @@ button.cq-skiptx1.on {
   font-size: 0.82rem;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
 }
+/* #357 — the Park column, after Need, only while the roster shows it (a station on it is at a park,
+   or it is sorted by Park): a POTA reference (US-1234) at its floor, a longer SOTA summit ellipsized
+   with the whole reference in its tooltip. Without it the row keeps the track list above, and with it
+   its minimum width. The same tracks otherwise, so header and data rows always agree. */
+.operate-roster.or-has-park .or-row {
+  grid-template-columns:
+    minmax(calc(124px * var(--text-scale)), 1fr) minmax(calc(68px * var(--text-scale)), 0.8fr)
+    minmax(calc(105px * var(--text-scale)), 1.13fr) minmax(calc(60px * var(--text-scale)), 0.6fr)
+    minmax(calc(50px * var(--text-scale)), 0.85fr)
+    calc(40px * var(--text-scale)) calc(54px * var(--text-scale)) calc(56px * var(--text-scale))
+    calc(48px * var(--text-scale)) calc(44px * var(--text-scale)) calc(48px * var(--text-scale));
+}
 .or-row.or-header {
   position: sticky;
   top: 0;
@@ -22675,6 +23475,7 @@ button.cq-skiptx1.on {
   text-overflow: ellipsis;
 }
 .or-calling,
+.or-park,
 .or-country,
 .or-state,
 .or-gridc,
@@ -22687,6 +23488,7 @@ button.cq-skiptx1.on {
   text-overflow: ellipsis;
 }
 .or-calling,
+.or-park,
 .or-state,
 .or-gridc,
 .or-dist,
@@ -22729,6 +23531,18 @@ button.cq-skiptx1.on {
   color: var(--text);
   background: color-mix(in srgb, var(--text-dim) 16%, transparent);
   border: 1px solid color-mix(in srgb, var(--text-dim) 40%, transparent);
+}
+/* #357 — a station at a park reads in the theme's ink, not dimmed: it is the column a hunter scans.
+   --text is defined in both themes. */
+.or-park:not(.none) {
+  color: var(--text);
+  font-weight: 700;
+}
+/* #346 — the anchor a row's menu opens from: no box of its own, so it moves nothing in the row. */
+.call-row-menu-anchor {
+  position: absolute;
+  width: 0;
+  height: 0;
 }
 /* A station calling CQ is the one to work — say so quietly rather than with a chip;
    --text is defined in both themes. */
@@ -23222,6 +24036,40 @@ button.cq-skiptx1.on {
 .country-item[data-state='checked']::before {
   content: '✓';
 }
+/* #346 — the calls a row's menu hid on one band or for a while, each with a ✕ that shows it again. */
+.hide-scoped-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 var(--space-2) var(--space-1);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.hide-scoped-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--fs-label);
+}
+.hide-scoped-what {
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+.hide-scoped-until {
+  color: var(--text-dim);
+}
+.hide-scoped-remove {
+  margin-left: auto;
+  padding: 0 var(--space-1);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  cursor: pointer;
+}
+.hide-scoped-remove:hover {
+  border-color: var(--accent);
+}
 .country-menu-note {
   max-width: 20em;
   padding: var(--space-1) var(--space-2);
@@ -23285,6 +24133,11 @@ button.cq-skiptx1.on {
   content: '';
   flex: 1;
   border-top: 1px solid var(--border-soft);
+}
+/* #452: periods this pane missed that the station no longer held — the rule is dashed. */
+.od-period-sep.od-gap::before,
+.od-period-sep.od-gap::after {
+  border-top-style: dashed;
 }
 .od-sep-utc {
   font-family: var(--font-mono);
@@ -26559,6 +27412,14 @@ button.sat-chip:disabled {
 .sat-tp-auto {
   color: var(--accent);
 }
+/* The row's ★ favorite: the .sat-star toggle (same gold, both themes), at the card's end. */
+.sat-tp-fav {
+  margin-left: auto;
+}
+/* "last used": a quiet word on the row the operator picked last time. */
+.sat-tp-last {
+  color: var(--text-dim);
+}
 .sat-tp-deadmark {
   color: var(--text-dim);
 }
@@ -29071,10 +29932,8 @@ button.sat-chip:disabled {
   display: none;
 }
 /* Triple-class (0,3,0) so `.layout.single` can't collapse the flex chain — same
-   fix as `.layout.single.cw-cockpit`. PSK is RTTY's region-less shape (one
-   content pane, no region), so it rides the same rule — and the same
-   `--cockpit-fill-min` knob, whose allowlist in cockpit-panes.test.ts names all
-   three shells. */
+   fix as `.layout.single.cw-cockpit`. RTTY, PSK and SSTV share one shape: header
+   (pinned), scope, TX strip, ONE pane region with a single column, dock. */
 .layout.single.rtty-cockpit,
 .layout.single.psk-cockpit,
 .layout.single.sstv-view {
@@ -29088,19 +29947,10 @@ button.sat-chip:disabled {
      cockpits' content usually fits, so the scrollbar appears only on genuine deficit. */
   overflow-y: auto;
   min-height: 0;
-  /* THE FILL-FRAME FLOOR (region-less cockpits only). These two shells have no
-     .cockpit-panes region — their CockpitPaneFrames are bare shell children whose
-     inline fill flex is `1 1 0` with `min-height: var(--cockpit-fill-min, 0)`. This
-     knob is that floor: RTTY's stream / SSTV's gallery keep their head plus a readable
-     band of content, and deficit past it flows to the `overflow-y: auto` valve above.
-     A SHEET rule on `.pane-frame` cannot supply the floor — the frame's inline
-     min-height outranks every selector, which is how the previous spelling
-     (`.rtty-cockpit > .pane-frame { min-height: 10em }`) shipped dead. Fenced:
-     cockpit-panes.test.ts fails any other rule that sets this — inherited under a
-     region's tier-2/3 `overflow: hidden` it would be the clip mechanism reborn.
-     RTTY lowers it on a short cockpit through its knob (cockpit-panes.css `.rtty-cockpit`,
-     2026-10-27); PSK and SSTV never set the knob and keep the stock 10em. */
-  --cockpit-fill-min: var(--rtty-fill-floor, 10em);
+  /* (The fill-frame floor knob `--cockpit-fill-min` that stood here went with the
+     region-less shape, 2026-11-04: the frames are in a pane region now, whose bounded
+     flow sets their yielding floor itself — cockpit-panes.css. RTTY's short-cockpit
+     floors became its region's floor there, `.rtty-cockpit`.) */
 }
 /* JS8 is a REGION cockpit (CW's shape: a .cockpit-panes grid, not bare fill frames), so it
    takes CW's shell rule and NOT the --cockpit-fill-min knob — cockpit-panes.test.ts fences
@@ -29127,7 +29977,11 @@ button.sat-chip:disabled {
   flex: 0 0 auto;
   position: sticky;
   bottom: 0;
-  z-index: 2;
+  /* 4, the TX strip's and `.cockpit-txdock`'s level and the pinned header's (cockpit-panes.css):
+     the bar comes after the header in the shell, so at equal z it wins any overlap — Send and Stop
+     are never under the dial. (It was 2, under the header's 4, and at 900×600 / 175 % the header
+     covered Send and Stop.) Above the region's column dividers (3) for the dock's reason. */
+  z-index: 4;
   display: flex;
   align-items: center;
   gap: var(--space-3);
@@ -29258,23 +30112,25 @@ button.sat-chip:disabled {
   gap: var(--space-2);
   align-items: end;
 }
-/* Muted dashed placeholder pill (band slot etc.) — reads as "not wired yet". */
+/* The band READOUT a header shows when it has no band picker: plain dim words, no outline, so it is
+   not mistaken for a button (#455; it was a dashed pill). The transparent border keeps its box. */
 .cockpit-ph-pill {
   font-size: var(--fs-label);
   font-weight: 700;
   color: var(--text-dim);
-  border: 1px dashed var(--border);
+  border: 1px solid transparent;
   border-radius: var(--radius-sm);
   padding: 3px 10px;
 }
-/* FSK/AFSK keying-backend indicator beside the RTTY mode badge. */
+/* FSK/AFSK keying-backend indicator beside the RTTY mode badge. An indicator, so no outline and no
+   raised face (#455): those are a button's. */
 .rtty-backend-pill {
   font-size: var(--fs-label);
   font-weight: 700;
   letter-spacing: 0.06em;
   color: var(--text-dim);
-  background: var(--bg-elev);
-  border: 1px solid var(--border);
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: 999px;
   padding: 2px 10px;
   margin-left: var(--space-2);
@@ -29404,6 +30260,31 @@ button.sat-chip:disabled {
   font-size: var(--fs-label);
   color: var(--text-dim);
   padding: 0 var(--space-1);
+}
+/* JTTY'S NOTICE OR REFUSAL, in the keep row so it stays parked while the dock is folded. In flow it takes a line of its
+   own under the send row, where the how-to hint stands. FOLDED IT IS AN OVERLAY on the row's top edge (cockpit-panes.css
+   sets `--cockpit-txdock-reason-pos`): in flow it would grow the row, and the row is bottom-anchored, so Send and Esc/Stop
+   would move up under the pointer as the refusal arrived. Where the strip parks directly above the row the overlay reaches
+   it, so it keeps to the column right of Stop TX, which holds no control (`--cockpit-txdock-reason-left`, CockpitTxStrip).
+   Opaque. */
+.jtty-dock-reason {
+  flex: 0 0 100%;
+  /* In flow, the dock's gap above it rather than the send row's bigger one (`.cockpit-txdock`'s stepped length), so a
+     refusal replacing the hint moves nothing above it: the line stands exactly where the hint stood. */
+  margin-top: calc(max(var(--space-1), min(var(--space-2), (var(--vh-eff, 100vh) - 1100px) * 100)) - var(--space-2));
+  position: var(--cockpit-txdock-reason-pos, static);
+  bottom: 100%;
+  left: var(--cockpit-txdock-reason-left, 0px);
+  right: 0;
+  background: var(--panel);
+  /* CLAMPED WHILE FOLDED to the lines the strip writes, so the keys keep their room; the whole text is in its tooltip and
+     the toast a click on it raises (JttyCockpit). It takes that click itself: a notice that hides a key may not pass a
+     click to it. */
+  display: var(--cockpit-txdock-reason-display, block);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--cockpit-txdock-reason-lines, none);
+  overflow: var(--cockpit-txdock-reason-overflow, visible);
+  cursor: help;
 }
 /* (`.rtty-cockpit > .cw-macros` / `> .cw-send { flex: 0 0 auto }` deleted with the pane
    rebuild — the child combinator stopped matching once the rows moved inside the pinned
@@ -29650,10 +30531,8 @@ button.sat-chip:disabled {
 .rtty-macros {
   grid-template-columns: repeat(8, minmax(0, 1fr));
 }
-.rtty-dock-keys > .rtty-macros {
-  flex: 999 1 76em;
-  min-width: 0;
-}
+/* (The keys' share of the line — `flex: 999 1 76em; min-width: 0` — lives in cockpit-panes.css as
+   `.dock-fkeys` since the 1080p pass, unchanged; the reasoning for 76em is the note above.) */
 .rtty-dock-keys > .rtty-dock-row {
   flex: 1 1 auto;
 }
@@ -29700,7 +30579,35 @@ button.sat-chip:disabled {
 .rtty-macro-slot:focus-within .rtty-macro-edit {
   opacity: 1;
 }
-/* The fixed row: Call box and set switch at the left, TX and Esc/Stop together at the right. */
+/* THE KEYBOARD DOCKS' SEND ROWS WRAP (`.cw-send-wrap`: CW, RTTY, PSK). Each is its dock's keep row, the one
+   row that stays parked when the dock folds on a small window at a large zoom (cockpit-panes.css
+   `.cockpit-txdock[data-fold='on']`), so nothing in it may leave the window: CW's His Call, text box and Send
+   came to 908 px on a 700 px window at 175 %, and Send stood wholly off its right edge (measured). Where the
+   line is too narrow the last items take a line of their own at the right. Before it wraps, the text box
+   keeps 8em and RTTY's TX line 5em (below their natural widths), so the row stays one line wherever those
+   fit: from 1024×768 at 175 % up (measured).
+   RTTY's and PSK's row also carries the stops (the TX latch and Esc/Stop, `.rtty-send-stops`) at its right
+   end, because the keep row is the row that stays parked. */
+.cw-send-wrap {
+  flex-wrap: wrap;
+}
+.cw-send-wrap > .cw-type {
+  min-width: min(8em, 100%);
+}
+.cw-send-wrap > .rtty-txline {
+  min-width: min(5em, 100%);
+}
+.cw-send-wrap > .cw-send-btn {
+  margin-left: auto;
+}
+.rtty-send-stops {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+/* The fixed row: Call box and set switch. */
 .rtty-dock-row {
   display: flex;
   flex-wrap: wrap;
@@ -29722,7 +30629,10 @@ button.sat-chip:disabled {
    element), and `left` is the key's offset in it, clamped by the component. Opaque, because it
    sits over the transcript and the log. */
 .rtty-macro-editor {
-  position: absolute;
+  /* Out of flow on the dock's top edge — except while the dock is FOLDED (cockpit-panes.css sets
+     `--cockpit-txdock-float: static` there): a folded dock has no box to stand on, so the editor joins
+     the flow above the send row and scrolls with the keys it edits. */
+  position: var(--cockpit-txdock-float, absolute);
   bottom: calc(100% + var(--space-1));
   z-index: 3;
   box-sizing: border-box;
@@ -29991,7 +30901,9 @@ button.sat-chip:disabled {
   padding: 0 var(--space-1);
 }
 .js8-hb-menu {
-  position: absolute;
+  /* Off the dock's top edge, except while the dock is FOLDED: a folded dock has no box to stand on, so the
+     menu joins the flow beside its button, as the macro editor does (`--cockpit-txdock-float`, cockpit-panes.css). */
+  position: var(--cockpit-txdock-float, absolute);
   bottom: calc(100% + var(--space-1));
   z-index: 3;
   display: flex;
@@ -30417,6 +31329,21 @@ button.sat-chip:disabled {
 .rtty-stop:not(:disabled) {
   color: var(--state-weak);
   border-color: var(--state-weak);
+}
+/* JTTY'S Esc/Stop STANDS IN THE SEND ROW (beside Send), not in a fixed row of keys as RTTY's and PSK's
+   do, so its height is the row's — and the row follows `--touch`, which the 1080p pass took from 44 to
+   30 px at Standard. A STOP CONTROL NEVER SHRINKS, so it keeps the floor it had before that pass: 44 px,
+   48 under Touch (`max(--touch, 44px)`, density by density exactly the old height). Measured in Chrome
+   at 1920×1040: 56×44 before the pass, 56×34 with the 30 px row, 56×44 with this floor.
+   cockpit-shells.test.ts pins it with every other stop and send control's floor. */
+.jtty-stop {
+  min-height: max(var(--touch), 44px);
+}
+/* RTTY'S AND PSK'S TX LATCH AND Esc/Stop STAND IN THE SEND ROW too (`.rtty-send-stops`, the dock's keep row), so
+   they take JTTY's floor: a stop control in a compose row never has less than the 44 px it had before the
+   1080p pass (48 under Touch). cockpit-shells.test.ts pins it with every other stop and send control's floor. */
+.send-row-stop {
+  min-height: max(var(--touch), 44px);
 }
 /* SSTV Arm toggle (header) — armed state must read at a glance. */
 .sstv-arm {

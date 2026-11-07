@@ -321,6 +321,107 @@ fn a_microphone_that_will_not_open_keys_nothing() {
     );
 }
 
+/// ⛔ NEVER KEY WITH NO AUDIO, the slot overs' rule, for the computer microphone too. The field
+/// case: a sound-card radio on CAT PTT whose TX audio output would not open. The press keyed the
+/// radio on the microphone's first audio and played into an output with no stream, so the radio
+/// went on the air with a dead carrier and nothing said why. Now the output is opened (or tried
+/// again) before the microphone is, and an output that will not open keys nothing, closes nothing
+/// it never opened, and names the reason. CONTROL: the same press with the output opening keys and
+/// plays.
+#[test]
+fn a_tx_audio_output_that_will_not_open_keys_nothing_and_says_so() {
+    let mut s = PcScene::new(true);
+    s.backend.tx_open_error = Some("the device is in use by another program".into());
+    s.ptt(true);
+    for k in 0..20 {
+        s.tick(k as f64 * 20.0, 0.5);
+    }
+    assert!(
+        !s.rig.keyed,
+        "the radio keyed with no transmit audio to carry the voice"
+    );
+    assert!(s.backend.played.is_empty());
+    assert!(
+        !s.backend.pc_mic_open,
+        "the microphone opened for an over that cannot go out"
+    );
+    {
+        let e = s.engine.lock().unwrap();
+        assert!(
+            !e.pc_mic_armed(),
+            "the over stayed armed with no transmit audio"
+        );
+        assert_eq!(
+            e.snapshot().radio.pc_mic_ended.map(|x| x.cause),
+            Some(tempo_app::dto::PcMicCause::TxAudio)
+        );
+    }
+    // CONTROL: the output opens on the next press, which keys and plays.
+    s.ptt(false);
+    s.backend.tx_open_error = None;
+    s.ptt(true);
+    for k in 20..40 {
+        s.tick(k as f64 * 20.0, 0.5);
+    }
+    assert!(
+        s.rig.keyed && s.backend.played.contains(&0.5),
+        "CONTROL: an output that opens"
+    );
+}
+
+/// THE FTDX10 FIELD CASE, AS IT IS (a pin of today's behaviour, not a change): with "Use this
+/// computer's microphone" on, Nexus keys the radio over CAT with `T 1` in the plain sideband the
+/// Phone screen commands (`M USB`), and plays the voice into the radio's USB audio input. A radio
+/// in plain SSB modulates from the input its SSB MOD SOURCE menu names, MIC from the factory on an
+/// FTDX10, so this voice is heard only with that menu on REAR (USB). Nexus changes no radio menu
+/// and no mode for it, which is why the Settings hint beside the switch says so.
+#[test]
+fn the_press_keys_t1_in_the_plain_sideband_on_a_cat_radio() {
+    let mut s = PcScene::with(true, |st| {
+        st.dial_mhz = 14.250;
+        st.band = "20m".into();
+    });
+    let (addr, log) = mock_rigctld_on(14_250_000, false);
+    s.rig = Rig::rigctld(&addr);
+    s.state = loop_state_for(&s.engine);
+    s.state.mono_origin = Some(s.origin);
+    s.settle();
+    s.ptt(true);
+    let mut t = 60.0;
+    while t <= 460.0 && !s.rig.keyed {
+        s.tick(t, 0.5);
+        t += 20.0;
+    }
+    assert!(
+        s.rig.keyed,
+        "control: the microphone's audio keyed the radio"
+    );
+    // The voice follows the key on the next ticks.
+    for _ in 0..5 {
+        s.tick(t, 0.5);
+        t += 20.0;
+    }
+    assert!(
+        s.backend.played.contains(&0.5),
+        "the voice went to the radio's USB audio"
+    );
+    let lines = log.lock().unwrap().clone();
+    let key = lines
+        .iter()
+        .position(|l| l == "T 1")
+        .unwrap_or_else(|| panic!("the key is T 1 over CAT — {lines:?}"));
+    assert!(
+        lines[..key].iter().any(|l| l.starts_with("M USB")),
+        "the radio is in plain USB at the key — {lines:?}"
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|l| l.starts_with("M PKT") || l == "T 2" || l == "T 3"),
+        "no data mode and no data key is ever sent for it — {lines:?}"
+    );
+}
+
 #[test]
 fn ft_never_opens_the_microphone() {
     let mut s = PcScene::new(true);

@@ -1050,6 +1050,22 @@ fn grid_fix(g: &str) -> Option<Option<String>> {
     Some(cut)
 }
 
+/// Is the logged band `logged` the band [`band_for_dial`](crate::bandplan::band_for_dial) names
+/// `by_freq`? Case aside, yes when they are spelled alike, and also for ADIF's `2190m`, which is
+/// the band Nexus calls `2200m` (the name its WSPR and FST4 plans tune it by). An imported
+/// LoTW/ADIF contact on 136 kHz is on the right band, and offering to "fix" it to the other
+/// spelling would trade ADIF's own name for a non-ADIF one.
+fn same_band(by_freq: &str, logged: &str) -> bool {
+    let canon = |b: &str| {
+        if b.eq_ignore_ascii_case("2190m") {
+            "2200m".to_string()
+        } else {
+            b.to_ascii_lowercase()
+        }
+    };
+    canon(by_freq) == canon(logged)
+}
+
 /// ★ The problems of one contact. `dxcc_mismatch` answers, for a call and the DXCC number the
 /// contact carries, whether the country file places the call in a different entity (`None` when
 /// they agree or either is unknown) and, when it does, the number to propose — `None` inside where
@@ -1099,19 +1115,30 @@ pub fn problems_of(
             want.filter(|_| !confirmed).map(|n| Some(n.to_string())),
         );
     }
-    if r.freq_mhz.is_finite() && r.freq_mhz > 0.0 {
-        let by_freq = crate::bandplan::band_for_dial(r.freq_mhz);
+    // Each frequency is judged against its own band (#163). FREQ_RX, when there is one, is the
+    // receive leg, and the band a contact is counted on (`counted_band`) is the receive leg's: a
+    // satellite contact's FREQ is its uplink. Without FREQ_RX, FREQ against the record's band, as
+    // before — a parked BAND_RX with no FREQ_RX beside it is not this check's to judge.
+    let rx = r.freq_rx_mhz.filter(|v| v.is_finite() && *v > 0.0);
+    let (heard, judged_band) = match rx {
+        Some(rx) => (rx, tempo_core::logbook::counted_band(r)),
+        None => (r.freq_mhz, r.band.as_str()),
+    };
+    if heard.is_finite() && heard > 0.0 {
+        let by_freq = crate::bandplan::band_for_dial(heard);
         if r.band.trim().is_empty() {
             add(
                 ProblemKind::NoBand,
                 Some(Field::Band),
                 by_freq.map(|b| Some(b.to_string())),
             );
-        } else if let Some(b) = by_freq.filter(|b| !b.eq_ignore_ascii_case(r.band.trim())) {
+        } else if let Some(b) = by_freq.filter(|b| !same_band(b, judged_band.trim())) {
+            // No fix that changes nothing: on a row whose parked BAND_RX the frequencies disagree
+            // with, the band the frequency names can be the band the row already has.
             add(
                 ProblemKind::BandFreq,
                 Some(Field::Band),
-                (!confirmed).then(|| Some(b.to_string())),
+                (!confirmed && !same_band(b, r.band.trim())).then(|| Some(b.to_string())),
             );
         }
     }

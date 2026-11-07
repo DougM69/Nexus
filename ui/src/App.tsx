@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useEscStop } from './useEscStop'
 import { publishBandConditions } from './bandConditions'
-import type { AppSnapshot, BandChannel, ExperienceLevel, LoggedQso, ModeRequest, Settings, SourceKind, Tier } from './types'
+import type { AppSnapshot, ArrivalOutlook, BandChannel, ExperienceLevel, KpForecast, LoggedQso, ModeRequest, Settings, SourceKind, Tier } from './types'
 import { isOnAir } from './types'
 import { rigModeTransition, RIG_MODE_BY_VIEW, type RigMode } from './rigModeForView'
 import {
@@ -29,6 +29,7 @@ import {
   resumeChatCq as apiResumeChatCq,
   setFrequency as apiSetFrequency,
   sstvTune as apiSstvTune,
+  sstvTuneOnOpen as apiSstvTuneOnOpen,
   setBlockedCalls as apiSetBlockedCalls,
   js8SetRxBlocklist,
   js8SetGroups,
@@ -41,6 +42,7 @@ import {
   setTxEnabled as apiSetTxEnabled,
   setTxLevel as apiSetTxLevel,
   setActiveRadio as apiSetActiveRadio,
+  switchStationProfile as apiSwitchStationProfile,
   setPegLock as apiSetPegLock,
   setTune as apiSetTune,
   atuBypass as apiAtuBypass,
@@ -55,9 +57,12 @@ import {
   subscribeSnapshot,
 } from './api'
 import { withErrorToast, pushToast, dismissToast, setPopupNotifications, setPopupMinSeconds } from './toast'
+import { setPopupCorner } from './features/popupCorner'
 import { contestStartWarning } from './features/contestLocation'
 import { keptFileMessage } from './features/keptFiles'
+import { intakeToast } from './features/logIntake'
 import { flexVoiceNeedsDax } from './features/flexDaxNote'
+import { phoneTuneNeedsRearSource } from './features/yaesuTuneNote'
 import { useActivationNotices } from './useActivationNotices'
 import { t } from './i18n'
 import { resolveUnits, setUnitsMirror } from './units'
@@ -75,7 +80,9 @@ import { useSkin } from './useSkin'
 import { useNight } from './useNight'
 import { useScale } from './useScale'
 import { useDpiScaleSeed } from './useDpiSeed'
+import { useScaleFitNotice } from './useScaleFitNotice'
 import { useViewport, useViewportClass } from './useViewport'
+import { foldedChrome } from './features/compactChrome'
 import { useDensity } from './useDensity'
 import { useTextSize } from './useTextSize'
 import { useLocalClock } from './useLocalClock'
@@ -172,6 +179,8 @@ import {
   pointRotatorAtCall,
   qsySetEnabled as apiQsySetEnabled,
   radioLaunchInfo,
+  radioPickerTimedOut,
+  radioPickerUnavailable,
   chooseRadio,
   useSingleRadio,
   resendChat,
@@ -190,8 +199,9 @@ import { dueNetReminders, reminderKey, untilPhrase } from './features/nets'
 import { bandLabelForMhz } from './band'
 import { sameCall } from './callsign'
 import { processFlare, effectiveXray, flareToastGrid } from './flareAlert'
-import { snapXray, wxUsable, xrayFastFresh } from './propViz'
+import { snapXray, xrayFastFresh } from './propViz'
 import { processStorm, processStormForecast } from './stormAlert'
+import { auroraStorm, kpAlert, setAuroraDismissal } from './capsNow'
 import { processArrivalWatch } from './arrivalAlert'
 import { processDxpedAlerts } from './features/dxpedChase'
 import { checkDxpedAlarms } from './features/dxpedAlarm'
@@ -373,11 +383,23 @@ function App() {
   // The colour roles (Settings ▸ Appearance ▸ Colours): App is their one writer, and Settings is
   // handed the picks and the setter, the same way it gets the theme.
   const { palette, setPreset: setPalettePreset } = usePaletteRoles()
-  const { scale, mode: scaleMode, cap: scaleCap, setMode: setScaleMode, setCap: setScaleCap } = useScale(fieldMode)
+  const {
+    scale,
+    mode: scaleMode,
+    cap: scaleCap,
+    setMode: setScaleMode,
+    setCap: setScaleCap,
+    fitOffer: scaleFitOffer,
+    setFitRule: setScaleFitRule,
+    fitRule: scaleFitRule,
+  } = useScale(fieldMode)
   // First launch on a high-density display: raise the auto-fit ceiling so the UI can grow to
   // the panel. Once only, raise only, and nothing at all on an ordinary 96-dpi monitor or on
   // a platform whose OS already scales for us. See useDpiSeed.ts.
   useDpiScaleSeed(setScaleCap)
+  // A fractionally scaled display (Windows 125/150%) opens smaller than the classic fit; ask once
+  // whether to keep that. See useScaleFitNotice.ts.
+  useScaleFitNotice(scaleFitOffer, setScaleFitRule)
   // Publishes the zoom-aware `data-viewport` size class on <html> (live on resize
   // AND on scale change) so the layout adapts to the EFFECTIVE width.
   useViewport(scale)
@@ -433,13 +455,18 @@ function App() {
   // and this window launched without a profile. `null` = not a picker launch (the common case),
   // so a single-radio station never sees any of this.
   const [radioPicker, setRadioPicker] = useState<RadioLaunchInfo | null>(null)
+  // Why the picker's last answer could not be carried out (its radio is open in another window).
+  const [radioPickerError, setRadioPickerError] = useState<string | null>(null)
   useEffect(() => {
     let live = true
     radioLaunchInfo()
       .then((i) => {
         if (live && i.showPicker) setRadioPicker(i)
       })
-      .catch(() => {}) // no picker on error — fall through to normal operation
+      // No picker on error. The backend holds a picker launch's radio until it is answered, so a
+      // window that cannot ask must say so: it starts this window's radio, as the window did
+      // before the picker held it, and the backend logs why.
+      .catch(() => void radioPickerUnavailable().catch(() => {}))
     return () => {
       live = false
     }
@@ -930,6 +957,20 @@ function App() {
     }
   }, [snap?.uploadTick, snap?.uploadNote, snap?.uploadOk])
 
+  // A contact another program logged into Nexus through the contact port (WSJT-X, N1MM, the
+  // S.A.T. box, FreeDV: `tempo_app::log_intake`): "Logged K1ABC from WSJT-X", once per contact.
+  // The first value is adopted: a fresh window is not a contact.
+  const intakeTickRef = useRef<number | null>(null)
+  useEffect(() => {
+    const f = snap?.freedv
+    const tick = f?.intakeTick
+    if (tick == null) return
+    if (intakeTickRef.current != null && tick !== intakeTickRef.current && f?.intakeCall && f.intakeProgram) {
+      pushToast(intakeToast(f.intakeCall, f.intakeProgram), 'success', 4000)
+    }
+    intakeTickRef.current = tick
+  }, [snap?.freedv?.intakeTick, snap?.freedv?.intakeCall, snap?.freedv?.intakeProgram])
+
   // The logbook database could not be opened at launch, so this session keeps the log in
   // log.adi. Said ONCE a session, sticky until the operator dismisses it, and never in the way
   // (a toast, not a dialog); the ref, not the snapshot, is what stops every poll re-raising it.
@@ -997,6 +1038,10 @@ function App() {
   // Latest MEASURED Kp, so the forecast watcher below can tell a heads-up from a
   // storm already in progress.
   const kpNowRef = useRef<number | null>(null)
+  // The Kp outlook's last answer: its observed rows are the measured Kp the storm toast prefers.
+  const kpFcRef = useRef<KpForecast | null>(null)
+  // NOAA's storm-watch outlook's last answer: a G watch in force keeps the storm (and its untick) on.
+  const arrivalRef = useRef<ArrivalOutlook | null>(null)
   // Freshest fast-lane X-ray reading (60 s poller below) — merged with each prop
   // snapshot so the flare heads-up fires app-wide, whatever view is open.
   const xrayFastRef = useRef<number | null>(null)
@@ -1033,9 +1078,14 @@ function App() {
           // reached the operator only if they had the Space Weather pane in front of
           // them, which is backwards: a flare is minutes, a storm is days. A stand-in Kp
           // or one past its cadence raises nothing and is not "the Kp now".
-          const kpNow = wxUsable(p.spaceWx, 'kp', nowMs) ? p.spaceWx.kp : null
-          processStorm(kpNow)
-          kpNowRef.current = kpNow
+          // The higher of NOAA's recent measured 3-hour Kp and the usable 1-minute estimate, else
+          // none (capsNow `kpAlert`); the toast says which one it is.
+          const kn = kpAlert(p.spaceWx, kpFcRef.current, nowMs)
+          processStorm(kn)
+          kpNowRef.current = kn?.kp ?? null
+          // The storm is over: the aurora untick it carried goes with it, on every map, whether or
+          // not one is on screen (capsNow `setAuroraDismissal`).
+          if (!auroraStorm(kn, arrivalRef.current)) setAuroraDismissal(false)
           // Chased-expedition window alerts (dxpedChase.ts owns the dedup).
           processDxpedAlerts(
             p.dxpeditions.workableNow,
@@ -1220,10 +1270,24 @@ function App() {
   // Storm FORECAST heads-up, app-wide: an alert that only fired while the Kp box is open would not
   // be an alert. stormAlert.ts dedups by the predicted onset time, so this announces once per
   // forecast event however often it is asked.
-  useEffect(() => watchFeed(KP_FORECAST, (f) => processStormForecast(f, kpNowRef.current)), [])
+  useEffect(
+    () =>
+      watchFeed(KP_FORECAST, (f) => {
+        kpFcRef.current = f
+        processStormForecast(f, kpNowRef.current)
+      }),
+    [],
+  )
   // NOAA storm WATCH heads-up, app-wide, once per watch serial (arrivalAlert.ts keeps the serials
   // across restarts); the map's countdown chip reads the same feed.
-  useEffect(() => watchFeed(ARRIVAL_OUTLOOK, (o) => processArrivalWatch(o)), [])
+  useEffect(
+    () =>
+      watchFeed(ARRIVAL_OUTLOOK, (o) => {
+        arrivalRef.current = o
+        processArrivalWatch(o)
+      }),
+    [],
+  )
   // X-ray fast lane (60 s): flare ONSET reaches the operator in ~1 min instead of
   // the 5-min prop-snapshot cadence. Best-effort — a failed fetch just leaves the
   // snapshot's slower value driving the watcher.
@@ -1401,6 +1465,10 @@ function App() {
   useEffect(() => {
     setPopupMinSeconds(settings?.popupMinSecs ?? 0)
   }, [settings?.popupMinSecs])
+  // #445: and which corner they stand in. Absent, or a corner this build does not know, is bottom right.
+  useEffect(() => {
+    setPopupCorner(settings?.popupCorner)
+  }, [settings?.popupCorner])
   // The active FD event's ruleset FACTS (banned modes + assistance policy) for the
   // warn-only advisories. get_fd_ruleset reads settings.fd_event itself (and works with
   // the master switch off), so the fetch just re-runs when the configured event changes —
@@ -1532,6 +1600,13 @@ function App() {
   useEffect(() => {
     setUnitsMirror(settings?.units)
   }, [settings?.units])
+
+  // The station profile changed (the picker, Settings, or an activation picking its park's): the
+  // settings copy every screen reads takes the profile's call, grid, state and power.
+  const activeStationProfile = snap?.activeStationProfile
+  useEffect(() => {
+    if (activeStationProfile !== undefined) reloadSettings()
+  }, [activeStationProfile, reloadSettings])
 
   // initial load + live subscription
   useEffect(() => {
@@ -1985,6 +2060,17 @@ function App() {
     [],
   )
 
+  // #451: the SSTV screen's tune on opening — the app's tune, never remembered as the
+  // operator's Phone dial (`sstv_tune_on_open`).
+  const handleSstvTuneOnOpen = useCallback((dialMhz: number, band: string, mode: string) => {
+    void withErrorToast(
+      () => apiSstvTuneOnOpen(dialMhz, band, mode),
+      t('shell.frequency.failed'),
+    ).then((s) => {
+      if (s) setSnap(s)
+    })
+  }, [])
+
   // The app parking the dial on one of its OWN channels (the ISS SSTV auto-arm's 145.800 FM).
   // A dedicated verb, not handleSetFrequency: the backend records who authored a dial write,
   // and an app-driven auto-tune must not be remembered as the operator's dial on that band.
@@ -2067,6 +2153,14 @@ function App() {
   // peg-lock. The returned snapshot echoes the new active radio + tune instantly.
   const handleSetActiveRadio = useCallback((id: number) => {
     void withErrorToast(() => apiSetActiveRadio(id), t('shell.radio.switch.failed')).then((s) => {
+      if (s) setSnap(s)
+    })
+  }, [])
+
+  // The top bar's "My station" picker. The snapshot answers with the new call; the settings copy
+  // follows below, from the active id the snapshot carries.
+  const handleSwitchStationProfile = useCallback((id: string) => {
+    void withErrorToast(() => apiSwitchStationProfile(id), t('shell.stationProfile.failed')).then((s) => {
       if (s) setSnap(s)
     })
   }, [])
@@ -3300,6 +3394,8 @@ function App() {
         stripRef={tempoWfRef}
         zoomKey="nexus.waterfall.tempo.zoom"
         transmitting={snap.radio.transmitting}
+        passbandHz={snap.radio.filterWidthHz ?? null}
+        passbandMode={snap.radio.rigMode || snap.radio.sideband}
         rxOffsetHz={snap.radio.rxOffsetHz}
         txOffsetHz={snap.radio.txOffsetHz}
         theme={theme}
@@ -3415,6 +3511,7 @@ function App() {
     needByCall,
     needAlerts: visibleAlerts,
     amp: snap.radio.amp ?? null,
+    radioOnAir: isOnAir(snap.radio),
     rigBand: snap.radio.band ?? null,
     fieldDay: snap.fieldDay ?? null,
     activation: { act: snap.activation ?? null, logTick: snap.logTick },
@@ -3563,6 +3660,7 @@ function App() {
     <PhoneCockpit
       esmSetting={esmSettingFor('phone')}
       flexDaxNote={settings ? flexVoiceNeedsDax(settings) : false}
+      yaesuTuneNote={settings ? phoneTuneNeedsRearSource(settings) : false}
       onResumeContest={resumeContest}
       onOpenLogbook={openLogbookFor}
       onEntryCall={reportEntry.phone}
@@ -3570,6 +3668,8 @@ function App() {
       panels={phonePanels}
       theme={theme}
       pendingWork={pendingWork?.view === 'phone' ? pendingWork : null}
+      // FreeDV's listeners are the station computer's own, and this is its window.
+      freedvPane
       onConsumeWork={() => setPendingWork(null)}
       onSnap={setSnap}
       fieldDay={snap.fieldDay}
@@ -3797,6 +3897,9 @@ function App() {
             targetSeq={settingsTarget?.seq}
             radio={snap.radio}
             parsecPresence={snap.parsecPresence}
+            stationProfileLocked={snap.stationProfileLocked}
+            activeStationProfile={snap.activeStationProfile}
+            freedv={snap.freedv}
             activeRadioId={snap.activeRadioId}
             onProveTx={handleProveTx}
             scale={scale}
@@ -3804,6 +3907,8 @@ function App() {
             scaleCap={scaleCap}
             onScaleModeChange={setScaleMode}
             onScaleCapChange={setScaleCap}
+            scaleFitRule={scaleFitRule}
+            onScaleFitRuleChange={setScaleFitRule}
             density={density}
             onDensityChange={setDensity}
             textSize={textSize}
@@ -3880,6 +3985,9 @@ function App() {
           // The amplifier rides the snapshot App already polls at 300 ms — no fourth poller,
           // no new command. Absent when none is configured, and the pane then renders nothing.
           amp={snap?.radio.amp ?? null}
+          // …and the ON AIR answer the cockpit header's amplifier strip locks on, for the Amplifier
+          // box's Operate/Standby button.
+          radioOnAir={snap ? isOnAir(snap.radio) : false}
           rigBand={snap?.radio.band ?? null}
           fieldDay={snap?.fieldDay ?? null}
           activation={snap ? { act: snap.activation ?? null, logTick: snap.logTick } : undefined}
@@ -4096,6 +4204,33 @@ function App() {
       break
   }
 
+  // The now-bar's one element, drawn by one call in one of two places: the top bar's last group at md
+  // and lg, its own line under the bar otherwise (and on Connect, which has no top bar).
+  const nowBarInTopBar = foldedChrome(viewportClass) && effectiveView !== 'connect'
+  const nowBar = (inBar: boolean) => (
+    <NowBar
+      snap={snap}
+      prop={prop}
+      feedHealth={feedHealth}
+      connectEnabled={features.isOn('connect')}
+      dxpedEnabled={features.isOn('dxped')}
+      needsAvailable
+      onNavigate={handleView}
+      // Profile-declared chip emphasis (dangling since the profiles landed).
+      // A hand-blended feature set is tagged 'custom' (no profile) → default order.
+      emphasis={features.profile === 'custom' ? undefined : PROFILES[features.profile].nowBarEmphasis}
+      // The dashboard rail's switch: beside an operating cockpit, and only where the window can
+      // show the rail, so the bar never offers a press that changes nothing.
+      rail={
+        // Where the switch changes what is on screen: the rail beside the cockpit, or its boxes in the columns.
+        railSection && (railFits || railFoldsHere)
+          ? { on: railShown || railFolds, onToggle: () => setRailOn(railSection, !railIsOn(railSection)) }
+          : undefined
+      }
+      inBar={inBar}
+    />
+  )
+
   return (
     <div className="app">
       <ClientBanner />
@@ -4115,6 +4250,10 @@ function App() {
         radios={snap.radios}
         radioPegged={snap.radioPegged}
         onSetActiveRadio={handleSetActiveRadio}
+        stationProfiles={snap.stationProfiles}
+        activeStationProfile={snap.activeStationProfile}
+        stationProfileLocked={snap.stationProfileLocked}
+        onSwitchStationProfile={handleSwitchStationProfile}
         onSetPegLock={handleSetPegLock}
         link={snap.link}
         bandPlan={bandPlan}
@@ -4188,6 +4327,7 @@ function App() {
         onSetOperator={handleSetOperator}
         fdActive={settings?.fdActive ?? false}
         showLocalClock={localClock}
+        nowBar={nowBarInTopBar ? nowBar(true) : undefined}
       />}
 
       <UpdateBanner update={selfUpdate} />
@@ -4223,26 +4363,10 @@ function App() {
         />
       )}
 
-      <NowBar
-        snap={snap}
-        prop={prop}
-        feedHealth={feedHealth}
-        connectEnabled={features.isOn('connect')}
-        dxpedEnabled={features.isOn('dxped')}
-        needsAvailable
-        onNavigate={handleView}
-        // Profile-declared chip emphasis (dangling since the profiles landed).
-        // A hand-blended feature set is tagged 'custom' (no profile) → default order.
-        emphasis={features.profile === 'custom' ? undefined : PROFILES[features.profile].nowBarEmphasis}
-        // The dashboard rail's switch: beside an operating cockpit, and only where the window can
-        // show the rail, so the bar never offers a press that changes nothing.
-        rail={
-          // Where the switch changes what is on screen: the rail beside the cockpit, or its boxes in the columns.
-          railSection && (railFits || railFoldsHere)
-            ? { on: railShown || railFolds, onToggle: () => setRailOn(railSection, !railIsOn(railSection)) }
-            : undefined
-        }
-      />
+      {/* THE NOW-BAR: a line of its own under the top bar, except at md and lg, where it rides IN the
+          top bar instead (features/compactChrome) and gives its line back to the screen. On Connect,
+          which has no top bar, it is always its own line. */}
+      {!nowBarInTopBar && nowBar(false)}
 
       {/* `data-dash-rail` while the dashboard rail takes width beside the cockpit: Operate's QSO strip
           keeps its two-row arrangement then (styles.css `.cq-break`). */}
@@ -4423,6 +4547,10 @@ function App() {
                 onSnap={setSnap}
                 active={effectiveView === 'sstv'}
                 onSetFrequency={handleSstvTune}
+                // #451. Undefined until the settings have loaded, so an entry at startup waits for
+                // the answer instead of being spent as "off".
+                tuneOnOpen={settings ? settings.sstvTuneOnOpen === true : undefined}
+                onTuneOnOpen={handleSstvTuneOnOpen}
                 onSetTxEnabled={handleSetTxEnabled}
                 wheelSensitivity={settings?.wheelTuneSensitivity ?? 1}
                 txModeDefault={settings?.sstvDefaultTxMode}
@@ -4556,7 +4684,20 @@ function App() {
         <RadioPicker
           info={radioPicker}
           onChoose={(id) => void chooseRadio(id)}
-          onSingleRadio={() => void useSingleRadio().finally(() => setRadioPicker(null))}
+          onSingleRadio={() =>
+            void useSingleRadio().then(
+              () => setRadioPicker(null),
+              (e: unknown) => setRadioPickerError(String(e)),
+            )
+          }
+          // "Windows" relaunches and exits this window; "one radio" starts this window's radio.
+          onTimeout={() =>
+            void radioPickerTimedOut().then(
+              () => setRadioPicker(null),
+              (e: unknown) => setRadioPickerError(String(e)),
+            )
+          }
+          error={radioPickerError}
         />
       )}
 

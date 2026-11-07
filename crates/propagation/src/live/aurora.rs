@@ -74,6 +74,9 @@ pub struct AuroraOval {
     /// served after a failed refetch says how old it is.
     #[serde(default)]
     pub fetched_at: Option<i64>,
+    /// OVATION's own equatorward edge (the 10 % line), read from the whole grid.
+    #[serde(default)]
+    pub edge: crate::oval::OvalEdge,
 }
 
 /// The oval plus its `Observation Time` / `Forecast Time` stamps. Pure.
@@ -88,31 +91,61 @@ pub fn parse_oval(v: &Value, min_prob: f32, step: i64) -> AuroraOval {
         observed_at: stamp("Observation Time"),
         forecast_at: stamp("Forecast Time"),
         fetched_at: None,
+        edge: crate::oval::ovation_edge(v),
     }
 }
 
 /// Fetch + parse the current OVATION aurora oval (prob ≥ 8 %, every 2°).
 pub fn fetch_aurora() -> Result<AuroraOval, String> {
-    let c = reqwest::blocking::Client::builder()
+    let body = get_text(&client()?, OVATION_URL)?;
+    let v = serde_json::from_str::<Value>(&body).map_err(|e| e.to_string())?;
+    Ok(parse_oval(&v, 8.0, 2))
+}
+
+/// The most the OVATION grid is read to: it was 920 KB on 2026-11-02 (a fixed 360 × 181 grid),
+/// so 8 MB is about nine times it.
+const OVATION_REPLY_BYTES: u64 = 8 * 1024 * 1024;
+
+/// The client the fetch uses: HTTPS only, on [`builder`]'s timeout and redirect policy.
+fn client() -> Result<reqwest::blocking::Client, String> {
+    builder()
+        .https_only(true)
+        .build()
+        .map_err(|e| e.to_string())
+}
+
+/// A timeout, and no redirect followed (SWPC serves the file at its own address, so a redirect
+/// is a fault, not a move). The loopback tests build on this (plain HTTP); the fetch itself
+/// always goes through [`client`].
+fn builder() -> reqwest::blocking::ClientBuilder {
+    reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(15))
         .user_agent(UA)
-        .build()
-        .map_err(|e| e.to_string())?;
-    let v = c
-        .get(OVATION_URL)
-        .send()
-        .map_err(|e| e.to_string())?
-        .error_for_status()
-        .map_err(|e| e.to_string())?
-        .json::<Value>()
-        .map_err(|e| e.to_string())?;
-    Ok(parse_oval(&v, 8.0, 2))
+        .redirect(reqwest::redirect::Policy::none())
+}
+
+fn get_text(c: &reqwest::blocking::Client, url: &str) -> Result<String, String> {
+    let resp = c.get(url).send().map_err(|e| e.to_string())?;
+    super::body::read_ok(resp, OVATION_REPLY_BYTES, "NOAA OVATION")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The grid is read through `get_text` on `client`: HTTPS only, no redirect followed, at
+    /// most `OVATION_REPLY_BYTES`.
+    #[test]
+    fn the_wire_keeps_its_limits() {
+        super::super::body::assert_wire_limits(
+            builder,
+            client,
+            get_text,
+            OVATION_REPLY_BYTES,
+            "NOAA OVATION",
+        );
+    }
 
     #[test]
     fn thresholds_downsamples_and_normalizes_longitude() {
@@ -151,6 +184,8 @@ mod tests {
         assert_eq!(oval.forecast_at, Some(utc("2026-10-30T04:04:00Z")));
         assert_eq!(oval.observed_at, Some(utc("2026-10-30T02:39:00Z")));
         assert!(!oval.points.is_empty());
+        // The edge is read with the stamps.
+        assert_eq!(oval.edge, crate::oval::ovation_edge(&v));
         let bare = parse_oval(&json!({"coordinates": []}), 8.0, 2);
         assert_eq!((bare.forecast_at, bare.observed_at), (None, None));
     }

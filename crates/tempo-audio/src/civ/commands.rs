@@ -760,7 +760,7 @@ pub fn set_rptr_offset(radio: u8, hz: u64) -> Frame {
 /// sent is its own count ([`data_mode_count`]), and the daemon caps the operator's choice at it
 /// before it gets here, so a single-DATA radio is only ever sent `01`.
 ///
-/// The filter byte keeps the rig's current selection when `None`.
+/// `filter` names FIL1–FIL3 for the DATA mode; `None` sends FIL1, as this always has.
 pub fn set_data_mode_n(radio: u8, mode: u8, filter: Option<u8>) -> Frame {
     let m = mode.clamp(1, 3);
     let fil = filter.unwrap_or(0x01);
@@ -1226,10 +1226,26 @@ pub fn set_band_freq(radio: u8, band: u8, hz: u64) -> Frame {
 ///   `06 <mode>` (the mode's default filter) and then `1A 06 00 00` (DATA off) left.
 /// - `data` `Some(n)` → `26 <band> <mode> <n> 01`: DATA mode `n` (clamped to D1–D3, as
 ///   [`set_data_mode_n`] clamps it) with FIL1, the two bytes `1A 06 <n> 01` sent.
-pub fn set_band_mode(radio: u8, band: u8, mode: Mode, data: Option<u8>) -> Frame {
-    match data {
-        Some(n) => Frame::command(radio, 0x26, &[band, mode.to_byte(), n.clamp(1, 3), 0x01]),
-        None => Frame::command(radio, 0x26, &[band, mode.to_byte()]),
+///
+/// `filter` `Some(f)` names the filter instead (#417: the one the radio last had lit in that mode,
+/// clamped to FIL1–FIL3): `26 <band> <mode> 00 <f>` for a plain mode, `26 <band> <mode> <n> <f>`
+/// for a DATA mode. `None` is exactly the two forms above.
+pub fn set_band_mode(
+    radio: u8,
+    band: u8,
+    mode: Mode,
+    data: Option<u8>,
+    filter: Option<u8>,
+) -> Frame {
+    let m = mode.to_byte();
+    match (data, filter) {
+        (Some(n), f) => Frame::command(
+            radio,
+            0x26,
+            &[band, m, n.clamp(1, 3), f.map_or(0x01, |f| f.clamp(1, 3))],
+        ),
+        (None, Some(f)) => Frame::command(radio, 0x26, &[band, m, 0x00, f.clamp(1, 3)]),
+        (None, None) => Frame::command(radio, 0x26, &[band, m]),
     }
 }
 
@@ -1291,6 +1307,56 @@ pub fn read_scope_center_mode(radio: u8, main_sub: u8) -> Frame {
 pub fn parse_scope_center_mode(f: &Frame) -> Option<bool> {
     (f.cmd == 0x27 && f.data.first() == Some(&0x14) && f.data.len() >= 2)
         .then(|| f.data.last().is_some_and(|b| *b != 0))
+}
+
+/// The radio's scope SWEEP SPEED, as its own scope menu names it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScopeSpeed {
+    Fast,
+    Mid,
+    Slow,
+}
+
+impl ScopeSpeed {
+    /// The word the snapshot and the diagnostic log carry: `fast`, `mid` or `slow`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ScopeSpeed::Fast => "fast",
+            ScopeSpeed::Mid => "mid",
+            ScopeSpeed::Slow => "slow",
+        }
+    }
+}
+
+/// READ the scope SWEEP SPEED (`27 1A <main_sub>`, no speed byte). The radio answers with the same
+/// two bytes and a trailing speed byte: `00` = FAST, `01` = MID, `02` = SLOW.
+///
+/// Icom's own pages: IC-9700 CI-V Reference Guide A7508-3EX-2, the command table (printed p. 12,
+/// "1A* Send/read the Sweep speed setting", `*` = send/read) and "Scope Sweep speed settings"
+/// (printed p. 25: `27 1A`, `00`=MAIN / `01`=SUB, `00`=FAST / `01`=MID / `02`=SLOW); IC-7300 Full
+/// Manual A7292-4EX-9, the command table (PDF p. 161, "1A … Send/read the Sweep speed setting")
+/// and "Scope Sweep speed settings" (printed p. 19-13: `27 1A`, `00` fixed, then the same three
+/// values). The selector sits before the value exactly as in `27 14`.
+///
+/// ⛔ READ ONLY, AND THERE IS NO SETTER ON PURPOSE. The speed is the operator's choice on the
+/// radio's own scope menu, and the slower settings are a legitimate pick (a steadier picture).
+/// Nexus reads it to explain a slow waterfall and never writes it.
+pub fn read_scope_speed(radio: u8, main_sub: u8) -> Frame {
+    scope_ctrl_frame(radio, 0x1A, main_sub, &[])
+}
+
+/// The speed from a `27 1A` reply (`1A <main_sub> <speed>`), `None` for any other frame or an
+/// unknown speed byte.
+pub fn parse_scope_speed(f: &Frame) -> Option<ScopeSpeed> {
+    if f.cmd != 0x27 || f.data.first() != Some(&0x1A) || f.data.len() != 3 {
+        return None;
+    }
+    match f.data[2] {
+        0x00 => Some(ScopeSpeed::Fast),
+        0x01 => Some(ScopeSpeed::Mid),
+        0x02 => Some(ScopeSpeed::Slow),
+        _ => None,
+    }
 }
 
 // ---- reply decoders ----
@@ -2040,6 +2106,43 @@ mod tests {
         }
     }
 
+    /// THE SWEEP-SPEED READ, WHOLE, ON THE WIRE, and its reply decoded in all three positions.
+    /// `27 1A 00` to an IC-9700 (Main) and an IC-7300 (the fixed `00`), per the two guides cited on
+    /// [`read_scope_speed`]. A reply carrying a speed byte the guides do not list, or another
+    /// sub-command's reply, decodes to nothing.
+    #[test]
+    fn the_scope_speed_read_is_pinned_and_its_reply_decoded() {
+        assert_eq!(
+            read_scope_speed(0xA2, 0x00).to_bytes(),
+            vec![0xFE, 0xFE, 0xA2, 0xE0, 0x27, 0x1A, 0x00, 0xFD]
+        );
+        assert_eq!(
+            read_scope_speed(0x94, 0x00).to_bytes(),
+            vec![0xFE, 0xFE, 0x94, 0xE0, 0x27, 0x1A, 0x00, 0xFD]
+        );
+        let reply = |data: &[u8]| Frame {
+            to: 0xE0,
+            from: 0xA2,
+            cmd: 0x27,
+            data: data.to_vec(),
+        };
+        assert_eq!(
+            parse_scope_speed(&reply(&[0x1A, 0x00, 0x00])),
+            Some(ScopeSpeed::Fast)
+        );
+        assert_eq!(
+            parse_scope_speed(&reply(&[0x1A, 0x00, 0x01])),
+            Some(ScopeSpeed::Mid)
+        );
+        assert_eq!(
+            parse_scope_speed(&reply(&[0x1A, 0x00, 0x02])),
+            Some(ScopeSpeed::Slow)
+        );
+        assert_eq!(parse_scope_speed(&reply(&[0x1A, 0x00, 0x03])), None);
+        assert_eq!(parse_scope_speed(&reply(&[0x1A, 0x00])), None, "no value");
+        assert_eq!(parse_scope_speed(&reply(&[0x14, 0x00, 0x01])), None);
+    }
+
     #[test]
     fn scope_ref_encodes_level_then_sign() {
         // 27 19: [scope, 2-byte BE BCD magnitude in 0.01 dB, sign(00=+/01=-)].
@@ -2678,12 +2781,12 @@ mod tests {
         // A plain mode: the mode byte alone after the band, which the radio takes as DATA OFF
         // and the mode's default filter — the state `06 <mode>` + `1A 06 00 00` left.
         assert_eq!(
-            set_band_mode(0x98, BAND_MAIN, Mode::Lsb, None).to_bytes(),
+            set_band_mode(0x98, BAND_MAIN, Mode::Lsb, None, None).to_bytes(),
             vec![0xFE, 0xFE, 0x98, 0xE0, 0x26, 0x00, 0x00, 0xFD]
         );
         // A DATA mode: D<n> and FIL1, the two bytes `1A 06 <n> 01` carried, clamped the same way.
         for (n, d) in [(1u8, 0x01u8), (2, 0x02), (3, 0x03), (0, 0x01), (9, 0x03)] {
-            let f = set_band_mode(0x98, BAND_MAIN, Mode::Usb, Some(n));
+            let f = set_band_mode(0x98, BAND_MAIN, Mode::Usb, Some(n), None);
             assert_eq!(f.data, vec![0x00, 0x01, d, 0x01], "D{n}");
             assert_eq!(
                 f.data[2..],

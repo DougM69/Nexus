@@ -229,8 +229,11 @@
      the floor, deficit past this point overflows the shell, whose `overflow-y: auto`
      valve (guarded by cockpit-shells.test.ts) turns it into the scrollbar + the sticky
      dock. A floor under a SCROLLING ancestor is the documented safe case; the 18em
-     floors this rebuild deleted sat under a CLIPPING one. */
-  min-height: 18em;
+     floors this rebuild deleted sat under a CLIPPING one.
+     A KNOB with the stock 18em as its fallback, set in exactly one place: RTTY's short cockpit
+     (`.rtty-cockpit` below), whose two fill frames stood on a yielding floor of their own before
+     they moved into a region. Every other region floors at 18em. */
+  min-height: var(--cockpit-region-floor, 18em);
   min-width: 0;
   display: grid;
   gap: var(--space-3);
@@ -409,28 +412,132 @@
    pane region, so no pane layout, stored or hand-edited, can move or hide it — this and
    the header are where THE STOP LINE above is made true, the surfaces that keep "the
    operator must never be unable to stop a transmission" true no matter what the ⊞ menu is
-   set to. A sender may live in a pane, and several do; the operator's last resort may not. */
+   set to. A sender may live in a pane, and several do; the operator's last resort may not.
+   Z-INDEX 4, ABOVE THE REGION'S COLUMN DIVIDERS (`.pane-splitter`, styles.css, 3). While the
+   deficit valve scrolls (CW at 1920×1080 pinned at 150 %) the parked dock covers the bottom of the
+   region, and a divider stacked above it took the click on F7's centre (measured in Chrome). The
+   TX strip below stands at the same level for the same reason. Guarded in cockpit-shells.test.ts. */
+/* THE SHORT-WINDOW TIER (the 1080p pass, 2026-11-01). Where the EFFECTIVE window height
+   (`--vh-eff`, the zoom-corrected height useViewport publishes) is at most 1100 px — 1080p at 100 %,
+   and at 125/150 % with the auto zoom — the chrome's own spacing tightens: the dock's and the TX
+   strip's padding and gaps here, the cockpit header's and the top bar's below (custom properties on
+   `.app`, read by their styles.css rules). No size class and no @media: each length is a STEP on `--vh-eff`,
+       max(TIGHT, min(STOCK, (var(--vh-eff) - 1100px) * 100))
+   which is TIGHT at 1100 and below and STOCK a hundredth of a pixel above it, so a 1440-tall window
+   (the 4K reference) is untouched and nothing moves between the two except spacing. Only padding and
+   gaps step: no control gets smaller than it is clickable, and every TX/stop control keeps its size.
+   Computed at both sides of the step in cockpit-panes.test.ts. */
 .cockpit-txdock {
   flex: 0 0 auto;
   position: sticky;
   bottom: 0;
-  z-index: 2;
+  z-index: 4;
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
-  padding: var(--space-2);
+  gap: max(var(--space-1), min(var(--space-2), (var(--vh-eff, 100vh) - 1100px) * 100));
+  padding: max(var(--space-1), min(var(--space-2), (var(--vh-eff, 100vh) - 1100px) * 100)) var(--space-2);
   border-top: 1px solid var(--border);
   background: var(--panel);
 }
 /* …LIFTED WHILE A MACRO EDITOR STANDS ON IT. The keyboard docks' macro editor (`.rtty-macro-editor`,
    styles.css) is out of flow on the dock's top edge, over the bottom of the pane region, so it
-   paints at the dock's level (2), under the region's column dividers (`.pane-splitter`, 3): where
-   a divider crossed it, a 12 px strip of the editor took no click (measured in Chrome, CW at
-   1366×768: Send once's centre hit the divider). While the editor is open the dock is lifted over
-   them. That covers no stop control: the TX strip, at the dock's own level, already paints under
-   the dock, which comes after it in the shell. */
+   paints at the dock's level. When that level was 2, under the region's column dividers
+   (`.pane-splitter`, 3), a 12 px strip of the editor took no click where a divider crossed it
+   (measured in Chrome, CW at 1366×768: Send once's centre hit the divider). The dock itself now
+   stands above the dividers; while an editor is open it is still lifted one step over its own
+   level. That covers no stop control: the TX strip, at the dock's own level, already
+   paints under the dock, which comes after it in the shell. */
 .cockpit-txdock-editing {
+  z-index: 5;
+}
+/* …FOLDED where it does not fit (`data-fold="on"`, written by the TX strip: CockpitTxStrip decideFold).
+   On a small window at a large zoom (900×600 and 700×800 at 175 %) the whole dock was taller than the
+   shell's scrollport: 337 px of RTTY dock and 391 of PSK against 313 (measured). Parked whole it could
+   not fit beside the strip, so it painted over the strip's TX On/Off, Tune and Stop TX at every scroll
+   position, pushed Send below the window at the top of the scroll, and hid the header's ⊞ Panels from
+   the pointer. Capping it with a scroller inside does not fit either: the strip, Esc/Stop with the
+   latch, Send, one row of keys and the ⊞ button's own height come to more than RTTY's 265 px.
+   So it FOLDS: the dock stops being a box (`display: contents`), its rows become shell rows that
+   scroll with the panes, and only its KEEP ROW (`.cockpit-txdock-keep` below — the row with Send,
+   PTT, Esc/Stop and the latch) parks at the bottom. What scrolls between the strip and the keep row
+   is the scope, the panes, the header and, at the end of the scroll, the macro keys at full size.
+   Nothing is hidden, nothing gets smaller, and the stop surfaces are the strip and the keep row.
+   The strip folds the dock only where its WHOLE height, the strip's and FOLD_ROOM_EM do not fit;
+   everywhere else this rule never applies (measured: of the windows from 1024×768 at 175 % up, only JTTY at
+   1024×768 and 1280×720 and PSK at 1280×720, all at 175 %, fold).
+   `--cockpit-txdock-float: static` is read by the macro editor (styles.css `.rtty-macro-editor`):
+   folded, the dock is no containing block, so the editor joins the flow above the keep row instead of
+   standing on a dock edge that is not there. */
+.cockpit-txdock[data-fold='on'] {
+  display: contents;
+  --cockpit-txdock-float: static;
+  --cockpit-txdock-reason-pos: absolute;
+  --cockpit-txdock-reason-display: -webkit-box;
+  --cockpit-txdock-reason-overflow: hidden;
+}
+/* THE KEEP ROW, while the dock is folded (the strip writes `data-fold="on"` on it as well): sticky at
+   the bottom of the shell's scrollport, as the dock was, above the dividers like the dock, and opaque,
+   because the panes scroll under it. It takes the dock's own padding, so folding moves none of its
+   controls by a pixel: a pointer held on PTT while the meters above it grow on key-down (and fold the
+   dock) stays on PTT. Unfolded it has no rule here at all: inside the parked dock it is exactly the
+   row it always was. LAST IN THE SHELL (`order`), whatever its place in the dock: a dock row below it, JS8's
+   beacon row or PSK's drive hint, would lift it that far at the end of the scroll, onto the strip's Stop TX (measured,
+   JS8 at 900×600 at 175 %). The order is the shell's because a folded dock's rows are shell rows. */
+.cockpit-txdock-keep[data-fold='on'] {
+  /* The room a notice standing on the row takes (JTTY's refusal, out of flow; the strip writes its height): the shell's
+     scroll ends that much later, or the last row above the keep row could never come out from under the words. Parked, the
+     row does not move. */
+  margin-top: var(--cockpit-txdock-reason-room, 0px);
+  order: 1;
+  position: sticky;
+  bottom: 0;
   z-index: 4;
+  padding: max(var(--space-1), min(var(--space-2), (var(--vh-eff, 100vh) - 1100px) * 100)) var(--space-2);
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+
+/* THE MACRO BANK — a keyboard dock of 12 or 16 macro keys (Settings ▸ CW / RTTY / PSK ▸ Macro keys;
+   8, the default, is the dock as it always was and wears none of these). The keys stand in GROUPS OF
+   FOUR, the way a keyboard groups its F-keys — F1–F4, F5–F8, F9–F12, then keys 13–16, which no key
+   sends — and the bank puts as many groups on a line as the dock's own width holds, wrapping the
+   rest under them in keyboard order: one row on a wide window, two on a narrower one, a group per
+   row at phone width. A WRAP, so it follows the dock at any zoom with no viewport rule, and a key
+   keeps its column inside its group. A group's floor is 32em, 8em a key: never narrower than the
+   eight-key row's keys at the 1024×768 floor (111 px there, `.rtty-dock-keys` in styles.css), and
+   yielding to the dock where the dock is narrower still, so nothing overflows.
+   CW's bank is a row of the dock's column and keeps `.cw-macros`' pin (never a shrink victim).
+   RTTY's and PSK's share the keys row with the fixed row (Call, set switch, TX latch, Esc/Stop) as the
+   eight-key grid does, but the fixed row stands beside the bank only where the bank's WHOLE line fits
+   beside it (three groups at 12, four at 16); anywhere narrower the bank takes the full width and the
+   fixed row folds under it, so the keys never wrap early to leave the fixed row room.
+   MEASURED in Chrome with the real app (2026-11-01; CW, RTTY and PSK at 12 and 16 keys, at 1024×768
+   at 150 % (xs) and fit (md), 1366×768 and 1920×1080 (lg), 1920×1080 at 150 % (md), 2560×1440 and
+   3440×1440 (xl)): every key, and RTTY's and PSK's Esc/Stop, on screen and hit-able at every size; no
+   key narrower than 113 px; 16 keys on one row from 2560 wide, two rows down
+   to 1024×768, a group per row at xs. A second row of keys costs the panes above its height: where
+   the cockpit already had no room (1920×1080 at 150 %) its deficit valve scrolls that much more
+   (RTTY 0 → 38 px), with the dock still parked at the bottom.
+   The keys are senders; no stop control is ever in the bank. cockpit-panes.test.ts computes all of it
+   at every viewport. */
+.macro-bank {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(32em, 100%), 1fr));
+  gap: var(--space-1);
+}
+.macro-bank-shared-12 {
+  flex: 999 1 97em;
+  min-width: 0;
+}
+.macro-bank-shared-16 {
+  flex: 999 1 129em;
+  min-width: 0;
+}
+.macro-quad {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-1);
+  min-width: 0;
 }
 
 /* THE TX STRIP — the fifth shell child kind (2026-10-01: "FT's strip under the
@@ -451,18 +558,112 @@
 .cockpit-txstrip {
   flex: 0 0 auto;
   position: sticky;
-  top: 0;
+  /* Under a PINNED header (below), not over it: the header's height, written by the strip as the
+     dock's is. 0 under a header that scrolls. */
+  top: var(--cockpit-txstrip-top, 0px);
   bottom: var(--cockpit-txstrip-bottom, 0px);
-  z-index: 2;
+  /* Above the region's column dividers, as the dock is: parked at the top of a scrolled shell the
+     strip covers the top of the region, and Stop TX must take its own click. */
+  z-index: 4;
   display: flex;
   flex-direction: row;
   flex-wrap: wrap;
   align-items: center;
   gap: 3px var(--space-2);
-  padding: 3px 10px;
+  padding: max(1px, min(3px, (var(--vh-eff, 100vh) - 1100px) * 100)) 10px;
   background: var(--panel);
   border: 1px solid var(--border-soft);
   border-radius: var(--radius);
+}
+/* THE PINNED HEADER (SSTV, RTTY, PSK; CockpitHeader `pinned`). The header is the shell's first child
+   and carries the mode, the dial, the band, ⊞ Panels, power and the CAT pill. In a shell whose
+   deficit valve scrolls (a laptop at 150–175 %), an unpinned header scrolls out of the window with
+   the scope, and the operator has to scroll back up to see the frequency or change the band — on
+   SSTV that is the whole 4-minute picture. Pinned, it parks at the top of the scrollport the way the
+   TX strip does, and the strip parks right under it (`--cockpit-txstrip-top`, which the strip
+   measures because CSS cannot read a sibling's box); what scrolls under the two is the scope and the
+   pane region, never a control in either. It must be a DIRECT shell child for the reason the strip
+   must: a sticky box never leaves its containing block.
+   Z-INDEX 4, THE STRIP'S AND THE DOCK'S OWN, and FIRST in the shell: at equal z the later box
+   paints on top, so in any overlap the TX strip and the dock win and the header loses — a broken
+   parking can hide the dial, never Stop TX. Over the region's dividers (3). Opaque (the page's own
+   `--bg`, defined in both themes) because content scrolls under it. Not a size: the header stays
+   exactly as tall as what it holds.
+   ONLY WHERE IT FITS (`[data-pin='off']` below): pinned, the header, the strip and the dock all
+   park; on a small window at a large zoom (900×600 / 700×800 at 175 %) the three are taller than
+   the scrollport and the header sat over Stop TX, Send and Esc/Stop at every scroll position. The
+   strip measures the three and turns the pin off there (CockpitTxStrip decidePin), and the header
+   scrolls as every other cockpit's does. */
+.cockpit-header-pinned {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  background: var(--bg);
+  /* A sticky box parks INSIDE its scroller's padding (Chrome), so `top: 0` leaves the shell's own
+     top padding (`--space-4`, the three shells' rule in styles.css) open above the header, and the
+     scope and the panes scrolled through that band in full view (measured at 1366×768 / 175 %).
+     The shadow is the header's own box lifted by that padding, in the page colour: it covers the
+     band and nothing else, and it takes no room. One pixel more than the padding: at a fractional
+     zoom the shell's top edge falls on a subpixel and the last row of the band leaked (measured at
+     1366×768 / 175 %); the extra pixel lies outside the scrollport, which clips it. */
+  box-shadow: 0 calc(-1 * var(--space-4) - 1px) 0 var(--bg);
+}
+/* …LIFTED ONE STEP while a menu it opens is open (CockpitHeader `data-menu="open"`, ⊞ Panels): the
+   menu (z 70 inside the header's context) hung over the strip and the dock at the header's 4, and
+   half its items were under them. Pinned, the header's own box never overlaps the strip or the dock
+   (it pins only where all three fit), so the lift lets only the open menu paint over them, and only
+   while the operator has it open. BEFORE the unpinned rule below, at the same specificity, so an
+   unpinned header is never lifted (a static flex item's z-index still stacks). */
+.cockpit-header-pinned[data-menu='open'] {
+  z-index: 5;
+}
+/* …UNPINNED where the header, the strip and the dock do not all fit (see above). Static: it scrolls
+   away with the scope, it parks over nothing, and the strip's top offset falls back to 0. */
+.cockpit-header-pinned[data-pin='off'] {
+  position: static;
+  /* `auto`, not merely ignored: the header is a FLEX ITEM of the shell, and a flex item's z-index
+     makes a stacking context even when it is static — a static header at 4 still painted over
+     SSTV's TX bar (measured at 900×600 / 175 %). Unpinned, it stacks as every other header does. */
+  z-index: auto;
+  box-shadow: none;
+}
+/* THE STRIP'S METERS CELL (Phone and CW from md up, the compact dock): the read-only TX meters in the
+   strip's empty right side, as Operate's QSO strip carries its own (`.cq-telemetry`). Right-packed by
+   its auto margin, after the cluster and the TX state, so no reading can move Stop TX, Tune or the
+   latch. A ZERO basis growing to 30em: the strip's line breaking sees a zero-wide item, so the cell
+   can never wrap the strip onto a second line — on a narrow `md` window it only gets narrower. The
+   meters inside sit in at most two rows (styles.css
+   `.ph-txmeters.inline.strip`), the height of the strip's own buttons, so the strip is the height it
+   was without them. A readout: no control here keys or stops anything. */
+.cockpit-txstrip-meters {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 30em;
+  margin-left: auto;
+}
+/* THE KEYBOARD DOCKS' EIGHT KEYS (RTTY, PSK, JTTY: `.rtty-dock-keys`, styles.css) share their line with
+   the fixed row (Call box, set switch, TX latch, Esc/Stop) only where 76em of keys fit beside it, and fold
+   the row under the keys everywhere else, so the keys then take the whole line. A BASIS, deliberately, not
+   a floor: the keys are one-click senders, and NO KEY MAY BE NARROWER THAN THE OLD RULE MADE IT AT ANY
+   WIDTH (the measured 2026-09-17 note in styles.css, the "RTTY DOCK" block). The 1080p pass tried a zero
+   basis with a 70em floor, which kept the fixed row beside the keys at 1080p with Windows at 125 % and
+   saved a dock row there — and took each key from 174 to 111 px wide on that screen, 36 % of its hit
+   area. Reverted to the basis; the pass keeps its other dock savings (the 30 px `--touch` rows and the
+   short-window padding). This rule moved here from styles.css (`.rtty-dock-keys > .rtty-macros`) so
+   the keys' share of the line has one home; cockpit-shells.test.ts COMPUTES each key's width at every
+   dock width against the old rule. Esc/Stop and the TX latch are in the fixed row, unchanged. */
+.dock-fkeys {
+  flex: 999 1 76em;
+  min-width: 0;
+}
+/* PHONE'S ONE-ROW DOCK (md and up): the transmit contract (`.ph-txcontract`) stands in the PTT row,
+   after PTT and Lock. The same zero basis, for the reason the contract is one line at all: the dock is
+   bottom-anchored, so a row that wrapped when the busy cell arrived on key-down would move PTT out
+   from under a held pointer. It takes only the room left and clips at its end rather than wrap. */
+.dock-status-inrow {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
 }
 /* The hosted observer's TX strip scrolls with its cockpit, for its dock's reason below: its
    controls are disabled, and at a phone width a parked strip of disabled buttons covered the decode
@@ -477,6 +678,120 @@
    class; native transmit controls keep the pinned stop surface above. */
 .remote-observer-dock {
   position: static;
+}
+
+/* THE APP'S OWN CHROME ON A 1080p WINDOW (the 1080p pass, 2026-11-01) — the top bar and the cockpit
+   header, which are not cockpit panes but are structure all the same: their spacing and what they fold
+   is decided here, by flat classes the components add, and never by a styles.css rule.
+
+   THE TOP BAR, ONE ROW at md and lg (components/TopBar, features/compactChrome). The eleven tier pills
+   are not drawn there; the one menu button the FT screens already use at the small size stands in their
+   place, labelled with the mode in use (`.tier-menu-folded` shows it: styles.css hides `.tier-menu-btn`
+   above sm, and this flat rule wins that tie by coming later). The Auto / Tx 1st / Tx 2nd group is not
+   touched. At md and lg the now-bar rides in the bar as its LAST group (`.topbar-now`). It is its OWN
+   width and does NOT GROW: where it fits it stands on the bar's line, where
+   it does not it takes a second line of the bar (still never a line of its own under the bar, as
+   before). Not a grower, deliberately: the status lane grows into the bar's free room when a message
+   comes up, and a now-bar sharing that room would re-wrap its chips and change the bar's height with
+   every message (topbar-probe's invariant; its harness carries a now-bar for exactly this). Its floor
+   (18em, or the bar) only matters on a line of its own, where its chips wrap inside it. Its own frame goes (`.now-bar-inbar`): the bar is the frame. The TX cluster (`.op-controls`)
+   is never named here. */
+.tier-menu-folded {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.topbar-now {
+  flex: 0 1 auto;
+  min-width: min(100%, 18em);
+}
+.now-bar-inbar {
+  padding: 0;
+  background: transparent;
+  border-bottom: 0;
+}
+/* THE "MY STATION" PICKER (components/TopBar, shown with two or more station profiles) is the CALLSIGN
+   BLOCK ITSELF: the select stands over the call and grid, out of the bar's line, with its own text
+   transparent (the call and grid under it are what reads). Its box reaches 10 px past them, into the
+   brand group's 10 px gap, and its arrow (every select's, styles.css `select`) is moved into that
+   overhang — `!important` only because that arrow's placement is. So showing it changes no width in
+   the bar. A 9.5em select in the line wrapped the now-bar to a second line at 1920×1080 on Operate
+   (the bar has a few px of slack there) and pushed the Logbook's TX cluster 113 px along
+   (profiles-probe). Each profile's full name is in the open list. The keyboard focus ring is the
+   select's own outline, which a transparent text colour leaves drawn. */
+.mycall-picker {
+  position: relative;
+}
+.station-profile-picker {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: calc(100% + 10px);
+  height: 100%;
+  min-width: 0;
+  max-width: none;
+  box-sizing: border-box;
+  border: 0;
+  border-radius: var(--radius-sm, 6px);
+  background-color: transparent;
+  background-position: right 5px center, right 0 center !important;
+  color: transparent;
+  /* High Contrast forces a select's colour to CanvasText, which drew its own text over the call. */
+  forced-color-adjust: none;
+  font-size: inherit;
+  cursor: pointer;
+}
+/* …and the SHORT-WINDOW TIER's step (see `.cockpit-txdock`) on the top bar's padding and gap and on the
+   cockpit header's gaps: TIGHT at an effective height of 1100 px and below, STOCK above. Spacing only.
+   Published as CUSTOM PROPERTIES on `.app`, which the bar's and the header's own rules in styles.css read
+   with their stock value as the fallback (`gap: var(--chrome-head-gap, var(--gap))`) — placement inputs,
+   the `--cockpit-txstrip-bottom` pattern — so the tier adds no class to those elements, every property
+   keeps ONE home, and a window with no `.app` above it (a test, a probe page) draws the stock spacing.
+   Only custom properties are declared here on `.app`; its real properties are styles.css's. */
+.app {
+  --chrome-bar-pad: max(4px, min(10px, (var(--vh-eff, 100vh) - 1100px) * 100)) 14px;
+  --chrome-bar-gap: max(var(--space-3), min(18px, (var(--vh-eff, 100vh) - 1100px) * 100));
+  --chrome-head-gap: max(var(--space-2), min(var(--gap), (var(--vh-eff, 100vh) - 1100px) * 100));
+  --chrome-extras-gap: max(var(--space-2), min(var(--space-3), (var(--vh-eff, 100vh) - 1100px) * 100));
+}
+
+/* THE CW AND PHONE HEADERS' ⋯ (components/HeaderOverflow), at md and lg: memories, the rotator, split
+   and REC behind one button, so the header is one row. Its group stands OUT OF FLOW under the button,
+   right-aligned to it, over the scope: opening it moves no control in the header, the TX strip or the
+   dock, and covers none of them but the scope's top edge (the strip is below the scope). Opaque, and
+   over the strip's sticky level (4) and the region's dividers (3). It wraps its controls rather than
+   run past the window (`--vw-eff`, never a raw vw). Hidden while closed (`display: none`, so it is out
+   of the tab order too); `.ch-overflow-open`, later in this sheet, shows it. Nothing that keys or stops
+   a transmission is ever in it. */
+.ch-overflow {
+  position: relative;
+  flex: 0 0 auto;
+}
+.ch-overflow-panel {
+  display: none;
+  position: absolute;
+  top: calc(100% + var(--space-1));
+  right: 0;
+  z-index: 5;
+  width: max-content;
+  max-width: min(44em, calc(var(--vw-eff, 100vw) - 2em));
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.ch-overflow-open {
+  display: flex;
+}
+/* …and the CW speed slider, half as long where the header folds (a placement input styles.css's
+   `.cw-wpm input[type='range']` reads, falling back to its stock 160 px). Its thumb is the same
+   size; only the travel is shorter, and PgUp/PgDn still step the speed as they always did. */
+.cw-wpm-compact {
+  --cw-wpm-w: 80px;
 }
 
 /* THE LEFT SIDE (operator's pick, 2026-10-03: "Arrange gets a third place, 'Left side': a
@@ -733,6 +1048,28 @@
 .cockpit-col--quiet { display: none; }
 .ph-scope-panel--quiet { display: none; }
 
+/* THE STACKED SCOPES (CW's Both view, components/CwCockpit): inside the scope strip, the radio's own
+   scope over the sound-card audio view, each a FILL CockpitPaneFrame (weight 1). This box is the
+   strip's grower in place of the one `.ph-scope`: basis 0 and min-height 0, so the strip's height is
+   still the divider's and nothing here can push it taller; the two frames split it by their weights.
+   Each frame's body scrolls (`.pane-body`), so the scope's readable floor inside it (styles.css
+   `.pane-body > .rf-scope`) never needs this box to grow. */
+.scope-stack {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+  gap: var(--space-1);
+}
+/* ON A SHORT WINDOW (an effective height under CwCockpit's STACK_MIN_EFF_H) the two stand side by side,
+   each the strip's whole height and half its width: stacked there, each was a sliver of picture under its
+   head. The frames' fill flex then shares the WIDTH; min-width 0 lets a half narrower than its toolbar wrap
+   that toolbar rather than push the strip wider than the window. */
+.scope-stack--beside {
+  flex-direction: row;
+  min-width: 0;
+}
+
 /* THE DASHBOARD RAIL (components/DashRail) — a column of Connect boxes beside the operating cockpit:
    the third child of App's `.shell`, after the navigation rail and the cockpit, and never inside a
    cockpit shell, so it adds no child kind to one and no pane of one sits in it.
@@ -802,9 +1139,10 @@
   gap: var(--space-3);
 }
 
-/* RTTY'S FLOORS ON A SHORT COCKPIT (2026-10-27). RTTY is region-less: its decoded text and log strip are
-   bare fill frames under the waterfall strip, so their floors and the strip's are what decide whether the
-   cockpit fits or its deficit valve scrolls the header away. At their stock sizes (10em each, the strip
+/* RTTY'S FLOORS ON A SHORT COCKPIT (2026-10-27). RTTY's decoded text and log strip stood as bare fill frames
+   under the waterfall strip until they moved into the cockpit's pane region (2026-11-04), so their floors and
+   the strip's were what decided whether the cockpit fits or its deficit valve scrolls. (The header no longer
+   scrolls away with it: it is pinned, `.cockpit-header-pinned` above.) At their stock sizes (10em each, the strip
    8em) the three need more than RTTY has at 1920×1080 with the UI at 150 %, and the cockpit scrolled 117 px
    there; until the tuning scope moved beside the waterfall (2026-10-26) the scope's own knobs lowered all
    three to 6em in RTTY's default layout, which is what made it fit. These two hold that geometry with or
@@ -821,10 +1159,17 @@
                          8em (WATERFALL_SPLIT_MIN); the strip goes lower only when the shell has no other room.
    Where even the 6em floors do not fit, the shell's deficit valve scrolls, as it did in 1.21.0. No stop
    control is in a frame or the strip: Stop TX, Tune and the latch are in the sticky TX strip, the Esc/Stop
-   macro in the sticky dock. `scripts/browser-probe --desktop rttyfit` measures it. */
+   macro in the sticky dock. `scripts/browser-probe --desktop rttyfit` measures it.
+     --cockpit-region-floor  SINCE THE REGION: the two frames' floors and the gap between them, as the pane
+                         region's floor (`.cockpit-panes` above), so the region stands on exactly what the
+                         frames stood on and the shell scrolls no sooner than it did. The `100%` in the
+                         frames' floor still means the shell's height: the region, like the frames before
+                         it, is a shell child. Inside the region the frames keep the region's own yielding
+                         floor, and where the two do not fit its column scrolls (the second legal fate). */
 .rtty-cockpit {
   --rtty-fill-floor: max(6em, min(10em, calc((100% - 30em) / 2)));
   --rtty-strip-floor: 6em;
+  --cockpit-region-floor: calc(2 * var(--rtty-fill-floor) + var(--space-3));
 }
 
 /* THE RTTY TUNING SCOPE (⊞ `tuning`): RIGHT of the waterfall, in the strip its divider sizes (operator,
@@ -889,4 +1234,23 @@
   position: absolute;
   top: 0;
   right: 0;
+}
+
+/* ── PHONE'S FREEDV PANE (receive only; components/FreedvPane) ─────────────────────────────────────
+   It stands in the feeds' wrapper (`.np-pane`, which takes the pane body and floors only in the
+   stacking flow), and its heard list holds up to 50 calls. The list is the pane's ONE scroller, as
+   Needed's grid is: the pane is a column flex with a ZERO basis so the status lines above keep their
+   height, and the list's zero basis lets it scroll under them instead of standing every call at full
+   height above the log form (an auto or percentage basis resolves to content height against an
+   indefinite box). No floor of its own: the wrapper carries the stacking flow's. */
+.freedv-pane {
+  flex: 1 1 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.freedv-heard {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
 }

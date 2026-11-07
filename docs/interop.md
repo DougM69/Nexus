@@ -26,8 +26,10 @@ sender id **`Tempo`**.
 
 **Enable it:** Settings → Services ▸ Integrations & Feeds → turn on **WSJT-X UDP API** (`wsjtx_udp`, **off by default**). The target
 address defaults to **`127.0.0.1:2237`** (`wsjtx_udp_addr`) — WSJT-X's own default —
-so most consumers need no reconfiguration. A **multicast group address** also works
-if you want several apps to hear Nexus at once.
+so most consumers need no reconfiguration. To feed several apps on this computer, list
+one address per app, with commas: **`127.0.0.1:2237, 127.0.0.1:2238`**. Each app keeps
+every request. A **multicast group address** also reaches several apps, but they only
+listen: what they answer comes from a network address, so it needs the setting below.
 
 **What Nexus sends:**
 
@@ -45,6 +47,10 @@ if you want several apps to hear Nexus at once.
 decode to call that station), HaltTx (stop transmitting, optionally auto-only),
 FreeText (stage or send a free-text message), Clear, Replay, Location (a GPS feeder
 updating your grid), and HighlightCallsign (row coloring sent by a logger such as JTAlert).
+Reply, FreeText and Location are taken only from this computer's loopback address unless
+**Accept requests from other computers** (`wsjtx_udp_accept_other_computers`, off by default) is on.
+With it on, anyone who can reach this computer over the network can turn TX on, because a UDP
+sender's address can be faked.
 
 > The message-type numbers follow WSJT-X's canonical `NetworkMessage.hpp` exactly
 > (HaltTx = 8, FreeText = 9, …). This matters: an off-by-one here once made a real
@@ -53,12 +59,13 @@ updating your grid), and HighlightCallsign (row coloring sent by a logger such a
 
 ### GridTracker
 
-1. In Nexus, enable the WSJT-X UDP output (target `127.0.0.1:2237`, or a multicast
-   group if GridTracker is on another machine).
+1. In Nexus, enable the WSJT-X UDP output (target `127.0.0.1:2237`, or that machine's
+   address if GridTracker is on another machine).
 2. In GridTracker, point its WSJT-X/UDP source at the same address/port.
 3. GridTracker will see station **`Tempo`** and plot decodes, log QSOs, and — because
    Nexus honors inbound **Reply** — you can double-click a spot in GridTracker to make
-   Nexus call it.
+   Nexus call it. On another machine, or through a multicast target, that double-click
+   is ignored until you turn on **Accept requests from other computers**.
 
 GridTracker reads the schema-3 Status trailer (including `tx_message`), which Nexus
 populates, so its transmit-state display works normally.
@@ -72,8 +79,11 @@ populates, so its transmit-state display works normally.
    **HaltTx** and **FreeText** from JTAlert are honored.
 
 > **One-port rule.** WSJT-X-family telemetry is a single UDP port. If several apps
-> need it on one machine, use a **multicast** target so they all receive, rather than
-> pointing two apps at the same unicast port.
+> need it on one machine, give each its own port and list them with commas
+> (`127.0.0.1:2237, 127.0.0.1:2238`) rather than pointing two apps at the same unicast
+> port. Each app keeps every request. A **multicast** target also reaches them all, but
+> their Reply, FreeText and Location are ignored until you turn on **Accept requests
+> from other computers**.
 
 ### ALL.TXT decode log
 
@@ -113,8 +123,9 @@ Only one program can own a radio's serial port at a time. Nexus's **CAT broker**
 solves the classic conflict: Nexus owns the rig, and other apps talk to the radio
 *through* Nexus by speaking the same text protocol Hamlib's `rigctld` does.
 
-- **Enable it:** Settings → turn on the CAT broker (`cat_broker`, **off by default**).
-  It listens on `cat_broker_port`, default **`4532`** — Hamlib's NET rigctl default.
+- **It is on by default** (`cat_broker`, on since 1.1.0): **Settings → Radio → Transmit limits &
+  sharing → Share this radio with other programs**. It listens on `cat_broker_port`, default
+  **`4532`** — Hamlib's NET rigctl default — on 127.0.0.1 only.
 - **Point your other app at it:** in WSJT-X, N1MM+, Log4OM, or anything Hamlib-based,
   choose the **"Hamlib NET rigctl"** radio and set its address to
   `127.0.0.1:4532`. Setting the dial or mode there retunes Nexus (and the real radio)
@@ -122,6 +133,8 @@ solves the classic conflict: Nexus owns the rig, and other apps talk to the radi
 - The broker implements the command subset a NET-rigctl client uses: get/set frequency
   (`f`/`F`), mode (`m`/`M`), PTT (`t`/`T`), VFO (`v`/`V`), split (`s`), plus
   `\dump_state`, `\chk_vfo`, and `\get_powerstat`.
+- **FreeDV** shares the radio this way too, and hands its logged contacts back to Nexus on
+  `127.0.0.1:2239`: see the [FreeDV guide](manual/FreeDV.md).
 
 > **Port note.** Nexus talks to the radio through its own internal `rigctld` on
 > `rigctld_port`, default 4534, so it never collides with the broker on 4532. If you
@@ -238,8 +251,10 @@ ClubLog, eQSL, and HRDLog.net).
 |---|---|---|---|---|
 | WSJT-X UDP telemetry | Nexus → apps | `127.0.0.1:2237` (UDP) | `wsjtx_udp` / `wsjtx_udp_addr` | no |
 | Companion decode intake | apps → Nexus | `127.0.0.1:2237` (UDP) | `companion_addr` / source = Companion | no |
-| CAT broker (rigctld) | apps ↔ Nexus | `4532` (TCP) | `cat_broker` / `cat_broker_port` | no |
-| PTT via broker | apps → rig | (guarded) | `cat_broker_ptt` | no |
+| CAT broker (rigctld) | apps ↔ Nexus | `127.0.0.1:4532` (TCP) | `cat_broker` / `cat_broker_port` | **yes** |
+| PTT via broker | apps → rig | (guarded) | `cat_broker_ptt` | **yes** |
+| Contacts other programs log (FreeDV, WSJT-X type 5/12, ADIF, N1MM `<contactinfo>`) | apps → Nexus | `127.0.0.1:2239` (UDP); private network addresses with `log_intake_lan` | `freedv_log` / `freedv_log_port`, `log_intake_lan`, `log_intake_peer` | **yes** (network: no) |
+| FreeDV heard calls | FreeDV → Nexus | `224.0.0.1:7177` (UDP, this computer only) | `freedv_heard` / `freedv_heard_port` | no |
 | N1MM+ contactinfo | Nexus → dashboard | `:12060` (UDP) | `n1mm_addr` | no |
 | N3FJP contact push | Nexus → N3FJP | `:1100` (TCP) | `n3fjp_host` / `n3fjp_port` | no |
 | HRD Logbook forwarding | Nexus → HRD | `127.0.0.1:2333` (UDP) | `hrd_logging` / `hrd_udp_addr` | no |

@@ -1,3 +1,4 @@
+import { localizeRefusal } from '../radioRefusal'
 import { useEscStop } from '../useEscStop'
 // ⚠️ THIS FILE IS ON THE **MIGRATED** LIST (i18n/hardcoded-strings.test.ts): every
 // operator-visible string in it is in the catalog under `cw.*`. Nothing was deferred —
@@ -12,13 +13,15 @@ import type { AppSnapshot, CwTurn, FieldDayStatus, NeedTag, Settings, SpotRow } 
 import { PhoneScope } from './PhoneScope'
 import { useSmeterDb } from './LiveMeters'
 import { TxMeters, TX_METERS_WHEN } from './TxMeters'
+import { useCompactChrome } from '../features/compactChrome'
+import { HeaderOverflow } from './HeaderOverflow'
 import { DraftNumberInput } from './DraftNumberInput'
 import { PalettePicker } from './PalettePicker'
 import { BandPicker } from './BandPicker'
 import { BandStrip } from './BandStrip'
 import { TuningStrip } from './TuningStrip'
 import { CockpitHeader } from './CockpitHeader'
-import { CockpitTxStrip } from './CockpitTxStrip'
+import { CockpitTxStrip, keepInSight, revealAfterPress } from './CockpitTxStrip'
 import { ZeroBeat } from './ZeroBeat'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { RegionColumnSeams } from './panes/RegionColumnSeams'
@@ -39,9 +42,17 @@ import { cueKeys, lamp as turnLamp, pace as paceOf } from '../features/cwTurn'
 import { announce } from '../announce'
 import { turnEarcon } from '../alerts'
 import { CwMacroButton, CwMacroEditor } from './CwMacroEditor'
-import type { MacroEditorFocus } from './MacroEditor'
-import { macroEditChordKey, type MacroKey, type MacroSlot } from '../features/macroSets'
-import { cwStoredBuiltIn, withCwEntry, type CwProfile } from '../features/cwMacros'
+import { MacroBank, type MacroEditorFocus } from './MacroEditor'
+import {
+  dockMacroKey,
+  macroCount,
+  macroEditChordKey,
+  macroKeyCaption,
+  type MacroKey,
+  type MacroSlot,
+} from '../features/macroSets'
+import { macroSlotName } from '../features/macroSlotWords'
+import { cwStoredBuiltIn, cwVisibleMacros, withCwEntry, type CwProfile } from '../features/cwMacros'
 import { PaneCloseButton } from './panes/PaneCloseButton'
 import { MemoryStrip } from './MemoryStrip'
 import { IS_MAC, FN_KEY_HINT } from '../platform'
@@ -102,6 +113,7 @@ import {
   getCatCwUnprovenRigModels,
 } from '../api'
 import { patchSettings } from '../settings/patch'
+import { icomScopeCure } from '../rigFormChecks'
 import { bandLabelForMhz, sidebandForQsy } from '../band'
 import { pushToast, withErrorToast } from '../toast'
 import { pollSingleFlight } from '../singleFlight'
@@ -117,17 +129,26 @@ import { PASSBAND_LIMITS } from '../spectrum/markers'
 import { scopeSpots } from '../spectrum/scopeSpots'
 import {
   bandWindow,
+  CW_SCOPE_VIEWS,
+  isRadioScopeSource,
   loadRfSpan,
+  loadScopeView,
   onlyPart,
   saveRfSpan,
+  saveScopeView,
   sweepFor,
   useSpanAsk,
+  type ScopeView,
   type TaggedSweep,
 } from '../spectrum/rfSpan'
+import { scopeIsSlow } from '../spectrum/sweepRate'
+import { ScopeViewChips } from './ScopeViewChips'
+import { useEffectiveHeightAtLeast } from '../useViewport'
 import { useRegionCols } from '../useRegionCols'
 import { usePinnedScroll } from '../usePinnedScroll'
 import { coerceCwAudioSpan, cwAudioView, cwScopeSideSign, CW_AUDIO_SPANS, isRfScopeSource, TRACE_HOLD_MS, NO_NATIVE_SCOPE_REASON, WF_F_MAX, WF_F_MIN, WF_STD_HI, type CwAudioSpan } from '../waterfall'
 import { t } from '../i18n'
+import { catDetailText } from '../features/catDetail'
 import { showWhenDriving } from '../features/drivingRefusal'
 import { drivesAnotherStation } from '../features/durableStore'
 import { T } from '../i18n/T'
@@ -149,6 +170,8 @@ const BW = 'BW'
 const CAT = 'CAT'
 const WINKEYER = 'WinKeyer'
 const REC = 'REC'
+/** The split plate on the header's ⋯ while split is on — the radio's own word, as Phone's. */
+const SPLIT = 'SPLIT'
 /** The BW nudge and the AI decoder's audio window, as the tooltips print them — figures, so
  *  they are supplied to the message rather than written in it. */
 /** The SI unit symbol. A NAMED CONSTANT rather than inline text because this file is on the
@@ -173,11 +196,27 @@ const AGC_CHIPS = [
   { id: 'off', labelKey: 'cw.rxDsp.agc.off' },
 ] as const satisfies readonly { id: string; labelKey: MessageKey }[]
 
+/** The effective window height (CSS px) from which CW's Both view stacks its two scopes; below it they
+ *  stand side by side. 1366×768 at 100 % is ~690 px; at 175 % it is 439. */
+const STACK_MIN_EFF_H = 560
+
+/** How long after the station was last seen on the air the scope strip's default may change (ms):
+ *  the tail of a CW over that the snapshot does not see. */
+const STRIP_UNKEY_HOLD_MS = 1000
+
 /** RF-zoom presets for a native panadapter (mirror of the Phone cockpit, Band and the asking
  *  included: see its RF_SPANS). The ± labels are measurements and stay written here; `Band` and
  *  `Full` are words. Both and every title resolve when the row RENDERS (a module constant would
  *  freeze the first locale loaded), so the chips are keyed and compared on `id` — the preset itself
- *  rather than the word printed on it. */
+ *  rather than the word printed on it.
+ *
+ *  THESE CHIPS ARE THE ONE CONTROL THAT SETS THE RADIO'S SPAN. A second row of rig-span chips
+ *  (±2.5k…±250k for an Icom, 50k…2M for a Flex pan) used to command the radio beside them, and the two
+ *  could disagree: a rig-span click stood until the next band or chip change re-asked, with the chip
+ *  still lit for a span the radio was no longer on. Every span that row offered lives on here
+ *  (±2.5k to ±250k, and a Flex pan's 1M and 2M as ±500k and ±1M, `only: 'flex'`), so none is reachable
+ *  only through Band. A CW scope opens on ±25k: CW work is close in, and Band on 2 m
+ *  asks an Icom for ±500 kHz, where a CW signal is under one point wide. */
 const RF_SPANS = [
   {
     id: 'band',
@@ -192,6 +231,43 @@ const RF_SPANS = [
     hi: 1e9,
     label: () => t('cw.rfZoom.full.label'),
     title: () => t('cw.rfZoom.full.title'),
+  },
+  {
+    id: '±1M',
+    lo: -1_000_000,
+    hi: 1_000_000,
+    label: () => '±1M',
+    title: () => t('cw.rfZoom.span.title', { khz: 1000 }),
+    only: 'flex',
+  },
+  {
+    id: '±500k',
+    lo: -500_000,
+    hi: 500_000,
+    label: () => '±500k',
+    title: () => t('cw.rfZoom.span.title', { khz: 500 }),
+    only: 'flex',
+  },
+  {
+    id: '±250k',
+    lo: -250_000,
+    hi: 250_000,
+    label: () => '±250k',
+    title: () => t('cw.rfZoom.span.title', { khz: 250 }),
+  },
+  {
+    id: '±100k',
+    lo: -100_000,
+    hi: 100_000,
+    label: () => '±100k',
+    title: () => t('cw.rfZoom.span.title', { khz: 100 }),
+  },
+  {
+    id: '±50k',
+    lo: -50_000,
+    hi: 50_000,
+    label: () => '±50k',
+    title: () => t('cw.rfZoom.span.title', { khz: 50 }),
   },
   {
     id: '±25k',
@@ -213,6 +289,13 @@ const RF_SPANS = [
     hi: 5_000,
     label: () => '±5k',
     title: () => t('cw.rfZoom.span.title', { khz: 5 }),
+  },
+  {
+    id: '±2.5k',
+    lo: -2_500,
+    hi: 2_500,
+    label: () => '±2.5k',
+    title: () => t('cw.rfZoom.span.title', { khz: 2.5 }),
   },
 ] as const
 
@@ -239,28 +322,6 @@ const YAESU_SPANS = [
   { label: '200k', halfHz: 100_000 },
   { label: '500k', halfHz: 250_000 },
   { label: '1M', halfHz: 500_000 },
-] as const
-
-/** RIG scope-span presets (native Icom CI-V) — command the RADIO's real panadapter sweep width
- *  via CI-V 27 15, exactly as the Phone cockpit does. */
-const RIG_SPANS = [
-  { label: '±2.5k', hz: 2_500 },
-  { label: '±5k', hz: 5_000 },
-  { label: '±10k', hz: 10_000 },
-  { label: '±25k', hz: 25_000 },
-  { label: '±50k', hz: 50_000 },
-  { label: '±100k', hz: 100_000 },
-  { label: '±250k', hz: 250_000 },
-] as const
-
-/** FlexRadio pan BANDWIDTH presets (full span) — command the SmartSDR panadapter width. */
-const FLEX_SPANS = [
-  { label: '50k', hz: 50_000 },
-  { label: '100k', hz: 100_000 },
-  { label: '200k', hz: 200_000 },
-  { label: '500k', hz: 500_000 },
-  { label: '1M', hz: 1_000_000 },
-  { label: '2M', hz: 2_000_000 },
 ] as const
 
 /** What each CW keyer back-end IS, and what it needs to work — verbatim from the four option
@@ -516,6 +577,9 @@ export function CwCockpit({
   neededBoard,
   boxes,
 }: Props) {
+  // The compact chrome (features/compactChrome): md and up, the meters stand in the TX strip, and the
+  // header's occasional controls fold behind ⋯ at md and lg.
+  const chrome = useCompactChrome()
   // Live S-meter (shared 100 ms poll, lock-free backend) — used to arrive via the 300 ms
   // snapshot on top of the backend's own sampling, which read as a laggy needle. smeterDb-only
   // subscription: the cockpit re-renders when the S-meter changes, never on RX-level churn.
@@ -639,6 +703,63 @@ export function CwCockpit({
     null,
   )
   const nativeRf = scopeFeed != null && isRfScopeSource(scopeFeed.source)
+  // THE RADIO'S OWN SCOPE, ONCE SEEN, for this radio: an Icom over native CI-V, a Yaesu over its LAN
+  // scope link or a FlexRadio has streamed its scope here. Only then is there a choice to offer, so
+  // only then does the view chip show (RF / Audio / Both, kept per window; `loadScopeView` validates
+  // the stored word). It stays seen for the radio while its stream stalls, so the radio's pane can
+  // say the scope has stopped rather than vanish; a radio swap forgets it.
+  const [rigScopeOf, setRigScopeOf] = useState<{ radio: number | undefined } | null>(null)
+  const rigScope = rigScopeOf != null && rigScopeOf.radio === snap.activeRadioId
+  const [scopeView, setScopeViewState] = useState<ScopeView>(() => loadScopeView('cw'))
+  // How fast the radio's scope is sweeping, as measured where it is drawn (PhoneScope `onSweepRate`).
+  const [sweepRate, setSweepRate] = useState<number | null>(null)
+  const setScopeView = (v: ScopeView) => {
+    setScopeViewState(v)
+    saveScopeView('cw', v)
+    // The next view's scope reports its own feed and rate; the last one's say nothing about it.
+    setScopeFeed(null)
+    setSweepRate(null)
+  }
+  // BOTH: the radio's scope as the wide view, the audio view under it (two panes in the strip).
+  // AUDIO: the audio view alone. Otherwise the one rig scope, as on a radio without a scope.
+  const stacked = rigScope && scopeView === 'both'
+  const audioOnlyView = rigScope && scopeView === 'audio'
+  const noteFeed = (source: string, loHz: number, hiHz: number) => {
+    setScopeFeed({ source, loHz, hiHz })
+    if (isRadioScopeSource(source) && !rigScope) setRigScopeOf({ radio: snap.activeRadioId })
+  }
+  // The stacked halves' toolbars go into their pane heads (PhoneScope `toolbarHost`), so each half
+  // is all picture under its head.
+  const [rfTools, setRfTools] = useState<HTMLDivElement | null>(null)
+  // ON A SHORT WINDOW THE HALVES STAND SIDE BY SIDE. Two scopes one above the other in a strip capped
+  // at 45 % of the window leave each a sliver of picture under its head (1366×768 at 175 %: the
+  // effective window is 439 px tall); beside each other each keeps the strip's whole height. A
+  // default the sheet cannot make, as it turns on the effective HEIGHT (`useViewport`).
+  const stackFits = useEffectiveHeightAtLeast(STACK_MIN_EFF_H)
+  const [audioTools, setAudioTools] = useState<HTMLDivElement | null>(null)
+  // THE STRIP'S DEFAULT HEIGHT: 40 % of the shell on a radio whose own scope has been seen, in every
+  // view, so the chip never moves the TX strip under it; 25 % on any other radio, every cockpit's
+  // waterfall default. It changes once, when the radio's scope first appears (or the radio is
+  // swapped), and never while the station is on the air: the TX strip does not move under Stop TX
+  // mid-over, it waits for the unkey. A height the operator dragged always wins (PaneSeam, clamped
+  // on load).
+  const onAirNow =
+    snap.radio.transmitting || !!snap.radio.txBusyReason || snap.radio.tuning === true || snap.radio.rigKeyed === true
+  const [tallStrip, setTallStrip] = useState(false)
+  // When the station was last seen on the air. The snapshot cannot see the last element of a CW
+  // over (the keyer's tail after the send returns), so the change also waits out a second after it.
+  const lastOnAirAt = useRef(0)
+  if (onAirNow) lastOnAirAt.current = Date.now()
+  useEffect(() => {
+    if (onAirNow || tallStrip === rigScope) return
+    const wait = lastOnAirAt.current + STRIP_UNKEY_HOLD_MS - Date.now()
+    if (wait <= 0) {
+      setTallStrip(rigScope)
+      return
+    }
+    const id = window.setTimeout(() => setTallStrip(rigScope), wait)
+    return () => window.clearTimeout(id)
+  }, [onAirNow, rigScope, tallStrip])
   // The scope's spot tags: Band Activity's set (CW spots on this band), each with its mark.
   const scopeTags = useMemo(
     () => scopeSpots(spots ?? [], 'CW', snap.radio.band, needByCall, typeByCall),
@@ -682,6 +803,9 @@ export function CwCockpit({
 
   const civScope = scopeFeed?.source === 'civ'
   const flexScope = scopeFeed?.source === 'flex'
+  // A quiet hint while the radio's scope is slow: its SPEED read back where the station reports it,
+  // else the rate measured here (`scopeIsSlow`, the one rule). SPEED is never sent to the radio.
+  const slowScope = scopeIsSlow(snap.radio.scopeRate, scopeFeed?.source, sweepRate)
   // The sub-plate under the scope title: the fed span in MHz — a MEASUREMENT, so it is
   // assembled here rather than in the catalog — or the word for what the audio view centres
   // on. The `·` separator is chrome and belongs to neither.
@@ -696,8 +820,8 @@ export function CwCockpit({
       .then((s) => onSnap?.(s))
       .catch(showWhenDriving)
   }
-  const [rfSpan, setRfSpanState] = useState<(typeof RF_SPANS)[number]>(() => {
-    const id = loadRfSpan('cw', RF_SPANS.map((sp) => sp.id), 'band')
+  const [rfSpanPick, setRfSpanState] = useState<(typeof RF_SPANS)[number]>(() => {
+    const id = loadRfSpan('cw', RF_SPANS.map((sp) => sp.id), '±25k')
     return RF_SPANS.find((sp) => sp.id === id) ?? RF_SPANS[0]
   })
   const setRfSpan = (sp: (typeof RF_SPANS)[number]) => {
@@ -709,6 +833,12 @@ export function CwCockpit({
   const [scopeSweep, setScopeSweep] = useState<TaggedSweep | null>(null)
   // The RF window the chosen span draws, and the sweep asked of the radio for it (as Phone's).
   const dialHzNow = snap.radio.dialMhz > 0 ? Math.round(snap.radio.dialMhz * 1e6) : null
+  // The spans this source offers: every rung the old rig-span buttons had, and for a Flex pan its 1M and 2M
+  // too. A stored pick the source does not offer (±1M kept from a Flex, then an Icom) is drawn as the
+  // default, and stays stored for the radio that offers it.
+  const rfOffered = RF_SPANS.filter((sp) => !('only' in sp) || sp.only === scopeFeed?.source)
+  const rfSpan =
+    rfOffered.find((sp) => sp.id === rfSpanPick.id) ?? rfOffered.find((sp) => sp.id === '±25k') ?? rfOffered[0]
   const bandFit = rfSpan.id === 'band' ? bandWindow(dialHzNow) : null
   const rfWant =
     rfSpan.id === 'band'
@@ -890,7 +1020,9 @@ export function CwCockpit({
     return () => {
       alive = false
     }
-  }, [active])
+    // Re-read on a radio switch too: the flat rig fields (model, connection, baud, CI-V switch) are
+    // the ACTIVE radio's, and the scope toolbar's Icom hint reads them (`icomScopeCure`).
+  }, [active, snap.activeRadioId])
   const profileMacros = profiles[activeProfile]?.macros
   // Typed as CwMacro[] so the row renderer reads ONE shape: a profile macro's label is the
   // operator's own words, a built-in's is either on-air shorthand or a catalog key.
@@ -907,7 +1039,14 @@ export function CwCockpit({
     : parkActivation
       ? CW_POTA_SET
       : DEFAULT_MACROS
-  const macros: CwMacro[] = profileMacros && profileMacros.length ? profileMacros : builtIn
+  // …and as many keys as Settings ▸ CW ▸ Macro keys shows: 8, 12 or 16 (`cwVisibleMacros`). A
+  // key past the count is kept in the profile, hidden, and is never sent by a key or a press.
+  // Memoised: the list is a new array otherwise, and the reply previews refetch on its identity.
+  const cwCount = macroCount(cwSettings?.macros?.cwMacroCount)
+  const macros: CwMacro[] = useMemo(
+    () => cwVisibleMacros(profileMacros && profileMacros.length ? profileMacros : builtIn, cwCount),
+    [profileMacros, builtIn, cwCount],
+  )
   // Switch the active macro profile from the cockpit (optimistic) and persist it — the index
   // alone, over the live settings. Saving the view's copy with the index merged in wrote every
   // field changed since the view opened back to what it was, the dial the operator had tuned
@@ -1097,17 +1236,31 @@ export function CwCockpit({
   // whatever pitch the operator runs (it used to be a fixed 300–1100, centered on 600 only).
   // That is the Filter chip, and the default; Std and Full show the band as the waterfalls do.
   const [audioSpan, setAudioSpan] = useState<CwAudioSpan>(() => coerceCwAudioSpan(surfaceGet(CW_SCOPE_SPAN_KEY)))
-  // A radio with its own scope (`yaesuScope`) hides the chips; when its rows fall back to sound-card
-  // audio that view is Filter, never a span picked elsewhere that the operator can neither see nor change.
-  const shownSpan: CwAudioSpan = yaesuScope ? 'filter' : audioSpan
-  const cwView = cwAudioView(shownSpan, pitch, filterHz)
+  const cwView = cwAudioView(audioSpan, pitch, filterHz)
   // The audio view's span: Filter (round the pitch, the default), or the waterfalls' Std and Full
   // views. Display only: the click maps through whichever window is shown. They stand at the start of
   // the scope's own toolbar strip: a row of their own took its height out of the picture, which sits at
-  // the panel's floor at 1024x768. Hidden on a native RF row and on a radio with its own scope.
+  // the panel's floor at 1024x768. Hidden on a native RF row only, where an audio span means nothing. A
+  // radio with its own scope whose rows are the sound card's (an FT-710 without its SCU-LAN10 link)
+  // draws audio like any other radio, so the operator can widen it there too.
+  // In Both the audio view stands under the radio's scope, and its chips go with it.
+  const audioShown = !nativeRf || stacked
+  // The audio is what came through the RADIO's filter, so in Std and Full, where the window is wider
+  // than that filter, the rest of the window is the filter's stopband and can never show a signal.
+  // Say so, or a 500 Hz filter reads as a scope that will not zoom out. Never in Filter: that view
+  // frames the filter by design, and saying so there would be noise.
+  const filterLimits =
+    audioShown && audioSpan !== 'filter' && filterHz != null && filterHz > 0 && filterHz < cwView.hiHz - cwView.loHz
   const audioSpanChips =
-    !nativeRf && !yaesuScope ? (
-      <div className="ph-span" role="group" aria-label={t('cw.scope.span.aria')}>
+    audioShown ? (
+      <div
+        className="ph-span"
+        role="group"
+        aria-label={t('cw.scope.span.aria')}
+        // In Both the chips sit in the audio pane's head, and the filter note rides them as their
+        // tooltip rather than as a line that would wrap the head onto three rows.
+        title={stacked && filterLimits ? t('cw.scope.filterLimit', { hz: filterHz }) : undefined}
+      >
         {CW_AUDIO_SPANS.map((id) => (
           <button
             key={id}
@@ -1135,6 +1288,80 @@ export function CwCockpit({
         ))}
       </div>
     ) : null
+  // An Icom whose own wide scope is one setting away (`icomScopeCure`): the audio view is all an
+  // operator on Hamlib ever sees, with nothing saying the radio's panadapter can be drawn here.
+  const scopeCure = !nativeRf && cwSettings ? icomScopeCure(cwSettings) : null
+  const settingsLink = (where: string) =>
+    onOpenSettings ? (
+      <button type="button" className="settings-linkbtn" onClick={() => onOpenSettings(where)} />
+    ) : (
+      <strong />
+    )
+  const scopeToolbar = (
+    <>
+      {audioSpanChips}
+      {filterLimits && !stacked && (
+        <span className="ph-scope-sub" role="status">
+          {t('cw.scope.filterLimit', { hz: filterHz })}
+        </span>
+      )}
+      {scopeCure && (
+        <span className="ph-scope-sub">
+          {scopeCure === 'native-off' ? (
+            <T k="cw.scope.nativeHint.civOff" tags={{ link: settingsLink('rig-advanced') }} />
+          ) : (
+            <T k="cw.scope.nativeHint.baud" tags={{ link: settingsLink('rig-control') }} />
+          )}
+        </span>
+      )}
+    </>
+  )
+  // The RF span chips, the one control of the radio's span, with what they say under them.
+  const rfZoomRow = (
+    <div className="ph-span" role="group" aria-label={t('cw.rfZoom.aria')}>
+      {/* Side by side on a short window, the radio's half is too narrow for seven chips beside its
+          title: the same choice, as one select. */}
+      {stacked && !stackFits ? (
+        <select
+          className="theme-chip"
+          aria-label={t('cw.rfZoom.aria')}
+          title={rfSpan.title()}
+          value={rfSpan.id}
+          onChange={(e) => {
+            const sp = rfOffered.find((x) => x.id === e.target.value)
+            if (sp) setRfSpan(sp)
+          }}
+        >
+          {rfOffered.map((sp) => (
+            <option key={sp.id} value={sp.id}>
+              {sp.label()}
+            </option>
+          ))}
+        </select>
+      ) : rfOffered.map((sp) => (
+        <button
+          key={sp.id}
+          type="button"
+          className={`theme-chip${rfSpan.id === sp.id ? ' active' : ''}`}
+          aria-pressed={rfSpan.id === sp.id}
+          title={sp.title()}
+          onClick={() => setRfSpan(sp)}
+        >
+          {sp.label()}
+        </button>
+      ))}
+      {bandFit && onlyPart(scopeFeed, bandFit) && (
+        <span className="ph-scope-sub" role="status">
+          {t('cw.rfZoom.band.partial')}
+        </span>
+      )}
+      {slowScope && (
+        <span className="ph-scope-sub" role="status">
+          {t('scope.slow.hint')}
+        </span>
+      )}
+    </div>
+  )
   const changePitch = (v: number) => {
     const p = Math.max(300, Math.min(1200, Math.round(v)))
     setPitch(p)
@@ -1280,17 +1507,19 @@ export function CwCockpit({
   const dockRef = useRef<HTMLDivElement | null>(null)
   const ownKeys = !!(profileMacros && profileMacros.length)
   const builtInStored = builtIn.map(cwStoredBuiltIn)
+  /** The built-in a key would show here: the set's own for F1–F8, an empty key past them. */
+  const builtInOf = (key: string) => builtInStored.find((b) => b.key === key) ?? { key, label: '', text: '' }
   /** A key as the shared surface reads it. Its caption is the one the dock has always shown (a
    *  key of the operator's with no label shows its F-key name), and a key with neither label nor
    *  message is empty, so a click opens its editor. `custom`: the key is not the built-in the dock
    *  would show here without the profile's keys, so Reset this button has something to put back. */
   const slotOf = (m: CwMacro): MacroSlot => {
-    const stock = builtInStored.find((b) => b.key === m.key)
+    const stock = builtInOf(m.key)
     return {
       key: m.key as MacroKey,
-      label: m.labelKey ? t(m.labelKey) : m.label || (m.text.trim() ? m.key : ''),
+      label: m.labelKey ? t(m.labelKey) : m.label || (m.text.trim() ? macroSlotName(m.key) : ''),
       text: m.text,
-      custom: ownKeys && (!stock || stock.label !== (m.label ?? '') || stock.text !== m.text),
+      custom: ownKeys && (stock.label !== (m.label ?? '') || stock.text !== m.text),
     }
   }
   /** The same key as its editor opens it: its own label, never the F-key name standing in for one. */
@@ -1308,9 +1537,15 @@ export function CwCockpit({
     setEditing(null)
     // The caret goes back to the key the editor was opened from, not to the top of the page.
     if (key) {
-      dockRef.current
-        ?.querySelector<HTMLElement>(`[data-cw-macro="${key}"] .cw-macro`)
-        ?.focus({ preventScroll: true })
+      const back = dockRef.current?.querySelector<HTMLElement>(`[data-cw-macro="${key}"] .cw-macro`)
+      back?.focus({ preventScroll: true })
+      // While the dock is folded the key scrolls with the panes: it may be off screen or behind the keep row.
+      if (back) {
+        revealAfterPress(back, () => {
+          back.scrollIntoView?.({ block: 'nearest' })
+          keepInSight(back)
+        })
+      }
     }
   }
   const writeKey = async (key: string, entry: { label: string; text: string }) => {
@@ -1347,8 +1582,8 @@ export function CwCockpit({
     void writeKey(key, { label: label === was.label && !ownKeys && stock ? stock.label : label, text })
   }
   const resetMacro = (key: string) => {
-    const stock = builtInStored.find((b) => b.key === key)
-    if (stock) void writeKey(key, { label: stock.label, text: stock.text })
+    const stock = builtInOf(key)
+    void writeKey(key, { label: stock.label, text: stock.text })
   }
   // Sent, the editor closes; refused here, it stays open with the draft, as a failed Save does.
   const sendOnce = (key: string, message: string) => {
@@ -1444,7 +1679,8 @@ export function CwCockpit({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingWork?.ts])
 
-  // Keyboard: F1–F8 fire macros; Esc aborts; PgUp/PgDn nudge speed (±2, Shift ±4). One press of a
+  // Keyboard: F1–F8 fire macros (F1–F12 when the dock shows 12 or 16 keys; keys 13–16 have no
+  // F-key, `dockMacroKey`, and Shift+F10 is the system's context menu); Esc aborts; PgUp/PgDn nudge speed (±2, Shift ±4). One press of a
   // macro key is one send, and never with Alt, Ctrl or Cmd held (RTTY's guard): a held F3's
   // auto-repeat queued the exchange again on every repeat, and Alt+F4, the window's close,
   // sent F4's macro. A modified key is left to the system; PgUp/PgDn still repeat.
@@ -1469,16 +1705,19 @@ export function CwCockpit({
   stateRef.current = { wpm, text }
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const macro = macrosRef.current.find((m) => m.key === e.key)
+      const shown = macrosRef.current.map((m) => m.key)
+      const chord = macroEditChordKey(e, shown)
+      const sendKey = dockMacroKey(e, shown)
+      const macro = sendKey ? macrosRef.current.find((m) => m.key === sendKey) : undefined
       if (e.key === 'Escape') {
         e.preventDefault()
-      } else if (macro && macroEditChordKey(e)) {
+      } else if (chord) {
         // Ctrl+Shift with a key's F-key: that key's editor, with the caret in its message. It
         // never sends (`macroEditChordKey` says why the chord is free).
         e.preventDefault()
-        if (!e.repeat) editRef.current.openEditor(macro.key, 'message')
+        if (!e.repeat) editRef.current.openEditor(chord, 'message')
       } else if (macro) {
-        if (e.altKey || e.ctrlKey || e.metaKey) return
+        // `dockMacroKey` has already left Alt, Ctrl and Cmd to the system.
         e.preventDefault()
         // Not while the editor is open: the caret is in it, as in RTTY and PSK.
         if (!e.repeat && !editRef.current.editorOpen) {
@@ -1784,31 +2023,14 @@ export function CwCockpit({
       <div className="cw-rigctl">
       {/* MAIN — exactly while the SUB row below is drawn; nothing for any other radio. */}
       {hasSubRow && <MainReceiverPlate radio={snap.radio} catOk={catOk} />}
-      {/* Rig scope controls (native Icom CI-V only) — command the RADIO's real panadapter:
-          span sets the hardware sweep width, ref sets weak-signal visibility. Parity with Phone. */}
+      {/* Rig scope controls (native Icom CI-V only) — command the RADIO's real panadapter: ref sets
+          weak-signal visibility. Parity with Phone. The radio's SPAN is the scope's own span chips
+          (RF_SPANS), the one control that sets it, so it is not offered a second time here. */}
       {hasScopeCtlPane && civScope && (
           <div className="ph-rigscope" role="group" aria-label={t('cw.rigScope.aria')}>
             <span className="ph-rigscope-lbl" title={t('cw.rigScope.title')}>
               {t('cw.rigScope.label')}
             </span>
-            <div className="ph-span">
-              {RIG_SPANS.map((sp) => (
-                <button
-                  key={sp.label}
-                  type="button"
-                  className="theme-chip"
-                  title={t('cw.rigScope.span.title', { span: sp.label })}
-                  /* #275: a failure here was swallowed, matching the backend's own swallow —
-                     between them a span button on an IC-7300 in Fixed mode did nothing with no
-                     explanation anywhere. The rig's OWN refusal arrives a tick later in
-                     `radio.scopeSpanRefused` (the status lane); this catch is the nearer half,
-                     the command itself failing. */
-                  onClick={() => void setScopeSpan(sp.hz).then((s) => onSnap?.(s)).catch(showWhenDriving)}
-                >
-                  {sp.label}
-                </button>
-              ))}
-            </div>
             <label className="ph-rigscope-ref" title={t('cw.rigScope.ref.title')}>
               <span>{t('cw.scope.ref.label')}</span>
               <input
@@ -1827,25 +2049,13 @@ export function CwCockpit({
           </div>
       )}
 
-      {/* FlexRadio SmartSDR panadapter controls — bandwidth + reference. Parity with Phone. */}
+      {/* FlexRadio SmartSDR panadapter controls — the reference level. Parity with Phone. The pan's
+          bandwidth is the scope's own span chips, as for an Icom. */}
       {hasScopeCtlPane && flexScope && (
           <div className="ph-rigscope" role="group" aria-label={t('cw.flexPan.aria')}>
             <span className="ph-rigscope-lbl" title={t('cw.flexPan.title')}>
               {t('cw.flexPan.label')}
             </span>
-            <div className="ph-span">
-              {FLEX_SPANS.map((sp) => (
-                <button
-                  key={sp.label}
-                  type="button"
-                  className="theme-chip"
-                  title={t('cw.flexPan.span.title', { span: sp.label })}
-                  onClick={() => void setFlexPanSpan(sp.hz).then((s) => onSnap?.(s)).catch(showWhenDriving)}
-                >
-                  {sp.label}
-                </button>
-              ))}
-            </div>
             <label className="ph-rigscope-ref" title={t('cw.flexPan.ref.title')}>
               <span>{t('cw.scope.ref.label')}</span>
               <input
@@ -2066,6 +2276,8 @@ export function CwCockpit({
         // App unmounts this cockpit on a page switch; the contact in its strip waits for it. A call
         // it puts back reaches His Call through `onCallChange`, as a typed one does.
         draft="cw"
+        // #438: a long contact whose call went in early restarts its start time here.
+        startButton
         onResumeContest={onResumeContest}
       />
       {/* Inside the log pane, under the form: it takes only the room the form leaves (RecentQsosPane). */}
@@ -2174,6 +2386,7 @@ export function CwCockpit({
     paneEls[b] = (
       <CockpitBox
         box={b}
+        cockpit="cw"
         entry={entry}
         source={boxes}
         selection={boxSel}
@@ -2229,7 +2442,66 @@ export function CwCockpit({
           .catch((e) => pushToast(String(e), 'error'))
       }
       onStopTx={abort}
+      // THE COMPACT DOCK (md and up): the read-only meters stand in the strip's empty right side, as
+      // in Operate's QSO strip, and the dock loses their row. They keep their ⊞ id — a readout.
+      meters={chrome.wide && shown('txmeters') ? <TxMeters radio={snap.radio} strip /> : undefined}
     />
+  )
+  // The header's occasional controls, drawn inline or behind its ⋯ (see the header below).
+  const occasional = (
+    <>
+      {onRecallMemory && (
+        <MemoryStrip
+          dialMhz={snap.radio.dialMhz}
+          mode="CW"
+          onRecall={onRecallMemory}
+          onManage={onOpenMemories}
+        />
+      )}
+      <RotorStrip
+        onOpenSettings={onOpenSettings}
+        targetCall={guide.workedCall}
+        onPointAt={rotorPointAt()}
+      />
+      {/* ⭐ A REAL SPLIT CONTROL, not a read-only plate. Until 2026-08-26 this header only
+          DISPLAYED that split was on; there was no way to set it from the CW cockpit at all.
+          A General working a DX in the Extra-only CW bottom — RX 14.015, TX 14.026, which is
+          simply how DX is worked — had to reach for the radio's front panel and then found
+          Nexus refusing to key, because the privilege gate had no way to learn where he was
+          transmitting. Fixing the gate without this left the fix unreachable by the operator
+          who reported it, and he was a CW operator.
+  
+          Gated on `catOk` like Phone's: with no CAT there is nothing to command, and the
+          header is width-critical at 1024 (see the density note above), so it costs nothing
+          when there is no radio to talk to. NOT a stop control — see SplitControl's header. */}
+      {catOk && (
+        <SplitControl
+          snap={snap}
+          onSnap={onSnap}
+          onError={(m) => pushToast(m, 'error')}
+        />
+      )}
+      {/* Dot + "REC", the same `.ph-rec` class Phone uses. This header already carries the band
+          picker, tuning strip, Tune, Stop TX, speed, pitch, macros, BW, memories and the rotator,
+          and its own density note records that width here is what wraps it at 1024, so this was
+          first built glyph-only to cost ~24px. That is exactly what made Phone's copy unfindable
+          (operator, 2026-08-08), so it carries the label and costs ~50px. The accessible name is
+          explicit rather than left to the glyph, and the glyph is aria-hidden so it is not read
+          twice. */}
+      <button
+        type="button"
+        className={`ph-rec${recording ? ' on' : ''}`}
+        onClick={toggleRecord}
+        disabled={recBusy}
+        aria-label={recording ? t('cw.record.stop.aria') : t('cw.record.start.aria')}
+        title={recording ? t('cw.record.on.title') : t('cw.record.off.title')}
+      >
+        <span className="ph-rec-dot" aria-hidden="true">
+          {recording ? '■' : '●'}
+        </span>
+        {REC}
+      </button>
+    </>
   )
   return (
     <main className="layout single cw-cockpit" ref={cockpitRef} data-pane-drag={dropPane ? '' : undefined}>
@@ -2237,7 +2509,7 @@ export function CwCockpit({
         snap={snap}
         onSnap={onSnap}
         modeIndicator={
-          <span className="cw-mode-badge" title={snap.radio.catDetail || t('cw.header.mode.title')}>
+          <span className="cw-mode-badge" title={(snap.radio.catDetail && catDetailText(localizeRefusal(snap.radio.catDetail))) || t('cw.header.mode.title')}>
             {CW}
           </span>
         }
@@ -2286,7 +2558,8 @@ export function CwCockpit({
         }
       >
         <label
-          className="cw-wpm"
+          // The speed slider is shorter where the header folds to one row (`.cw-wpm-compact`).
+          className={`cw-wpm${chrome.fold ? ' cw-wpm-compact' : ''}`}
           // Compact Mac keyboards have no PgUp/PgDn keys — Fn+↑/↓ is what sends them, which is
           // a second statement rather than a tail on the first: one whole sentence each.
           title={IS_MAC ? t('cw.wpm.title.mac') : t('cw.wpm.title')}
@@ -2394,57 +2667,25 @@ export function CwCockpit({
             </button>
           </div>
         )}
-        {onRecallMemory && (
-          <MemoryStrip
-            dialMhz={snap.radio.dialMhz}
-            mode="CW"
-            onRecall={onRecallMemory}
-            onManage={onOpenMemories}
-          />
+        {/* THE OCCASIONAL CONTROLS — memories, the rotator, split and REC: inline at xl and below md,
+            behind the header's ⋯ at md and lg (components/HeaderOverflow, features/compactChrome),
+            so the header is one row on a 1080p window. None of them keys or stops a transmission. */}
+        {chrome.fold ? (
+          <HeaderOverflow
+            label={t('cockpit.header.more.label')}
+            title={t('cockpit.header.more.title')}
+            badges={
+              <>
+                {snap.radio.splitTxMhz != null && <span className="ch-overflow-badge">{SPLIT}</span>}
+                {recording && <span className="ch-overflow-badge">● {REC}</span>}
+              </>
+            }
+          >
+            {occasional}
+          </HeaderOverflow>
+        ) : (
+          occasional
         )}
-        <RotorStrip
-          onOpenSettings={onOpenSettings}
-          targetCall={guide.workedCall}
-          onPointAt={rotorPointAt()}
-        />
-        {/* ⭐ A REAL SPLIT CONTROL, not a read-only plate. Until 2026-08-26 this header only
-            DISPLAYED that split was on; there was no way to set it from the CW cockpit at all.
-            A General working a DX in the Extra-only CW bottom — RX 14.015, TX 14.026, which is
-            simply how DX is worked — had to reach for the radio's front panel and then found
-            Nexus refusing to key, because the privilege gate had no way to learn where he was
-            transmitting. Fixing the gate without this left the fix unreachable by the operator
-            who reported it, and he was a CW operator.
-
-            Gated on `catOk` like Phone's: with no CAT there is nothing to command, and the
-            header is width-critical at 1024 (see the density note above), so it costs nothing
-            when there is no radio to talk to. NOT a stop control — see SplitControl's header. */}
-        {catOk && (
-          <SplitControl
-            snap={snap}
-            onSnap={onSnap}
-            onError={(m) => pushToast(m, 'error')}
-          />
-        )}
-        {/* Dot + "REC", the same `.ph-rec` class Phone uses. This header already carries the band
-            picker, tuning strip, Tune, Stop TX, speed, pitch, macros, BW, memories and the rotator,
-            and its own density note records that width here is what wraps it at 1024, so this was
-            first built glyph-only to cost ~24px. That is exactly what made Phone's copy unfindable
-            (operator, 2026-08-08), so it carries the label and costs ~50px. The accessible name is
-            explicit rather than left to the glyph, and the glyph is aria-hidden so it is not read
-            twice. */}
-        <button
-          type="button"
-          className={`ph-rec${recording ? ' on' : ''}`}
-          onClick={toggleRecord}
-          disabled={recBusy}
-          aria-label={recording ? t('cw.record.stop.aria') : t('cw.record.start.aria')}
-          title={recording ? t('cw.record.on.title') : t('cw.record.off.title')}
-        >
-          <span className="ph-rec-dot" aria-hidden="true">
-            {recording ? '■' : '●'}
-          </span>
-          {REC}
-        </button>
       </CockpitHeader>
 
       {keyerError && (
@@ -2495,10 +2736,10 @@ export function CwCockpit({
             title={
               nativeRf
                 ? t('cw.scope.nativeRf.title')
-                : shownSpan === 'filter'
+                : audioSpan === 'filter'
                   ? t('cw.scope.audio.title', { lo: cwView.loHz, hi: cwView.hiHz })
                   // Std and Full are not centred on the pitch, so the title says what they are.
-                  : shownSpan === 'std'
+                  : audioSpan === 'std'
                     ? t('cw.scope.span.std.title', { lo: cwView.loHz, hi: cwView.hiHz })
                     : t('cw.scope.span.full.title', { lo: cwView.loHz, hi: cwView.hiHz })
             }
@@ -2506,6 +2747,9 @@ export function CwCockpit({
             {nativeRf ? t('cw.scope.nativeRf.label') : t('cw.scope.audio.label')}{' '}
             <span className="ph-scope-sub">{scopeSub}</span>
           </span>
+          {/* THE VIEW CHIP: the radio's scope, the audio view, or both stacked. Only on a radio whose
+              own scope has been seen here; a display choice, it sends the radio nothing. */}
+          {rigScope && <ScopeViewChips views={CW_SCOPE_VIEWS} value={scopeView} onChange={setScopeView} />}
           {/* ⭐ THE ZERO-BEAT INDICATOR sits in the SCOPE HEAD, beside the marker it
               completes: the scope below draws your pitch, this says where the received
               tone actually is, and its needle runs in the scope's own axis so the two can
@@ -2566,46 +2810,116 @@ export function CwCockpit({
             </select>
           </div>
         ) : null}
-        {nativeRf && !yaesuScope && (
-          // Native RF panadapter: client-side RF-width zoom around the dial (mirror of Phone).
-          <div className="ph-span" role="group" aria-label={t('cw.rfZoom.aria')}>
-            {RF_SPANS.map((sp) => (
-              <button
-                key={sp.id}
-                type="button"
-                className={`theme-chip${rfSpan.id === sp.id ? ' active' : ''}`}
-                aria-pressed={rfSpan.id === sp.id}
-                title={sp.title()}
-                onClick={() => setRfSpan(sp)}
-              >
-                {sp.label()}
-              </button>
-            ))}
-            {bandFit && onlyPart(scopeFeed, bandFit) && (
-              <span className="ph-scope-sub" role="status">
-                {t('cw.rfZoom.band.partial')}
-              </span>
-            )}
+        {/* Native RF panadapter: the RF span chips (mirror of Phone). In Both they ride the radio's
+            pane instead, in its head with the rest of its toolbar. */}
+        {nativeRf && !yaesuScope && !stacked && rfZoomRow}
+        {stacked ? (
+          // BOTH, STACKED: the radio's own scope as the wide view, and under it the sound-card audio
+          // view for the detail inside the radio's filter. Two fill panes in the strip; the strip's
+          // height is the divider's, and each pane takes a share of it (cockpit-panes.css
+          // `.scope-stack`). The radio's pane reads the radio's scope only, and says so when that
+          // stalls; the audio pane reads the audio only, so it keeps working either way.
+          <div className={stackFits ? 'scope-stack' : 'scope-stack scope-stack--beside'}>
+            <CockpitPaneFrame
+              title={t('scope.view.rf.label')}
+              paneId="scopeRf"
+              weight={1}
+              actions={<div ref={setRfTools} />}
+            >
+              <div className="rf-scope">
+                <PhoneScope
+                  feed="rf"
+                  cockpit="rfpan"
+                  compact
+                  toolbarHost={rfTools}
+                  toolbarStart={yaesuScope ? undefined : rfZoomRow}
+                  active={active}
+                  transmitting={snap.radio.transmitting}
+                  theme={theme}
+                  smeterDb={smeterDb}
+                  viewLoHz={yaesuRf ? -1e9 : rfSpan.lo}
+                  viewHiHz={yaesuRf ? 1e9 : rfSpan.hi}
+                  sideband={scopeMode}
+                  dialHz={dialHzNow}
+                  onFeed={noteFeed}
+                  rfViewHz={yaesuRf ? null : bandFit}
+                  onSweep={(source, loHz, hiHz) => setScopeSweep({ loHz, hiHz, radio: snap.activeRadioId, source })}
+                  onSweepRate={setSweepRate}
+                  onTune={onScopeTune}
+                  filterWidthHz={filterHz ?? 500}
+                  passbandHz={soundcardKeyer ? null : filterHz}
+                  onPassband={passbandEditable ? onScopePassband : undefined}
+                  notchHz={snap.radio.manualNotch === true ? (snap.radio.notchFreqHz ?? null) : null}
+                  subReceiver={subScopeMarker(snap.radio, catOk)}
+                  pitchHz={pitch}
+                  cwPitchRefDial={keyer !== 'soundcard'}
+                  traceHoldMs={TRACE_HOLD_MS.fast}
+                  interactive={catOk && !snap.radio.txBusyReason && !snap.radio.transmitting && snap.radio.dialMhz > 0}
+                  spots={scopeTags}
+                  onSpot={onWorkSpot}
+                  privilegeMode={snap.radio.operatingMode}
+                />
+              </div>
+            </CockpitPaneFrame>
+            <CockpitPaneFrame
+              title={t('scope.view.audio.label')}
+              paneId="scopeAudio"
+              weight={1}
+              actions={<div ref={setAudioTools} />}
+            >
+              <div className="rf-scope">
+                <PhoneScope
+                  feed="audio"
+                  cockpit="cw"
+                  compact
+                  toolbarHost={audioTools}
+                  active={active}
+                  transmitting={snap.radio.transmitting}
+                  theme={theme}
+                  toolbarStart={scopeToolbar}
+                  viewLoHz={cwView.loHz}
+                  viewHiHz={cwView.hiHz}
+                  markerHz={pitch}
+                  sideband={scopeMode}
+                  dialHz={dialHzNow}
+                  onTune={onScopeTune}
+                  filterWidthHz={filterHz ?? 500}
+                  passbandHz={soundcardKeyer ? null : filterHz}
+                  onPassband={passbandEditable ? onScopePassband : undefined}
+                  notchHz={snap.radio.manualNotch === true ? (snap.radio.notchFreqHz ?? null) : null}
+                  pitchHz={pitch}
+                  cwPitchRefDial={keyer !== 'soundcard'}
+                  traceHoldMs={TRACE_HOLD_MS.fast}
+                  interactive={catOk && !snap.radio.txBusyReason && !snap.radio.transmitting && snap.radio.dialMhz > 0}
+                  privilegeMode={snap.radio.operatingMode}
+                />
+              </div>
+            </CockpitPaneFrame>
           </div>
-        )}
-        {/* CW-narrow view — 800 Hz CENTERED ON THE PITCH (cwScopeWindow) — unless a native RF
-            scope is streaming, in which case we show the real RF spectrum around the dial. The
-            dashed hairline is YOUR pitch, and it now sits mid-screen where a rig puts it. */}
+        ) : (
+        // CW-narrow view — 800 Hz CENTERED ON THE PITCH (cwScopeWindow) — unless a native RF
+        // scope is streaming, in which case we show the real RF spectrum around the dial. The
+        // dashed hairline is YOUR pitch, and it now sits mid-screen where a rig puts it. The
+        // Audio view reads the audio only (`feed`), so the radio's scope never replaces it; the
+        // feed is fixed for a scope's life, so the key remounts it when the view changes.
         <PhoneScope
+          key={audioOnlyView ? 'audio' : 'scope'}
+          feed={audioOnlyView ? 'audio' : 'scope'}
           cockpit="cw"
           active={active}
           transmitting={snap.radio.transmitting}
           theme={theme}
           smeterDb={smeterDb}
-          toolbarStart={audioSpanChips}
+          toolbarStart={scopeToolbar}
           viewLoHz={yaesuRf ? -1e9 : nativeRf ? rfSpan.lo : cwView.loHz}
           viewHiHz={yaesuRf ? 1e9 : nativeRf ? rfSpan.hi : cwView.hiHz}
           markerHz={nativeRf ? undefined : pitch}
           sideband={scopeMode}
           dialHz={snap.radio.dialMhz > 0 ? Math.round(snap.radio.dialMhz * 1e6) : null}
-          onFeed={(source, loHz, hiHz) => setScopeFeed({ source, loHz, hiHz })}
+          onFeed={noteFeed}
           rfViewHz={nativeRf && !yaesuRf ? bandFit : null}
           onSweep={(source, loHz, hiHz) => setScopeSweep({ loHz, hiHz, radio: snap.activeRadioId, source })}
+          onSweepRate={audioOnlyView ? undefined : setSweepRate}
           onTune={onScopeTune}
           filterWidthHz={filterHz ?? 500}
           passbandHz={soundcardKeyer ? null : filterHz}
@@ -2621,16 +2935,23 @@ export function CwCockpit({
           onSpot={onWorkSpot}
           privilegeMode={snap.radio.operatingMode}
         />
+        )}
       </section>
       <PaneSeam
+        // Remounted when the default changes, so the new default is read (a stored height still wins).
+        key={tallStrip ? 'rig-scope' : 'audio'}
+        // The default here depends on the radio (25 % or 40 %), so a Reset forgets the stored height
+        // rather than storing the default in force: the next radio opens on its own default.
+        resetClears
         axis="y"
         varName="--cw-scope-h"
         strip={scopeRef}
         storageKey="nexus.split.cw.scope"
         min={SCOPE_SPLIT_MIN}
         max={SCOPE_SPLIT_MAX}
-        // 25 % of the shell, every cockpit's waterfall default (2026-10-26); a dragged height is kept.
-        defaultPct={25}
+        // 25 % of the shell, every cockpit's waterfall default (2026-10-26); 40 % once a radio scope
+        // is seen (`tallStrip`, the same in every view). A dragged height is kept.
+        defaultPct={tallStrip ? 40 : 25}
         label={t('cw.scope.splitter.label')}
       />
         </>
@@ -2733,9 +3054,11 @@ export function CwCockpit({
             `pinned`, so the last send's readings stay on screen (dimmed) after the key is
             up. CW keys in short bursts: unpinned, the panel appeared and was gone before a
             reading could be read at all. See PhoneCockpit's dock for the full reasoning. */}
-        {shown('txmeters') && <TxMeters radio={snap.radio} pinned />}
+        {!chrome.wide && shown('txmeters') && <TxMeters radio={snap.radio} pinned />}
 
-        <div className="cw-macros" role="group" aria-label={t('cw.macros.aria')}>
+        {/* The keys: the grid CW always drew at 8, groups of four that wrap by width at 12 or 16
+            (Settings ▸ CW ▸ Macro keys, `MacroBank`). */}
+        <MacroBank label={t('cw.macros.aria')} gridClass="cw-macros" bankClass="cw-macros macro-bank">
           {/* The buttons ADVERTISE their F-keys, and default Mac keyboards eat bare F-keys
               as media keys — the tooltip carries the cure there (mac QA audit). */}
           {/* A built-in caption that is a WORD arrives as a key; one that is on-air shorthand
@@ -2748,12 +3071,12 @@ export function CwCockpit({
               editing={editing === m.key}
               lit={esmLit.includes(m.key)}
               cue={cueOn(m.key)}
-              title={`${previews[m.key] || m.text}${IS_MAC ? `\n${FN_KEY_HINT}` : ''}`}
+              title={`${previews[m.key] || m.text}${IS_MAC && macroKeyCaption(m.key) ? `\n${FN_KEY_HINT}` : ''}`}
               onSend={() => sendMacro(m)}
               onEdit={(focus) => openEditor(m.key, focus)}
             />
           ))}
-        </div>
+        </MacroBank>
 
         {/* THE EDITOR — out of flow, standing on the dock's top edge over the key it edits, so
             it moves and covers no control in the dock; non-modal, so Stop TX in the TX strip
@@ -2772,7 +3095,7 @@ export function CwCockpit({
           />
         )}
 
-        <div className="cw-send">
+        <div className="cw-send cw-send-wrap cockpit-txdock-keep">
           {/* THE TURN CUE's lamp, first on the row in a slot of its own width, so what it says
               never moves His Call or Send. A readout: no click, and it sends nothing. */}
           {cueLamp && <CwTurnLamp lamp={cueLamp} window={cue?.window ?? null} />}

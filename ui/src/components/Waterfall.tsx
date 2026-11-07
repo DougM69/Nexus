@@ -11,6 +11,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type Ref } from 'react'
 import { getSpectrumRow } from '../api'
 import { sampleLut, type ColormapName } from '../colormaps'
+import { drawScaleStrip, scaleStripHeight, scaleTicks, SCALE_MIN_GAP_PX } from '../freqScale'
 import {
   agcRange,
   applyGainZero,
@@ -26,6 +27,8 @@ import {
   overlayTextScale,
   WF_DB_SPAN,
   WF_FLOOR_PCT,
+  WF_F_MAX,
+  WF_FLATTEN_FIT_HZ,
   coerceZoomSpan,
   zoomWindow,
   MIN_SPAN,
@@ -37,6 +40,7 @@ import { useWaterfallPalette } from '../waterfallPalette'
 import { ageLabel } from '../waterfallHistory'
 import { createSpectrumRenderer, type SpectrumRenderer, type SpectrumScene } from '../spectrum'
 import { autoRange } from '../spectrum/scaleRange'
+import { audioRowPassband, noiseFloorWindowHz } from '../spectrum/markers'
 import { surfaceGet, surfaceHasOwn, surfaceSet } from '../features/windowScope'
 import { PalettePicker } from './PalettePicker'
 import { MOD_LABEL } from '../platform'
@@ -67,6 +71,8 @@ const ZERO_KEY = 'nexus.waterfall.zero'
  *  after the mode's own, so a span chosen before each mode had its own keeps opening as it did;
  *  nothing writes it, so it can never again carry a pick from one mode into another. */
 const ZOOM_KEY = 'nexus.waterfall.zoom'
+/** The least colour bar, layout px, the legend is shown with (see `legendBarRef`). */
+const LEGEND_BAR_MIN_PX = 12
 /** PER-SURFACE: FT's span (the Operate cockpit and its torn-off copy), the `zoomKey` default. */
 const FT_ZOOM_KEY = 'nexus.waterfall.ft.zoom'
 /** PER-SURFACE: 2D scroll vs 3D stacked-spectrum (3DSS) view. A torn-off 3D display next to a
@@ -299,6 +305,25 @@ interface Props {
    *  WideGraph.cpp:239-240, :616-618). PAINT ONLY: no click, gesture or hit-test reads it. Unset or
    *  null = nothing, so every other mode's waterfall draws exactly as before. */
   shade?: { loHz: number; hiHz: number } | null
+  /** The radio's REPORTED filter width, Hz (`snap.radio.filterWidthHz`): drawn as a thin edge
+   *  marker at each end of the filter that falls inside the view, so the dark stopband above a
+   *  narrow filter reads as the radio's filter rather than as a waterfall cut short. null/absent =
+   *  the radio does not report one, and nothing is drawn (a fallback width would place a filter the
+   *  radio never said it had).
+   *
+   *  PLACEMENT IS `audioRowPassband` (spectrum/markers.ts) for `passbandMode`, the radio's mode:
+   *  on USB/LSB and their data modes the audio runs up from 0 Hz, so the passband is 0..width and
+   *  its upper edge is drawn at the width. The radio never reports its low cut, so the true edge sits
+   *  that far higher (typically 100–300 Hz). Only the sideband modes are placed, and only at widths
+   *  of 1.8 kHz or more (a narrower data filter may sit on a data shift): every other mode, and any
+   *  mode name the allow-list does not know, draws none.
+   *
+   *  DRAWN UNDER EVERYTHING ELSE on the overlay, one pixel wide at half strength in the well's scale
+   *  ink, never filled: it may not hide a decode, a marker or a tag. PAINT ONLY: no click, gesture or
+   *  hit-test reads it. */
+  passbandHz?: number | null
+  /** The radio's mode for `passbandHz`'s placement (the rig's read-back mode, else the sideband). */
+  passbandMode?: string | null
 }
 
 /** One label on the picture: its text at `hz`. `opacity` 0..1 is the host's (a fading tag);
@@ -329,11 +354,13 @@ const SHADE_ALPHA = 127 / 255
 /** The filter edge's line: Qt's yellow, as JS8Call draws it. */
 const SHADE_EDGE = '#ffff00'
 
-// Default FT8/digital view window (Hz) — the FT8 signals live here, now spanning the full 4 kHz
-// spectrum row so stations calling above ~2.9 kHz are visible + clickable. drawRow maps the view
-// onto the row via the DTO's lo/hi, so the row and view share the same span.
+// Default FT8/digital view window (Hz) — the FT8 signals live here, now spanning the full 5 kHz
+// spectrum row (`WF_F_MAX`) so stations calling above ~2.9 kHz are visible + clickable. drawRow
+// maps the view onto the row via the DTO's lo/hi, so the row and view share the same span.
 const F_MIN = 200
-const F_MAX = 4000
+const F_MAX = WF_F_MAX
+/** The filter-edge marker's strength (`passbandHz`): half, so a signal under it still shows. */
+const PASSBAND_ALPHA = 0.5
 
 // Display mapping over the current view window [lo, hi] (defaults = the FT8 view), so
 // the waterfall can zoom into a sub-range of the band.
@@ -387,6 +414,8 @@ export function Waterfall({
   keepRowRemainder = false,
   onRowDoubleClick,
   shade,
+  passbandHz,
+  passbandMode,
 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   // Separate transparent overlay for the axis + Rx/Tx markers, so they are NEVER baked into
@@ -400,7 +429,7 @@ export function Waterfall({
   const [gain, setGain] = useState<number>(() => loadKnob(GAIN_KEY))
   const [zero, setZero] = useState<number>(() => loadKnob(ZERO_KEY))
   // Span/zoom: the displayed audio-band window. 0 = the default Std 0–3 kHz view, -1 = Full
-  // 0–4 kHz, positive = a sub-window centered on the RX marker. Only the SPAN is state; the
+  // 0–5 kHz, positive = a sub-window centered on the RX marker. Only the SPAN is state; the
   // window is DERIVED from (span, RX marker) on every render and never stored.
   //
   // ⚠️ The window used to be `useState` too, and that is issue #115 (akhepcat — "waterfall
@@ -499,6 +528,8 @@ export function Waterfall({
   const keyedRef = useRef(keyed)
   const markerWidthRef = useRef(markerWidthHz)
   const shadeRef = useRef(shade)
+  const passband = audioRowPassband(passbandHz, passbandMode)
+  const passbandRef = useRef(passband)
   const activeRef = useRef(active)
   const rowMsRef = useRef(rowMs)
   const keepRemainderRef = useRef(keepRowRemainder)
@@ -510,6 +541,9 @@ export function Waterfall({
   const lutRef = useRef<Uint8ClampedArray>(lutFor(resolveColormap(palette, theme, night, skin), contrastCurve))
   // live legend readout (updated directly, no React re-render at 8 Hz)
   const dbLabelRef = useRef<HTMLSpanElement>(null)
+  /** The legend's colour bar: under `LEGEND_BAR_MIN_PX` tall (a short waterfall, the legend held off
+   *  the scale) the legend is hidden whole rather than left as a lone "0" that reads as a frequency. */
+  const legendBarRef = useRef<HTMLDivElement>(null)
   // The picture is the spectrum renderer's (ui/src/spectrum). It keeps every row as DATA, the
   // flattened values at the feed's own resolution, each with its own frequency span and the range it
   // was drawn in, and draws through WebGL2 or canvas-2D from that history: a palette, zoom, resize,
@@ -558,6 +592,7 @@ export function Waterfall({
   keyedRef.current = keyed
   markerWidthRef.current = markerWidthHz
   shadeRef.current = shade
+  passbandRef.current = passband
   activeRef.current = active
   rowMsRef.current = rowMs
   keepRemainderRef.current = keepRowRemainder
@@ -715,7 +750,7 @@ export function Waterfall({
     // scale. Refreshed in resize() from the canvas box — see `overlayTextScale` for why the
     // transform alone does not carry the zoom on Chromium.
     let textScale = 1
-    const axisHFor = (h: number) => Math.round((h < 160 ? 14 : 18) * textScale)
+    const axisHFor = (h: number) => scaleStripHeight(h, textScale)
     /** What the renderer draws, read off the refs. No trace: the waterfall fills the canvas above the
      *  frequency-axis strip, which stays the palette floor under the overlay's axis. */
     const scene = (): SpectrumScene => ({
@@ -754,6 +789,8 @@ export function Waterfall({
       cssW = Math.max(1, rect.width)
       cssH = Math.max(1, rect.height)
       textScale = overlayTextScale(rect.width, canvas.offsetWidth)
+      const bar = legendBarRef.current
+      if (bar) bar.parentElement?.toggleAttribute('data-squeezed', bar.clientHeight < LEGEND_BAR_MIN_PX)
       const { dW, dH } = measure(entry)
       // Keep the draw scale fresh even when the pixel size is unchanged.
       scaleX = dW / cssW
@@ -800,7 +837,7 @@ export function Waterfall({
       if (!latch.owns(myGen)) return
       const row = spec.row
       if (!row || row.length === 0) return
-      // The FT8/FT4 waterfall shows the AUDIO passband (0–4000 Hz) and is NOT source-aware, so a
+      // The FT8/FT4 waterfall shows the AUDIO passband (0–5000 Hz) and is NOT source-aware, so a
       // native RF-panadapter row (absolute MHz span, e.g. a native-CI-V Icom scope) would map every
       // column out of range → a flat colormap-floor field. Backend gating stops feeding RF rows in
       // DATA mode, but skip one here too as defense in depth: keep the last audio frame rather than
@@ -828,7 +865,8 @@ export function Waterfall({
       // draw a trace whose shape IS the rig's passband. Flattening at the source would have
       // reached all three. See `flattenRow`'s header.
       if (!flatBuf || flatBuf.length !== nBins) flatBuf = new Float32Array(nBins)
-      flattenRow(row, flatBuf)
+      // The baseline is fitted over 0–4000 Hz only, the span it was measured on (`WF_FLATTEN_FIT_HZ`).
+      flattenRow(row, flatBuf, ((WF_FLATTEN_FIT_HZ - rowLo) / (rowHi - rowLo)) * nBins)
       const frow = flatBuf
       // ⚠️ OUR OWN TX ZEROES THE ROW AT THE SOURCE (operator retest, 2026-08-16: the first
       // dark-band fix darkened only the HISTORY copy, and the live hot path below paints
@@ -859,9 +897,20 @@ export function Waterfall({
       // the noise floor — which is what put the noise at mid-palette. PhoneScope.tsx:414-419 has
       // done it over the visible window since it was written, for the same reason (a loud signal
       // outside the view must not compress what is shown); this is that fix, arriving late.
+      //
+      // ⭐ AND INSIDE THE RADIO'S PASSBAND where it reports one (`noiseFloorWindowHz`, the audio
+      // scope's rule): Full now reaches 5000 Hz, and over a 2.4 kHz filter half of that is stopband,
+      // where the median would land and light the whole passband.
       const binHz = (rowHi - rowLo) / nBins
-      const vLo = Math.max(0, Math.floor((viewLoRef.current - rowLo) / binHz))
-      const vHi = Math.min(nBins, Math.ceil((viewHiRef.current - rowLo) / binHz))
+      const pbNow = passbandRef.current
+      const fw = noiseFloorWindowHz(
+        { lo: viewLoRef.current, hi: viewHiRef.current },
+        pbNow ? { lo: pbNow.loHz, hi: pbNow.hiHz, anchor: pbNow.loHz } : null,
+        false,
+        8 * binHz,
+      )
+      const vLo = Math.max(0, Math.floor((fw.lo - rowLo) / binHz))
+      const vHi = Math.min(nBins, Math.ceil((fw.hi - rowLo) / binHz))
       const visible = vHi - vLo >= 8 ? frow.slice(vLo, vHi) : frow
       const { floor, ceil } = agcRange(visible, WF_FLOOR_PCT)
       // ⚠️ THE AGC FREEZES WHILE TRANSMITTING — the post-TX red band (operator-relayed
@@ -985,25 +1034,22 @@ export function Waterfall({
       // Part of the dark display in either theme (styles.css DISPLAY WELLS) — it used to turn
       // pale in the light theme, a light band across the bottom of a dark picture. The alphas
       // are the old strip's: the ground lets a trace of the floor through, the scale is dimmed.
-      octx.globalAlpha = 0.92
-      octx.fillStyle = ink.ground
-      octx.fillRect(0, wfH, W, AXIS_H)
-      octx.globalAlpha = 0.7
-      octx.fillStyle = ink.scale
-      octx.font = `${10 * textScale}px system-ui, sans-serif`
-      octx.textBaseline = 'middle'
+      // The strip is the one every waterfall and scope draws (`freqScale.ts`): audio hertz at a step
+      // the span and the room choose — 500 Hz on Std and Full, finer when zoomed in, wider apart on
+      // a narrow pane or a large text size.
       const vlo = viewLoRef.current
       const vhi = viewHiRef.current
-      // Sparser labels when narrow; finer when zoomed in (a small window needs ticks).
-      const span = vhi - vlo
-      const labelStep = span <= 800 ? 200 : span <= 1600 ? 500 : W < 280 ? 1000 : 500
-      const first = Math.ceil(vlo / labelStep) * labelStep
-      for (let f = first; f <= vhi; f += labelStep) {
-        const x = freqToX(f, W, vlo, vhi)
-        octx.fillRect(x, wfH, 1, 4)
-        octx.fillText(`${f}`, Math.min(W - 26 * textScale, x + 2), wfH + AXIS_H / 2)
-      }
-      octx.globalAlpha = 1
+      drawScaleStrip(octx, {
+        w: W,
+        top: wfH,
+        h: AXIS_H,
+        marks: scaleTicks(vlo, vhi, W, SCALE_MIN_GAP_PX * textScale).map((f) => ({ x: freqToX(f, W, vlo, vhi), label: `${f}` })),
+        ground: ink.ground,
+        ink: ink.scale,
+        fontPx: 10 * textScale,
+        gfx: 1,
+        text: textScale,
+      })
 
       // (No per-decode callsign labels on the waterfall — WSJT-X keeps the
       // spectrum clean; callsigns live in the Band Activity list. Only the
@@ -1023,6 +1069,19 @@ export function Waterfall({
         tape.forEach((label, i) => {
           if (label) octx.fillText(label, W - 34 * textScale, (wfH * (i + 1)) / 5)
         })
+        octx.globalAlpha = 1
+      }
+
+      // The radio's filter edges, FIRST of everything drawn on the picture so every mark, band and
+      // tag lands over them: one pixel, half strength, never a fill (`passbandHz`). An edge outside
+      // the view (the 0 Hz end of a USB passband, always) is not drawn — never clamped to the edge.
+      const pb = passbandRef.current
+      if (pb) {
+        octx.globalAlpha = PASSBAND_ALPHA
+        octx.fillStyle = ink.scale
+        for (const hz of [pb.loHz, pb.hiHz]) {
+          if (hz > vlo && hz < vhi) octx.fillRect(Math.round(freqToX(hz, W, vlo, vhi)), 0, 1, wfH)
+        }
         octx.globalAlpha = 1
       }
 
@@ -1143,8 +1202,9 @@ export function Waterfall({
       const band = toneBandRef.current
       const shade = band ? `${band.loHz}/${band.hiHz}/${keyedRef.current}` : '-'
       const filter = shadeRef.current
+      const pb = passbandRef.current
       const held = pausedRef.current ? pausedLabels(cssH - axisHFor(cssH)).join('\n') : '-'
-      return `${cssW}|${cssH}|${scaleX}|${scaleY}|${textScale}|${viewLoRef.current}|${viewHiRef.current}|${txOffRef.current}|${rxOffRef.current}|${markerWidthRef.current}|${txRef.current}|${named}|${shade}|${filter ? `${filter.loHz}-${filter.hiHz}` : '-'}|${held}`
+      return `${cssW}|${cssH}|${scaleX}|${scaleY}|${textScale}|${viewLoRef.current}|${viewHiRef.current}|${txOffRef.current}|${rxOffRef.current}|${markerWidthRef.current}|${txRef.current}|${named}|${shade}|${filter ? `${filter.loHz}-${filter.hiHz}` : '-'}|${pb ? `${pb.loHz}-${pb.hiHz}` : '-'}|${held}`
     }
 
     const loop = (now: number) => {
@@ -1531,7 +1591,7 @@ export function Waterfall({
           title={t('waterfall.legend.title')}
         >
           <span className="wf-legend-tick">0</span>
-          <div className="wf-legend-bar" style={{ background: legendGradient }} />
+          <div ref={legendBarRef} className="wf-legend-bar" style={{ background: legendGradient }} />
           <span className="wf-legend-tick">
             <span ref={dbLabelRef}>−40</span>
           </span>

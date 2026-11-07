@@ -121,6 +121,19 @@ pub fn same_call(a: &str, b: &str) -> bool {
     base_call(a) == base_call(b)
 }
 
+/// `to` names `mycall` WHOLE: letter for letter, case ignored, a hashed form's brackets dropped
+/// (`<PJ4/K1ABC>` is PJ4/K1ABC, `<K1ABC>` is K1ABC) and never reduced to a base call, so
+/// `K1ABC/P` is not K1ABC. Never the unresolved `<...>`.
+///
+/// ⚠️ The test for a NEW caller to my CQ, not for a reply inside a contact ([`same_call`]).
+/// WSJT-X 3.0.2 answers a caller to its CQ only when the decode, brackets dropped
+/// (`mainwindow.cpp` 6415), holds `" " + my_callsign() + " "` (CQ: First, 7021; CQ: Max Dist,
+/// 7041), and `for_us` (7276-7285) turns away a caller to "the same base call as ours but
+/// different prefix or suffix". Its partner's replies it takes by base call (7546, 9048-9055).
+pub fn names_whole_call(to: &str, mycall: &str) -> bool {
+    unhash_call(to).eq_ignore_ascii_case(mycall.trim())
+}
+
 /// A valid WSJT-X directed-CQ token: 1–4 letters ("DX", "NA", "POTA", "TEST")
 /// or exactly 3 digits (a kHz QSY like "CQ 040 …").
 fn is_cq_dir(s: &str) -> bool {
@@ -339,6 +352,21 @@ pub fn unhash_call(s: &str) -> &str {
     } else {
         t
     }
+}
+
+/// The call a decoded token names in the LOG — the key a worked-before (B4), dupe or
+/// previous-contacts lookup asks with: [`unhash_call`], upper-cased. `<K1ABC>` is K1ABC and
+/// `<PJ4/K1ABC>` is PJ4/K1ABC, whole, never a base call: WSJT-X drops every `<`/`>` from a
+/// decode before it reads a call off it (`decodedtext.cpp`, `message_.remove
+/// (QRegularExpression {"[<>]"})`) and then matches that call exactly (`WorkedBefore::call_worked`,
+/// `call.toUpper ()`). `None` for the unresolved `<...>` (and an empty token), which names no
+/// station and must match nothing — WSJT-X's `appendWorkedB4` returns on a call with no letter
+/// or digit.
+///
+/// Display keeps the token as sent; only the lookup goes through here.
+pub fn lookup_call(token: &str) -> Option<String> {
+    let c = unhash_call(token);
+    (!c.is_empty() && c != "...").then(|| c.to_ascii_uppercase())
 }
 
 /// Resolve an i3=4 hashed token to the plain call it stands for — but ONLY when the plain form
@@ -732,6 +760,47 @@ impl Msg {
             | Msg::FieldDay { de, .. } => Some(de),
             _ => None,
         }
+    }
+
+    /// This message as the same over sent by `now` where it was made by `was`, the change WSJT-X's
+    /// `genStdMsgs` makes to its Tx messages when My Call changes: the sender a standard message
+    /// names, and each word of free text that is `was`, become `now`, hashed where they were
+    /// hashed. Anything else is left exactly as it is, and so is free text when only one of the
+    /// two calls is standard: a standard frame cannot carry the other, so it is not made one.
+    pub fn signed_by(mut self, was: &str, now: &str) -> Msg {
+        let was = unhash_call(was).trim();
+        let is_was = |c: &str| !was.is_empty() && unhash_call(c).trim().eq_ignore_ascii_case(was);
+        let now_as = |c: &str| {
+            if c.starts_with('<') {
+                format!("<{now}>")
+            } else {
+                now.to_string()
+            }
+        };
+        match &mut self {
+            Msg::Cq { de, .. }
+            | Msg::Grid { de, .. }
+            | Msg::Report { de, .. }
+            | Msg::RReport { de, .. }
+            | Msg::Rr73 { de, .. }
+            | Msg::Rrr { de, .. }
+            | Msg::Bye73 { de, .. }
+            | Msg::FieldDay { de, .. } => {
+                if is_was(de) {
+                    *de = now_as(de);
+                }
+            }
+            Msg::Other(text) => {
+                if is_std_call(was) == is_std_call(now) && text.split_whitespace().any(&is_was) {
+                    *text = text
+                        .split_whitespace()
+                        .map(|w| if is_was(w) { now_as(w) } else { w.to_string() })
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                }
+            }
+        }
+        self
     }
 }
 
@@ -1431,5 +1500,57 @@ mod fidelity_tests {
         assert!(matches!(Msg::parse("CQ FD W9XYZ EN37"), Msg::Cq { .. }));
         assert_eq!(Msg::parse("W9XYZ K2DEF 3A WI").addressee(), Some("W9XYZ"));
         assert_eq!(Msg::parse("W9XYZ K2DEF 3A WI").sender(), Some("K2DEF"));
+    }
+}
+
+#[cfg(test)]
+mod signed_by_tests {
+    use super::*;
+
+    /// The same over signed by the new call: the sender of a standard message, whole or hashed;
+    /// in free text each word that is the old call, when both calls have the same shape. Nothing
+    /// another station sent, and no free text across a change of shape, is touched.
+    #[test]
+    fn an_over_signed_by_the_new_call_changes_only_its_own_call() {
+        let signed = |text: &str, was: &str, now: &str| Msg::parse(text).signed_by(was, now);
+        let cases = [
+            ("W1AW KD9TAW -05", "KD9TAW", "KD9TAW/P", "W1AW KD9TAW/P -05"),
+            ("CQ KD9TAW EN52", "kd9taw", "W9XYZ", "CQ W9XYZ EN52"),
+            ("W1AW <KD9TAW> RR73", "KD9TAW", "W9XYZ", "W1AW <W9XYZ> RR73"),
+            ("KD9TAW W1AW R-07", "KD9TAW", "W9XYZ", "KD9TAW W1AW R-07"),
+            (
+                "W1AW KD9TAW TNX JOE",
+                "KD9TAW",
+                "W9XYZ",
+                "W1AW W9XYZ TNX JOE",
+            ),
+            (
+                "W1AW KD9TAW TNX JOE",
+                "KD9TAW",
+                "PJ4/KD9TAW",
+                "W1AW KD9TAW TNX JOE",
+            ),
+            ("TNX JOE 73", "KD9TAW", "W9XYZ", "TNX JOE 73"),
+        ];
+        for (text, was, now, want) in cases {
+            assert_eq!(signed(text, was, now).to_text(), want, "{text}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod lookup_call_tests {
+    use super::*;
+
+    /// A hashed call is looked up as the call inside its brackets, whole (a compound call keeps
+    /// its prefix, as WSJT-X keeps it); the unresolved `<...>` is no call at all.
+    #[test]
+    fn a_hashed_call_is_looked_up_without_its_brackets_and_an_unresolved_one_never() {
+        assert_eq!(lookup_call("<K1ABC>").as_deref(), Some("K1ABC"));
+        assert_eq!(lookup_call(" <k1abc> ").as_deref(), Some("K1ABC"));
+        assert_eq!(lookup_call("K1ABC").as_deref(), Some("K1ABC"));
+        assert_eq!(lookup_call("<PJ4/K1ABC>").as_deref(), Some("PJ4/K1ABC"));
+        assert_eq!(lookup_call("<...>"), None);
+        assert_eq!(lookup_call(""), None);
     }
 }

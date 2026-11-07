@@ -64,6 +64,12 @@ export type LogSortKey =
   | 'exchSent'
   | 'exchRcvd'
   | 'notes'
+  // A satellite contact's bird and propagation mode (#423).
+  | 'satName'
+  | 'propMode'
+  // The park's name, from the station's park list (#437): the engine sorts it; this reference
+  // holds no park list, and reads every contact's as empty.
+  | 'parkName'
 
 /** What the Logbook list shows: the rows the search and the filter chip let through, in the
  *  order the sorted column gives. The same four fields identify an order everywhere — the view,
@@ -149,7 +155,8 @@ const notesKey = (s: string | null | undefined): string | null => {
 }
 
 /** An upload mark's place: failed, waiting, done; null with no stamp. */
-const UPLOAD_RANK = { failed: 0, waiting: 1, done: 2, none: null } as const
+// `resend` sorts with `none`, as the engine's `upload_rank` does (#163).
+const UPLOAD_RANK = { failed: 0, waiting: 1, done: 2, resend: null, none: null } as const
 
 /** A row's value in a sorted column. Null is "nothing here", which `logOrder` puts last in either
  *  direction, in every column. The band, frequency, time and QSL mark always hold a value. */
@@ -229,6 +236,12 @@ export function sortVal(q: LoggedQso, k: LogSortKey): string | number | null {
       return naturalKey(contestExchange(q, 'rcvd'))
     case 'notes':
       return notesKey(q.comment?.trim() || q.notes)
+    case 'satName':
+      return textOrNull(q.satName)
+    case 'propMode':
+      return textOrNull(q.propMode)
+    case 'parkName':
+      return null
   }
 }
 

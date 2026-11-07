@@ -8,6 +8,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
 import { SettingsPanel, radioPatch } from './SettingsPanel'
+import { EN } from '../i18n/en'
 import type { FeaturesApi } from '../useFeatures'
 import defaultSettings from './__fixtures__/defaultSettings.json'
 
@@ -169,15 +170,25 @@ const openRadioTab = async () => {
 describe("Use this computer's microphone", () => {
   it('is off by default, and on it offers the microphone and the gain', async () => {
     api.get('getAudioDevices').mockImplementation(() =>
-      Promise.resolve({ input: ['in-0', 'Desk Mic'], output: ['out-0'] }),
+      Promise.resolve({
+        input: [
+          { name: 'in-0', label: 'in-0' },
+          { name: 'Desk Mic', label: 'Desk Mic' },
+        ],
+        output: [{ name: 'out-0', label: 'out-0' }],
+      }),
     )
     renderPanel()
     await openRadioTab()
     const sw = await screen.findByRole('switch', { name: "Use this computer's microphone" })
     expect(sw.getAttribute('aria-checked')).toBe('false')
     expect(screen.queryByRole('slider', { name: 'Microphone gain' })).toBeNull()
+    expect(screen.queryByText(EN['settings.audio.pcMic.radioInput'])).toBeNull()
     fireEvent.click(sw)
     expect(sw.getAttribute('aria-checked')).toBe('true')
+    // On, it says where the radio must take this microphone from: a radio keyed on its microphone
+    // input (an FTDX10 in SSB with SSB MOD SOURCE = MIC) keys and sends its own microphone instead.
+    expect(await screen.findByText(EN['settings.audio.pcMic.radioInput'])).toBeTruthy()
     const gain = await screen.findByRole('slider', { name: 'Microphone gain' })
     expect(gain.getAttribute('min')).toBe('-20')
     expect(gain.getAttribute('max')).toBe('20')

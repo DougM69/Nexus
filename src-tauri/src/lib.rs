@@ -63,6 +63,7 @@ mod client_mode;
 mod club_key;
 /// The human DX-cluster node feeds: which run, which should, and how each node is doing.
 mod cluster_nodes;
+mod cluster_share;
 /// Where each command runs when another computer drives this station: at the shack, here,
 /// refused here, starts TX or stops TX.
 mod command_classes;
@@ -131,6 +132,8 @@ mod remote_service;
 /// The Stations on this network window: the Connect to my station… window, on the PC an operator
 /// works from (Windows only). The page in it reaches no command — see the module header.
 mod remote_window;
+#[cfg(test)]
+mod sat_fix_tests;
 /// "Spot me": the operator's own activation to pota.app and the DX cluster, for the desktop and
 /// the Remote page alike.
 mod self_spot;
@@ -141,6 +144,8 @@ mod shack_files;
 /// and a build without it has none of it.
 #[cfg(test)]
 mod shipped_without_the_road_switch;
+/// `get_solar_regions`: NOAA's numbered active regions for the sun disc, held only while current.
+mod solar_regions;
 /// Pins `assetProtocol.scope` to where SSTV images are actually written — they are one fact in
 /// two files, and when they drifted every gallery preview silently went blank.
 #[cfg(test)]
@@ -776,7 +781,7 @@ fn pounce_offer(sp: &tempo_net::cluster::ClusterSpot) {
         mode: propagation::digital_hole_mode(freq_mhz)
             .map(str::to_string)
             .unwrap_or_else(|| {
-                propagation::classify_spot_mode(freq_mhz)
+                propagation::classify_spot_mode(freq_mhz, &sp.dx_call)
                     .label()
                     .to_string()
             }),
@@ -1056,6 +1061,11 @@ fn roster_local_spots(
 /// Lifted out of [`get_need_alerts`] for the same reason `roster_local_spots` was:
 /// `roster_spot_age_secs` on its own cannot show whether the caller applies it, and
 /// this caller did not.
+///
+/// THE GRID is the decode's own, else `credited[call]` ([`tempo_app::engine::Engine::
+/// credited_grid`]): the grid a contact with that station would be credited with, so a station
+/// decoded here without a grid but whose grid it sent on another band, or was logged before,
+/// still scores the grid the log will take.
 fn own_decode_heards(
     stations: &[tempo_app::dto::Station],
     slot_now: u64,
@@ -1063,6 +1073,7 @@ fn own_decode_heards(
     band: &str,
     tier_mode: &str,
     max_age_secs: i64,
+    credited: &std::collections::HashMap<String, String>,
 ) -> Vec<propagation::Heard> {
     stations
         .iter()
@@ -1076,7 +1087,12 @@ fn own_decode_heards(
             freq_mhz: None, // own decodes are band-level here
             admitted_at: None,
             evidence: Some("decoded by YOUR radio on this band".to_string()),
-            grid: s.grid.clone(), // own decode's Maidenhead grid → drives NewGrid
+            // own decode's Maidenhead grid, else the one its contact would be credited with → NewGrid
+            grid: s
+                .grid
+                .clone()
+                .filter(|g| !g.trim().is_empty())
+                .or_else(|| credited.get(&s.call).cloned()),
             // US state hint (drives WAS NewState): FCC baseline refined by this live decode grid —
             // a precise 6-char grid that disagrees with the license means a rover. See us_state_hint.
             us_state: us_state_hint(&s.call, s.grid.as_deref()),
@@ -1141,6 +1157,19 @@ fn start_cluster_feeds(
     health: &SharedHealth,
     restarting: bool,
 ) {
+    // A window still showing the radio picker takes no lease and starts no feed: a settings save
+    // or a callsign restart meanwhile waits for the window to become a station, like the launch.
+    if cluster_held_for_the_picker() {
+        return;
+    }
+    // One login per call on this computer: when another Nexus window holds this call's cluster
+    // logins, this one follows them through the relay and starts no feed of its own.
+    if !is_real_call(mycall) {
+        // No feed starts under this call, so no lease is held for it either.
+        release_cluster_share();
+    } else if cluster_share_of(spots, health).claim(mycall) == cluster_share::Claim::Follow {
+        return;
+    }
     start_cluster_feed(
         spots,
         RBN_CW_HOST,
@@ -1158,6 +1187,105 @@ fn start_cluster_feeds(
         &RBN_DIGITAL_STARTED,
     );
     cluster_nodes::reconcile(spots, health, restarting);
+}
+
+/// This window's part in sharing the cluster logins with the other Nexus windows on this computer
+/// ([`cluster_share`]). Made on the first start of the cluster feeds, whose buffer and health are
+/// the process's one pair.
+static CLUSTER_SHARE: std::sync::OnceLock<cluster_share::Share> = std::sync::OnceLock::new();
+
+fn cluster_share_of(spots: &SharedSpots, health: &SharedHealth) -> &'static cluster_share::Share {
+    CLUSTER_SHARE.get_or_init(|| {
+        cluster_share::Share::new(
+            config_dir_for(None),
+            Arc::new(DesktopShare {
+                spots: spots.clone(),
+                health: health.clone(),
+            }),
+        )
+    })
+}
+
+/// Let go of this window's part in the share: its feeds have stopped and will not start again,
+/// so a window following it takes the logins over rather than wait on a holder with none.
+fn release_cluster_share() {
+    if let Some(share) = CLUSTER_SHARE.get() {
+        share.release();
+    }
+}
+
+/// Hand a spot this window's feed parsed to the windows following it. Nothing before the share
+/// exists, or while no window follows.
+fn share_relay(source: cluster_share::Source, spot: &tempo_net::cluster::ClusterSpot) {
+    if let Some(share) = CLUSTER_SHARE.get() {
+        share.relay(source, spot);
+    }
+}
+
+/// While this window follows another's cluster logins: whether the relay is up, and what the
+/// other window is logged into. `None` when this window holds its own logins (or has none).
+fn cluster_following() -> Option<(bool, cluster_share::HolderStatus)> {
+    CLUSTER_SHARE
+        .get()
+        .and_then(cluster_share::Share::following)
+}
+
+/// The desktop window's side of the share: its spot buffer, health and outbox.
+struct DesktopShare {
+    spots: SharedSpots,
+    health: SharedHealth,
+}
+
+/// This window wants the cluster now: its switch is on, it is not Unassisted, and it has a real
+/// call.
+fn cluster_wanted() -> bool {
+    let c = cluster_nodes::config();
+    c.active && is_real_call(&c.mycall)
+}
+
+impl cluster_share::Hooks for DesktopShare {
+    fn active(&self) -> bool {
+        cluster_wanted()
+    }
+
+    fn status(&self) -> cluster_share::HolderStatus {
+        let feeds = cluster_nodes::feeds();
+        cluster_share::HolderStatus {
+            rbn_connected: self
+                .health
+                .cluster_connected
+                .load(std::sync::atomic::Ordering::Relaxed),
+            nodes_running: !feeds.is_empty(),
+            nodes_connected: feeds.any_connected(),
+            nodes_label: feeds.label(),
+        }
+    }
+
+    fn post(&self, line: String) {
+        CLUSTER_OUTBOX
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push_back(line);
+    }
+
+    fn take(&self, source: cluster_share::Source, spot: &tempo_net::cluster::ClusterSpot) {
+        match source {
+            cluster_share::Source::Rbn => take_rbn_spot(&self.spots, &self.health, spot),
+            cluster_share::Source::Node => take_node_spot(&self.spots, &self.health, spot),
+        }
+    }
+
+    fn next_post(&self) -> Option<String> {
+        CLUSTER_OUTBOX
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pop_front()
+    }
+
+    fn promote(&self) {
+        let c = cluster_nodes::config();
+        start_cluster_feeds(&self.spots, &c.mycall, &c.ssid, &self.health, false);
+    }
 }
 
 /// Spawn one RBN skimmer telnet feed (CW or digital). Once-latched via `started`; each parsed
@@ -1192,29 +1320,10 @@ fn start_cluster_feed(
             &host,
             &call,
             |sp| {
-                // UNASSISTED mode: drop the spot at the door, before the health stamp, the
-                // buffer and Pounce. Checked here rather than only at the start gate so a
-                // mid-event flip takes effect on the very next packet without waiting for a
-                // socket teardown. The feed intentionally stays connected and simply
-                // discards — reconnecting later is what would cost the operator spots.
-                if unassisted() {
-                    return;
-                }
-                hp.cluster_last
-                    .store(now_unix(), std::sync::atomic::Ordering::Relaxed);
-                if let Ok(mut b) = buf.lock() {
-                    // Mark the skimmer origin so a leading "RTTY" comment token can
-                    // UPGRADE the display label (is_rbn_rtty) — trusted only here, on
-                    // the machine-generated RBN wire, never on the human-node path.
-                    let mut s = sp.clone();
-                    s.rbn = true;
-                    pounce_offer(&s);
-                    note_spot_iota(&s);
-                    // RANKED, never plain `push`: the buffer's corroborator cap has to
-                    // choose which voices a re-spotted row keeps, and the Needed board
-                    // admits the row on whether a NEAR voice is among them.
-                    b.push_ranked(s, spotter_evidence_rank);
-                }
+                // Other windows following this one's logins get it first, whatever this
+                // window's own Unassisted switch says: theirs decides for them.
+                share_relay(cluster_share::Source::Rbn, sp);
+                take_rbn_spot(&buf, &hp, sp);
             },
             &CLUSTER_STOP,
             &hp_conn.cluster_connected,
@@ -1787,6 +1896,65 @@ mod aprs_is_session_tests {
     }
 }
 
+/// Take one spot an RBN skimmer feed parsed — this window's own feed, or the holder's through
+/// the relay ([`cluster_share`]): the buffer, Pounce and the health stamps.
+fn take_rbn_spot(buf: &SharedSpots, hp: &SharedHealth, sp: &tempo_net::cluster::ClusterSpot) {
+    // UNASSISTED mode: drop the spot at the door, before the health stamp, the
+    // buffer and Pounce. Checked here rather than only at the start gate so a
+    // mid-event flip takes effect on the very next packet without waiting for a
+    // socket teardown. The feed intentionally stays connected and simply
+    // discards — reconnecting later is what would cost the operator spots.
+    if unassisted() {
+        return;
+    }
+    hp.cluster_last
+        .store(now_unix(), std::sync::atomic::Ordering::Relaxed);
+    if let Ok(mut b) = buf.lock() {
+        // Mark the skimmer origin so a leading "RTTY" comment token can
+        // UPGRADE the display label (is_rbn_rtty) — trusted only here, on
+        // the machine-generated RBN wire, never on the human-node path.
+        let mut s = sp.clone();
+        s.rbn = true;
+        pounce_offer(&s);
+        note_spot_iota(&s);
+        // RANKED, never plain `push`: the buffer's corroborator cap has to
+        // choose which voices a re-spotted row keeps, and the Needed board
+        // admits the row on whether a NEAR voice is among them.
+        b.push_ranked(s, spotter_evidence_rank);
+    }
+}
+
+/// Take one spot a human DX-cluster node parsed — this window's own feed, or the holder's
+/// through the relay ([`cluster_share`]).
+fn take_node_spot(buf: &SharedSpots, hp: &SharedHealth, sp: &tempo_net::cluster::ClusterSpot) {
+    // UNASSISTED mode: drop at the door — see `take_rbn_spot`.
+    if unassisted() {
+        return;
+    }
+    let ts = now_unix();
+    hp.cluster_last
+        .store(ts, std::sync::atomic::Ordering::Relaxed);
+    // Only a PHONE-classed spot proves SSB is actually reaching us — a human
+    // node's feed is mostly CW (RBN relay + human CW), which would otherwise keep
+    // the Phone pill green and hide a phone drought. Classify the same way the
+    // need-matcher does.
+    if matches!(
+        propagation::classify_spot_mode(sp.freq_mhz(), &sp.dx_call),
+        propagation::ModeClass::Phone
+    ) {
+        hp.phone_cluster_last
+            .store(ts, std::sync::atomic::Ordering::Relaxed);
+        hp.phone_spots_seen
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    if let Ok(mut b) = buf.lock() {
+        pounce_offer(sp);
+        note_spot_iota(sp);
+        // Ranked — see `take_rbn_spot`.
+        b.push_ranked(sp.clone(), spotter_evidence_rank);
+    }
+}
+
 /// Start the thread for ONE human DX-cluster node feed (an SSB/phone source), on the flags of
 /// its `cluster_nodes::Feed` — the registry entry that starts, stops and counts it. `call` is the
 /// login identity. Each parsed spot stamps BOTH the aggregate `cluster_last` AND
@@ -1815,32 +1983,9 @@ fn start_human_cluster_feed(
             &host,
             &call,
             |sp| {
-                // UNASSISTED mode: drop at the door — see the RBN callback above.
-                if unassisted() {
-                    return;
-                }
-                let ts = now_unix();
-                hp.cluster_last
-                    .store(ts, std::sync::atomic::Ordering::Relaxed);
-                // Only a PHONE-classed spot proves SSB is actually reaching us — a human
-                // node's feed is mostly CW (RBN relay + human CW), which would otherwise keep
-                // the Phone pill green and hide a phone drought. Classify the same way the
-                // need-matcher does.
-                if matches!(
-                    propagation::classify_spot_mode(sp.freq_mhz()),
-                    propagation::ModeClass::Phone
-                ) {
-                    hp.phone_cluster_last
-                        .store(ts, std::sync::atomic::Ordering::Relaxed);
-                    hp.phone_spots_seen
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                }
-                if let Ok(mut b) = buf.lock() {
-                    pounce_offer(sp);
-                    note_spot_iota(sp);
-                    // Ranked — see the RBN callback above.
-                    b.push_ranked(sp.clone(), spotter_evidence_rank);
-                }
+                // Followers first — see the RBN callback above.
+                share_relay(cluster_share::Source::Node, sp);
+                take_node_spot(&buf, &hp, sp);
             },
             &stop,
             &conn,
@@ -2252,6 +2397,10 @@ struct FeedHealth {
     /// board show "N SSB spots", splitting "SSB isn't arriving" (0) from "arriving but not a
     /// need" (>0 with no phone rows).
     phone_spots_seen: i64,
+    /// This window holds no cluster login of its own: another Nexus window on this computer
+    /// holds them for this call, under its own node list and SSID, and relays its spots here
+    /// ([`cluster_share`]). `cluster` and `phone_cluster` then say what reaches THIS window.
+    cluster_via_other_window: bool,
 }
 
 fn feed_status(started: bool, connected: bool, last: i64, now: i64) -> FeedStatus {
@@ -2318,6 +2467,25 @@ fn get_cluster_nodes() -> cluster_nodes::NodesView {
 fn read_feed_health(health: &SharedHealth) -> FeedHealth {
     use std::sync::atomic::Ordering::Relaxed;
     let now = now_unix();
+    if let Some((relay_up, holder)) = cluster_following() {
+        return FeedHealth {
+            pskr: feed_status(
+                PSKR_STARTED.load(Relaxed),
+                health.pskr_connected.load(Relaxed),
+                health.pskr_last_event.load(Relaxed),
+                now,
+            ),
+            ..followed_feed_health(
+                cluster_wanted(),
+                relay_up,
+                &holder,
+                health.cluster_last.load(Relaxed),
+                health.phone_cluster_last.load(Relaxed),
+                health.phone_spots_seen.load(Relaxed),
+                now,
+            )
+        };
+    }
     // The human DX-cluster nodes (the SSB/phone aggregator): the running feeds drive the
     // started flag, "connected" = ANY node's session up, and the label names only nodes that
     // are — never a started node that is down beside one that is up.
@@ -2349,6 +2517,48 @@ fn read_feed_health(health: &SharedHealth) -> FeedHealth {
         ),
         phone_cluster_host: phone_label,
         phone_spots_seen: health.phone_spots_seen.load(Relaxed),
+        cluster_via_other_window: false,
+    }
+}
+
+/// The cluster pills of a window that follows another window's logins ([`cluster_share`]). They
+/// claim a connection only while the relay is up AND the other window says it is logged in: a
+/// follower holds no session, so its own flags prove nothing. Spot ages are this window's own,
+/// as the relay stamps them on arrival. `pskr` is left off (`off`) for the caller to fill.
+/// `wanted` is this window's own cluster switch (with Unassisted folded in): off, nothing reaches
+/// it, and both pills are off as they are in a window with no cluster at all.
+fn followed_feed_health(
+    wanted: bool,
+    relay_up: bool,
+    holder: &cluster_share::HolderStatus,
+    cluster_last: i64,
+    phone_last: i64,
+    phone_seen: i64,
+    now: i64,
+) -> FeedHealth {
+    FeedHealth {
+        cluster: feed_status(
+            wanted,
+            relay_up && (holder.rbn_connected || holder.nodes_connected),
+            cluster_last,
+            now,
+        ),
+        pskr: feed_status(false, false, 0, now),
+        // While the relay is down nothing is known about the other window's nodes: the pill
+        // stays up, unconnected, rather than vanish as "no node configured".
+        phone_cluster: feed_status(
+            wanted && (!relay_up || holder.nodes_running),
+            relay_up && holder.nodes_connected,
+            phone_last,
+            now,
+        ),
+        phone_cluster_host: if relay_up {
+            holder.nodes_label.clone()
+        } else {
+            None
+        },
+        phone_spots_seen: phone_seen,
+        cluster_via_other_window: true,
     }
 }
 
@@ -2736,6 +2946,213 @@ struct RadioLaunchInfo {
     /// launched without a profile (a fresh chooser launch, not an already-bound relaunch).
     show_picker: bool,
     radios: Vec<RadioLaunchOption>,
+    /// What the picker does when nobody answers it within `auto_seconds`: `"windows"` (open each
+    /// radio in its own window) or `"one"` (this window runs one radio). The operator's last
+    /// answer; `"one"` before there is one, the behaviour before the picker held its radio.
+    auto_choice: &'static str,
+    /// How long the picker waits for an answer before repeating the last one.
+    auto_seconds: u32,
+}
+
+/// How long the radio picker waits before repeating the operator's last answer, so a launch at
+/// sign-in, or one nobody is in the shack for (Remote), still becomes a station.
+const PICKER_AUTO_SECONDS: u32 = 30;
+
+/// The operator's last answer to the radio picker, which its timeout repeats.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PickerChoice {
+    /// "Use one radio": this window, one band-following radio.
+    OneRadio,
+    /// A radio picked: radios in their own windows.
+    Windows,
+}
+
+/// Where the last answer is kept: a one-word file in the BASE profile's folder, which only the
+/// picker reads. Not a setting: nothing in Settings shows or edits it.
+fn picker_choice_path(base_dir: &Path) -> PathBuf {
+    base_dir.join("radio-picker-choice")
+}
+
+/// The last answer, or `None` before the first (or for a file this build cannot read).
+fn read_picker_choice(base_dir: &Path) -> Option<PickerChoice> {
+    match std::fs::read_to_string(picker_choice_path(base_dir))
+        .ok()?
+        .trim()
+    {
+        "one" => Some(PickerChoice::OneRadio),
+        "windows" => Some(PickerChoice::Windows),
+        _ => None,
+    }
+}
+
+/// Keep `choice` as the last answer. Best-effort: a failure only means the timeout repeats an
+/// older answer.
+fn write_picker_choice(base_dir: &Path, choice: PickerChoice) {
+    let word = match choice {
+        PickerChoice::OneRadio => "one",
+        PickerChoice::Windows => "windows",
+    };
+    let _ = std::fs::create_dir_all(base_dir);
+    if let Err(e) = std::fs::write(picker_choice_path(base_dir), word) {
+        eprintln!("tempo: couldn't keep the radio picker's answer: {e}");
+    }
+}
+
+/// What the picker's timeout does for `last`: only a remembered "windows" opens windows; "one
+/// radio", and no answer yet, start this window's radio as the window before the picker held it.
+fn picker_auto_choice(last: Option<PickerChoice>) -> PickerChoice {
+    last.unwrap_or(PickerChoice::OneRadio)
+}
+
+/// Does a launch with these settings, under `profile`, open on the radio picker? Simultaneous radios
+/// on, at least two radios enabled, and no profile on the command line: a fresh launch, not a radio
+/// window the picker already relaunched. The ONE rule, read by the picker itself
+/// ([`radio_launch_info`]) and by the launch's radio start ([`PICKER_HELD_RADIO`]), so the window
+/// that shows the picker is exactly the window whose radio loop waits for it.
+fn opens_on_the_radio_picker(s: &Settings, profile: Option<&str>) -> bool {
+    s.simultaneous_radios && s.radios.iter().filter(|r| r.enabled).count() >= 2 && profile.is_none()
+}
+
+/// The radio loop of a launch that opens on the radio picker, held until the operator answers it.
+///
+/// ⛔ THE PICKER WINDOW DRIVES NO RADIO. It is a chooser on screen for a few seconds; what the
+/// operator picks there is relaunched as its own `--profile r<id>` window ([`choose_radio`]) and this
+/// process exits. Before this hold it ran the whole radio loop meanwhile, unbound: it opened the
+/// base profile's active radio (sharing, or spawning, the rigctld for it) and its monitor spawned a
+/// rigctld for EVERY other radio. The radio window it relaunched then started while those daemons
+/// were still alive, found its own radio's rigctld already answering on its port, and shared it —
+/// a daemon the exiting picker took with it a moment later (on Windows its Job Object kills it with
+/// the process; elsewhere its `Drop`). That window's CAT went silent until the silence watch rebuilt
+/// it minutes later, halting transmit on the way (field log, two radios in two windows). A radio
+/// window already open was touched too: the picker attached to its daemon as one more client.
+///
+/// So the loop starts only when the window becomes a station: "use one radio" ([`use_single_radio`])
+/// releases it, as the single band-following window it always was, and so does the picker's
+/// timeout when it repeats that choice ([`radio_picker_timed_out`]) or a picker that could not be
+/// asked at all ([`radio_picker_unavailable`]). A pick never starts it, and a quit takes it so
+/// nothing can ([`stop_the_radio`]). A launch that does not open on the picker starts its loop
+/// exactly as before, unless its radio is open in another Nexus window ([`tempo_app::radio_claim`]): then the
+/// loop waits here too, and switching this window to a free radio ([`set_active_radio`]) starts it.
+#[cfg(feature = "radio")]
+static PICKER_HELD_RADIO: RadioGate<(SharedEngine, tempo_audio::service::RadioConfig)> =
+    RadioGate::new();
+
+/// The cluster feeds of a launch that opens on the radio picker, held until the window becomes a
+/// station: the same rule ([`opens_on_the_radio_picker`]) and the same answers as
+/// [`PICKER_HELD_RADIO`]. A picker window takes no cluster lease and logs in nowhere: it exits on
+/// a pick, and holding the logins there would hand them over a few seconds later to the radio
+/// window it opened, or win a handover meant for a window that stays. "Use one radio", the
+/// picker's timeout and a picker that could not be asked release it ([`release_held_cluster`]).
+#[cfg(any(feature = "radio", test))]
+static PICKER_HELD_CLUSTER: RadioGate<(SharedSpots, SharedHealth)> = RadioGate::new();
+
+/// Start the cluster feeds from the settings they run under now ([`cluster_nodes::config`]): what
+/// a held cluster does when its window becomes a station, and the launch's start otherwise.
+fn start_cluster_from_config((spots, health): (SharedSpots, SharedHealth)) {
+    let c = cluster_nodes::config();
+    if c.active {
+        start_cluster_feeds(&spots, &c.mycall, &c.ssid, &health, false);
+    }
+}
+
+/// The window is a station now: its cluster, held while the picker was up, starts (or, if the
+/// launch has not reached its cluster start yet, starts the moment it does).
+fn release_held_cluster() {
+    #[cfg(any(feature = "radio", test))]
+    PICKER_HELD_CLUSTER.release(start_cluster_from_config);
+}
+
+/// Is this window's cluster held for the radio picker? Nothing starts it meanwhile.
+fn cluster_held_for_the_picker() -> bool {
+    #[cfg(any(feature = "radio", test))]
+    return PICKER_HELD_CLUSTER.is_held();
+    #[cfg(not(any(feature = "radio", test)))]
+    false
+}
+
+/// Where a [`RadioGate`] is.
+#[cfg(any(feature = "radio", test))]
+enum GateState<T> {
+    /// The launch has not reached its radio start, and nobody has answered.
+    Waiting,
+    /// The launch's radio, waiting for an answer.
+    Held(T),
+    /// Answered: started, or to start the moment the launch gets there.
+    Released,
+    /// The process is quitting. `held`: what was held then never ran.
+    Quit { held: bool },
+}
+
+/// A start that may wait for an answer: [`PICKER_HELD_RADIO`]'s mechanism, generic so its order of
+/// events is tested without a radio.
+#[cfg(any(feature = "radio", test))]
+struct RadioGate<T>(Mutex<GateState<T>>);
+
+#[cfg(any(feature = "radio", test))]
+impl<T> RadioGate<T> {
+    const fn new() -> Self {
+        Self(Mutex::new(GateState::Waiting))
+    }
+
+    fn state(&self) -> std::sync::MutexGuard<'_, GateState<T>> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The launch's start: hold `item` while `must_wait()` says so (the picker is up, or the radio
+    /// is another window's), else `start` it now. A release that landed before the launch got here
+    /// is an answer already given: the launch starts, never waits for a second one. After a quit,
+    /// a launch that would have waited starts nothing; one that would not starts as it always did.
+    fn hold_or_start(&self, must_wait: impl FnOnce() -> bool, item: T, start: impl FnOnce(T)) {
+        let mut state = self.state();
+        let go = match &*state {
+            GateState::Released => true,
+            GateState::Quit { .. } => !must_wait(),
+            GateState::Waiting | GateState::Held(_) => {
+                if must_wait() {
+                    *state = GateState::Held(item);
+                    return;
+                }
+                true
+            }
+        };
+        drop(state);
+        if go {
+            start(item);
+        }
+    }
+
+    /// The answer: start what was held, once. Before the launch gets here, the answer is kept and
+    /// the launch starts on arrival. A second answer, or one after a quit, starts nothing.
+    fn release(&self, start: impl FnOnce(T)) {
+        let mut state = self.state();
+        match std::mem::replace(&mut *state, GateState::Released) {
+            GateState::Held(item) => {
+                drop(state);
+                start(item);
+            }
+            GateState::Waiting | GateState::Released => {}
+            quit @ GateState::Quit { .. } => *state = quit,
+        }
+    }
+
+    /// Is something held, waiting for an answer?
+    fn is_held(&self) -> bool {
+        matches!(&*self.state(), GateState::Held(_))
+    }
+
+    /// A quit: what was held never starts. True when something was held, i.e. nothing ran, and
+    /// true again on every later call: the quit can run `stop_the_radio` twice (the held quit,
+    /// then `quit_cleanup`), and the second must not wait on a loop that never ran either.
+    fn quit(&self) -> bool {
+        let mut state = self.state();
+        let held = match &*state {
+            GateState::Held(_) => true,
+            GateState::Quit { held } => *held,
+            GateState::Waiting | GateState::Released => false,
+        };
+        *state = GateState::Quit { held };
+        held
+    }
 }
 
 /// Tell the frontend whether to show the launch picker, and the radios to offer. Single-radio
@@ -2745,7 +3162,7 @@ fn radio_launch_info(state: State<'_, SharedEngine>) -> Result<RadioLaunchInfo, 
     let eng = engine_lock(&state);
     let s = eng.settings();
     let enabled: Vec<_> = s.radios.iter().filter(|r| r.enabled).collect();
-    let show_picker = s.simultaneous_radios && enabled.len() >= 2 && active_profile().is_none();
+    let show_picker = opens_on_the_radio_picker(s, active_profile());
     let radios = enabled
         .iter()
         .map(|r| RadioLaunchOption {
@@ -2754,9 +3171,15 @@ fn radio_launch_info(state: State<'_, SharedEngine>) -> Result<RadioLaunchInfo, 
             in_use: profile_in_use(&radio_profile_key(r.id)),
         })
         .collect();
+    let auto_choice = match picker_auto_choice(read_picker_choice(&config_dir_for(None))) {
+        PickerChoice::Windows => "windows",
+        PickerChoice::OneRadio => "one",
+    };
     Ok(RadioLaunchInfo {
         show_picker,
         radios,
+        auto_choice,
+        auto_seconds: PICKER_AUTO_SECONDS,
     })
 }
 
@@ -2775,6 +3198,8 @@ fn choose_radio(app: tauri::AppHandle, radio_id: u32) -> Result<(), String> {
         .arg(radio_profile_key(radio_id))
         .spawn()
         .map_err(|e| e.to_string())?;
+    // The answer the picker's timeout repeats next time: radios in their own windows.
+    write_picker_choice(&config_dir_for(None), PickerChoice::Windows);
     // The window on screen right now is the radio picker, not a box the operator sized —
     // `quit_cleanup` must not persist it over the base profile's real geometry (see
     // QUIT_SKIP_GEOMETRY). This exit path never captured geometry before the Cmd+Q fix
@@ -2882,12 +3307,128 @@ fn persist_routing_to_base(live: &Settings) {
 /// behavior. Frontend dismisses the picker after this resolves.
 #[tauri::command(async)]
 fn use_single_radio(state: State<'_, SharedEngine>) -> Result<(), String> {
+    // A radio another Nexus window runs is refused before anything changes: the picker stays, and
+    // so does the operator's simultaneous-radios setting.
+    claim_active_radio(&state)?;
     use_one_radio(
         &state,
         &settings_path(),
         &config_dir_for(None).join("settings.json"),
     );
+    write_picker_choice(&config_dir_for(None), PickerChoice::OneRadio);
+    // The window is a station now: its radio loop, held while the picker was up, starts (or, if
+    // the launch has not reached its radio start yet, starts the moment it does).
+    #[cfg(feature = "radio")]
+    PICKER_HELD_RADIO.release(start_radio_loop);
+    // …and so does its cluster.
+    release_held_cluster();
     Ok(())
+}
+
+/// Claim this window's active radio ([`tempo_app::radio_claim`], by its port): `Err` with the
+/// operator's words when another live Nexus window runs it.
+///
+/// Patient, and OFF the engine lock: the radio is read under the lock, the claim (which may wait a
+/// moment for another window's peek) is made after it is released.
+fn claim_active_radio(engine: &SharedEngine) -> Result<(), String> {
+    let active = {
+        let eng = engine_lock(engine);
+        let s = eng.settings();
+        s.radios.iter().find(|r| r.id == s.active_radio).cloned()
+    };
+    match active {
+        Some(p) => tempo_app::radio_claim::claim_profile_patiently(&p),
+        None => Ok(()),
+    }
+}
+
+/// [`claim_active_radio`] on settings already in hand, at once: for a caller that holds the engine
+/// lock (the launch's radio start, a settings save), which must not sleep.
+fn claim_active_radio_of(s: &Settings) -> Result<(), String> {
+    match s.radios.iter().find(|r| r.id == s.active_radio) {
+        Some(p) => tempo_app::radio_claim::claim_profile(p),
+        None => Ok(()),
+    }
+}
+
+/// Start the held radio loop as this window's station, its radio claimed first. The picker's
+/// timeout and a picker that could not be asked end here; "use one radio" does the same, plus
+/// turning simultaneous radios off.
+fn release_as_station(engine: &SharedEngine) -> Result<(), String> {
+    claim_active_radio(engine)?;
+    #[cfg(feature = "radio")]
+    PICKER_HELD_RADIO.release(start_radio_loop);
+    release_held_cluster();
+    Ok(())
+}
+
+/// Nobody answered the radio picker within [`PICKER_AUTO_SECONDS`]: repeat the last answer and get
+/// out of the way, so a launch at sign-in, or one Remote is waiting on, becomes a station without a
+/// click. "Windows" opens a window for every enabled radio no other window has, then this one
+/// exits (if every radio is open already, it only exits). "One radio", and a station that never
+/// answered the picker, start this window's radio as one window, as the window before the picker
+/// held it did; simultaneous radios stays on, because nobody chose to turn it off.
+#[tauri::command(async)]
+fn radio_picker_timed_out(
+    app: tauri::AppHandle,
+    state: State<'_, SharedEngine>,
+) -> Result<(), String> {
+    let base = config_dir_for(None);
+    match picker_auto_choice(read_picker_choice(&base)) {
+        PickerChoice::Windows => {
+            tempo_core::applog::info(
+                "startup",
+                "radio picker: no answer in time; opening each radio in its own window, as last time",
+            );
+            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+            // A radio another window drives (by its port) is already open: not opened twice.
+            let ids: Vec<(u32, bool)> = engine_lock(&state)
+                .settings()
+                .radios
+                .iter()
+                .filter(|r| r.enabled)
+                .map(|r| (r.id, tempo_app::radio_claim::profile_held_elsewhere(r)))
+                .collect();
+            flush_settings();
+            for (id, held_elsewhere) in ids {
+                let key = radio_profile_key(id);
+                if profile_in_use(&key) || held_elsewhere {
+                    continue; // already open in another window
+                }
+                tempo_core::process::command(&exe)
+                    .arg("--profile")
+                    .arg(key)
+                    .spawn()
+                    .map_err(|e| e.to_string())?;
+            }
+            QUIT_SKIP_GEOMETRY.store(true, std::sync::atomic::Ordering::SeqCst);
+            app.exit(0);
+            Ok(())
+        }
+        PickerChoice::OneRadio => {
+            tempo_core::applog::info(
+                "startup",
+                "radio picker: no answer in time; this window runs one radio, as last time",
+            );
+            release_as_station(&state)
+        }
+    }
+}
+
+/// The window could not ask whether to show the radio picker. Fail toward what the window did
+/// before the picker held its radio: start this window's radio. Logged, because the operator saw
+/// no picker and may wonder why.
+#[tauri::command(async)]
+fn radio_picker_unavailable(state: State<'_, SharedEngine>) -> Result<(), String> {
+    tempo_core::applog::warn(
+        "startup",
+        "radio picker: could not ask whether to show it; starting this window's radio as one window",
+    );
+    let started = release_as_station(&state);
+    if let Err(why) = &started {
+        engine_lock(&state).set_cat_status(Some(false), why.clone());
+    }
+    started
 }
 
 /// "Use one radio", with the files named: this window's settings.json (`own`) and the base config
@@ -2955,6 +3496,329 @@ mod single_radio_tests {
             "and this window's Engine agrees with its file"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+/// The picker window drives no radio until it becomes a station ([`PICKER_HELD_RADIO`]).
+#[cfg(test)]
+mod picker_radio_hold_tests {
+    use super::*;
+
+    /// Two enabled radios, simultaneous radios as given.
+    fn two_radios(simultaneous: bool) -> Settings {
+        let mut s = Settings {
+            simultaneous_radios: simultaneous,
+            ..Settings::default()
+        };
+        s.ensure_radio_profiles();
+        s.add_radio_profile();
+        assert_eq!(s.radios.iter().filter(|r| r.enabled).count(), 2);
+        s
+    }
+
+    /// The rule the picker shows by, and therefore the rule the radio loop waits by.
+    #[test]
+    fn only_a_fresh_launch_with_two_radios_side_by_side_opens_on_the_picker() {
+        assert!(opens_on_the_radio_picker(&two_radios(true), None));
+        // CONTROLS: a radio window the picker relaunched, a hand-named profile, one window that
+        // follows the band, and a station with one radio all start their radio at once.
+        assert!(!opens_on_the_radio_picker(&two_radios(true), Some("r1")));
+        assert!(!opens_on_the_radio_picker(&two_radios(true), Some("hf")));
+        assert!(!opens_on_the_radio_picker(&two_radios(false), None));
+        let mut one = two_radios(true);
+        one.radios.truncate(1);
+        assert!(!opens_on_the_radio_picker(&one, None));
+        // A disabled second radio is not a second radio.
+        let mut off = two_radios(true);
+        off.radios[1].enabled = false;
+        assert!(!opens_on_the_radio_picker(&off, None));
+    }
+
+    /// The field bug: the picker window's radio loop opened radios (and spawned a rigctld for each
+    /// one it monitored) while the operator was choosing; the radio window it relaunched shared one
+    /// of those daemons and lost CAT when the picker exited. The loop must not start until the
+    /// window becomes a station.
+    #[test]
+    fn the_picker_window_starts_no_radio_until_the_operator_answers() {
+        let gate = RadioGate::new();
+        let started = Mutex::new(Vec::new());
+        gate.hold_or_start(|| true, 7, |i| started.lock().unwrap().push(i));
+        assert!(
+            started.lock().unwrap().is_empty(),
+            "the picker is on screen: no radio loop, no rigctld"
+        );
+        // "Use one radio": the window is the single band-following station now.
+        gate.release(|i| started.lock().unwrap().push(i));
+        assert_eq!(*started.lock().unwrap(), vec![7]);
+        // Once: a second press starts nothing more.
+        gate.release(|i| started.lock().unwrap().push(i));
+        assert_eq!(*started.lock().unwrap(), vec![7]);
+    }
+
+    /// Picking a radio relaunches it as its own window and quits this one: the held loop never
+    /// starts, and the quit knows nothing ran (so it does not wait on an unkey from a loop that
+    /// does not exist).
+    #[test]
+    fn a_pick_quits_with_the_radio_never_started() {
+        let gate = RadioGate::new();
+        let started = Mutex::new(Vec::new());
+        gate.hold_or_start(|| true, 7, |i| started.lock().unwrap().push(i));
+        assert!(gate.quit(), "the quit took the held loop");
+        gate.release(|i| started.lock().unwrap().push(i));
+        assert!(
+            started.lock().unwrap().is_empty(),
+            "nothing starts a radio after the quit"
+        );
+    }
+
+    /// CONTROL — every launch that does not open on the picker (one window, a radio window, one
+    /// radio) starts its loop at once, exactly as before, and its quit waits for the unkey.
+    #[test]
+    fn a_launch_without_the_picker_starts_its_radio_at_once() {
+        let gate = RadioGate::new();
+        let started = Mutex::new(Vec::new());
+        gate.hold_or_start(|| false, 7, |i| started.lock().unwrap().push(i));
+        assert_eq!(*started.lock().unwrap(), vec![7]);
+        assert!(
+            !gate.quit(),
+            "a running loop is not held: the quit waits for its unkey"
+        );
+        assert!(!gate.quit(), "and still waits the second time");
+    }
+
+    /// The held quit runs `stop_the_radio` twice (the logbook's held quit, then `quit_cleanup`).
+    /// Both must know the held loop never ran, or the second waits 3 s on a loop that never
+    /// existed.
+    /// What the refused-launch retry asks before it claims: is a loop still waiting?
+    #[test]
+    fn the_gate_says_whether_it_holds_a_loop() {
+        let gate = RadioGate::new();
+        assert!(!gate.is_held());
+        gate.hold_or_start(|| true, 7, |_| panic!("held"));
+        assert!(gate.is_held());
+        gate.release(|_| {});
+        assert!(!gate.is_held(), "released: the retry stops");
+        let gate: RadioGate<u32> = RadioGate::new();
+        gate.hold_or_start(|| true, 7, |_| panic!("held"));
+        gate.quit();
+        assert!(!gate.is_held(), "a quit: the retry stops");
+    }
+
+    #[test]
+    fn a_held_quit_says_never_ran_every_time_it_is_asked() {
+        let gate: RadioGate<u32> = RadioGate::new();
+        gate.hold_or_start(|| true, 7, |_| panic!("held"));
+        assert!(gate.quit());
+        assert!(
+            gate.quit(),
+            "sticky: the second stop_the_radio skips the wait too"
+        );
+        assert!(gate.quit());
+    }
+
+    /// The picker's timeout, or a picker the window could not ask, answering before the launch
+    /// reached its radio start (the logbook still opening): neither changes the picker rule, so the
+    /// gate keeps the answer, and the launch starts on arrival instead of waiting for a second one.
+    #[test]
+    fn an_answer_before_the_launch_reaches_its_radio_is_kept() {
+        let gate = RadioGate::new();
+        let started = Mutex::new(Vec::new());
+        gate.release(|i| started.lock().unwrap().push(i));
+        gate.hold_or_start(|| true, 7, |i| started.lock().unwrap().push(i));
+        assert_eq!(*started.lock().unwrap(), vec![7]);
+    }
+
+    /// A quit before the launch's radio start: a launch that would wait starts nothing; one that
+    /// would not starts as it always did (and the loop sees SHUTDOWN at once).
+    #[test]
+    fn after_a_quit_a_waiting_launch_starts_nothing() {
+        let gate = RadioGate::new();
+        let started = Mutex::new(Vec::new());
+        assert!(!gate.quit());
+        gate.hold_or_start(|| true, 7, |i| started.lock().unwrap().push(i));
+        gate.release(|i| started.lock().unwrap().push(i));
+        assert!(started.lock().unwrap().is_empty());
+        let gate = RadioGate::new();
+        assert!(!gate.quit());
+        gate.hold_or_start(|| false, 8, |i| started.lock().unwrap().push(i));
+        assert_eq!(*started.lock().unwrap(), vec![8]);
+    }
+
+    /// A window refused its launch radio (another window runs it) waits; switching it to a free
+    /// radio starts the loop on THAT radio. The config held since the launch named the refused
+    /// one, and its loop would have opened that radio's daemon (the other window's) first.
+    #[cfg(feature = "radio")]
+    #[test]
+    fn a_held_loop_started_by_a_switch_opens_the_radio_switched_to() {
+        let mut launch = two_radios(false);
+        launch.radios[0].serial_port = "COM4".into();
+        launch.radios[0].rig_model = 1029;
+        launch.radios[1].serial_port = "COM8".into();
+        launch.radios[1].rig_model = 16008;
+        launch.active_radio = launch.radios[0].id;
+        launch.sync_flat_from_active();
+        let mut held = radio_config_for(
+            &launch,
+            &tempo_app::engine::SpectrumFeed::default(),
+            &std::sync::Arc::new(tempo_audio::rxtap::RxTap::new()),
+            &tempo_app::engine::MeterFeed::default(),
+        );
+        held.app_version = "9.9.9".into();
+        held.on_active_profile_change = Some(std::sync::Arc::new(|| {}));
+        assert_eq!((held.serial_port.as_str(), held.rig_model), ("COM4", 1029));
+
+        let mut switched = launch.clone();
+        switched.active_radio = switched.radios[1].id;
+        switched.sync_flat_from_active();
+        let now = radio_config_now(held, &switched);
+        assert_eq!((now.serial_port.as_str(), now.rig_model), ("COM8", 16008));
+        assert_eq!(now.radio_id, switched.radios[1].id);
+        assert_eq!(now.capture_radio_id, Some(switched.radios[1].id));
+        assert_eq!(
+            now.app_version, "9.9.9",
+            "what the launch set afterwards is kept"
+        );
+        assert!(now.on_active_profile_change.is_some());
+    }
+
+    /// The picker's timeout repeats the last answer: windows only when that was the answer; one
+    /// radio otherwise, including a station that never answered (the old start).
+    #[test]
+    fn the_picker_timeout_repeats_the_last_answer() {
+        let dir = std::env::temp_dir().join(format!("nexus-picker-choice-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(read_picker_choice(&dir), None, "never answered");
+        assert_eq!(
+            picker_auto_choice(read_picker_choice(&dir)),
+            PickerChoice::OneRadio
+        );
+        write_picker_choice(&dir, PickerChoice::Windows);
+        assert_eq!(read_picker_choice(&dir), Some(PickerChoice::Windows));
+        assert_eq!(
+            picker_auto_choice(read_picker_choice(&dir)),
+            PickerChoice::Windows
+        );
+        write_picker_choice(&dir, PickerChoice::OneRadio);
+        assert_eq!(
+            picker_auto_choice(read_picker_choice(&dir)),
+            PickerChoice::OneRadio
+        );
+        std::fs::write(picker_choice_path(&dir), "both, please").unwrap();
+        assert_eq!(
+            read_picker_choice(&dir),
+            None,
+            "an unreadable answer is no answer"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// "Use one radio" pressed before the launch reached its radio start (the logbook still
+    /// opening): the launch reads the answer, the flag already off, and starts at once. The release
+    /// found nothing to start, so the loop runs exactly once.
+    #[test]
+    fn use_one_radio_before_the_launch_reaches_its_radio_is_not_lost() {
+        let gate = RadioGate::new();
+        let started = Mutex::new(Vec::new());
+        let mut settings = two_radios(true);
+        settings.simultaneous_radios = false; // what "use one radio" wrote first
+        gate.release(|i| started.lock().unwrap().push(i));
+        gate.hold_or_start(
+            || opens_on_the_radio_picker(&settings, None),
+            7,
+            |i| started.lock().unwrap().push(i),
+        );
+        assert_eq!(*started.lock().unwrap(), vec![7]);
+    }
+
+    /// The wiring no type sees, source-scanned as `quit.rs` scans the same functions: the launch
+    /// starts its radio only through the gate, "use one radio" releases it after the flag is off,
+    /// and the quit takes it before the unkey wait (which it skips only for a loop that never ran).
+    #[test]
+    fn the_launch_the_escape_and_the_quit_all_go_through_the_gate() {
+        let lib = include_str!("lib.rs");
+        let body_of = |sig: &str| {
+            let rest = &lib[lib.find(&format!("\n{sig}")).expect(sig) + 1..];
+            &rest[..rest.find("\n}\n").expect("the end of the function")]
+        };
+        let at = |hay: &str, needle: &str| hay.find(needle).unwrap_or_else(|| panic!("{needle}"));
+
+        let launch = body_of("fn start_on_the_logbook(");
+        assert!(launch.contains("PICKER_HELD_RADIO.hold_or_start("));
+        assert!(
+            !launch.contains("run_radio("),
+            "the launch never starts the loop around the gate"
+        );
+        assert!(body_of("fn start_radio_loop(").contains("run_radio("));
+
+        let escape = body_of("fn use_single_radio(");
+        assert!(
+            at(escape, "claim_active_radio(&state)?") < at(escape, "use_one_radio(")
+                && at(escape, "use_one_radio(") < at(escape, "PICKER_HELD_RADIO.release("),
+            "the refusal comes before anything changes; the release after the flag is off"
+        );
+        let station = body_of("fn release_as_station(");
+        assert!(
+            at(station, "claim_active_radio(engine)?") < at(station, "PICKER_HELD_RADIO.release(")
+        );
+        let timed_out = body_of("fn radio_picker_timed_out(");
+        assert!(timed_out.contains("release_as_station(&state)"));
+        assert!(body_of("fn radio_picker_unavailable(").contains("release_as_station(&state)"));
+
+        // The guard: the launch claims its radio before it starts, and a switch is refused before
+        // the engine is touched.
+        let launch_gate = &launch[at(launch, "PICKER_HELD_RADIO.hold_or_start(")..];
+        assert!(
+            at(launch_gate, "claim_active_radio_of(eng.settings())")
+                < at(launch_gate, "start_radio_loop")
+        );
+        let switch = body_of("fn set_active_radio(");
+        assert!(
+            at(switch, "profile_held_elsewhere")
+                < at(switch, "return Err(tempo_app::radio_claim::REFUSAL")
+                && at(switch, "return Err(tempo_app::radio_claim::REFUSAL")
+                    < at(switch, "eng.set_active_radio(id)"),
+            "refused, in the operator's words, before the engine is touched"
+        );
+
+        // A launch refused its radio asks again on a timer, and starts on the radio the settings
+        // name THEN (another window closed, or a save moved this window's radio to a free port).
+        assert!(
+            at(launch_gate, "eng.set_cat_status(Some(false), why)")
+                < at(launch_gate, "retry_the_refused_radio(retry_engine)")
+        );
+        let retry = body_of("fn retry_the_refused_radio(");
+        assert!(
+            at(retry, "PICKER_HELD_RADIO.is_held()") < at(retry, "claim_active_radio(&engine)")
+                && at(retry, "claim_active_radio(&engine)") < at(retry, ".release(|(engine, cfg)|")
+        );
+        // N2: the settings the loop starts on are read inside the release, not before it.
+        let release_closure = &retry[at(retry, ".release(|(engine, cfg)|")..];
+        assert!(
+            at(release_closure, "engine_lock(&engine).settings().clone()")
+                < at(release_closure, "radio_config_now(cfg, &now)")
+        );
+        // N5 / M1: the switch reserves the radio off the lock and moves the claim right before
+        // the engine switches.
+        assert!(
+            at(switch, "tentative_profile(p, true)?")
+                < at(switch, "let mut eng = engine_lock(&state);")
+                && at(switch, "commit_if_switching(reserved, eng.settings(), id)")
+                    < at(switch, "eng.set_active_radio(id)")
+        );
+
+        // A settings save: refused before it is applied, and the claim moved after.
+        let save = body_of("fn save_and_publish(");
+        assert!(
+            at(save, "eng.radio_claim_a_save_refuses(") < at(save, "eng.apply_settings(settings)")
+                && at(save, "eng.apply_settings(settings)")
+                    < at(save, "claim_active_radio_of(eng.settings())")
+        );
+
+        let stop = body_of("fn stop_the_radio() {");
+        assert!(
+            at(stop, "SHUTDOWN.store(true") < at(stop, "PICKER_HELD_RADIO.quit()")
+                && at(stop, "PICKER_HELD_RADIO.quit()") < at(stop, "SHUTDOWN_DONE.load(")
+        );
     }
 }
 
@@ -4137,6 +5001,545 @@ mod lotw_batch_tests {
 }
 
 #[cfg(test)]
+mod lotw_location_tests {
+    use super::durable_command_tests::engine_on_store;
+    use super::*;
+    use crate::remote_service::stored_log_tests::StoredLog;
+    use tempo_app::settings::StationProfile;
+    use tempo_core::logbook::{RecordId, UploadOutcome};
+
+    /// A store-backed station (K2DEF in FN31, Station Location `station_location`) with a Portable
+    /// profile (K2DEF/P in FN42, location "Portable"), a Club profile (W2CLB in FN30, location
+    /// "Club") and Home naming none, and five contacts logged under them.
+    fn station(tag: &str, station_location: &str) -> (PathBuf, SharedEngine) {
+        let (dir, engine) = engine_on_store(tag, 0);
+        {
+            let mut eng = engine_lock(&engine);
+            let mut s = eng.settings().clone();
+            s.lotw_station_location = station_location.into();
+            eng.apply_settings(s);
+            for (name, call, grid, location) in [
+                ("Portable", "K2DEF/P", "FN42", "Portable"),
+                ("Club", "W2CLB", "FN30", "Club"),
+            ] {
+                eng.save_station_profile(StationProfile {
+                    name: name.into(),
+                    call: call.into(),
+                    grid: grid.into(),
+                    lotw_location: location.into(),
+                    ..StationProfile::default()
+                })
+                .expect("the profile is saved");
+            }
+        }
+        let mut adif = String::new();
+        for (i, (call, station, grid)) in [
+            ("K1POR", "K2DEF/P", "FN42"),
+            ("K1HOM", "K2DEF", "FN31"),
+            ("K1CLB", "W2CLB", "FN30"),
+            ("K2POR", "K2DEF/P", "FN42"),
+            ("K2HOM", "K2DEF", "FN31"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            adif.push_str(&format!(
+                "<CALL:5>{call}<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20261020<TIME_ON:6>12000{i}\
+                 <STATION_CALLSIGN:{}>{station}<MY_GRIDSQUARE:4>{grid}<EOR>\n",
+                station.len()
+            ));
+        }
+        tempo_app::logwrite::import_adif(&engine, &adif)
+            .0
+            .expect("the contacts are imported");
+        (dir, engine)
+    }
+
+    fn id_of(engine: &SharedEngine, call: &str) -> RecordId {
+        engine
+            .stored_log()
+            .iter()
+            .find(|r| r.call == call)
+            .and_then(|r| r.id)
+            .expect("logged")
+    }
+
+    /// The LoTW outcome stamped on each contact, by call, in the order asked.
+    fn stamped(engine: &SharedEngine, calls: &[&str]) -> Vec<Option<UploadOutcome>> {
+        let log = engine.stored_log();
+        calls
+            .iter()
+            .map(|c| {
+                log.iter()
+                    .find(|r| r.call == *c)
+                    .and_then(|r| r.upload.lotw.as_ref().map(|s| s.outcome))
+            })
+            .collect()
+    }
+
+    /// Each TQSL run: the Station Location it was given (`-l`) and the calls in its file.
+    type Runs = Vec<(Option<String>, Vec<String>)>;
+
+    fn run_of(args: &[String]) -> (Option<String>, Vec<String>) {
+        let location = args
+            .iter()
+            .position(|a| a == "-l")
+            .map(|at| args[at + 1].clone());
+        let file = std::fs::read_to_string(args.last().expect("the batch file"))
+            .expect("TQSL can read it");
+        let calls = file
+            .split("<CALL:5>")
+            .skip(1)
+            .map(|f| f[..5].to_string())
+            .collect();
+        (location, calls)
+    }
+
+    fn calls(v: &[&str]) -> Vec<String> {
+        v.iter().map(|c| c.to_string()).collect()
+    }
+
+    /// ★ Each contact is signed with the Station Location of the profile it was logged under, in
+    /// one TQSL run per location; a contact of a profile naming none (Home) with the station's.
+    /// Every contact is stamped with its own run's outcome.
+    #[test]
+    fn each_contact_is_signed_with_its_profiles_location() {
+        let (dir, engine) = station("lotw-profile-locations", "Home");
+        let mut runs: Runs = Vec::new();
+        let report = lotw_upload_batch_with(&engine, LotwPick::Unsent, true, |_, args| {
+            runs.push(run_of(args));
+            Ok((0, String::new()))
+        })
+        .expect("the upload ran");
+        assert_eq!(
+            runs,
+            vec![
+                (Some("Portable".into()), calls(&["K1POR", "K2POR"])),
+                (Some("Home".into()), calls(&["K1HOM", "K2HOM"])),
+                (Some("Club".into()), calls(&["K1CLB"])),
+            ]
+        );
+        assert_eq!((report.dispatched, report.outcome.as_str()), (5, "pending"));
+        let all = ["K1POR", "K1HOM", "K1CLB", "K2POR", "K2HOM"];
+        assert_eq!(
+            stamped(&engine, &all),
+            vec![Some(UploadOutcome::Pending); 5]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A run TQSL refuses (the Club location is not in this TQSL) stamps its own contacts with the
+    /// refusal, and only them; the others are sent. The screen reads the refusal, and the
+    /// connection log names the location it came from.
+    #[test]
+    fn a_refused_location_stamps_only_its_own_contacts() {
+        let (dir, engine) = station("lotw-profile-refused", "Home");
+        let report = lotw_upload_batch_with(&engine, LotwPick::Unsent, true, |_, args| {
+            Ok(match run_of(args).0.as_deref() {
+                Some("Club") => (5, "Error: station location 'Club' not found".into()),
+                _ => (0, String::new()),
+            })
+        })
+        .expect("the upload ran");
+        assert_eq!(
+            (report.dispatched, report.outcome.as_str()),
+            (5, "authfail")
+        );
+        let sent = Some(UploadOutcome::Pending);
+        assert_eq!(
+            stamped(&engine, &["K1POR", "K1HOM", "K1CLB", "K2POR", "K2HOM"]),
+            vec![sent, sent, Some(UploadOutcome::AuthFail), sent, sent]
+        );
+        assert!(
+            get_connection_log().iter().any(|e| e.connector == "LoTW"
+                && e.level == "error"
+                && e.message.contains("(Station Location Club)")),
+            "the connection log names the location"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Two profiles with the same call and grid (K2DEF/P in FN42) that name different locations:
+    /// their contact is not guessed. It is signed with the Station Location in Settings, and the
+    /// report the operator reads counts it. A contact no profile fits is counted too. CONTROL:
+    /// while one profile alone fits, its location signs and nothing is counted.
+    #[test]
+    fn a_contact_two_profiles_fit_is_signed_as_settings_say_and_counted() {
+        let (dir, engine) = station("lotw-profile-tie", "Home");
+        let upload = |call: &str| {
+            let mut runs: Runs = Vec::new();
+            let report = lotw_upload_batch_with(
+                &engine,
+                LotwPick::Ids(vec![id_of(&engine, call)]),
+                true,
+                |_, args| {
+                    runs.push(run_of(args));
+                    Ok((0, String::new()))
+                },
+            )
+            .expect("the upload ran");
+            (runs, report.location_tie, report.location_unmatched)
+        };
+        assert_eq!(
+            upload("K2POR"),
+            (vec![(Some("Portable".into()), calls(&["K2POR"]))], 0, 0),
+            "one profile fits: its location, nothing to tell"
+        );
+        engine_lock(&engine)
+            .save_station_profile(StationProfile {
+                name: "Portable B".into(),
+                call: "K2DEF/P".into(),
+                grid: "FN42AB".into(),
+                lotw_location: "Portable B".into(),
+                ..StationProfile::default()
+            })
+            .expect("the profile is saved");
+        assert_eq!(
+            upload("K1POR"),
+            (vec![(Some("Home".into()), calls(&["K1POR"]))], 1, 0),
+            "a tie: the station's location, counted"
+        );
+        tempo_app::logwrite::import_adif(
+            &engine,
+            "<CALL:5>K3OLD<BAND:3>20m<MODE:3>FT8<QSO_DATE:8>20261020<TIME_ON:6>130000\
+             <STATION_CALLSIGN:7>K2DEF/P<MY_GRIDSQUARE:4>EM10<EOR>\n",
+        )
+        .0
+        .expect("imported");
+        assert_eq!(
+            upload("K3OLD"),
+            (vec![(Some("Home".into()), calls(&["K3OLD"]))], 0, 1),
+            "no profile fits: the station's location, counted"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// With no Station Location in Settings, contacts whose profiles name one are signed; a batch
+    /// with a contact that needs the station's own is refused before TQSL runs, with today's words,
+    /// and nothing is stamped. CONTROL: no profile naming a location refuses as it always did.
+    #[test]
+    fn the_stations_own_location_is_needed_only_by_its_own_contacts() {
+        let (dir, engine) = station("lotw-profile-no-station", "");
+        let ported = vec![id_of(&engine, "K1POR"), id_of(&engine, "K1CLB")];
+        let mut runs: Runs = Vec::new();
+        lotw_upload_batch_with(&engine, LotwPick::Ids(ported), true, |_, args| {
+            runs.push(run_of(args));
+            Ok((0, String::new()))
+        })
+        .expect("only profile locations are needed");
+        assert_eq!(
+            runs,
+            vec![
+                (Some("Portable".into()), calls(&["K1POR"])),
+                (Some("Club".into()), calls(&["K1CLB"])),
+            ]
+        );
+        let mut ran = false;
+        let refused = lotw_upload_batch_with(&engine, LotwPick::Unsent, true, |_, _| {
+            ran = true;
+            Ok((0, String::new()))
+        });
+        assert_eq!(refused.unwrap_err(), LOTW_NO_LOCATION);
+        assert!(!ran, "TQSL never ran");
+        assert_eq!(stamped(&engine, &["K1HOM", "K2POR"]), vec![None, None]);
+
+        let (dir2, plain) = engine_on_store("lotw-profile-none-named", 1);
+        let refused = lotw_upload_batch_with(&plain, LotwPick::Unsent, true, |_, _| {
+            panic!("TQSL never runs")
+        });
+        assert_eq!(refused.unwrap_err(), LOTW_NO_LOCATION);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir2);
+    }
+
+    /// A later TQSL run that cannot run at all (TQSL gone or timed out) after an earlier run sent
+    /// its contacts: the report keeps the earlier run's outcome, and counts the contacts left
+    /// unsent with why; the runs after it do not start, and nothing of theirs is stamped. CONTROL:
+    /// the first run failing is the error, as it always was.
+    #[test]
+    fn a_later_run_that_fails_keeps_what_the_earlier_runs_sent() {
+        let (dir, engine) = station("lotw-profile-later-error", "Home");
+        let mut ran = 0;
+        let report = lotw_upload_batch_with(&engine, LotwPick::Unsent, true, |_, _| {
+            ran += 1;
+            if ran == 2 {
+                Err("TQSL did not answer in time".into())
+            } else {
+                Ok((0, String::new()))
+            }
+        })
+        .expect("the earlier run's report");
+        assert_eq!(ran, 2, "the run after the failure does not start");
+        assert_eq!(
+            (report.dispatched, report.outcome.as_str()),
+            (2, "pending"),
+            "the Portable run went"
+        );
+        assert_eq!(
+            (report.unsent_after_error, report.unsent_error.as_deref()),
+            (3, Some("TQSL did not answer in time")),
+            "Home's two and Club's one were not sent"
+        );
+        let sent = Some(UploadOutcome::Pending);
+        assert_eq!(
+            stamped(&engine, &["K1POR", "K2POR", "K1HOM", "K2HOM", "K1CLB"]),
+            vec![sent, sent, None, None, None]
+        );
+        assert!(
+            get_connection_log().iter().any(|e| e.connector == "LoTW"
+                && e.message.contains("3 contact(s) not sent")
+                && e.message.contains("TQSL did not answer in time")),
+            "the connection log says what was left"
+        );
+
+        let (dir2, first) = station("lotw-profile-first-error", "Home");
+        let failed = lotw_upload_batch_with(&first, LotwPick::Unsent, true, |_, _| {
+            Err("TQSL is not installed".into())
+        });
+        assert_eq!(failed.unwrap_err(), "TQSL is not installed");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir2);
+    }
+
+    /// A later run TQSL signed whose stamps could not be shown on disk (another program holds the
+    /// database's write lock past every retry): its contacts went to LoTW, so the report counts
+    /// them as sent and says their mark was not confirmed, and counts as unsent only the runs
+    /// after it, which do not start. The disk refused their stamp here, so they stay owed and go
+    /// again with the next upload. CONTROL: the earlier run is reported and stamped as before.
+    #[test]
+    fn a_later_run_signed_but_not_confirmed_on_disk_is_counted_as_sent() {
+        let (dir, engine) = station("lotw-profile-later-unconfirmed", "Home");
+        let db = tempo_core::logbook::migrate::database_path(&dir.join("log.adi"));
+        let mut hold = None;
+        let mut ran = 0;
+        let report = lotw_upload_batch_with(&engine, LotwPick::Unsent, true, |_, _| {
+            ran += 1;
+            if ran == 2 {
+                hold = Some(
+                    tempo_core::logbook::sqlite::WriteHold::take(&db).expect("hold the write lock"),
+                );
+            }
+            Ok((0, String::new()))
+        })
+        .expect("the earlier run's report");
+        drop(hold);
+        assert_eq!(ran, 2, "the run after it does not start");
+        assert_eq!(
+            (report.dispatched, report.outcome.as_str()),
+            (4, "pending"),
+            "the Portable run and the Home run went"
+        );
+        assert_eq!(
+            (report.unconfirmed_after_error, report.unsent_after_error),
+            (2, 1),
+            "Home's two went, unconfirmed; only Club's was not sent"
+        );
+        assert!(
+            report.unsent_error.is_some(),
+            "why the stamp was not confirmed"
+        );
+        // The stamps as the log holds them now, without waiting for the write the disk refused:
+        // Home's were refused, so they are not stamped and stay owed.
+        let rows = engine_lock(&engine).log_rows();
+        let mut held = Vec::new();
+        rows.each_record(std::time::Duration::ZERO, &mut |r| {
+            held.push((r.call.clone(), r.upload.lotw.as_ref().map(|s| s.outcome)));
+            std::ops::ControlFlow::Continue(())
+        })
+        .expect("the store reads");
+        let sent = Some(UploadOutcome::Pending);
+        let of = |call: &str| held.iter().find(|(c, _)| c == call).map(|(_, o)| *o);
+        assert_eq!(
+            ["K1POR", "K2POR", "K1HOM", "K2HOM", "K1CLB"].map(of),
+            [sent, sent, None, None, None].map(Some)
+        );
+        assert!(
+            get_connection_log()
+                .iter()
+                .any(|e| e.connector == "LoTW" && e.message.contains("2 contact(s) went to LoTW")),
+            "the connection log says the signed run went"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A later run TQSL REFUSED (a rejection, or a Station Location it does not know) whose
+    /// refusal mark could not be shown on disk: nothing of it went to LoTW, so the report shows
+    /// the refusal and counts none of it as gone; only the runs after it, which do not start, are
+    /// unsent. CONTROL: the exit-0 case above still counts its run as gone.
+    #[test]
+    fn a_later_run_tqsl_refused_and_not_confirmed_on_disk_is_never_counted_as_gone() {
+        for (code, outcome) in [(3, "rejected"), (5, "authfail")] {
+            let (dir, engine) = station(&format!("lotw-profile-later-refused-{code}"), "Home");
+            let db = tempo_core::logbook::migrate::database_path(&dir.join("log.adi"));
+            let mut hold = None;
+            let mut ran = 0;
+            let report = lotw_upload_batch_with(&engine, LotwPick::Unsent, true, |_, _| {
+                ran += 1;
+                if ran == 2 {
+                    hold = Some(
+                        tempo_core::logbook::sqlite::WriteHold::take(&db)
+                            .expect("hold the write lock"),
+                    );
+                    // Exit 5 with these words is a Station Location TQSL does not know.
+                    return Ok((code, "Station Location Home not found".into()));
+                }
+                Ok((0, String::new()))
+            })
+            .expect("the earlier run's report");
+            drop(hold);
+            assert_eq!(ran, 2, "exit {code}: the run after it does not start");
+            assert_eq!(
+                report.outcome, outcome,
+                "exit {code}: the refusal is what the screen reads"
+            );
+            assert_eq!(
+                (report.unconfirmed_after_error, report.unsent_after_error),
+                (0, 1),
+                "exit {code}: none of the refused run went; only Club's was not sent"
+            );
+            let refused = format!(
+                "TQSL refused the 2 contact(s) of the run with Station Location Home ({outcome})"
+            );
+            assert!(
+                get_connection_log()
+                    .iter()
+                    .any(|e| e.connector == "LoTW" && e.message.contains(&refused)),
+                "exit {code}: the connection log says the run was refused, not that it went"
+            );
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// A Station Location name TQSL could read as an option, from Settings or from a profile,
+    /// never reaches TQSL: that run is refused before TQSL starts, says why, and its contacts and
+    /// the later runs' stay unsent. CONTROL: the runs before it go as usual.
+    #[test]
+    fn a_station_location_that_reads_as_an_option_never_reaches_tqsl() {
+        let upload = |engine: &SharedEngine| {
+            let mut runs: Runs = Vec::new();
+            let report = lotw_upload_batch_with(engine, LotwPick::Unsent, true, |_, args| {
+                assert!(
+                    !args
+                        .iter()
+                        .any(|a| a.starts_with("-H") || a.starts_with("-C")),
+                    "no dashed name in TQSL's arguments: {args:?}"
+                );
+                runs.push(run_of(args));
+                Ok((0, String::new()))
+            })
+            .expect("the earlier runs' report");
+            let locations: Vec<Option<String>> = runs.into_iter().map(|(l, _)| l).collect();
+            (report, locations)
+        };
+
+        // The Settings field: the Home run is refused, Club's after it never starts.
+        let (dir, engine) = station("lotw-profile-dashed-settings", "-Home");
+        let (report, locations) = upload(&engine);
+        assert_eq!(locations, vec![Some("Portable".to_string())]);
+        assert_eq!((report.dispatched, report.outcome.as_str()), (2, "pending"));
+        assert_eq!(report.unsent_after_error, 3, "Home's two and Club's one");
+        assert!(
+            report
+                .unsent_error
+                .as_deref()
+                .is_some_and(|e| e.contains("\"-Home\"")),
+            "the refusal names the location: {:?}",
+            report.unsent_error
+        );
+        let sent = Some(UploadOutcome::Pending);
+        assert_eq!(
+            stamped(&engine, &["K1POR", "K2POR", "K1HOM", "K2HOM", "K1CLB"]),
+            vec![sent, sent, None, None, None]
+        );
+
+        // A profile's field: the Club run, last, is refused; Portable and Home go.
+        let (dir2, engine2) = station("lotw-profile-dashed-profile", "Home");
+        let club = engine_lock(&engine2)
+            .settings()
+            .station_profiles
+            .iter()
+            .find(|p| p.name == "Club")
+            .cloned()
+            .expect("the Club profile");
+        engine_lock(&engine2)
+            .save_station_profile(StationProfile {
+                lotw_location: "-Club".into(),
+                ..club
+            })
+            .expect("the profile is saved");
+        let (report, locations) = upload(&engine2);
+        assert_eq!(
+            locations,
+            vec![Some("Portable".to_string()), Some("Home".to_string())]
+        );
+        assert_eq!((report.dispatched, report.outcome.as_str()), (4, "pending"));
+        assert_eq!(report.unsent_after_error, 1, "Club's one");
+        assert!(
+            report
+                .unsent_error
+                .as_deref()
+                .is_some_and(|e| e.contains("\"-Club\"")),
+            "the refusal names the location: {:?}",
+            report.unsent_error
+        );
+        assert_eq!(stamped(&engine2, &["K1CLB"]), vec![None]);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&dir2);
+    }
+
+    /// Signing from the ADIF, a contact no profile tells apart is signed from the call and grid in
+    /// its own record, and the report says so, for the screen's words; with a named Station
+    /// Location it does not. CONTROL: the one-profile contact is signed with its profile's.
+    #[test]
+    fn the_report_says_how_a_contact_no_profile_told_apart_was_signed() {
+        let (dir, engine) = station("lotw-profile-adif-fallback", "Home");
+        engine_lock(&engine)
+            .save_station_profile(StationProfile {
+                name: "Portable B".into(),
+                call: "K2DEF/P".into(),
+                grid: "FN42AB".into(),
+                lotw_location: "Portable B".into(),
+                ..StationProfile::default()
+            })
+            .expect("the profile is saved");
+        let upload = |engine: &SharedEngine, calls_: &[&str]| {
+            let ids = calls_.iter().map(|c| id_of(engine, c)).collect();
+            let mut runs: Runs = Vec::new();
+            let r = lotw_upload_batch_with(engine, LotwPick::Ids(ids), true, |_, args| {
+                runs.push(run_of(args));
+                Ok((0, String::new()))
+            })
+            .expect("the upload ran");
+            (runs, r.location_tie, r.location_from_adif)
+        };
+        assert_eq!(
+            upload(&engine, &["K1POR"]),
+            (vec![(Some("Home".into()), calls(&["K1POR"]))], 1, false),
+            "a named Station Location signs it"
+        );
+        {
+            let mut eng = engine_lock(&engine);
+            let mut s = eng.settings().clone();
+            s.lotw_use_adif_location = true;
+            eng.apply_settings(s);
+        }
+        assert_eq!(
+            upload(&engine, &["K2POR", "K1CLB"]),
+            (
+                vec![
+                    (None, calls(&["K2POR"])),
+                    (Some("Club".into()), calls(&["K1CLB"]))
+                ],
+                1,
+                true
+            ),
+            "signed from the ADIF, and said so"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
 mod logbook_startup_tests {
     use super::durable_command_tests::{by_command, card_at, engine_on_store, id_at};
     use super::*;
@@ -4702,8 +6105,12 @@ mod logbook_startup_tests {
             !held.contains("drop(eng)") && !held.contains("\n    }\n"),
             "and held until it: the attach is in the same block, with nothing releasing it"
         );
+        // The radio loop's only start in the launch is the picker gate: `run_radio(` lives in
+        // `start_radio_loop`, which the gate calls from here or later from "use one radio". A loop
+        // is held only from inside `hold_or_start`, which runs after the attach, so no release can
+        // start one before the attach either.
         let writers = [
-            "run_radio(",
+            "PICKER_HELD_RADIO.hold_or_start(",
             "resume_field_day(",
             "set_source(SourceKind::Companion)",
             "sync_qrz_since(",
@@ -4724,7 +6131,7 @@ mod logbook_startup_tests {
             assert!(attach < at(start, w), "`{w}` starts after the attach");
         }
         assert!(
-            at(start, "resume_field_day(") < at(start, "run_radio("),
+            at(start, "resume_field_day(") < at(start, "PICKER_HELD_RADIO.hold_or_start("),
             "Field Day is resumed, or given up, before the radio loop starts"
         );
         let finish = body_of(src, "fn finish_launch(");
@@ -7988,6 +9395,18 @@ async fn get_snapshot(
     .await
 }
 
+/// The received decodes a decode pane missed, slots `from_slot..=to_slot`, from the history the
+/// engine keeps (#452, `Engine::decode_refill`). A READ: it decides no alert, drains nothing and
+/// changes nothing the sequencer reads; the pane draws what it returns as history.
+#[tauri::command]
+async fn get_decode_refill(
+    state: State<'_, SharedEngine>,
+    from_slot: u64,
+    to_slot: u64,
+) -> Result<tempo_app::dto::DecodeRefill, String> {
+    with_engine(&state, move |eng| eng.decode_refill(from_slot, to_slot)).await
+}
+
 /// The operator's area filter for the needed-station alerts (`alertContinents`,
 /// `alertEntities`) as the entity names it admits, by the country file's continent table; `None`
 /// for no filter, the default.
@@ -8438,7 +9857,7 @@ async fn get_propagation(
                     // spot frequency. The mode is the band plan's call, NEVER the free-text
                     // comment (which holds QSY requests / chit-chat / times).
                     mode: Some(
-                        propagation::classify_spot_mode(cs.freq_mhz())
+                        propagation::classify_spot_mode(cs.freq_mhz(), &cs.dx_call)
                             .label()
                             .to_string(),
                     ),
@@ -8576,6 +9995,7 @@ async fn get_path_outlook(
     cache: State<'_, PropCache>,
     kp_cache: State<'_, KpForecastCache>,
     aurora: State<'_, AuroraCache>,
+    protons: State<'_, ProtonCache>,
 ) -> Result<propagation::PathPrediction, String> {
     let (mygrid, prop_engine, station_power_w, ant_gain_dbi) = {
         let eng = engine_lock(&state);
@@ -8598,6 +10018,8 @@ async fn get_path_outlook(
             long_path: None,
             routes: None,
             day: None,
+            overlay: None,
+            space_now: None,
         });
     };
     // Current space weather from the propagation cache's last snapshot (the same
@@ -8630,9 +10052,10 @@ async fn get_path_outlook(
     // The geometry's Kp is only ever one SWPC reported: `wx.kp` above may be the cold-cache
     // default or a failed fetch's stand-in, which the engine may use but no label may call a
     // reading.
-    let kp_now = {
+    let (kp_now, now_inputs) = {
         let guard = cache.lock().map_err(|e| e.to_string())?;
-        swpc_kp(guard.as_ref().map(|(_, s)| &s.space_wx), t)
+        let view = guard.as_ref().map(|(_, s)| &s.space_wx);
+        (swpc_kp(view, t), NowInputs::read(view, &protons, t))
     };
     // P.533 pairs are kept (`path_outlook`): the client asks again every 60 s, and only the
     // serving hour's scalars and the geometry are recomputed then.
@@ -8696,6 +10119,10 @@ async fn get_path_outlook(
         // Kept for the grade of a contact logged with this station (`path_grades::at_log`), when
         // it was computed from measured space weather (`keep_outlook` decides).
         path_grades::keep_outlook(&mygrid, &grid, t, &pred, stamps.as_ref());
+        // Then the display-only "now" overlay, which the kept card never carries.
+        if let Some(me) = me {
+            attach_now(&mut pred, me, dx, &now_inputs, t);
+        }
         pred
     })
     .await
@@ -9064,6 +10491,110 @@ fn swpc_kp(wx: Option<&propagation::SpaceWxView>, now: i64) -> Option<f32> {
         .map(|w| w.kp)
 }
 
+/// What the "now" overlays run on ([`propagation::pathnow`]), each with its own sample time, read
+/// from what the map's own layers keep — the X-ray fast lane and its D-RAP grid, the snapshot's
+/// X-ray, the proton cache, the watch — and never fetched here: a lane nobody is polling simply
+/// ages out, and the overlay then claims nothing.
+#[derive(Default)]
+struct NowInputs {
+    xray: Option<propagation::pathnow::XraySample>,
+    drap: Option<propagation::flare::DrapGrid>,
+    protons: Option<propagation::pathnow::ProtonSample>,
+    watch: Option<propagation::arrival::Watch>,
+}
+
+impl NowInputs {
+    fn read(wx: Option<&propagation::SpaceWxView>, protons: &ProtonCache, now: i64) -> NowInputs {
+        use propagation::pathnow::{ProtonSample, XraySample};
+        // The newer of the fast lane's GOES sample and the snapshot's, each by its own time (the
+        // snapshot's only when it is a reading, never the stand-in a failed fetch leaves).
+        let lane = XRAY_LANE.lock().ok().and_then(|l| {
+            l.kept().map(|x| XraySample {
+                flux: x.now.value,
+                at: x.now.at,
+            })
+        });
+        NowInputs {
+            xray: newer(lane, snapshot_xray(wx)),
+            drap: DRAP_LANE.lock().ok().and_then(|l| l.kept().cloned()),
+            protons: protons.lock().ok().and_then(|g| {
+                // Carried with its own time, or none: the event rule (`proton_event`) refuses an
+                // undated reading.
+                g.as_ref().map(|(_, p)| ProtonSample {
+                    j1: p.j1,
+                    j5: p.j5,
+                    j10: p.j10,
+                    at: p.at,
+                })
+            }),
+            watch: arrival_outlook::watch_now(now),
+        }
+    }
+
+    /// The "now" line at `now`.
+    fn space_now(&self, now: i64) -> Option<propagation::pathnow::SpaceNow> {
+        let fp = propagation::pathnow::footprint(self.xray, self.drap.as_ref(), now);
+        propagation::pathnow::space_now(fp.as_ref(), self.protons, self.watch.as_ref(), now)
+    }
+}
+
+/// The snapshot's GOES sample, only when its X-ray is a reading (stamped), never the stand-in a
+/// failed fetch leaves.
+fn snapshot_xray(
+    wx: Option<&propagation::SpaceWxView>,
+) -> Option<propagation::pathnow::XraySample> {
+    wx.and_then(|w| {
+        w.stamps.xray_at.map(|at| propagation::pathnow::XraySample {
+            flux: w.xray_long,
+            at,
+        })
+    })
+}
+
+/// The newer of two GOES samples by their own times.
+fn newer(
+    a: Option<propagation::pathnow::XraySample>,
+    b: Option<propagation::pathnow::XraySample>,
+) -> Option<propagation::pathnow::XraySample> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(if b.at > a.at { b } else { a }),
+        (a, b) => a.or(b),
+    }
+}
+
+/// Lay the "now" overlay over a per-path card's routes and attach the "now" line: display only,
+/// so it is done AFTER the card is kept for contact grading and changes none of the model's numbers.
+fn attach_now(
+    pred: &mut propagation::PathPrediction,
+    me: (f64, f64),
+    dx: (f64, f64),
+    inputs: &NowInputs,
+    now: i64,
+) {
+    let fp = propagation::pathnow::footprint(inputs.xray, inputs.drap.as_ref(), now);
+    let over = |p: &propagation::PathPrediction, route| {
+        let g = p.geometry.as_ref()?;
+        let h = usize::from(g.now_hour);
+        propagation::pathnow::path_overlay(
+            me,
+            dx,
+            route,
+            &p.bands,
+            g.hours.get(h)?,
+            h,
+            now,
+            fp.as_ref(),
+            inputs.protons,
+        )
+    };
+    pred.overlay = over(pred, propagation::Route::Short);
+    if let Some(lp) = pred.long_path.as_deref_mut() {
+        lp.overlay = over(lp, propagation::Route::Long);
+    }
+    pred.space_now =
+        propagation::pathnow::space_now(fp.as_ref(), inputs.protons, inputs.watch.as_ref(), now);
+}
+
 #[cfg(test)]
 mod ring_key_tests {
     use super::ring_key;
@@ -9086,6 +10617,230 @@ mod ring_key_tests {
         };
         assert_ne!(at(70.0, None), at(200.0, None));
         assert_eq!(at(70.0, Some(105.0)), at(200.0, Some(105.0)));
+    }
+}
+
+#[cfg(test)]
+mod path_now_tests {
+    use super::{attach_now, newer, snapshot_xray, NowInputs};
+    use propagation::pathnow::{ProtonSample, XraySample};
+
+    /// 2026-05-15 12:00 UTC.
+    const NOW: i64 = 1_778_846_400;
+    const BOSTON: (f64, f64) = (42.36, -71.06);
+    const LONDON: (f64, f64) = (51.5, -0.12);
+
+    fn view(xray_long: f32, xray_at: Option<i64>) -> propagation::SpaceWxView {
+        propagation::SpaceWxView {
+            sfi: 120.0,
+            kp: 2.0,
+            a_index: 8.0,
+            xray_class: "X1.0".into(),
+            flare: true,
+            xray_long,
+            solar_wind: None,
+            fetched: xray_at.is_some(),
+            stamps: propagation::model::SpaceWxStamps {
+                xray_at,
+                ..Default::default()
+            },
+            ap_now: None,
+            a_by_day: Vec::new(),
+        }
+    }
+
+    /// Both routes of a heuristic card Boston → London with their geometry (Kp 2 measured).
+    fn card() -> propagation::PathPrediction {
+        let eng = propagation::HeuristicEngine::new(Some(BOSTON));
+        use propagation::PathPredictor;
+        let wx = propagation::SpaceWx::default();
+        let mut sp = eng.predict(LONDON, NOW, &wx);
+        let geom = |route| {
+            propagation::path_geometry_route(BOSTON, LONDON, route, NOW, Some(2.0), None, None)
+        };
+        sp.geometry = Some(geom(propagation::Route::Short));
+        let mut lp = sp.clone();
+        lp.geometry = Some(geom(propagation::Route::Long));
+        sp.long_path = Some(Box::new(lp));
+        sp
+    }
+
+    /// The lanes are process globals: the one test that fills them holds this.
+    static LANES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn proton_cache(at: Option<i64>) -> super::ProtonCache {
+        std::sync::Arc::new(std::sync::Mutex::new(Some((
+            std::time::Instant::now(),
+            propagation::live::protons::ProtonFlux {
+                j1: 800.0,
+                j5: 400.0,
+                j10: 200.0,
+                at,
+            },
+        ))))
+    }
+
+    #[test]
+    fn the_inputs_carry_noaas_grid_from_its_lane_and_an_undated_proton_sample_is_none() {
+        let _g = LANES
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let lats: Vec<f32> = (0..90).map(|i| 89.0 - 2.0 * i as f32).collect();
+        let lons: Vec<f32> = (0..90).map(|i| -178.0 + 4.0 * i as f32).collect();
+        let grid = propagation::flare::DrapGrid {
+            valid_at: NOW - 30,
+            recovery_at: Some(NOW + 1800),
+            haf: vec![30.0; lats.len() * lons.len()],
+            lats,
+            lons,
+        };
+        super::XRAY_LANE
+            .lock()
+            .unwrap()
+            .answered(propagation::live::swpc::XrayTrace {
+                now: propagation::live::swpc::Sample {
+                    value: 1e-4,
+                    at: NOW - 60,
+                },
+                series: Vec::new(),
+                recent: Vec::new(),
+            });
+        super::DRAP_LANE.lock().unwrap().answered(grid);
+        let dated = NowInputs::read(None, &proton_cache(Some(NOW - 300)), NOW);
+        let undated = NowInputs::read(None, &proton_cache(None), NOW);
+        *super::XRAY_LANE.lock().unwrap() = propagation::flare::Lane::new();
+        *super::DRAP_LANE.lock().unwrap() = propagation::flare::Lane::new();
+        // NOAA's word reaches the now line, with the grid's own valid time and the GOES sample's.
+        assert_eq!(
+            dated.xray,
+            Some(XraySample {
+                flux: 1e-4,
+                at: NOW - 60
+            })
+        );
+        let fl = dated
+            .space_now(NOW)
+            .and_then(|n| n.flare)
+            .expect("a flare now");
+        assert_eq!(fl.haf, propagation::pathnow::HafSource::Noaa);
+        assert_eq!(fl.drap_valid_at, Some(NOW - 30));
+        assert_eq!(fl.xray_at, NOW - 60);
+        // A dated proton sample is carried with its time; an undated one is no sample at all.
+        assert_eq!(dated.protons.and_then(|p| p.at), Some(NOW - 300));
+        assert_eq!(undated.protons.map(|p| p.at), Some(None));
+        assert!(undated.space_now(NOW).and_then(|n| n.protons).is_none());
+        assert!(dated.space_now(NOW).and_then(|n| n.protons).is_some());
+        // The grid split runs only during a held proton event: beside the dated S2 reading it keeps
+        // the grid's polar excess out of the flare figure; beside the same reading undated, NOAA's
+        // grid stands as its word.
+        let split_flag = |inputs: &NowInputs| {
+            let mut p = card();
+            attach_now(&mut p, BOSTON, LONDON, inputs, NOW);
+            let o = p.overlay.expect("a flare overlay");
+            let from = o
+                .bands
+                .iter()
+                .filter_map(|b| b.flare_from)
+                .collect::<Vec<_>>();
+            (o.source.flare_cap_geomag, from)
+        };
+        let (flag, _) = split_flag(&dated);
+        assert_eq!(flag, Some(50.0));
+        let (flag, from) = split_flag(&undated);
+        assert_eq!(flag, None);
+        assert!(
+            from.iter()
+                .all(|f| *f == propagation::pathnow::FlareFrom::Noaa),
+            "{from:?}"
+        );
+    }
+
+    #[test]
+    fn a_stand_in_x_ray_never_feeds_the_overlay_and_the_newer_sample_wins() {
+        assert_eq!(snapshot_xray(Some(&view(1e-4, None))), None);
+        assert_eq!(snapshot_xray(None), None);
+        let snap = snapshot_xray(Some(&view(1e-4, Some(NOW - 30))));
+        assert_eq!(
+            snap,
+            Some(XraySample {
+                flux: 1e-4,
+                at: NOW - 30
+            })
+        );
+        let lane = Some(XraySample {
+            flux: 2e-4,
+            at: NOW - 90,
+        });
+        assert_eq!(newer(lane, snap), snap);
+        assert_eq!(newer(snap, lane), snap);
+        assert_eq!(newer(lane, None), lane);
+        assert_eq!(newer(None, None), None);
+    }
+
+    #[test]
+    fn a_flare_lays_an_overlay_on_both_routes_and_a_now_line_and_quiet_lays_none() {
+        let flare = NowInputs {
+            xray: Some(XraySample {
+                flux: 1e-4,
+                at: NOW - 60,
+            }),
+            ..Default::default()
+        };
+        let mut p = card();
+        attach_now(&mut p, BOSTON, LONDON, &flare, NOW);
+        let o = p.overlay.as_ref().expect("short-path overlay");
+        assert!(o.bands.iter().any(|b| b.flare_db.is_some_and(|d| d > 1.0)));
+        // The long route carries the long route's own figures (its own arc and hops), not the
+        // short route's.
+        let lp = p.long_path.as_ref().unwrap();
+        let own = |route| {
+            let g = lp.geometry.as_ref().unwrap();
+            let h = usize::from(g.now_hour);
+            let fp = propagation::pathnow::footprint(flare.xray, None, NOW);
+            propagation::pathnow::path_overlay(
+                BOSTON,
+                LONDON,
+                route,
+                &lp.bands,
+                &g.hours[h],
+                h,
+                NOW,
+                fp.as_ref(),
+                None,
+            )
+        };
+        assert_eq!(lp.overlay, own(propagation::Route::Long));
+        assert_ne!(lp.overlay, own(propagation::Route::Short));
+        // Each input keeps its own time.
+        assert_eq!(o.source.xray_at, Some(NOW - 60));
+        assert!(p.space_now.as_ref().unwrap().flare.is_some());
+        let v = serde_json::to_value(&p).unwrap();
+        assert!(v["overlay"]["bands"].is_array() && v["spaceNow"]["flare"]["out"].is_string());
+        // The model's numbers are untouched.
+        let plain = card();
+        assert_eq!(
+            serde_json::to_value(&plain.bands).unwrap(),
+            serde_json::to_value(&p.bands).unwrap()
+        );
+        // Quiet: a C-class sample, quiet protons, no watch → no overlay, no now line, no keys.
+        let quiet = NowInputs {
+            xray: Some(XraySample {
+                flux: 5e-6,
+                at: NOW - 60,
+            }),
+            protons: Some(ProtonSample {
+                j1: 2.0,
+                j5: 1.0,
+                j10: 0.3,
+                at: Some(NOW - 300),
+            }),
+            ..Default::default()
+        };
+        let mut q = card();
+        attach_now(&mut q, BOSTON, LONDON, &quiet, NOW);
+        assert!(q.overlay.is_none() && q.space_now.is_none());
+        let v = serde_json::to_value(&q).unwrap();
+        assert!(v.get("overlay").is_none() && v.get("spaceNow").is_none());
     }
 }
 
@@ -9213,6 +10968,7 @@ static RING_OUTLOOK: Mutex<Option<(std::time::Instant, String, propagation::Path
 async fn get_band_outlook(
     state: State<'_, SharedEngine>,
     cache: State<'_, PropCache>,
+    protons: State<'_, ProtonCache>,
 ) -> Result<propagation::PathPrediction, String> {
     let (mygrid, prop_engine, station_power_w, ant_gain_dbi) = {
         let eng = engine_lock(&state);
@@ -9234,6 +10990,8 @@ async fn get_band_outlook(
             long_path: None,
             routes: None,
             day: None,
+            overlay: None,
+            space_now: None,
         });
     };
     let p533 = prop_engine == "p533";
@@ -9250,7 +11008,11 @@ async fn get_band_outlook(
             .unwrap_or_default()
     };
     let t = now_unix();
-    ring_prediction(
+    let now_inputs = {
+        let guard = cache.lock().map_err(|e| e.to_string())?;
+        NowInputs::read(guard.as_ref().map(|(_, s)| &s.space_wx), &protons, t)
+    };
+    let mut out = ring_prediction(
         mygrid,
         prop_engine,
         station_power_w,
@@ -9259,7 +11021,10 @@ async fn get_band_outlook(
         wx,
         t,
     )
-    .await
+    .await?;
+    // The "now" line beside the climatology (never cached with it: it is re-read every ask).
+    out.space_now = now_inputs.space_now(t);
+    Ok(out)
 }
 
 /// The sunspot number a P.533 cache keys on, as a key fragment: the one the engine runs on (the
@@ -9708,6 +11473,26 @@ struct PcaView {
     /// The GOES proton sample's own time (Unix seconds), so a copy served after a failed
     /// refetch says how old it is.
     protons_at: Option<i64>,
+    /// NOAA's S-scale from `j10` (0 below S1).
+    s_scale: u8,
+    /// NOAA's rule of thumb for how long the event lasts (hours), from `j10`; `None` where the
+    /// rule says nothing (≤ 15 pfu).
+    sep_recovery_h: Option<f64>,
+    /// The cap's edge at `cutoff_deg`, `[north, south]` closed `[lon, lat]` rings — only with a
+    /// measured Kp (`None` exactly when `cutoff_deg` is). An approximation (pca.rs), labelled so.
+    edge: Option<[Vec<[f32; 2]>; 2]>,
+    /// THE one answer to "is a proton event held now" (`pca::proton_event`: S1+, dated, under
+    /// `PROTON_FRESH_SECS`). The map draws no proton cap, no edge and no chip without it, and never
+    /// reads NOAA's grid's polar excess as protons — the same rule that asks NOAA for the grid
+    /// (`drap_wanted`) and that the path overlay uses, so they cannot disagree.
+    proton_event: bool,
+    /// When the held event stops being held (`pca::proton_event_until`: the sample time + 30 min),
+    /// present exactly when `proton_event` is. The map stops drawing it then on its own clock, so a
+    /// view kept through failed polls still ends on time.
+    proton_event_until: Option<i64>,
+    /// Why (`pca::proton_state`): held, or undated / ahead / stale / quiet — the map's words for
+    /// "nothing drawn" come from here, never from a guess on its side.
+    proton_why: propagation::pca::ProtonState,
 }
 
 #[tauri::command]
@@ -9716,8 +11501,6 @@ async fn get_pca(
     protons: State<'_, ProtonCache>,
 ) -> Result<Option<PcaView>, String> {
     const PROTON_TTL_SECS: u64 = 300;
-    /// Below this 30 MHz cap absorption the event isn't operationally visible.
-    const MIN_DB: f64 = 0.5;
     let cached = {
         let g = protons.lock().map_err(|e| e.to_string())?;
         g.as_ref()
@@ -9755,14 +11538,31 @@ async fn get_pca(
         let guard = cache.lock().map_err(|e| e.to_string())?;
         pca_kp(guard.as_ref().map(|(_, s)| &s.space_wx), now)
     };
-    Ok(Some(PcaView {
+    Ok(Some(pca_view(flux, kp, now)))
+}
+
+/// The polar-cap view from the proton reading and the measured Kp (if any) at `now`.
+fn pca_view(flux: propagation::live::protons::ProtonFlux, kp: Option<f64>, now: i64) -> PcaView {
+    /// Below this 30 MHz cap absorption the event isn't operationally visible.
+    const MIN_DB: f64 = 0.5;
+    let cutoff_deg = kp.map(propagation::pca::cutoff_lat_deg);
+    let state = propagation::pca::proton_state(flux.j10, flux.at, now);
+    PcaView {
         j10: flux.j10,
         a30_day: propagation::pca::a30_day(flux.j5),
         a30_night: propagation::pca::a30_night(flux.j1),
-        cutoff_deg: kp.map(propagation::pca::cutoff_lat_deg),
+        cutoff_deg,
         points: propagation::pca::pca_layer(flux.j5, flux.j1, kp.unwrap_or(0.0), now, MIN_DB),
         protons_at: flux.at,
-    }))
+        s_scale: propagation::pca::s_scale(flux.j10),
+        sep_recovery_h: propagation::pca::sep_recovery_hours(flux.j10),
+        edge: cutoff_deg.map(propagation::pca::cap_edge_rings),
+        proton_event: state == propagation::pca::ProtonState::Held,
+        proton_event_until: (state == propagation::pca::ProtonState::Held)
+            .then(|| flux.at.map(propagation::pca::proton_event_until))
+            .flatten(),
+        proton_why: state,
+    }
 }
 
 /// The Kp the polar-cap edge is placed at: the snapshot's Kp only when it may speak for `now`
@@ -9909,6 +11709,14 @@ async fn fetch_lotw_users() -> Result<LotwUsersStatus, String> {
 // --- FCC callsign→state index (downloaded to the SHARED data dir; the WAS New-State hint on
 // grid-less spots). Mirrors the LoTW-users pattern above. ---
 const FCC_STATES_BASE: &str = "https://hamradiotools.io/nexus";
+/// The most a hosted data manifest (`fcc-states.json`, `cty.json`) is read to: a few hundred
+/// bytes of version stamps.
+const DATA_MANIFEST_BYTES: u64 = 1024 * 1024;
+/// The most `fcc-states.bin` is read to. It was 5.7 MB on 2026-11-03.
+const FCC_STATES_BYTES: u64 = 64 * 1024 * 1024;
+/// The most a hosted text data file (`cty.dat`, `fd-rules.json`) is read to. Each was about
+/// 330 KB on 2026-11-03.
+const DATA_FILE_BYTES: u64 = 16 * 1024 * 1024;
 static FCC_STATES: std::sync::LazyLock<std::sync::RwLock<Option<propagation::FccStates>>> =
     std::sync::LazyLock::new(|| std::sync::RwLock::new(None));
 
@@ -10273,14 +12081,18 @@ fn fcc_download_if_newer() -> Result<bool, String> {
         .timeout(std::time::Duration::from_secs(120))
         .build()
         .map_err(|e| e.to_string())?;
-    let manifest: serde_json::Value = c
+    let resp = c
         .get(format!("{FCC_STATES_BASE}/fcc-states.json"))
         .send()
         .map_err(|e| e.to_string())?
         .error_for_status()
-        .map_err(|e| e.to_string())?
-        .json()
         .map_err(|e| e.to_string())?;
+    let manifest: serde_json::Value = serde_json::from_str(&propagation::live::body::read_capped(
+        resp,
+        DATA_MANIFEST_BYTES,
+        "FCC states manifest",
+    )?)
+    .map_err(|e| e.to_string())?;
     let generated = manifest
         .get("generated")
         .and_then(|v| v.as_str())
@@ -10301,15 +12113,14 @@ fn fcc_download_if_newer() -> Result<bool, String> {
         );
         return Ok(false);
     }
-    let bytes = c
+    let resp = c
         .get(format!("{FCC_STATES_BASE}/fcc-states.bin"))
         .send()
         .map_err(|e| e.to_string())?
         .error_for_status()
-        .map_err(|e| e.to_string())?
-        .bytes()
-        .map_err(|e| e.to_string())?
-        .to_vec();
+        .map_err(|e| e.to_string())?;
+    let bytes =
+        propagation::live::body::read_capped_bytes(resp, FCC_STATES_BYTES, "FCC states index")?;
     let count = propagation::FccStates::load(bytes.clone())
         .ok_or("downloaded index is not a valid NEXFCCS1 file")?
         .count();
@@ -10465,14 +12276,18 @@ fn cty_download_if_newer() -> Result<bool, String> {
         .timeout(std::time::Duration::from_secs(120))
         .build()
         .map_err(|e| e.to_string())?;
-    let manifest: serde_json::Value = c
+    let resp = c
         .get(format!("{FCC_STATES_BASE}/cty.json"))
         .send()
         .map_err(|e| e.to_string())?
         .error_for_status()
-        .map_err(|e| e.to_string())?
-        .json()
         .map_err(|e| e.to_string())?;
+    let manifest: serde_json::Value = serde_json::from_str(&propagation::live::body::read_capped(
+        resp,
+        DATA_MANIFEST_BYTES,
+        "cty.dat manifest",
+    )?)
+    .map_err(|e| e.to_string())?;
     let ver = manifest
         .get("ver")
         .and_then(|v| v.as_str())
@@ -10499,14 +12314,13 @@ fn cty_download_if_newer() -> Result<bool, String> {
         );
         return Ok(false);
     }
-    let text = c
+    let resp = c
         .get(format!("{FCC_STATES_BASE}/cty.dat"))
         .send()
         .map_err(|e| e.to_string())?
         .error_for_status()
-        .map_err(|e| e.to_string())?
-        .text()
         .map_err(|e| e.to_string())?;
+    let text = propagation::live::body::read_capped(resp, DATA_FILE_BYTES, "cty.dat")?;
     let stats = propagation::dxcc::validate(&text)
         .map_err(|e| format!("downloaded cty.dat failed validation: {e}"))?;
     if let Some(dir) = cty_path().parent() {
@@ -10754,14 +12568,13 @@ fn fd_rules_download_if_newer() -> Result<bool, String> {
         .timeout(std::time::Duration::from_secs(60))
         .build()
         .map_err(|e| e.to_string())?;
-    let text = c
+    let resp = c
         .get(format!("{FCC_STATES_BASE}/fd-rules.json"))
         .send()
         .map_err(|e| e.to_string())?
         .error_for_status()
-        .map_err(|e| e.to_string())?
-        .text()
         .map_err(|e| e.to_string())?;
+    let text = propagation::live::body::read_capped(resp, DATA_FILE_BYTES, "fd-rules.json")?;
     let stats = tempo_core::fd_rules::validate(&text)
         .map_err(|e| format!("downloaded fd-rules.json failed validation: {e}"))?;
     if stats.generated == local.generated && have {
@@ -11561,8 +13374,11 @@ fn queue_spot(freq_mhz: f64, call: String, comment: String) -> Result<(), String
     if !is_real_call(&call) {
         return Err("enter a valid callsign to spot".into());
     }
-    // Only a node still in the registry counts: one being stopped has left it already.
-    if !cluster_nodes::feeds().any_connected() {
+    // Only a node still in the registry counts: one being stopped has left it already. A window
+    // following another's logins posts through it, while it says a node there is logged in.
+    let through_other_window =
+        cluster_following().is_some_and(|(up, status)| up && status.nodes_connected);
+    if !cluster_nodes::feeds().any_connected() && !through_other_window {
         return Err("no DX cluster connected — set a cluster host in Settings".into());
     }
     let line = tempo_net::cluster::format_dx_spot(freq_mhz * 1000.0, &call, &comment);
@@ -13953,14 +15769,19 @@ fn send_rot_step(
             // Elevation REFUSED — the daemon answered and said no (`RPRT -1` from the
             // frontend's min_el/max_el check on a mount with no elevation axis). If plain
             // azimuth then lands, this is an az-only rotator, or a transient the driver
-            // re-probes for.
+            // re-probes for; the driver takes two in a row to believe it.
             //
             // ⚠️ Only on an answered refusal. Silence is not a refusal: retrying azimuth
             // after a timeout doubles the wait on a tick that has a satellite to keep up
             // with, and a rotator that answers nothing is not an az-only rotator — it is
             // gone. Before the rotctld client told the truth about replies this could not
             // be asked, because a timeout arrived here as `Ok(())`.
-            Err(e) if e.kind() == std::io::ErrorKind::Other => {
+            //
+            // ⚠️ Nor is Hamlib's own `RPRT -5` (its serial timeout) or `RPRT -6` (an I/O
+            // error): rotctld answered, but only to say the CONTROLLER did not. This arm
+            // used to take every answered non-zero `RPRT`, so on a G-5500 reached over the
+            // internet one slow round trip dropped the elevation for a minute of the pass.
+            Err(e) if tempo_audio::rotator::says_unsupported(&e) => {
                 if tempo_audio::rotator::point(addr, az).is_ok() {
                     RotOutcome::AzOnly
                 } else {
@@ -14599,6 +16420,36 @@ fn run_sat_track(run: SatTrackRun, clock: &dyn Fn() -> i64, tick_wait: &dyn Fn()
             ending = SatTrackLoss::BirdSet;
             break;
         }
+        // ⭐ A MAST GIVEN UP ON IS ASKED AGAIN (2026-11-03, a tester's G-5500 reached over the
+        // internet). The give-up used to hold for the rest of the pass, so a 15 s hiccup on the
+        // link cost the whole pass after the link was back. Every `REPROBE_AFTER_TICKS` ticks
+        // the loop reads the rotator's position — which moves nothing — and an answer gives the
+        // pass its mast back, said once on the Connections log. A rotator with no position to
+        // give (the DCU-1's `RPRT -11`) is not taken back: that answer comes from rotctld, not
+        // from the controller, so it is no evidence the controller is there.
+        if rotor_lost && driver.reprobe_due() {
+            if let Some(a) = addr.as_deref() {
+                // Shared with the polls (`latest_position`): a pane poll already in flight
+                // answers this too, rather than a second read queueing behind it.
+                if tempo_audio::rotator::latest_position(a).is_ok() {
+                    driver.answered();
+                    lag = tempo_core::rotator::LagWatch::default();
+                    rotor_lost = false;
+                    conn_log(
+                        "Rotator",
+                        "info",
+                        format!(
+                            "the rotator is answering again — the {name} pass has taken the \
+                             mast back and is pointing it."
+                        ),
+                    );
+                    tempo_core::applog::info(
+                        "rotator",
+                        &format!("the {name} pass took the mast back: the rotator answered again"),
+                    );
+                }
+            }
+        }
         let mast = if rotor_lost { None } else { addr.as_deref() };
         // The per-tick honesty label (+ the declared TX-leg sideband).
         // The rotor half is the live mast above — fixed at arm time except
@@ -14802,11 +16653,14 @@ fn run_sat_track(run: SatTrackRun, clock: &dyn Fn() -> i64, tick_wait: &dyn Fn()
         // while the antenna stays put, and every surface in the app was drawing the commanded
         // pair. The rule is "far AND not moving", never "far" — a legitimate slew to AOS is
         // 180° of gap and takes a G-5500 half a minute (`LagWatch`). Once per episode, to the
-        // connection log, which is where support asks the operator to look.
+        // connection log, which is where support asks the operator to look. A read that leaves
+        // AFTER the `P` (`fresh_position`): a poll already in flight may have left before it, so
+        // it is waited for, never taken.
         if outcome != RotOutcome::Failed {
-            if let (Some((caz, _)), Ok((meas_az, _))) =
-                (driver.last_cmd(), tempo_audio::rotator::read_position(addr))
-            {
+            if let (Some((caz, _)), Ok((meas_az, _))) = (
+                driver.last_cmd(),
+                tempo_audio::rotator::fresh_position(addr),
+            ) {
                 if let Some(gap) = lag.observe(caz, meas_az) {
                     conn_log(
                         "Rotator",
@@ -14877,7 +16731,16 @@ fn run_sat_track(run: SatTrackRun, clock: &dyn Fn() -> i64, tick_wait: &dyn Fn()
                         format!(
                             "the rotator stopped answering during the {name} pass \
                              ({} commands in a row) — the track let the mast go and \
-                             kept the dial. Point the antenna yourself.",
+                             kept the dial. Point the antenna yourself: Nexus asks the \
+                             rotator again every {} s and takes the mast back when it answers.",
+                            tempo_core::rotator::MISS_LIMIT,
+                            tempo_core::rotator::REPROBE_AFTER_TICKS * 3
+                        ),
+                    );
+                    tempo_core::applog::warn(
+                        "rotator",
+                        &format!(
+                            "the {name} pass let the mast go: {} commands in a row unanswered",
                             tempo_core::rotator::MISS_LIMIT
                         ),
                     );
@@ -15069,6 +16932,328 @@ fn disarm_sat_track_locked(eng: &mut Engine) -> Option<String> {
 #[tauri::command]
 fn sat_track_status() -> Result<Option<SatTrackDto>, String> {
     Ok(SAT_TRACK.lock().map_err(|e| e.to_string())?.clone())
+}
+
+// ── FOLLOW THE MOON (EME) ────────────────────────────────────────────────────────────────────
+// A rotator pointed at the Moon and kept there: the satellite track's pointing half, with the
+// Moon in place of a TLE (`propagation::moon`, topocentric, parallax included). Rotators only:
+// nothing here keys, tunes or corrects Doppler.
+//
+// ⭐ ONE TRACKER AT A TIME, by construction rather than by convention: the Moon follow takes its
+// generation from `SAT_TRACK_GEN`, the counter the satellite track owns the mast by. Arming a
+// pass bumps it, so the Moon loop exits on its next tick; Stop (`stop_sat_track`, which every
+// manual move in the Rotor pane calls first) bumps it too; and starting the Moon follow disarms a
+// live pass the way Stop does, dial handback included. The Moon's badge is stamped with the
+// generation it was published under and reads as idle the moment the counter moves on.
+
+/// How often the Moon loop looks again. The Moon crosses the sky at about a quarter of a degree a
+/// minute, so with the rotator's 2° deadband a command goes out every several minutes; 10 s keeps
+/// the readout current and costs nothing on the wire between commands.
+const MOON_TICK: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// The Moon follow's state, as the Rotor pane draws it.
+#[derive(serde::Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct MoonTrackDto {
+    /// "following", "belowHorizon" (the Moon is down: the antenna is held where it was, and
+    /// nothing is sent until it rises) or "rotorLost" (the rotator stopped answering; Nexus asks
+    /// it again every `REPROBE_AFTER_TICKS` ticks).
+    state: &'static str,
+    /// Is the elevation being driven? False on a rotator whose backend declares no elevation axis.
+    elevation: bool,
+    /// Where the antenna was last commanded (boresight, after the deadband); `None` until a
+    /// command has gone out. `el_deg` is `None` whenever the elevation is not driven.
+    az_deg: Option<f64>,
+    el_deg: Option<f64>,
+}
+
+/// The Moon follow's badge and the generation it was published under.
+static MOON_TRACK: Mutex<Option<(u64, MoonTrackDto)>> = Mutex::new(None);
+
+/// The live Moon follow, or `None` when another owner (a pass, a Stop) has taken the mast since.
+fn moon_track_now() -> Option<MoonTrackDto> {
+    let g = MOON_TRACK.lock().ok()?;
+    let (gen, dto) = g.as_ref()?;
+    (*gen == SAT_TRACK_GEN.load(std::sync::atomic::Ordering::SeqCst)).then(|| dto.clone())
+}
+
+/// An EME window with the station in line 2's entry: the Moon above the horizon at both ends.
+#[derive(serde::Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct EmeWindowDto {
+    /// Unix seconds; `start` is now when the window is open now.
+    start: i64,
+    end: i64,
+    open_now: bool,
+}
+
+/// What the Rotor pane shows of the Moon.
+#[derive(serde::Serialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct MoonStatusDto {
+    /// Where the Moon is from this station now (topocentric, geometric).
+    az_deg: f64,
+    el_deg: f64,
+    /// The follow, while it owns the mast.
+    track: Option<MoonTrackDto>,
+    /// The next EME window with `dx_grid` in the next 48 h, when one was asked for and there is
+    /// one; `None` otherwise (the pane says which).
+    window: Option<EmeWindowDto>,
+}
+
+/// The first EME window with `dx` in the 48 hours from `now`, in 5-minute steps.
+fn eme_window_dto(obs: (f64, f64), dx: (f64, f64), now: i64) -> Option<EmeWindowDto> {
+    propagation::moon::eme_window(obs, dx, now, 48, 300, 0.0).map(|(start, end)| EmeWindowDto {
+        start,
+        end,
+        open_now: start == now,
+    })
+}
+
+/// The Moon from this station, and the follow's state. `None` when the station's own grid is not
+/// set: where the Moon stands depends on where you are. `dx_grid` asks for an EME window with
+/// that grid as well.
+#[tauri::command]
+async fn moon_status(
+    state: State<'_, SharedEngine>,
+    dx_grid: Option<String>,
+) -> Result<Option<MoonStatusDto>, String> {
+    let grid = with_engine(&state, |eng| eng.settings().mygrid.clone()).await?;
+    let Some(obs) = propagation::geo::maidenhead_to_latlon(grid.trim()) else {
+        return Ok(None);
+    };
+    let now = now_unix();
+    let m = propagation::moon::look(obs, now);
+    let window = dx_grid
+        .as_deref()
+        .and_then(|g| propagation::geo::maidenhead_to_latlon(g.trim()))
+        .and_then(|dx| eme_window_dto(obs, dx, now));
+    Ok(Some(MoonStatusDto {
+        az_deg: m.az_deg,
+        el_deg: m.el_deg,
+        track: moon_track_now(),
+        window,
+    }))
+}
+
+/// Start following the Moon with the rotator. Refused, with the reason, when there is no rotator,
+/// no station grid, or a rotctld that does not say whether the rotator has an elevation axis
+/// (sending `P <az> 0` to an az/el mount would lay the antenna on the horizon).
+#[tauri::command]
+async fn start_moon_track(state: State<'_, SharedEngine>) -> Result<MoonTrackDto, String> {
+    #[cfg(feature = "radio")]
+    {
+        let (addr, grid, cfg) = {
+            let eng = engine_lock(&state);
+            let st = eng.settings();
+            (
+                effective_rotator_addr(st),
+                st.mygrid.clone(),
+                st.rotator_config(),
+            )
+        };
+        let Some(addr) = addr else {
+            return Err(
+                "Set up your rotator in Settings (pick a model + port; Nexus runs rotctld for you)."
+                    .to_string(),
+            );
+        };
+        let Some(obs) = propagation::geo::maidenhead_to_latlon(grid.trim()) else {
+            return Err(
+                "Set your grid square in Settings ▸ Station first: where the Moon stands depends \
+                 on where you are."
+                    .to_string(),
+            );
+        };
+        let probe = addr.clone();
+        let limits =
+            tauri::async_runtime::spawn_blocking(move || tempo_audio::rotator::read_limits(&probe))
+                .await
+                .map_err(|e| e.to_string())?
+                .map_err(|e| e.to_string())?;
+        let elevation = moon_drives_elevation(limits.as_ref());
+        let (gen, initial) = arm_moon_track(&state, elevation);
+        tauri::async_runtime::spawn_blocking(move || {
+            run_moon_track(
+                MoonRun {
+                    addr,
+                    obs,
+                    cfg,
+                    elevation,
+                    gen,
+                },
+                &now_unix,
+                &|| std::thread::sleep(MOON_TICK),
+            );
+        });
+        Ok(initial)
+    }
+    #[cfg(not(feature = "radio"))]
+    {
+        let _ = state;
+        Err("radio support is not built into this binary".to_string())
+    }
+}
+
+/// Does the Moon follow drive the elevation? Exactly when the backend declares an elevation axis
+/// (`Limits::elevation`, from rotctld's own `\dump_state`): a G-5500 on its GS-232B does, Hamlib's
+/// "GS-232B azimuth" model (611, `rot_type=Az`, 0–0) does not, and a daemon that declares nothing
+/// is sent the azimuth-only line it always gets.
+fn moon_drives_elevation(limits: Option<&tempo_audio::rotator::Limits>) -> bool {
+    limits
+        .and_then(tempo_audio::rotator::Limits::elevation)
+        .is_some()
+}
+
+/// Is a tracker steering the mast right now — a Moon follow, or a pass prepositioning or tracking?
+/// An ARMED pass (waiting for AOS, the rotor left to the operator) is not.
+///
+/// ⚠️ **Nor is a pass that lost its rotor ARMED, whatever its badge says.** A pass whose rotator
+/// stopped answering while it prepositioned publishes "armed" until AOS (it has no mast to slew),
+/// and its re-probe takes the mast back within 15 s once the rotator answers — off the station a
+/// point just turned it to. `rotor_lost` can only be set by commands the pass sent, so a pass that
+/// carries it has been steering, and is treated as steering.
+fn tracker_steering() -> bool {
+    moon_track_now().is_some()
+        || SAT_TRACK
+            .lock()
+            .map(|g| {
+                g.as_ref()
+                    .is_some_and(|t| t.state != "armed" || t.rotor_lost)
+            })
+            .unwrap_or(false)
+}
+
+/// End the tracker that is steering the mast, as Stop does (a pass hands its dial back), and leave
+/// an armed pass armed: a manual point is an HF move, and the armed phase is exactly when the
+/// operator has the rotor for HF.
+fn disarm_steering_tracker(engine: &SharedEngine) {
+    if tracker_steering() {
+        let _ = disarm_sat_track(engine);
+    }
+}
+
+/// Take the mast for the Moon: a live pass is disarmed exactly as Stop disarms it (its dial
+/// handed back), then the Moon gets the next generation and its first badge.
+fn arm_moon_track(engine: &SharedEngine, elevation: bool) -> (u64, MoonTrackDto) {
+    let _ = disarm_sat_track(engine);
+    let gen = SAT_TRACK_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+    let initial = MoonTrackDto {
+        state: "following",
+        elevation,
+        az_deg: None,
+        el_deg: None,
+    };
+    if let Ok(mut g) = MOON_TRACK.lock() {
+        *g = Some((gen, initial.clone()));
+    }
+    (gen, initial)
+}
+
+/// What one Moon follow runs on, fixed when it starts.
+struct MoonRun {
+    addr: String,
+    obs: (f64, f64),
+    cfg: tempo_core::rotator::RotatorConfig,
+    /// Drive the elevation (the backend declares an elevation axis)?
+    elevation: bool,
+    gen: u64,
+}
+
+/// THE MOON LOOP: point at the Moon every tick it is up, through the satellite track's own
+/// driver (deadband, calibration trim, misses, the give-up and its re-probe) and `send_rot_step`.
+/// Ends when the generation moves on — a pass, a Stop, a manual move, another Moon follow. `clock`
+/// and `tick_wait` are the wall clock and a [`MOON_TICK`] sleep in production, a simulation in a
+/// test.
+fn run_moon_track(run: MoonRun, clock: &dyn Fn() -> i64, tick_wait: &dyn Fn()) {
+    use std::sync::atomic::Ordering;
+    use tempo_core::rotator::{RotOutcome, RotStep};
+    let MoonRun {
+        addr,
+        obs,
+        cfg,
+        elevation,
+        gen,
+    } = run;
+    let mut driver = tempo_core::rotator::TrackDriver::new(cfg);
+    let mut rotor_lost = false;
+    loop {
+        if SAT_TRACK_GEN.load(Ordering::SeqCst) != gen {
+            return; // a newer owner, or a Stop: it halts the mast itself
+        }
+        let t = clock();
+        if rotor_lost
+            && driver.reprobe_due()
+            && tempo_audio::rotator::latest_position(&addr).is_ok()
+        {
+            driver.answered();
+            rotor_lost = false;
+            conn_log(
+                "Rotator",
+                "info",
+                "the rotator is answering again — following the Moon again.",
+            );
+            tempo_core::applog::info("rotator", "Moon follow: the rotator answered again");
+        }
+        let m = propagation::moon::look(obs, t);
+        let state = if rotor_lost {
+            "rotorLost"
+        } else if m.el_deg < 0.0 {
+            // BELOW THE HORIZON: hold. The antenna stays where it was last sent and nothing goes
+            // out until the Moon rises; parking a mast nobody asked to move is not this loop's.
+            "belowHorizon"
+        } else {
+            // An azimuth-only rotator is sent the line it always is (`point`, `P <az> 0`): the
+            // elevation fed to the driver is held at 0, so only the azimuth moves the deadband.
+            let el = if elevation { m.el_deg } else { 0.0 };
+            let step = match driver.step(m.az_deg, el) {
+                RotStep::PointAzEl { az, .. } if !elevation => RotStep::PointAz { az },
+                step => step,
+            };
+            if step != RotStep::Hold {
+                if SAT_TRACK_GEN.load(Ordering::SeqCst) != gen {
+                    return;
+                }
+                let outcome = send_rot_step(&addr, step);
+                driver.record(step, outcome, m.az_deg, el);
+                if outcome == RotOutcome::Failed && driver.gave_up() {
+                    rotor_lost = true;
+                    conn_log(
+                        "Rotator",
+                        "error",
+                        format!(
+                            "the rotator stopped answering while following the Moon ({} commands \
+                             in a row). Nexus asks it again every {} s.",
+                            tempo_core::rotator::MISS_LIMIT,
+                            tempo_core::rotator::REPROBE_AFTER_TICKS as u64 * MOON_TICK.as_secs()
+                        ),
+                    );
+                    tempo_core::applog::warn(
+                        "rotator",
+                        "Moon follow: the rotator stopped answering",
+                    );
+                }
+            }
+            if rotor_lost {
+                "rotorLost"
+            } else {
+                "following"
+            }
+        };
+        let aim = (!rotor_lost).then(|| driver.last_aim()).flatten();
+        let dto = MoonTrackDto {
+            state,
+            elevation: elevation && driver.azel_ok(),
+            az_deg: aim.map(|a| a.0),
+            el_deg: aim.and_then(|a| (elevation && driver.azel_ok()).then_some(a.1)),
+        };
+        if let Ok(mut g) = MOON_TRACK.lock() {
+            if SAT_TRACK_GEN.load(Ordering::SeqCst) == gen {
+                *g = Some((gen, dto));
+            }
+        }
+        tick_wait();
+    }
 }
 
 /// The transponder the ENGINE holds right now — read-back for
@@ -15300,8 +17485,9 @@ struct XrayNow {
     recent: Vec<(i64, f32)>,
     /// NOAA's newest flare event, when its list has answered.
     event: Option<propagation::flare::FlareEvent>,
-    /// NOAA's D-RAP grid, only while the flux is at a flare (M1+, where the map draws it):
-    /// it is not asked on a quiet sun, and not sent where nothing would draw it.
+    /// NOAA's D-RAP grid, only during a flare (M1+, where the map draws its footprint) or a
+    /// measured proton event (where the map draws its polar caps, `drap_wanted`): it is not asked
+    /// on a quiet sun, and not sent where nothing would draw it.
     drap: Option<propagation::flare::DrapGrid>,
 }
 
@@ -15328,19 +17514,37 @@ async fn lane_ask<T: Clone + Send + 'static>(
 /// snapshot so a flare's ONSET reaches the map + alert in ~1 min. Serves the
 /// last-good reading on a fetch failure; errors only when we never had one.
 #[tauri::command]
-async fn get_xray_now() -> Result<XrayNow, String> {
+async fn get_xray_now(protons: State<'_, ProtonCache>) -> Result<XrayNow, String> {
     use propagation::live::swpc;
     let x = lane_ask(&XRAY_LANE, swpc::fetch_xray_trace)
         .await
         .ok_or("xray: no GOES reading yet")?;
     let event = lane_ask(&FLARE_EVENT_LANE, swpc::fetch_flare_latest).await;
-    // Only during a flare, and only beside a GOES sample the UI still uses (flare.rs `wants_drap`).
-    let drap = if propagation::flare::wants_drap(x.now.value, x.now.at, now_unix()) {
+    // The proton reading the polar-cap layer already holds (never fetched here).
+    let held = protons
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|(_, p)| *p));
+    let drap = if drap_wanted(x.now.value, x.now.at, held, now_unix()) {
         lane_ask(&DRAP_LANE, swpc::fetch_drap_grid).await
     } else {
         None
     };
     Ok(xray_now(x, event, drap))
+}
+
+/// Whether NOAA's D-RAP grid is asked for: during a flare, beside a GOES sample the UI still uses
+/// (flare.rs `wants_drap`), OR during a measured proton event (pca.rs `proton_event`), where the
+/// grid carries NOAA's own polar-cap absorption and real cutoff. A quiet sun with no proton
+/// event costs NOAA nothing.
+fn drap_wanted(
+    xray: f32,
+    xray_at: i64,
+    protons: Option<propagation::live::protons::ProtonFlux>,
+    now: i64,
+) -> bool {
+    propagation::flare::wants_drap(xray, xray_at, now)
+        || protons.is_some_and(|p| propagation::pca::proton_event(p.j10, p.at, now))
 }
 
 /// The fast lane's answer: the flux, its time, the sparkline and the raw minutes all from the
@@ -15527,6 +17731,10 @@ fn get_scope_row(
 /// native panadapter row: the standing request an IQ panadapter zooms its rows to
 /// (`SpectrumFeed::request_rf_view`). Absent from an older UI or a Remote page, and then nothing
 /// is asked.
+///
+/// `audio_only` is the AUDIO VIEW the CW and Phone cockpits draw under the radio's own scope
+/// (`SpectrumFeed::audio_scope_frame_after`): the audio row over the window, never the RF row,
+/// whose own pane reads `get_rf_frame`. Absent or false, the read is the rig scope's, as before.
 #[tauri::command(async)]
 #[allow(clippy::too_many_arguments)]
 fn get_scope_frame(
@@ -15536,6 +17744,7 @@ fn get_scope_frame(
     last_seq: u64,
     rf_lo_hz: Option<f64>,
     rf_hi_hz: Option<f64>,
+    audio_only: Option<bool>,
     feed: State<'_, tempo_app::engine::SpectrumFeed>,
     state: State<'_, SharedEngine>,
 ) -> Result<Option<tempo_app::dto::SpectrumFrame>, String> {
@@ -15547,6 +17756,11 @@ fn get_scope_frame(
         .as_deref()
         .and_then(tempo_core::spectrum::ScopeAnalysis::from_tag)
         .unwrap_or_default();
+    if audio_only == Some(true) {
+        return Ok(
+            feed.audio_scope_frame_after(lo_hz, hi_hz, win, last_seq, || spectrum_fallback(&state))
+        );
+    }
     Ok(feed.scope_frame_after(lo_hz, hi_hz, win, last_seq, || spectrum_fallback(&state)))
 }
 
@@ -15682,7 +17896,7 @@ fn settings_read(
         settings: s,
         saved_at_the_station,
         // From afar, which settings the save keeps as the shack has them, so the form says so.
-        set_at_the_station: command_dispatch::station_only_settings(afar),
+        set_at_the_station: command_dispatch::station_only_settings(afar, shack),
     }
 }
 
@@ -15839,11 +18053,16 @@ fn apply_and_persist(
     let cluster_active = settings.cluster_active();
     let node_config = cluster_nodes::NodeConfig::of(&settings);
     let cluster_ssid = settings.cluster_ssid.clone();
-    let mycall = settings.mycall.clone();
-    let mygrid = settings.mygrid.clone();
     let opening_regional = settings.opening_regional;
-    // The engine lock is released again before the feed threads are touched.
-    let snap = save_and_publish(&state, settings, authoritative_roster)?;
+    // The engine lock is released again before the feed threads are touched. The call and grid
+    // the feeds bind to are the station's after the save, not the form's: with station profiles a
+    // form loaded before a switch carries the call the station has left (`save_and_publish`).
+    let (snap, mycall, mygrid) = save_and_publish(&state, settings, authoritative_roster)?;
+    // The claim moved under the save's lock, at once; if a peek of another window's refused that
+    // instant, it is taken now, patiently, off the lock. Already this window's: nothing to do.
+    if let Err(why) = claim_active_radio(&state) {
+        tempo_core::applog::warn("radio", &why);
+    }
     // Resolve the authoritative merged profile after the Engine commit.
     sync_rotctld(&state);
 
@@ -15921,11 +18140,16 @@ fn apply_and_persist(
 /// form keeps what the operator typed. So is a form save that would put a daemon of Nexus's, or
 /// its CAT broker, on a NET rigctl radio's Network Address
 /// ([`tempo_app::engine::Engine::port_clash_a_save_introduces`]), with words naming the port.
+///
+/// With the snapshot, the station's call and grid once the save is applied: what the feeds and the
+/// spot ranking's QTH bind to. Not the form's: with "My station" profiles a form loaded before a
+/// switch carries the call the station has left, and the save keeps the station on its profile
+/// (`Settings::keep_station_form`).
 fn save_and_publish(
     engine: &SharedEngine,
     mut settings: Settings,
     authoritative_roster: bool,
-) -> Result<AppSnapshot, String> {
+) -> Result<(AppSnapshot, String, String), String> {
     let published = settings.clone();
     let snap = tempo_app::engine::with_session_rows(
         engine,
@@ -15937,6 +18161,18 @@ fn save_and_publish(
             if !authoritative_roster {
                 if let Some(refusal) = eng.port_clash_a_save_introduces(&settings) {
                     return Err(refusal);
+                }
+            }
+            // ⛔ ONE RADIO, ONE WINDOW: a save that moves this window's radio onto a port another
+            // live Nexus window drives is refused whole, and the window keeps its radio.
+            if let Some(refusal) = eng.radio_claim_a_save_refuses(&settings, authoritative_roster) {
+                return Err(refusal);
+            }
+            // ⛔ A reset replaces the station's profiles and call: not while a run, a contact or an
+            // over is under way on a station with profiles (a form save keeps the call instead).
+            if authoritative_roster {
+                if let Some(why) = eng.station_profile_restore_refusal(&settings) {
+                    return Err(why.to_string());
                 }
             }
             // The LoTW sync cursor is bound to the exact query (notably the username);
@@ -15974,12 +18210,20 @@ fn save_and_publish(
             // copies), so saving the raw form here would write a roster that diverges from the engine and
             // revert the active radio on the next launch. Persist eng.settings() post-merge, like every
             // light verb does.
+            let before = eng.settings().clone();
             if authoritative_roster {
                 // The incoming settings REPLACE the station — see `apply_and_persist`. Keeping the
                 // live roster here would leave a factory reset with every radio it promised to erase.
                 eng.apply_restored_settings(settings);
             } else {
                 eng.apply_settings(settings);
+            }
+            note_tx_cards(eng, &before);
+            // The claim follows the radio's port: a save that moved it lets go of the old port and
+            // takes the new one (refused above if another window had it). Under the same hold of
+            // the lock as the check, so no other save of this window comes between.
+            if let Err(why) = claim_active_radio_of(eng.settings()) {
+                tempo_core::applog::warn("radio", &why);
             }
             if let Some(rows) = rows {
                 eng.open_session_from(rows);
@@ -15993,7 +18237,12 @@ fn save_and_publish(
             if active_profile().is_some() {
                 persist_simultaneous_to_base(eng.settings().simultaneous_radios);
             }
-            Ok(eng.snapshot())
+            let station = eng.settings();
+            Ok((
+                eng.snapshot(),
+                station.mycall.clone(),
+                station.mygrid.clone(),
+            ))
         },
     )??;
     // Live, so an operator can start a diagnostic session mid-flight without restarting — the
@@ -16013,8 +18262,9 @@ fn save_and_publish(
     journal_assistance(&published, "settings saved", false);
     // The spot buffer's voice ranking is QTH-relative and the feed threads outlive a
     // save, so it reads this mirror rather than a spawn-time capture.
-    set_operator_qth(&published.mycall, &published.mygrid);
-    Ok(snap)
+    let (snap, mycall, mygrid) = snap;
+    set_operator_qth(&mycall, &mygrid);
+    Ok((snap, mycall, mygrid))
 }
 
 /// A command that opens a contest session, and the launch that resumes one, when the logbook is
@@ -16471,6 +18721,70 @@ mod contest_session_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// ⛔ A BACKUP NEVER CHANGES WHETHER OTHER COMPUTERS' WSJT-X REQUESTS ARE TAKEN: not a file
+    /// that says yes where the station says no, in its settings or a saved profile, and not one
+    /// that says no where the station says yes. The rest of the backup lands.
+    #[test]
+    fn a_restore_keeps_the_stations_answer_on_other_computers_requests() {
+        let (dir, engine) = super::durable_command_tests::engine_on_store("restore-accept", 0);
+        let set = |on: bool| {
+            let mut s = engine_lock(&engine).settings().clone();
+            s.wsjtx_udp_accept_other_computers = on;
+            engine_lock(&engine).apply_restored_settings(s);
+        };
+        let station_ui = with_station_paths_set(&engine, "C:\\Shack");
+        let restore = |file_says: bool| {
+            let text = settings_bundle(&engine, station_ui.clone(), None).unwrap();
+            let mut v: serde_json::Value = serde_json::from_str(&text).unwrap();
+            v["settings"]["mycall"] = serde_json::json!("W9NEW");
+            v["settings"]["wsjtxUdpAcceptOtherComputers"] = serde_json::json!(file_says);
+            let mut profiles: serde_json::Value = serde_json::from_str(
+                v["uiState"][crate::command_dispatch::PROFILES]
+                    .as_str()
+                    .unwrap(),
+            )
+            .unwrap();
+            profiles[0]["settings"]["wsjtxUdpAcceptOtherComputers"] = serde_json::json!(file_says);
+            v["uiState"][crate::command_dispatch::PROFILES] =
+                serde_json::Value::String(profiles.to_string());
+            let mut saved = None;
+            restore_settings_bundle(
+                &engine,
+                v.to_string(),
+                || station_ui.clone(),
+                |ui| {
+                    saved = Some(ui);
+                    true
+                },
+                no_key_change,
+            )
+            .unwrap();
+            let s = engine_lock(&engine).settings().clone();
+            let profiles: serde_json::Value =
+                serde_json::from_str(&saved.unwrap()[crate::command_dispatch::PROFILES]).unwrap();
+            (
+                s.mycall,
+                s.wsjtx_udp_accept_other_computers,
+                profiles[0]["settings"]
+                    .get("wsjtxUdpAcceptOtherComputers")
+                    .cloned(),
+            )
+        };
+        set(false);
+        assert_eq!(
+            restore(true),
+            ("W9NEW".to_string(), false, None),
+            "(the rest lands, the station's answer, the profile's)"
+        );
+        set(true);
+        assert_eq!(
+            restore(false),
+            ("W9NEW".to_string(), true, None),
+            "(the rest lands, the station's answer, the profile's)"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// ★ RESTORING A BACKUP MADE FROM AFAR KEEPS THE STATION'S PATHS, as the station has them at
     /// the restore (moved since the backup), in its settings and in its saved profile of the same
     /// name, while the rest of the backup lands. A backup made at the station keeps them too.
@@ -16836,6 +19150,36 @@ mod contest_session_tests {
         );
     }
 
+    /// ★ A VOICE SLOT WRITTEN AS A LIST (`[slot, label, file]`, which the settings reader takes as
+    /// readily as `{slot, label, file}`) never brings its recording either: after a restore of a
+    /// backup made at the station, no slot, in the settings or in any saved profile, plays the file
+    /// the backup named.
+    #[test]
+    fn restoring_a_backup_never_takes_a_recording_from_a_slot_written_as_a_list() {
+        let unc = "\\\\elsewhere\\share\\cq.wav";
+        let as_list = serde_json::json!([[1, "CQ CONTEST", unc]]);
+        let read: Vec<tempo_app::settings::VoiceMessage> =
+            serde_json::from_value(as_list.clone()).unwrap();
+        assert_eq!(read[0].file, unc, "the settings reader takes the list form");
+        let (_, profiles, voice) = restored_at_the_station("restore-voice-list", |s| {
+            s.insert("voiceMessages".into(), as_list.clone());
+        });
+        assert!(voice.iter().all(|v| v.file != unc), "settings: {voice:?}");
+        for (name, p) in &profiles {
+            assert!(!p.to_string().contains("elsewhere"), "profile {name}: {p}");
+        }
+    }
+
+    /// ★ A BACKUP MADE FROM AFAR CARRIES NO RECORDING FROM A SLOT WRITTEN AS A LIST either.
+    #[test]
+    fn a_backup_from_afar_leaves_out_a_recording_from_a_slot_written_as_a_list() {
+        let mut settings = serde_json::json!({
+            "voiceMessages": [[1, "CQ", "C:\\Shack\\voice\\slot1.wav"]],
+        });
+        without_station_paths(settings.as_object_mut().unwrap());
+        assert!(!settings.to_string().contains("Shack"), "{settings}");
+    }
+
     /// The station's stored keys, planted (fake): its own Club Log and Cloudlog keys in its
     /// settings, and each of two saved profiles' own, every one a distinct string under `tag`.
     /// With the UI state holding a station key (the watch list) and this computer's own (the UI
@@ -16982,6 +19326,50 @@ mod contest_session_tests {
                 Some(serde_json::json!("1.5"))
             ),
             "CONTROL: at the station"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ★ THE TRANSPONDER CHOSEN ON EACH SATELLITE IS THE STATION'S, AND GOES WITH ITS BACKUP: the
+    /// last pick and the ★ favorite per bird (`nexus.sats.transponders`, the UI's
+    /// satTransponderPref) are in a backup made from afar, and restoring that backup lands the
+    /// backup's choice over the station's current one, as the ★ birds beside it do. CONTROL: made
+    /// at the station, it goes too.
+    #[test]
+    fn the_transponder_choices_go_with_a_backup_made_from_afar() {
+        const KEY: &str = "nexus.sats.transponders";
+        let (dir, engine) = super::durable_command_tests::engine_on_store("bundle-sat-tp", 0);
+        let mut ui = with_station_keys_set(&engine, "PLANTED");
+        ui.insert(KEY.into(), r#"{"ISS":{"fav":{"up":145990000}}}"#.into());
+        let carried = |afar| {
+            let text = settings_bundle(&engine, ui.clone(), afar).unwrap();
+            let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+            (text, v["uiState"].get(KEY).cloned())
+        };
+        let (afar, from_afar) = carried(Some(&FROM_AFAR));
+        assert_eq!(
+            from_afar,
+            Some(serde_json::json!(r#"{"ISS":{"fav":{"up":145990000}}}"#))
+        );
+        assert_eq!(carried(None).1, from_afar, "CONTROL: at the station");
+        let mut station_ui = std::collections::BTreeMap::new();
+        station_ui.insert(KEY.to_string(), r#"{"ISS":{"last":{"up":1}}}"#.to_string());
+        let mut saved = None;
+        restore_settings_bundle(
+            &engine,
+            afar,
+            || station_ui,
+            |ui| {
+                saved = Some(ui);
+                true
+            },
+            no_key_change,
+        )
+        .unwrap();
+        assert_eq!(
+            saved.unwrap().get(KEY).map(String::as_str),
+            Some(r#"{"ISS":{"fav":{"up":145990000}}}"#),
+            "the backup's choice lands"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -19609,6 +21997,10 @@ fn restart_live_feeds(
         cluster_nodes::set_config(node_config);
         if cluster_active {
             start_cluster_feeds(&spots, &mycall, &cluster_ssid, &health, true);
+        } else {
+            // Every cluster feed stopped above and none restarts: a lease held for the old call
+            // would strand the windows following it.
+            release_cluster_share();
         }
         start_pskr_feed(&live_paths, &mycall, &health);
         start_wspr_feed(&live_paths, &mycall);
@@ -19779,8 +22171,9 @@ fn export_settings_bundle(
 
 /// The settings that hold a path on the station's own disk: the TQSL program and JS8's sound
 /// files. Each voice-keyer slot's recording (`voiceMessages[].file`) is one too, and goes with
-/// them ([`without_station_paths`]).
-const STATION_PATHS: [&str; 2] = ["tqslPath", "js8SoundFiles"];
+/// them ([`without_station_paths`]). ⛔ With them, though it is no path, the leave for other
+/// computers to send WSJT-X requests that can arm TX: a backup can never turn it on.
+const STATION_PATHS: [&str; 3] = ["tqslPath", "js8SoundFiles", "wsjtxUdpAcceptOtherComputers"];
 
 /// The name a bundle exported from afar carries, `true`, beside its settings: the station's paths
 /// were left out of it ([`without_station_paths`]), so a restore keeps the station's own
@@ -19789,7 +22182,8 @@ const STATION_PATHS_LEFT_OUT: &str = "stationPathsLeftOut";
 
 /// One settings object (the bundle's own, or a saved profile's) without the station's paths: each
 /// of [`STATION_PATHS`] left out, which a restore and a profile load read as "keep this station's",
-/// and each voice-keyer slot's recording blanked, as a slot is before one is recorded.
+/// and each voice-keyer slot's recording blanked, as a slot is before one is recorded. A slot that
+/// is not an object is left out whole.
 fn without_station_paths(settings: &mut serde_json::Map<String, serde_json::Value>) {
     for key in STATION_PATHS {
         settings.remove(key);
@@ -19798,6 +22192,9 @@ fn without_station_paths(settings: &mut serde_json::Map<String, serde_json::Valu
         .get_mut("voiceMessages")
         .and_then(serde_json::Value::as_array_mut)
     {
+        // ⛔ A slot the settings reader takes in another form (a list, `[slot, label, file]`)
+        // cannot have its recording rewritten here, so it is dropped (Nexus writes none).
+        slots.retain(serde_json::Value::is_object);
         for slot in slots
             .iter_mut()
             .filter_map(serde_json::Value::as_object_mut)
@@ -19811,11 +22208,12 @@ fn without_station_paths(settings: &mut serde_json::Map<String, serde_json::Valu
 /// `station` holds them (this station's settings, or its saved profile of the same name): each of
 /// [`STATION_PATHS`], and each voice-keyer slot's recording by slot number. What `station` does not
 /// hold is left out, so loading that profile keeps this station's own. The backup's voice slots are
-/// always kept, labels and all: a slot the station holds no recording for (no profile of that
-/// name here, or one with no voice slots) keeps its recording blank, as a slot is before one is
-/// recorded. ⛔ A path a backup names is never taken: the TQSL program runs with nobody pressing
-/// anything (the automatic LoTW upload), and a file could name any program, or a sound or a
-/// recording on another computer's share.
+/// always kept, labels and all, except a slot that is not an object, which is left out whole: a
+/// slot the station holds no recording for (no profile of that name here, or one with no voice
+/// slots) keeps its recording blank, as a slot is before one is recorded. ⛔ A path a backup names
+/// is never taken: the TQSL program runs with nobody pressing anything (the automatic LoTW
+/// upload), and a file could name any program, or a sound or a recording on another computer's
+/// share.
 fn with_station_paths(
     settings: &mut serde_json::Map<String, serde_json::Value>,
     station: Option<&serde_json::Map<String, serde_json::Value>>,
@@ -19833,6 +22231,9 @@ fn with_station_paths(
         .get_mut("voiceMessages")
         .and_then(serde_json::Value::as_array_mut)
     {
+        // ⛔ A slot the settings reader takes in another form (a list, `[slot, label, file]`)
+        // cannot have its recording rewritten here, so it is dropped (Nexus writes none).
+        slots.retain(serde_json::Value::is_object);
         for slot in slots
             .iter_mut()
             .filter_map(serde_json::Value::as_object_mut)
@@ -21540,10 +23941,18 @@ struct RotctldOwner {
     /// episode, however many times [`rotctld_tick`] tries again. Cleared when a daemon comes up
     /// or the rotator is unconfigured; a change of params is a new episode.
     failing: Option<RotctldParams>,
+    /// The External rotctld address last written to the diagnostic log, so a save says when it
+    /// starts and stops being used and is quiet otherwise. That rotctld is not Nexus's process,
+    /// so these two lines are its whole lifecycle as far as this log can see.
+    external: Option<String>,
+    /// The restarts of a running rotctld whose network link is stuck ([`StuckLink`]).
+    stuck: StuckLink,
 }
 static ROTCTLD: Mutex<RotctldOwner> = Mutex::new(RotctldOwner {
     daemon: None,
     failing: None,
+    external: None,
+    stuck: StuckLink::new(),
 });
 
 /// What one reconcile of the integrated rotctld did — so the supervisor's rules can be held to
@@ -21674,8 +24083,9 @@ fn supervise_rotctld(engine: SharedEngine) {
     }
 }
 
-/// One supervisor tick: reconcile only when a daemon is wanted and is not running, so a healthy
-/// daemon costs one lock and one `try_wait`. `None` when there was nothing to do.
+/// One supervisor tick: reconcile when a daemon is wanted and is not running, and restart a
+/// running one whose network link is stuck ([`restart_if_stuck`]), so a healthy daemon costs one
+/// lock, one `try_wait` and one look at a counter. `None` when there was nothing to do.
 fn rotctld_tick(
     owner: &mut RotctldOwner,
     st: &Settings,
@@ -21686,7 +24096,181 @@ fn rotctld_tick(
         .daemon
         .as_mut()
         .is_some_and(|(proc, _)| proc.is_alive());
-    (want && !running).then(|| reconcile_rotctld(owner, st, spawn))
+    if want && running {
+        return restart_if_stuck(
+            owner,
+            st,
+            spawn,
+            std::time::Instant::now(),
+            tempo_audio::rotator::controller_streak,
+        );
+    }
+    owner.stuck = StuckLink::new();
+    want.then(|| reconcile_rotctld(owner, st, spawn))
+}
+
+/// Answers in a row of `RPRT -6` from the integrated rotctld that make its network link stuck
+/// ([`StuckLink`]): three polls, about six seconds with a Rotor box open. `RPRT -5` never counts
+/// (`tempo_audio::rotator::controller_streak` says why).
+const STUCK_AFTER: u32 = 3;
+/// The wait after a restart of a stuck rotctld before the next one, doubling each time it is still
+/// stuck, up to [`STUCK_RETRY_MAX`].
+const STUCK_RETRY_FIRST: std::time::Duration = std::time::Duration::from_secs(30);
+const STUCK_RETRY_MAX: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Restarts of a running integrated rotctld whose link to a network Port box is stuck.
+///
+/// ⭐ **Hamlib never reconnects a network port** (2026-11-04, rotators reached over the internet).
+/// With `a.b.c.d:port` in the Port box (a serial server, or a controller's own network port)
+/// rotctld opens that TCP connection once, when it opens the rotator. When a NAT, the ISP or the
+/// serial server drops it, rotctld stays up and answers every command `RPRT -6` (measured on
+/// rotctld 4.6.5), and the supervisor, which restarted only a rotctld that had EXITED, left it
+/// there until Nexus was restarted. A new rotctld opens a new connection.
+///
+/// The rules, pure with the clock passed in: the first restart after [`STUCK_AFTER`] answers in a
+/// row; another one only after [`STUCK_RETRY_FIRST`], doubling to [`STUCK_RETRY_MAX`], so a far end
+/// that accepts the connection and drops it again costs a restart every five minutes, not one per
+/// tick; and the episode ends at the first good answer. A controller that is merely switched off
+/// is never restarted for: rotctld answers it `RPRT -5`, which does not count.
+///
+/// ⚠️ **The backoff only covers a new rotctld that CONNECTS.** One whose far end refuses the
+/// connection exits at once, and one whose far end drops everything sits in `connect` until the
+/// computer's TCP gives up (measured: about 134 s on Linux) and then exits. Either way the dead
+/// daemon is the supervisor's ordinary business ([`ROTCTLD_RETRY`]), and this episode is over.
+#[derive(Debug, Default)]
+struct StuckLink {
+    /// Restarts this episode, and when the last one was.
+    restarts: u32,
+    last: Option<std::time::Instant>,
+}
+
+/// What [`StuckLink::decide`] says to do.
+#[derive(Debug, PartialEq, Eq)]
+enum StuckCall {
+    Wait,
+    /// Restart rotctld; `first` is the episode's first restart (the one the log says).
+    Restart {
+        first: bool,
+    },
+    /// The link answers again after this many restarts (said once).
+    Recovered {
+        restarts: u32,
+    },
+}
+
+impl StuckLink {
+    const fn new() -> Self {
+        StuckLink {
+            restarts: 0,
+            last: None,
+        }
+    }
+
+    /// `streak` is [`tempo_audio::rotator::controller_streak`] for the integrated rotctld.
+    fn decide(&mut self, streak: Option<u32>, now: std::time::Instant) -> StuckCall {
+        match streak {
+            Some(0) if self.restarts > 0 => {
+                let restarts = self.restarts;
+                *self = StuckLink::new();
+                StuckCall::Recovered { restarts }
+            }
+            Some(n) if n >= STUCK_AFTER => {
+                let wait = STUCK_RETRY_FIRST
+                    .saturating_mul(1 << self.restarts.saturating_sub(1).min(8))
+                    .min(STUCK_RETRY_MAX);
+                if self.last.is_some_and(|t| now.duration_since(t) < wait) {
+                    return StuckCall::Wait;
+                }
+                self.restarts += 1;
+                self.last = Some(now);
+                StuckCall::Restart {
+                    first: self.restarts == 1,
+                }
+            }
+            _ => StuckCall::Wait,
+        }
+    }
+}
+
+/// Is the rotator's Port box an address Hamlib opens as a TCP connection rather than a serial
+/// port? Hamlib does that only for a literal IPv4 address and a port number (`a.b.c.d:port`); a
+/// host name is taken as a serial device, and rotctld exits on it, which the supervisor already
+/// handles.
+fn network_port(port: &str) -> bool {
+    port.trim().rsplit_once(':').is_some_and(|(host, number)| {
+        host.parse::<std::net::Ipv4Addr>().is_ok() && number.parse::<u16>().is_ok()
+    })
+}
+
+/// Restart the running integrated rotctld when its link to a network Port box is stuck
+/// ([`StuckLink`]). `streak` is asked for the daemon's address: in the app,
+/// `tempo_audio::rotator::controller_streak`.
+///
+/// Only Hamlib's own rotctld, and only one whose Port box is a network address: both read from the
+/// RUNNING daemon and the params it was started with, not from settings that may have been edited
+/// since. A serial port does not get stuck the way a TCP connection does, and the PstRotatorAz
+/// link is Nexus's own, holds no connection, and keeps its UDP target in the same Port box.
+fn restart_if_stuck(
+    owner: &mut RotctldOwner,
+    st: &Settings,
+    spawn: impl FnOnce(u32, &str, u32, u16) -> std::io::Result<RotDaemon>,
+    now: std::time::Instant,
+    streak: impl FnOnce(&str) -> Option<u32>,
+) -> Option<RotctldSync> {
+    let (daemon, params) = owner.daemon.as_ref()?;
+    let hamlib = matches!(daemon, RotDaemon::Hamlib(_));
+    let (port, addr) = (params.1.clone(), format!("127.0.0.1:{}", params.3));
+    if !(hamlib && network_port(&port)) {
+        owner.stuck = StuckLink::new();
+        return None;
+    }
+    match owner.stuck.decide(streak(&addr), now) {
+        StuckCall::Wait => None,
+        StuckCall::Recovered { restarts } => {
+            let (screen, diag) = rotctld_reconnect_lines(&port, Some(restarts));
+            tempo_core::applog::info("rotator", &diag);
+            conn_log("Rotator", "info", screen);
+            None
+        }
+        StuckCall::Restart { first } => {
+            if first {
+                let (screen, diag) = rotctld_reconnect_lines(&port, None);
+                tempo_core::applog::warn("rotator", &diag);
+                conn_log("Rotator", "warn", screen);
+            }
+            owner.daemon = None; // kill-on-drop
+            tempo_audio::rotator::forget_controller(&addr);
+            Some(reconcile_rotctld(owner, st, spawn))
+        }
+    }
+}
+
+/// The two copies of the stuck-link lines for the Port box `port`: the first restart of an episode
+/// (`restarts` `None`) and the link answering again after `restarts` restarts. The Connections
+/// log's, verbatim, and the diagnostic log's, with the host masked
+/// (`tempo_audio::rotator::mask_port`). Pure, so the wording and the masking are tests.
+fn rotctld_reconnect_lines(port: &str, restarts: Option<u32>) -> (String, String) {
+    let port = port.trim();
+    let screen = match restarts {
+        None => format!(
+            "rotctld lost its network connection to the rotator at {port}: it answered {} \
+             commands in a row with an I/O error, and Hamlib does not connect again on its own, \
+             so Nexus is restarting rotctld. If the new rotctld connects and the connection \
+             fails again, Nexus restarts it after {} s, then at longer and longer intervals, up \
+             to {} minutes apart. If it cannot connect at all, it stops, and Nexus starts it \
+             again as it does any rotctld that stops (it checks every {} s).",
+            STUCK_AFTER,
+            STUCK_RETRY_FIRST.as_secs(),
+            STUCK_RETRY_MAX.as_secs() / 60,
+            ROTCTLD_RETRY.as_secs()
+        ),
+        Some(n) => format!(
+            "rotctld is talking to the rotator at {port} again, after {n} restart{}.",
+            if n == 1 { "" } else { "s" }
+        ),
+    };
+    let diag = tempo_audio::rotator::mask_port(&screen, port);
+    (screen, diag)
 }
 
 fn sync_rotctld_owned(owner: &mut RotctldOwner, st: &Settings) -> RotctldSync {
@@ -21722,6 +24306,82 @@ fn absent_serial_port(port: &str, present: impl FnOnce() -> Vec<String>) -> Opti
     ))
 }
 
+/// The diagnostic log's line when the External rotctld starts or stops being the rotator, or
+/// `None` when nothing changed. Its address is written the way the link watch writes it
+/// (`tempo_audio::rotator::link_label`): a host off this computer is not named.
+fn external_rotctld_note(was: Option<&str>, now: Option<&str>) -> Option<String> {
+    match (was, now) {
+        (a, b) if a == b => None,
+        (_, Some(addr)) => Some(format!(
+            "using an External rotctld: {}",
+            tempo_audio::rotator::link_label(addr)
+        )),
+        (Some(_), None) => Some("no longer using an External rotctld".to_string()),
+        (None, None) => None,
+    }
+}
+
+/// The two copies of "rotctld exited" (the Connections log's, verbatim, and the diagnostic log's,
+/// with a network address in the Port box `port` masked), with Hamlib's own words (`said`).
+fn rotctld_exited_lines(port: &str, said: &[String]) -> (String, String) {
+    let screen = tempo_audio::service::with_daemon_error(
+        "rotctld exited — the rotator is not under control. Restarting it.".to_string(),
+        said,
+    );
+    let diag = tempo_audio::rotator::mask_port(&screen, port);
+    (screen, diag)
+}
+
+/// The two copies of "rotctld launched" (or, for model 3, "PstRotatorAz link up"): the
+/// Connections log's, verbatim, and the diagnostic log's, with a network address in the Port box
+/// (for PstRotatorAz, its UDP target) masked.
+fn rotctld_launched_lines(params: &RotctldParams, pst: bool) -> (String, String) {
+    let port = params.3;
+    let screen = if pst {
+        format!(
+            "PstRotatorAz link up (UDP to {}, rotctld :{port})",
+            if params.1.is_empty() {
+                tempo_audio::pstrotator::DEFAULT_TARGET
+            } else {
+                &params.1
+            }
+        )
+    } else {
+        format!(
+            "rotctld launched (model {} on {} @ {}, :{port})",
+            params.0,
+            if params.1.is_empty() { "-" } else { &params.1 },
+            params.2
+        )
+    };
+    let diag = tempo_audio::rotator::mask_port(&screen, &params.1);
+    (screen, diag)
+}
+
+/// The two copies of "rotctld could not start", with Hamlib's own words (`said`): the Connections
+/// log's, on screen only and verbatim, and the diagnostic log's, which is built to be sent to a
+/// stranger and so has a network address in the Port box masked (`tempo_audio::rotator::mask_port`).
+fn rotctld_start_failed_lines(params: &RotctldParams, said: &[String]) -> (String, String) {
+    let screen = tempo_audio::service::with_daemon_error(
+        format!(
+            "rotctld could not start for model {} on {} @ {} — the rotator will not answer. Is \
+             the controller switched on and plugged in? Nexus keeps trying every {} s. If it is, \
+             check the port and that the baud matches what this model needs.",
+            params.0,
+            if params.1.is_empty() {
+                "(no port set)"
+            } else {
+                &params.1
+            },
+            params.2,
+            ROTCTLD_RETRY.as_secs()
+        ),
+        said,
+    );
+    let diag = tempo_audio::rotator::mask_port(&screen, &params.1);
+    (screen, diag)
+}
+
 /// The reconcile itself, with the spawn handed in so a test can count its attempts.
 fn reconcile_rotctld(
     owner: &mut RotctldOwner,
@@ -21729,6 +24389,15 @@ fn reconcile_rotctld(
     spawn: impl FnOnce(u32, &str, u32, u16) -> std::io::Result<RotDaemon>,
 ) -> RotctldSync {
     let want = st.rotator_host.trim().is_empty() && st.rotator_model > 0;
+    let external = Some(st.rotator_host.trim())
+        .filter(|h| !h.is_empty())
+        .map(str::to_string);
+    if owner.external != external {
+        if let Some(line) = external_rotctld_note(owner.external.as_deref(), external.as_deref()) {
+            tempo_core::applog::info("rotator", &line);
+        }
+        owner.external = external;
+    }
     let params = (
         st.rotator_model,
         st.rotator_port.trim().to_string(),
@@ -21743,21 +24412,28 @@ fn reconcile_rotctld(
     // same reason the CAT daemon's rebuild is: while it is dead there is no rotator channel to
     // race, no motion is in flight (the mast stopped when the daemon did), and a fresh one is
     // the only route back. It cannot run away, either: a save, a radio switch and startup call
-    // this, and the supervisor calls it every ROTCTLD_RETRY only while the daemon is down.
+    // this, and the supervisor calls it every ROTCTLD_RETRY while the daemon is down. The one
+    // time the supervisor calls it with a daemon that was LIVE is [`restart_if_stuck`], which has
+    // already killed it: a rotctld whose network link answers only `RPRT -6`, so nothing it was
+    // sent could reach the controller anyway, and that restart is backed off ([`StuckLink`]). A
+    // `P` the controller took before the link dropped is a go-to that ends at its target; the
+    // kill sends the controller nothing.
     let running = g.as_mut().map(|(proc, p)| (*p == params, proc.is_alive()));
     match (running, want) {
         (Some((true, true)), true) => RotctldSync::Running, // running, with the right params
         (was, true) => {
-            if let (Some((_, false)), Some((proc, _))) = (was, g.as_mut()) {
-                conn_log(
-                    "Rotator",
-                    "error",
-                    tempo_audio::service::with_daemon_error(
-                        "rotctld exited — the rotator is not under control. Restarting it."
-                            .to_string(),
-                        &proc.said(),
-                    ),
+            if let (Some((_, false)), Some((proc, old))) = (was, g.as_mut()) {
+                let (screen, diag) = rotctld_exited_lines(&old.1, &proc.said());
+                // The diagnostic log's copy, at most once a minute: a daemon that comes up and
+                // dies on every 5 s retry is one line and a count there, not a line per retry.
+                tempo_core::applog::throttled(
+                    tempo_core::applog::Level::Warn,
+                    "rotator",
+                    "rotctld-exited",
+                    std::time::Duration::from_secs(60),
+                    &diag,
                 );
+                conn_log("Rotator", "error", screen);
             }
             let slot = &mut *g;
             *slot = None; // kill-on-drop reaps a stale daemon first
@@ -21774,7 +24450,6 @@ fn reconcile_rotctld(
             }
             match spawn(params.0, &params.1, params.2, params.3) {
                 Ok(mut proc) => {
-                    let port = params.3;
                     // Give it the moment it takes to fail. A rotctld that cannot open the port
                     // is gone in tens of milliseconds; one that comes up is still here after a
                     // quarter second and this costs a settings save that long, once.
@@ -21784,24 +24459,16 @@ fn reconcile_rotctld(
                         std::thread::sleep(std::time::Duration::from_millis(25));
                     }
                     if proc.is_alive() {
-                        let what = if let RotDaemon::PstRotator(_) = proc {
-                            format!(
-                                "PstRotatorAz link up (UDP to {}, rotctld :{port})",
-                                if params.1.is_empty() {
-                                    tempo_audio::pstrotator::DEFAULT_TARGET
-                                } else {
-                                    &params.1
-                                }
-                            )
-                        } else {
-                            format!(
-                                "rotctld launched (model {} on {} @ {}, :{port})",
-                                params.0,
-                                if params.1.is_empty() { "-" } else { &params.1 },
-                                params.2
-                            )
-                        };
-                        conn_log("Rotator", "info", what);
+                        let pst = matches!(proc, RotDaemon::PstRotator(_));
+                        let (screen, diag) = rotctld_launched_lines(&params, pst);
+                        tempo_core::applog::throttled(
+                            tempo_core::applog::Level::Info,
+                            "rotator",
+                            "rotctld-started",
+                            std::time::Duration::from_secs(60),
+                            &diag,
+                        );
+                        conn_log("Rotator", "info", screen);
                         *slot = Some((proc, params));
                         owner.failing = None;
                         RotctldSync::Started
@@ -21811,28 +24478,10 @@ fn reconcile_rotctld(
                         // there, port already open, a `-C` value it will not parse — and every
                         // one of them was being discarded.
                         if report {
-                            conn_log(
-                                "Rotator",
-                                "error",
-                                tempo_audio::service::with_daemon_error(
-                                    format!(
-                                        "rotctld could not start for model {} on {} @ {} — the \
-                                         rotator will not answer. Is the controller switched on \
-                                         and plugged in? Nexus keeps trying every {} s. If it \
-                                         is, check the port and that the baud matches what this \
-                                         model needs.",
-                                        params.0,
-                                        if params.1.is_empty() {
-                                            "(no port set)"
-                                        } else {
-                                            &params.1
-                                        },
-                                        params.2,
-                                        ROTCTLD_RETRY.as_secs()
-                                    ),
-                                    &proc.said(),
-                                ),
-                            );
+                            let (screen, diag) = rotctld_start_failed_lines(&params, &proc.said());
+                            // Once per episode, as on the Connections log.
+                            tempo_core::applog::warn("rotator", &diag);
+                            conn_log("Rotator", "error", screen);
                         }
                         owner.failing = Some(params);
                         RotctldSync::StartFailed { reported: report }
@@ -21883,6 +24532,7 @@ fn reconcile_rotctld(
             } else {
                 "rotctld stopped (rotator unconfigured)"
             };
+            tempo_core::applog::info("rotator", why);
             conn_log("Rotator", "info", why);
             *g = None;
             owner.failing = None;
@@ -21952,7 +24602,79 @@ mod rotctld_supervisor_tests {
         RotctldOwner {
             daemon: None,
             failing: None,
+            external: None,
+            stuck: StuckLink::new(),
         }
+    }
+
+    #[test]
+    fn the_diagnostic_copies_of_launched_and_exited_mask_a_network_port_box() {
+        let params = (603, "203.0.113.9:4001".to_string(), 9600, 4533);
+        let (screen, diag) = rotctld_launched_lines(&params, false);
+        assert!(screen.contains("203.0.113.9:4001"), "{screen}");
+        assert_eq!(
+            diag,
+            "rotctld launched (model 603 on a network address:4001 @ 9600, :4533)"
+        );
+        // PstRotatorAz's UDP target on another computer.
+        let (_, diag) = rotctld_launched_lines(&(3, "203.0.113.9:12000".into(), 0, 4533), true);
+        assert!(!diag.contains("203.0.113.9"), "{diag}");
+        let said = vec!["network_open: 203.0.113.9 refused".to_string()];
+        let (screen, diag) = rotctld_exited_lines("203.0.113.9:4001", &said);
+        assert!(
+            screen.contains("203.0.113.9"),
+            "the screen keeps it: {screen}"
+        );
+        assert!(!diag.contains("203.0.113.9"), "{diag}");
+        // The control: a serial port stays.
+        let (_, diag) = rotctld_launched_lines(&(603, "COM4".into(), 9600, 4533), false);
+        assert!(diag.contains("on COM4 @ 9600"), "{diag}");
+    }
+
+    #[test]
+    fn the_diagnostic_copy_of_a_failed_start_masks_a_network_port_box() {
+        // A Port box holding a serial server's address (path B2), and Hamlib naming it too.
+        let said = vec!["serial_open: 203.0.113.9:4001 does not exist".to_string()];
+        let (screen, diag) =
+            rotctld_start_failed_lines(&(603, "203.0.113.9:4001".into(), 9600, 4533), &said);
+        assert!(
+            screen.contains("203.0.113.9"),
+            "the screen keeps it: {screen}"
+        );
+        assert!(!diag.contains("203.0.113.9"), "{diag}");
+        assert!(diag.contains("a network address:4001"), "{diag}");
+        // A bare address with no port is the likely paste, and is masked too.
+        let (_, diag) = rotctld_start_failed_lines(&(603, "203.0.113.9".into(), 9600, 4533), &[]);
+        assert!(!diag.contains("203.0.113.9"), "{diag}");
+        // The control: a serial port is the diagnosis, and stays.
+        let (_, diag) = rotctld_start_failed_lines(&(603, "COM4".into(), 9600, 4533), &[]);
+        assert!(diag.contains("on COM4 @ 9600"), "{diag}");
+    }
+
+    #[test]
+    fn the_external_rotctld_is_logged_when_it_starts_and_stops_being_the_rotator() {
+        assert_eq!(external_rotctld_note(None, None), None);
+        assert_eq!(
+            external_rotctld_note(Some("10.0.0.5:4533"), Some("10.0.0.5:4533")),
+            None
+        );
+        let on = external_rotctld_note(None, Some("203.0.113.9:4533")).expect("a line");
+        assert_eq!(
+            on,
+            "using an External rotctld: the rotator (a remote rotctld, port 4533)"
+        );
+        assert!(
+            !on.contains("203.0.113.9"),
+            "the host is the operator's: {on}"
+        );
+        assert_eq!(
+            external_rotctld_note(Some("203.0.113.9:4533"), None).as_deref(),
+            Some("no longer using an External rotctld")
+        );
+        // On this computer it is named, as the integrated daemon's port is.
+        assert!(external_rotctld_note(None, Some("127.0.0.1:4533"))
+            .expect("a line")
+            .contains("127.0.0.1:4533"));
     }
 
     #[test]
@@ -22285,7 +25007,9 @@ mod rotctld_supervisor_tests {
                 let _ = sock.write_all(answer(line.trim_end()).as_bytes());
                 held.push(sock);
             }
-            std::thread::sleep(std::time::Duration::from_secs(3));
+            // Held well past the client's read deadline (3 s, `tempo_audio::rotator`), so a
+            // silence meets the deadline and never a hang-up, which means something else.
+            std::thread::sleep(std::time::Duration::from_secs(6));
         });
         addr
     }
@@ -22342,6 +25066,347 @@ mod rotctld_supervisor_tests {
         );
         let wire = serde_json::to_value(&busy).expect("json");
         assert_eq!(wire.get("elRange"), None, "{wire}");
+    }
+
+    /// A GS-232B controller on the network, as a serial server or the controller's own network
+    /// port gives one: it answers `C2` with its position on every connection it accepts, and
+    /// `drop_link` hangs up on every connection it holds (a NAT, the ISP or the serial server
+    /// dropping it) while it goes on listening.
+    struct NetworkController {
+        port: u16,
+        accepted: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        held: std::sync::Arc<Mutex<Vec<std::net::TcpStream>>>,
+    }
+
+    impl NetworkController {
+        fn start() -> NetworkController {
+            use std::io::{Read, Write};
+            use std::sync::atomic::Ordering;
+            let l = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+            let port = l.local_addr().expect("its port").port();
+            let accepted = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let held = std::sync::Arc::new(Mutex::new(Vec::<std::net::TcpStream>::new()));
+            let (count, keep) = (accepted.clone(), held.clone());
+            std::thread::spawn(move || {
+                for sock in l.incoming() {
+                    let Ok(mut sock) = sock else { return };
+                    count.fetch_add(1, Ordering::SeqCst);
+                    if let Ok(copy) = sock.try_clone() {
+                        keep.lock().expect("the held list").push(copy);
+                    }
+                    std::thread::spawn(move || {
+                        let mut pending = Vec::new();
+                        let mut buf = [0u8; 256];
+                        while let Ok(n) = sock.read(&mut buf) {
+                            if n == 0 {
+                                return;
+                            }
+                            pending.extend_from_slice(&buf[..n]);
+                            while let Some(end) = pending.iter().position(|&b| b == b'\r') {
+                                let cmd =
+                                    String::from_utf8_lossy(&pending[..end]).trim().to_string();
+                                pending.drain(..=end);
+                                if cmd == "C2" && sock.write_all(b"AZ=123  EL=045\r\n").is_err() {
+                                    return;
+                                }
+                            }
+                        }
+                    });
+                }
+            });
+            NetworkController {
+                port,
+                accepted,
+                held,
+            }
+        }
+
+        fn drop_link(&self) {
+            for s in self.held.lock().expect("the held list").drain(..) {
+                let _ = s.shutdown(std::net::Shutdown::Both);
+            }
+        }
+
+        fn accepted(&self) -> usize {
+            self.accepted.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    fn free_port() -> u16 {
+        TcpListener::bind("127.0.0.1:0")
+            .expect("a loopback port")
+            .local_addr()
+            .expect("its port")
+            .port()
+    }
+
+    /// One guard case: `daemon` running as the integrated rotator daemon, recorded as started with
+    /// the Port box `port`, and three `RPRT -6` answers in a row. Whether the supervisor restarted
+    /// it, after checking that what it left alone is still there and that nothing was spawned.
+    fn restarted_for_a_stuck_link(daemon: RotDaemon, model: u32, port: &str, tcp: u16) -> bool {
+        let st = station(tcp, 1); // a restart starts Hamlib's dummy: no serial line needed
+        let mut owner = owner();
+        owner.daemon = Some((daemon, (model, port.to_string(), 9600, tcp)));
+        let spawned = Cell::new(0);
+        let spawn = |m: u32, p: &str, b: u32, t: u16| {
+            spawned.set(spawned.get() + 1);
+            spawn_rotator_daemon(m, p, b, t)
+        };
+        let streak = |addr: &str| {
+            assert_eq!(
+                addr,
+                format!("127.0.0.1:{tcp}"),
+                "the running daemon's address"
+            );
+            Some(STUCK_AFTER)
+        };
+        match restart_if_stuck(&mut owner, &st, spawn, std::time::Instant::now(), streak) {
+            None => {
+                assert_eq!(spawned.get(), 0, "{port}: nothing started");
+                let Some((left, params)) = owner.daemon.as_mut() else {
+                    panic!("{port}: the daemon was taken away");
+                };
+                assert!(left.is_alive(), "{port}: still running");
+                assert_eq!(params.1, port);
+                false
+            }
+            Some(sync) => {
+                assert_eq!(sync, RotctldSync::Started, "{port}");
+                assert_eq!(spawned.get(), 1, "{port}");
+                true
+            }
+        }
+    }
+
+    #[test]
+    fn a_rotctld_on_a_serial_port_is_never_restarted_for_io_errors() {
+        if !rotctld_here() {
+            return;
+        }
+        let hamlib = |tcp| {
+            RotDaemon::Hamlib(
+                tempo_audio::rigctld_proc::spawn_rotctld(1, "", 9600, tcp).expect("rotctld"),
+            )
+        };
+        // A serial port does not get stuck the way a TCP connection does: left alone.
+        for serial in ["COM5", "/dev/ttyUSB0"] {
+            let tcp = free_port();
+            assert!(!restarted_for_a_stuck_link(hamlib(tcp), 603, serial, tcp));
+        }
+        // The same daemon with an IPv4 address in the Port box is restarted.
+        let tcp = free_port();
+        assert!(restarted_for_a_stuck_link(
+            hamlib(tcp),
+            603,
+            "192.168.1.50:4001",
+            tcp
+        ));
+    }
+
+    #[test]
+    fn a_pstrotatoraz_link_is_never_restarted_for_io_errors() {
+        if !rotctld_here() {
+            return;
+        }
+        // Its UDP target sits in the same Port box, and is an IPv4 address and a port.
+        let (target, tcp, link) = (0..5)
+            .find_map(|_| {
+                let (udp, tcp) = (free_port(), free_port());
+                let target = format!("127.0.0.1:{udp}");
+                tempo_audio::pstrotator::PstRotatorLink::start(&target, tcp)
+                    .ok()
+                    .map(|link| (target, tcp, link))
+            })
+            .expect("a PstRotatorAz link on a free port pair");
+        assert!(
+            network_port(&target),
+            "the guard is the daemon's kind, not the box"
+        );
+        assert!(!restarted_for_a_stuck_link(
+            RotDaemon::PstRotator(link),
+            tempo_audio::pstrotator::MODEL,
+            &target,
+            tcp
+        ));
+        // Hamlib's rotctld with that same Port box is restarted.
+        let tcp = free_port();
+        let rotctld = tempo_audio::rigctld_proc::spawn_rotctld(1, "", 9600, tcp).expect("rotctld");
+        assert!(restarted_for_a_stuck_link(
+            RotDaemon::Hamlib(rotctld),
+            603,
+            &target,
+            tcp
+        ));
+    }
+
+    #[test]
+    fn the_diagnostic_copies_of_the_reconnect_lines_mask_a_network_port_box() {
+        for restarts in [None, Some(1), Some(3)] {
+            let (screen, diag) = rotctld_reconnect_lines(" 203.0.113.9:4001 ", restarts);
+            assert!(
+                screen.contains("203.0.113.9:4001"),
+                "the screen keeps it: {screen}"
+            );
+            assert!(!diag.contains("203.0.113.9"), "{diag}");
+            assert!(diag.contains("a network address:4001"), "{diag}");
+            // A string literal broken across lines without its `\` keeps the indentation.
+            assert!(!screen.contains("  "), "a run of spaces: {screen:?}");
+        }
+        assert!(rotctld_reconnect_lines("203.0.113.9:4001", Some(1))
+            .0
+            .ends_with("after 1 restart."));
+        assert!(rotctld_reconnect_lines("203.0.113.9:4001", Some(3))
+            .0
+            .ends_with("after 3 restarts."));
+    }
+
+    #[test]
+    fn a_stuck_link_is_restarted_after_three_answers_then_less_and_less_often() {
+        use std::time::{Duration, Instant};
+        let t0 = Instant::now();
+        let at = |s: u64| t0 + Duration::from_secs(s);
+        let mut stuck = StuckLink::new();
+        // One or two are a slow link; nothing answered yet is no evidence.
+        assert_eq!(stuck.decide(Some(1), at(0)), StuckCall::Wait);
+        assert_eq!(stuck.decide(Some(2), at(5)), StuckCall::Wait);
+        assert_eq!(stuck.decide(None, at(10)), StuckCall::Wait);
+        assert_eq!(
+            stuck.decide(Some(3), at(10)),
+            StuckCall::Restart { first: true }
+        );
+        // Still stuck after the restart: 30 s, then 60 s, then 120 s…
+        assert_eq!(stuck.decide(Some(3), at(39)), StuckCall::Wait);
+        assert_eq!(
+            stuck.decide(Some(3), at(40)),
+            StuckCall::Restart { first: false }
+        );
+        assert_eq!(stuck.decide(Some(5), at(99)), StuckCall::Wait);
+        assert_eq!(
+            stuck.decide(Some(5), at(100)),
+            StuckCall::Restart { first: false }
+        );
+        assert_eq!(stuck.decide(Some(5), at(219)), StuckCall::Wait);
+        assert_eq!(
+            stuck.decide(Some(5), at(220)),
+            StuckCall::Restart { first: false }
+        );
+        assert_eq!(stuck.decide(Some(5), at(459)), StuckCall::Wait);
+        assert_eq!(
+            stuck.decide(Some(5), at(460)),
+            StuckCall::Restart { first: false }
+        );
+        // …and never more than five minutes apart.
+        let mut last = 460;
+        for _ in 0..6 {
+            last += 300;
+            assert_eq!(stuck.decide(Some(9), at(last - 1)), StuckCall::Wait);
+            assert_eq!(
+                stuck.decide(Some(9), at(last)),
+                StuckCall::Restart { first: false }
+            );
+        }
+        // The first good answer ends the episode, said once; the next drop is a new one.
+        assert_eq!(
+            stuck.decide(Some(0), at(last + 1)),
+            StuckCall::Recovered { restarts: 11 }
+        );
+        assert_eq!(stuck.decide(Some(0), at(last + 2)), StuckCall::Wait);
+        assert_eq!(
+            stuck.decide(Some(3), at(last + 3)),
+            StuckCall::Restart { first: true }
+        );
+    }
+
+    #[test]
+    fn only_an_ip_address_and_port_in_the_port_box_is_a_network_link() {
+        for net in ["192.168.1.50:4001", " 10.0.0.2:23 ", "127.0.0.1:4001"] {
+            assert!(network_port(net), "{net}");
+        }
+        // Serial ports, a host name (Hamlib takes it for a serial device, and rotctld exits),
+        // an address with no port, and IPv6, which Hamlib does not open as a network port.
+        for serial in [
+            "",
+            "COM5",
+            "/dev/ttyUSB0",
+            "\\\\.\\COM12",
+            "rotor.local:4001",
+            "192.168.1.50",
+            "192.168.1.50:",
+            "[::1]:4001",
+        ] {
+            assert!(!network_port(serial), "{serial}");
+        }
+    }
+
+    #[test]
+    fn a_rotctld_whose_network_link_dropped_is_restarted_and_reconnects() {
+        if !rotctld_here() {
+            return;
+        }
+        // Measured on rotctld 4.6.5: once the TCP connection under it is gone, rotctld stays up
+        // and answers every command `RPRT -6`, and never connects again. Only a new rotctld does.
+        let controller = NetworkController::start();
+        let spot = TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        let port = spot.local_addr().expect("its port").port();
+        drop(spot);
+        let mut st = station(port, 603);
+        st.rotator_port = format!("127.0.0.1:{}", controller.port);
+        st.rotator_baud = 9600;
+        let addr = format!("127.0.0.1:{port}");
+        let mut owner = owner();
+        assert_eq!(sync_rotctld_owned(&mut owner, &st), RotctldSync::Started);
+        let spawn = spawn_rotator_daemon;
+        assert_eq!(
+            tempo_audio::rotator::read_position(&addr)
+                .expect("a position")
+                .0,
+            123.0
+        );
+        // Healthy: the supervisor leaves it alone.
+        assert_eq!(rotctld_tick(&mut owner, &st, spawn), None);
+        assert_eq!(controller.accepted(), 1);
+
+        controller.drop_link();
+        for _ in 0..3 {
+            let e = tempo_audio::rotator::read_position(&addr).expect_err("the link is down");
+            assert!(e.to_string().contains("RPRT -6"), "{e}");
+        }
+        // The process is alive and stuck. The supervisor starts a new one, which connects again.
+        assert_eq!(
+            rotctld_tick(&mut owner, &st, spawn),
+            Some(RotctldSync::Started)
+        );
+        assert_eq!(
+            tempo_audio::rotator::controller_streak(&addr),
+            None,
+            "the new rotctld is counted afresh, not charged the old one's errors"
+        );
+        assert_eq!(
+            tempo_audio::rotator::read_position(&addr)
+                .expect("answering again")
+                .0,
+            123.0
+        );
+        assert_eq!(controller.accepted(), 2, "the new rotctld connected again");
+        // It answered, so the episode is over and the next tick leaves it alone.
+        assert_eq!(rotctld_tick(&mut owner, &st, spawn), None);
+        assert!(owner.stuck.last.is_none(), "the episode is over");
+
+        // Fewer than three I/O errors are a slow link, not a stuck one.
+        controller.drop_link();
+        for _ in 0..2 {
+            let _ = tempo_audio::rotator::read_position(&addr);
+        }
+        assert_eq!(rotctld_tick(&mut owner, &st, spawn), None);
+        assert_eq!(controller.accepted(), 2);
+        // The third makes it stuck again: a new episode, restarted at once.
+        let _ = tempo_audio::rotator::read_position(&addr);
+        assert_eq!(
+            rotctld_tick(&mut owner, &st, spawn),
+            Some(RotctldSync::Started)
+        );
+        assert!(tempo_audio::rotator::read_position(&addr).is_ok());
+        assert_eq!(controller.accepted(), 3);
     }
 }
 /// What an operator is told when a rotator command reaches no rotctld at all, in place of the
@@ -23022,6 +26087,15 @@ async fn point_at_call(
         } else {
             short
         };
+        // ⭐ THE MAST GOES TO THE STATION NOW, so a tracker that is STEERING it lets go first,
+        // exactly as Stop does (a live pass hands its dial back). Without this a Moon follow kept
+        // its badge and, once the Moon had moved past the deadband — minutes later — swung the
+        // antenna back off the station nobody had told it to leave. Done here, not only in the
+        // UI, so no caller (a cockpit strip, the Needed board, a computer driving from afar) can
+        // turn the beam under a tracker that still thinks it owns it. An ARMED pass is not
+        // steering: it promises the rotor is free for HF until 5 min before AOS, so it stays
+        // armed, staged transponder and all ([`disarm_steering_tracker`]).
+        disarm_steering_tracker(engine);
         // The elevation stays where it is, as for every manual azimuth move (`point_rotator`).
         tauri::async_runtime::spawn_blocking(move || {
             tempo_audio::rotator::point_keeping(&host, Some(bearing), None)
@@ -23220,6 +26294,93 @@ mod point_at_call_tests {
         (addr, rx)
     }
 
+    /// A point at a call ends a Moon follow (and a pass): the mast is the station's now. It used to
+    /// leave the follow running, and the loop swung the antenna back to the Moon minutes later.
+    #[cfg(feature = "radio")]
+    #[test]
+    fn a_point_at_call_ends_the_moon_follow() {
+        let _alone = crate::sat_track_alone();
+        let (addr, _sent) = rotctld();
+        let mut eng = Engine::with_settings(tempo_app::settings::Settings {
+            mycall: "KD9TAW".into(),
+            mygrid: ME.into(),
+            rotator_host: addr,
+            ..Default::default()
+        });
+        eng.note_callbook_fix(
+            "EC1DD",
+            CallbookFix {
+                grid: Some("IN52TK".into()),
+                position: None,
+            },
+        );
+        let engine: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(eng));
+        arm_moon_track(&engine, true);
+        assert!(
+            moon_track_now().is_some(),
+            "the control: following the Moon"
+        );
+        tauri::async_runtime::block_on(point_at_call(&engine, "EC1DD".into(), Some(true)))
+            .expect("the long-path point went out");
+        assert_eq!(
+            moon_track_now(),
+            None,
+            "the point took the mast from the Moon"
+        );
+    }
+
+    /// A point ends a pass that is STEERING the mast, dial handed back; an ARMED pass, still
+    /// waiting for AOS with the rotor left to the operator, stays armed with its transponder.
+    #[cfg(feature = "radio")]
+    #[test]
+    fn a_point_at_call_ends_a_steering_pass_and_leaves_an_armed_one_armed() {
+        let _alone = crate::sat_track_alone();
+        // (state, rotor lost, does a point end it?) A pass that lost its rotor while it
+        // prepositioned publishes "armed" with `rotor_lost`, and it was steering: it ends.
+        for (state, lost, ends) in [
+            ("armed", false, false),
+            ("prepositioning", false, true),
+            ("tracking", false, true),
+            ("armed", true, true),
+            ("tracking", true, true),
+        ] {
+            let (addr, _sent) = rotctld();
+            let mut eng = Engine::with_settings(tempo_app::settings::Settings {
+                mycall: "KD9TAW".into(),
+                mygrid: ME.into(),
+                rotator_host: addr,
+                ..Default::default()
+            });
+            eng.note_callbook_fix(
+                "EC1DD",
+                CallbookFix {
+                    grid: Some("IN52TK".into()),
+                    position: None,
+                },
+            );
+            eng.set_sat_transponder(Some((
+                "SO-50|FM repeater".into(),
+                0,
+                tempo_core::doppler::Transponder::channel(145_850_000, 436_795_000),
+            )));
+            let engine: SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(eng));
+            test_live_sat_track("SO-50");
+            if let Some(b) = SAT_TRACK.lock().unwrap().as_mut() {
+                b.state = state.into();
+                b.rotor_lost = lost;
+            }
+            tauri::async_runtime::block_on(point_at_call(&engine, "EC1DD".into(), None))
+                .expect("the point went out");
+            let live = SAT_TRACK.lock().unwrap().is_some();
+            let held = engine_lock(&engine).sat_transponder_held().is_some();
+            assert_eq!(
+                (live, held),
+                (!ends, !ends),
+                "a point while the pass is {state}, rotor lost: {lost}"
+            );
+        }
+    }
+
     /// ⭐ THE BEARING THE ROTOR BOX SHOWS IS THE BEARING ITS POINT TURNS TO, by value, for the
     /// tester's EC1DD: its callbook grid IN52TK is at 227°, the centre of Spain at 207°. The box
     /// asks `rotator_bearing_to_call` ([`call_bearing`]); Point runs the whole point-at-call
@@ -23227,6 +26388,9 @@ mod point_at_call_tests {
     #[cfg(feature = "radio")]
     #[test]
     fn the_bearing_the_box_shows_is_the_one_point_turns_the_antenna_to() {
+        // A point disarms a tracker that is steering, through the process-wide badge: alone, so
+        // it never takes another test's Moon follow or pass (`sat_track_alone`).
+        let _alone = crate::sat_track_alone();
         use propagation::geo::{haversine_km, maidenhead_to_latlon};
         let (addr, sent) = rotctld();
         let mut eng = Engine::with_settings(tempo_app::settings::Settings {
@@ -23416,9 +26580,12 @@ struct RotatorStateDto {
 
 /// Read the rotator at `addr` for [`RotatorStateDto`]: its position first, and what its backend
 /// declares only when it answered, so a daemon that is not there costs one connection, as it
-/// always did.
+/// always did. Both reads are shared with every other poll of this rotator
+/// (`tempo_audio::rotator::latest_position`): rotctld runs one command at a time for all of its
+/// clients, and the strip, the pane and the Needed panel each asking for themselves queued up
+/// there over a slow link, with a STOP waiting behind the queue.
 fn rotator_state(addr: &str) -> RotatorStateDto {
-    let (az_deg, el, reading) = match tempo_audio::rotator::read_position(addr) {
+    let (az_deg, el, reading) = match tempo_audio::rotator::latest_position(addr) {
         Ok((az, el)) => (Some(az), el, "position"),
         Err(e) if e.kind() == std::io::ErrorKind::Unsupported => (None, None, "noPosition"),
         Err(_) => {
@@ -23430,7 +26597,7 @@ fn rotator_state(addr: &str) -> RotatorStateDto {
             }
         }
     };
-    let el_range = tempo_audio::rotator::read_limits(addr)
+    let el_range = tempo_audio::rotator::latest_limits(addr)
         .ok()
         .map(|declared| {
             declared
@@ -23444,6 +26611,14 @@ fn rotator_state(addr: &str) -> RotatorStateDto {
         el_deg: el.filter(|_| el_range != Some(None)),
         el_range,
     }
+}
+
+/// The rotor strip's and the Needed panel's poll: the azimuth alone, `None` on any failure.
+/// Shared with every other poll of this rotator (`tempo_audio::rotator::latest_position`).
+fn rotator_azimuth(addr: &str) -> Option<f64> {
+    tempo_audio::rotator::latest_position(addr)
+        .ok()
+        .map(|(az, _)| az)
 }
 
 /// The Rotor pane's poll ([`RotatorStateDto`]); `None` when no rotator is configured.
@@ -23477,7 +26652,7 @@ async fn read_rotator(state: State<'_, SharedEngine>) -> Result<Option<f64>, Str
         let Some(host) = host else {
             return Ok(None); // no rotator configured — the pane shows its hint
         };
-        tauri::async_runtime::spawn_blocking(move || tempo_audio::rotator::read_azimuth(&host))
+        tauri::async_runtime::spawn_blocking(move || rotator_azimuth(&host))
             .await
             .map_err(|e| e.to_string())
     }
@@ -23485,6 +26660,155 @@ async fn read_rotator(state: State<'_, SharedEngine>) -> Result<Option<f64>, Str
     {
         let _ = state;
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod rotator_poll_tests {
+    //! Every surface that shows where the rotator points (the rotor strip in each cockpit, the
+    //! Rotor pane, the Needed panel) polls it, and rotctld runs ONE command at a time for all its
+    //! clients. Over a slow link those polls queued behind each other at rotctld, and a STOP waited
+    //! behind the whole queue. These tests stage a rotctld that works the same way (one command at
+    //! a time, in the order they arrive) and hold the polls to one position read in flight.
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier};
+    use std::time::{Duration, Instant};
+
+    /// What the stand-in saw: position reads waiting or running at once (the most), and in all.
+    #[derive(Default)]
+    struct Seen {
+        reads_now: AtomicUsize,
+        reads_most: AtomicUsize,
+        reads: AtomicUsize,
+    }
+
+    /// A rotctld on loopback that answers each connection's one command in arrival order, one at a
+    /// time, as rotctld's single command lock does: a `p` takes `read_ms` (a controller across a
+    /// slow link); `\dump_state` and `S` answer at once.
+    fn one_at_a_time_rotctld(read_ms: u64) -> (String, Arc<Seen>) {
+        use std::io::{BufRead, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port");
+        let addr = l.local_addr().expect("its address").to_string();
+        let seen = Arc::new(Seen::default());
+        let (queue, work) = std::sync::mpsc::channel::<(String, std::net::TcpStream)>();
+        let worker_seen = seen.clone();
+        std::thread::spawn(move || {
+            for (cmd, mut sock) in work {
+                let reply = match cmd.as_str() {
+                    "p" => {
+                        std::thread::sleep(Duration::from_millis(read_ms));
+                        worker_seen.reads_now.fetch_sub(1, Ordering::SeqCst);
+                        "123.000000\n45.000000\n"
+                    }
+                    "\\dump_state" => {
+                        "1\n603\nmin_az=-180.000000\nmax_az=450.000000\nmin_el=0.000000\n\
+                         max_el=180.000000\nsouth_zero=0\nrot_type=AzEl\ndone\n"
+                    }
+                    _ => "RPRT 0\n",
+                };
+                let _ = sock.write_all(reply.as_bytes());
+            }
+        });
+        let accept_seen = seen.clone();
+        std::thread::spawn(move || {
+            for sock in l.incoming() {
+                let Ok(sock) = sock else { return };
+                let (queue, seen) = (queue.clone(), accept_seen.clone());
+                std::thread::spawn(move || {
+                    let mut line = String::new();
+                    let Ok(read) = sock.try_clone() else { return };
+                    if std::io::BufReader::new(read).read_line(&mut line).is_err() {
+                        return;
+                    }
+                    let cmd = line.trim().to_string();
+                    if cmd == "p" {
+                        let now = seen.reads_now.fetch_add(1, Ordering::SeqCst) + 1;
+                        seen.reads_most.fetch_max(now, Ordering::SeqCst);
+                        seen.reads.fetch_add(1, Ordering::SeqCst);
+                    }
+                    let _ = queue.send((cmd, sock));
+                });
+            }
+        });
+        (addr, seen)
+    }
+
+    /// `n` strip/Needed polls and `n` pane polls, all asking at the same moment.
+    fn polls(addr: &str, n: usize) -> Vec<std::thread::JoinHandle<()>> {
+        let go = Arc::new(Barrier::new(2 * n));
+        (0..2 * n)
+            .map(|i| {
+                let (addr, go) = (addr.to_string(), go.clone());
+                std::thread::spawn(move || {
+                    go.wait();
+                    if i % 2 == 0 {
+                        assert_eq!(rotator_azimuth(&addr), Some(123.0));
+                    } else {
+                        assert_eq!(rotator_state(&addr).az_deg, Some(123.0));
+                    }
+                })
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_surface_polling_at_once_puts_one_read_in_flight() {
+        let (addr, seen) = one_at_a_time_rotctld(300);
+        for p in polls(&addr, 4) {
+            p.join().expect("a poll");
+        }
+        assert_eq!(
+            seen.reads_most.load(Ordering::SeqCst),
+            1,
+            "position reads waiting at rotctld at once"
+        );
+        assert_eq!(
+            seen.reads.load(Ordering::SeqCst),
+            1,
+            "eight polls, one read"
+        );
+    }
+
+    #[test]
+    fn a_stop_waits_behind_one_read_at_most_never_a_queue_of_them() {
+        const READ_MS: u64 = 400;
+        let (addr, seen) = one_at_a_time_rotctld(READ_MS);
+        let busy = polls(&addr, 3);
+        // The polls are at rotctld; the operator presses STOP.
+        std::thread::sleep(Duration::from_millis(100));
+        let pressed = Instant::now();
+        tempo_audio::rotator::stop(&addr).expect("RPRT 0");
+        let waited = pressed.elapsed();
+        for p in busy {
+            p.join().expect("a poll");
+        }
+        assert!(
+            waited < Duration::from_millis(READ_MS + 300),
+            "STOP took {waited:?} behind {} position reads",
+            seen.reads.load(Ordering::SeqCst)
+        );
+    }
+
+    #[test]
+    fn a_track_that_steered_reads_again_rather_than_taking_a_poll_in_flight() {
+        // A poll is in flight when the track asks where the mast went: the track waits for it,
+        // then reads for itself, so the answer is not one from before its `P`. Never two reads
+        // at rotctld at once.
+        let (addr, seen) = one_at_a_time_rotctld(300);
+        let poll = {
+            let addr = addr.clone();
+            std::thread::spawn(move || rotator_azimuth(&addr))
+        };
+        std::thread::sleep(Duration::from_millis(100));
+        tempo_audio::rotator::fresh_position(&addr).expect("a position");
+        assert_eq!(poll.join().expect("the poll"), Some(123.0));
+        assert_eq!(
+            seen.reads.load(Ordering::SeqCst),
+            2,
+            "the poll's read and its own"
+        );
+        assert_eq!(seen.reads_most.load(Ordering::SeqCst), 1, "one at a time");
     }
 }
 
@@ -24175,6 +27499,7 @@ fn psk_state_dto(eng: &Engine) -> PskStateDto {
         mode: match s.mode {
             tempo_core::psk::PskModeKind::Bpsk31 => "psk31",
             tempo_core::psk::PskModeKind::Qpsk31 => "qpsk31",
+            tempo_core::psk::PskModeKind::Bpsk63 => "psk63",
         },
         reverse: s.reverse,
         text: s.text,
@@ -25019,7 +28344,7 @@ fn psk_net(state: State<'_, SharedEngine>, hz: f32) -> Result<PskStateDto, Strin
     Ok(psk_state_dto(&eng))
 }
 
-/// Select the PSK sub-mode ("psk31" | "qpsk31") and the QPSK sideband-reverse
+/// Select the PSK sub-mode ("psk31" | "qpsk31" | "psk63") and the QPSK sideband-reverse
 /// polarity — the cockpit's selector and Reverse toggle (Keyboard Modes
 /// Phase 3). The engine refuses a switch while any PSK transmission is
 /// active (a mid-over switch would garble the far end's copy) and returns
@@ -25033,6 +28358,7 @@ fn psk_set_mode(
     let kind = match mode.as_str() {
         "psk31" => tempo_core::psk::PskModeKind::Bpsk31,
         "qpsk31" => tempo_core::psk::PskModeKind::Qpsk31,
+        "psk63" => tempo_core::psk::PskModeKind::Bpsk63,
         other => return Err(format!("unknown PSK mode {other:?}")),
     };
     let mut eng = engine_lock(&state);
@@ -25291,6 +28617,7 @@ fn parse_sstv_mode(slug: &str) -> Option<tempo_sstv::SstvMode> {
 /// state (with `sending` true). Refuses — with the reason — on an unknown mode, a
 /// dimension mismatch, or any TX gate being down. `afar`: as [`set_tx_enabled`]'s, checked in the
 /// hold the picture is handed over in.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command(async)]
 fn sstv_send(
     state: State<'_, SharedEngine>,
@@ -25303,6 +28630,9 @@ fn sstv_send(
     // already carries. §97.119(b)(4) is satisfied by the call being in the image emission; it
     // does not say WE must have drawn it. Optional so every existing caller keeps the plate.
     id_in_image: Option<bool>,
+    // The station calls the picture's text carries, as the screen put them there (a CQ or 73
+    // preset's "DE <call>"): judged by the keying-time call check before anything is encoded.
+    overlay_calls: Option<Vec<String>>,
     afar: Option<command_dispatch::Afar>,
 ) -> Result<SstvStateDto, String> {
     let sstv_mode = parse_sstv_mode(&mode).ok_or_else(|| format!("Unknown SSTV mode: {mode}"))?;
@@ -25331,6 +28661,11 @@ fn sstv_send(
     let (mycall, send_fsk_id) = {
         let eng = engine_lock(&state);
         eng.sstv_tx_gate()?;
+        // ⛔ The keying-time call check: a picture whose text names another station call than
+        // the station's now (a preset added before a profile switch) is not sent.
+        if let Some(why) = eng.sstv_overlay_call_refusal(&overlay_calls.unwrap_or_default()) {
+            return Err(why.to_string());
+        }
         (eng.settings().mycall.clone(), eng.settings().sstv_tx_fsk_id)
     };
 
@@ -25391,7 +28726,8 @@ fn sstv_send(
     // duration-budget check; nothing keys until the radio loop takes it).
     let mut eng = engine_lock(&state);
     command_dispatch::still_bound(&eng, afar.as_ref())?;
-    eng.sstv_send(samples, spec.name.to_string())?;
+    // The picture carries the call read above; the poll judges it by that call.
+    eng.sstv_send_as(samples, spec.name.to_string(), &mycall)?;
     command_dispatch::started_from_afar(&mut eng, afar.as_ref());
     Ok(sstv_state_dto(&eng))
 }
@@ -25547,9 +28883,54 @@ fn set_rx_gain(state: State<'_, SharedEngine>, gain: f32) -> Result<AppSnapshot,
 /// `apply_settings`). Persisted so the active radio survives a restart. Returns the snapshot.
 #[tauri::command(async)]
 fn set_active_radio(state: State<'_, SharedEngine>, id: u32) -> Result<AppSnapshot, String> {
+    // One radio, one window: a radio another live Nexus window runs (by its port) is refused with
+    // the operator's words, and this window stays on the radio it had.
+    let (held_elsewhere, station, target) = {
+        let eng = engine_lock(&state);
+        let s = eng.settings();
+        let target = s.radios.iter().find(|r| r.id == id).cloned();
+        (
+            target
+                .as_ref()
+                .is_some_and(tempo_app::radio_claim::profile_held_elsewhere),
+            !opens_on_the_radio_picker(s, active_profile()),
+            // A real switch (an enabled radio, not the one already active) is the only one that
+            // moves the claim; the engine leaves every other pick alone.
+            target.filter(|r| r.enabled && r.id != s.active_radio),
+        )
+    };
+    if held_elsewhere {
+        return Err(tempo_app::radio_claim::REFUSAL.to_string());
+    }
+    // The new radio is RESERVED here, patiently and off the engine lock (a peek of another
+    // window's must not refuse it, and the engine lock must not wait on one), and the claim moves
+    // under the lock right before the engine switches, so the window never drives a radio it does
+    // not hold. The engine's own claim in the switch then finds it this window's.
+    let reserved = match &target {
+        Some(p) if station => tempo_app::radio_claim::tentative_profile(p, true)?,
+        _ => None,
+    };
     let snap = {
         let mut eng = engine_lock(&state);
+        // Committed only for a switch the engine is about to make, as the settings stand NOW
+        // (a save may have disabled the target or moved its port since the reservation). Else it
+        // drops, and the claim stays on the radio this window still drives.
+        if let Some(reserved) = reserved {
+            tempo_app::radio_claim::commit_if_switching(reserved, eng.settings(), id);
+        }
         eng.set_active_radio(id);
+        // The engine refused the switch because the target's port (moved by such a save) is
+        // another window's: say so, as for any other radio another window runs.
+        if eng.settings().active_radio != id
+            && eng
+                .settings()
+                .radios
+                .iter()
+                .find(|r| r.id == id)
+                .is_some_and(tempo_app::radio_claim::profile_held_elsewhere)
+        {
+            return Err(tempo_app::radio_claim::REFUSAL.to_string());
+        }
         persist_settings(eng.settings().clone(), |e| {
             eprintln!("tempo: set_active_radio save failed: {e}")
         });
@@ -25559,6 +28940,20 @@ fn set_active_radio(state: State<'_, SharedEngine>, id: u32) -> Result<AppSnapsh
        // rotator config (mirrors set_settings). The rig loop swaps CAT/audio on its own via the flat
        // mirror, but the rotator daemon only follows an explicit sync.
     sync_rotctld(&state);
+    // A window whose launch radio was another window's waits with no radio loop; a free radio
+    // starts it, on the radio switched to: the config held since the launch named the refused
+    // one, whose daemon (the other window's) the loop would otherwise open first. A running loop
+    // is untouched: it follows the switch on its next tick.
+    #[cfg(feature = "radio")]
+    if station {
+        let switched = engine_lock(&state).settings().clone();
+        PICKER_HELD_RADIO
+            .release(|(engine, cfg)| start_radio_loop((engine, radio_config_now(cfg, &switched))));
+        // …and its cluster, if the picker held that too (a picker that could not be asked was
+        // refused its radio, then the settings turned simultaneous radios off): once, as from
+        // every other answer that makes the window a station.
+        release_held_cluster();
+    }
     Ok(snap)
 }
 
@@ -25853,6 +29248,122 @@ fn set_radio_switch_policy(
     Ok(eng.snapshot())
 }
 
+/// Put the station on one of its "My station" profiles (the top bar's picker): its call, grid,
+/// state and power become the station's, applied and saved exactly as a Settings save of them is,
+/// so the feeds bound to the call follow it. The ONE write path for which profile is on
+/// (`Engine::apply_settings` keeps the live one). Set at the station only: it changes the call the
+/// station transmits under. Returns the snapshot.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command(async)]
+fn switch_station_profile(
+    state: State<'_, SharedEngine>,
+    spots: State<'_, SharedSpots>,
+    live_paths: State<'_, SharedLivePaths>,
+    region_paths: State<'_, SharedRegionPaths>,
+    health: State<'_, SharedHealth>,
+    cache: State<'_, PropCache>,
+    id: String,
+) -> Result<AppSnapshot, String> {
+    let settings = {
+        let mut eng = engine_lock(&state);
+        eng.switch_station_profile(&id)?;
+        eng.settings().clone()
+    };
+    apply_and_persist(
+        state,
+        spots,
+        live_paths,
+        region_paths,
+        health,
+        cache,
+        settings,
+        false,
+    )
+}
+
+/// Save one "My station" profile (Settings ▸ Station); an empty id adds one. Saving the profile
+/// the station is on applies its call, grid, state and power as a switch does. Set at the station
+/// only, for the switch's reason. Returns the snapshot.
+#[allow(clippy::too_many_arguments)]
+#[tauri::command(async)]
+fn save_station_profile(
+    state: State<'_, SharedEngine>,
+    spots: State<'_, SharedSpots>,
+    live_paths: State<'_, SharedLivePaths>,
+    region_paths: State<'_, SharedRegionPaths>,
+    health: State<'_, SharedHealth>,
+    cache: State<'_, PropCache>,
+    profile: tempo_app::settings::StationProfile,
+) -> Result<AppSnapshot, String> {
+    let Some(settings) = save_station_profile_on(&state, profile)? else {
+        let eng = engine_lock(&state);
+        persist_settings(eng.settings().clone(), |e| {
+            eprintln!("tempo: save_station_profile save failed: {e}")
+        });
+        return Ok(eng.snapshot());
+    };
+    apply_and_persist(
+        state,
+        spots,
+        live_paths,
+        region_paths,
+        health,
+        cache,
+        settings,
+        false,
+    )
+}
+
+/// [`save_station_profile`]'s body, over the plain handle: the settings to apply and save when the
+/// save moved the station's call, grid, state or power (it was the profile the station is on), so
+/// the feeds follow the call. `None` when it changed the list alone: that is only written to disk,
+/// with no settings apply, so an over already planned keeps its slot.
+fn save_station_profile_on(
+    engine: &SharedEngine,
+    profile: tempo_app::settings::StationProfile,
+) -> Result<Option<Settings>, String> {
+    let flat = |s: &Settings| {
+        (
+            s.mycall.clone(),
+            s.mygrid.clone(),
+            s.op_state.clone(),
+            s.station_power_w,
+        )
+    };
+    let locations = |s: &Settings| {
+        s.station_profiles
+            .iter()
+            .map(|p| (p.id.clone(), p.lotw_location.clone()))
+            .collect::<Vec<_>>()
+    };
+    let mut eng = engine_lock(engine);
+    let before = flat(eng.settings());
+    let located = locations(eng.settings());
+    eng.save_station_profile(profile)?;
+    // A changed TQSL Station Location is the operator fixing what may have suspended the
+    // automatic LoTW batch, as the same change in Settings is (`apply_and_persist`).
+    if locations(eng.settings()) != located {
+        LOTW_AUTO_SUSPENDED.store(false, std::sync::atomic::Ordering::Relaxed);
+        LOTW_AUTO_ANNOUNCED.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+    Ok((flat(eng.settings()) != before).then(|| eng.settings().clone()))
+}
+
+/// Remove one "My station" profile. Home and the profile the station is on stay. Returns the
+/// snapshot.
+#[tauri::command(async)]
+fn remove_station_profile(
+    state: State<'_, SharedEngine>,
+    id: String,
+) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    eng.remove_station_profile(&id)?;
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: remove_station_profile save failed: {e}")
+    });
+    Ok(eng.snapshot())
+}
+
 /// The first-run wizard's experience answer (also Settings ▸ Station ▸ Your experience), and the
 /// ONE write path for it: narrow for `set_radio_switch_policy`'s stale-snapshot reason, and
 /// `Engine::apply_settings` keeps the live value. Returns the snapshot.
@@ -25978,11 +29489,60 @@ fn update_radio_profile(
         &mut patch,
         afar.as_ref(),
     );
+    let before = eng.settings().clone();
     eng.update_radio_profile(id, patch)?;
+    note_tx_cards(&mut eng, &before);
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: update_radio_profile save failed: {e}")
     });
     Ok(eng.snapshot())
+}
+
+/// Record the sound card of each TX audio device a save just chose (`Settings::tx_card_models`),
+/// from the settings `before` it: the headphone monitor's and the app sounds' TX-device guard
+/// refuses that card under whatever id a later reboot gives it
+/// (`tempo_audio::notify_sound::tx_card_models_after`). Every settings save and radio edit passes
+/// here after it applies, and before it persists.
+/// Without the radio there is no guard to feed, and the record stays as it was: never a form's.
+fn note_tx_cards(eng: &mut Engine, before: &Settings) {
+    #[cfg(feature = "radio")]
+    let models = tempo_audio::notify_sound::tx_card_models_after(before, eng.settings());
+    #[cfg(not(feature = "radio"))]
+    let models = before.tx_card_models.clone();
+    eng.set_tx_card_models(models);
+}
+
+#[cfg(test)]
+mod tx_card_record_tests {
+    /// Both ways a TX audio device is chosen, a settings save and a radio edit, record its sound
+    /// card from the settings before the change, after the change applies and before it persists.
+    #[test]
+    fn every_tx_device_choice_records_its_card_before_it_persists() {
+        let src = include_str!("lib.rs");
+        let body_of = |sig: &str| {
+            let rest = &src[src.find(&format!("\n{sig}")).expect(sig) + 1..];
+            &rest[..rest.find("\n}\n").expect("the end of the function")]
+        };
+        for (sig, apply) in [
+            ("fn save_and_publish(", "eng.apply_settings(settings);"),
+            (
+                "fn update_radio_profile(",
+                "eng.update_radio_profile(id, patch)?;",
+            ),
+        ] {
+            let body = body_of(sig);
+            let at = |needle: &str| {
+                body.find(needle)
+                    .unwrap_or_else(|| panic!("{sig} has {needle}"))
+            };
+            assert!(
+                at("let before = eng.settings().clone();") < at(apply)
+                    && at(apply) < at("note_tx_cards(")
+                    && at("note_tx_cards(") < at("persist_settings("),
+                "{sig}"
+            );
+        }
+    }
 }
 
 /// Hold (`true`) or release (`false`) a steady tune carrier for ATU/amp tuning.
@@ -26139,12 +29699,16 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
         let mut answer = None;
         while Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(100));
-            answer = engine_lock(&state).cat_reprobe_answer(asked);
+            let eng = engine_lock(&state);
+            // The refusal flag under the same lock as the answer it belongs to.
+            answer = eng
+                .cat_reprobe_answer(asked)
+                .map(|(ok, detail)| (ok, detail, eng.cat_reprobe_refused()));
             if answer.is_some() {
                 break;
             }
         }
-        let Some((ok, mut detail)) = answer else {
+        let Some((ok, mut detail, refused)) = answer else {
             // The loop never published our probe. Either it is wedged/slow (stale status
             // exists) or it never ran at all this session (status empty — the radio engine
             // died before its first probe, classically because the audio open failed at
@@ -26177,6 +29741,9 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
                 &s.serial_port,
                 &s.ptt_method,
                 &s.ptt_serial_port,
+                // RTS on the CAT port keys a transmitter whatever PTT says: every rung must
+                // hold it down, or the sweep is refused (`sweep_refusal` below).
+                tempo_audio::service::settings_key_rts_on(s, &s.serial_port),
             )
             .map(|gate| {
                 (
@@ -26195,8 +29762,19 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
             });
             ladder
         };
-        if ok == Some(false) {
-            if let Some((port, baud, rig_model, gate, model_name, native)) = ladder {
+        // A launch Nexus REFUSED (a declared Hardware handshake on a port where RTS keys the
+        // transmitter) is not a fault to sweep: the refusal is the answer, and a sweep would
+        // open the very port the refusal kept shut, then replace the sentence with a verdict.
+        // `refused` is the radio loop's typed flag, never a match on the words.
+        if ok == Some(false) && !refused {
+            // A sweep whose rungs could not hold RTS unkeyed on an RTS-keyed port is not run:
+            // the probe's own failure stands, with the reason. Asked before the port is taken.
+            let sweep_refused = ladder.as_ref().and_then(|(_, _, rig_model, gate, _, _)| {
+                tempo_audio::baud_ladder::sweep_refusal(*rig_model, *gate)
+            });
+            if let Some(why) = sweep_refused {
+                detail = format!("{detail} {why}");
+            } else if let Some((port, baud, rig_model, gate, model_name, native)) = ladder {
                 // Ask the loop to release the serial port (our own daemon holds it even
                 // when the rig is mute), wait for the ack, then probe. Always release —
                 // the loop rebuilds CAT at the configured settings either way, and the
@@ -26223,7 +29801,7 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
                         use tempo_audio::baud_ladder::{self as bl, LadderKind};
                         match bl::ladder_kind(rig_model) {
                             LadderKind::Civ { addr } => bl::compose_ladder_message(
-                                &bl::run(&port, baud, addr),
+                                &bl::run(&port, baud, addr, gate),
                                 &model_name,
                                 addr,
                                 native,
@@ -26676,6 +30254,27 @@ fn sstv_tune(
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: failed to persist frequency: {e}")
     });
+    Ok(eng.snapshot())
+}
+
+/// The SSTV screen's tune on opening (#451, Settings ▸ Digital ▸ SSTV, off by default): the strip
+/// pick's claim of Phone and QSY, as the APP's tune — `Engine::sstv_tune_on_open` declares
+/// machinery provenance, so the channel never becomes the operator's remembered Phone dial, and
+/// it refuses the ISS downlink and a dial a satellite pass owns. It never arms Phone's Enable-TX
+/// latch, so it takes no `afar`. Persists like `sstv_tune`.
+#[tauri::command(async)]
+fn sstv_tune_on_open(
+    state: State<'_, SharedEngine>,
+    dial_mhz: f64,
+    band: String,
+    mode: String,
+) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    if eng.sstv_tune_on_open(dial_mhz, &band, &mode) {
+        persist_settings(eng.settings().clone(), |e| {
+            eprintln!("tempo: failed to persist frequency: {e}")
+        });
+    }
     Ok(eng.snapshot())
 }
 
@@ -29139,7 +32738,7 @@ async fn set_sat_tag(
 }
 
 /// The satellite names LoTW accepts, for the Logbook row's tag picker — the backend owns the
-/// table (`Engine::LOTW_SAT_NAMES`), so the UI offers exactly what the writer will accept and
+/// table (`Engine::LOTW_ACCEPTED_SATS`), so the UI offers exactly what the writer will accept and
 /// the two cannot drift. Same arrangement as [`dxcc_entity_names`].
 #[tauri::command]
 fn lotw_sat_names() -> Vec<String> {
@@ -29747,7 +33346,7 @@ fn program_spot_row(
     let (entity, zone) = propagation::dxcc::resolve(&spot.call)
         .map(|i| (i.entity.to_string(), i.cq_zone))
         .unwrap_or_default();
-    let mode_label = propagation::classify_spot_mode(freq).label();
+    let mode_label = propagation::classify_spot_mode(freq, &spot.call).label();
     let licensed = tempo_app::privileges::tx_allowed(
         class,
         freq,
@@ -29975,7 +33574,7 @@ fn read_spots_with(
             } else {
                 -1
             };
-            let mode_label = propagation::classify_spot_mode(freq).label();
+            let mode_label = propagation::classify_spot_mode(freq, &cs.dx_call).label();
             let licensed = tempo_app::privileges::tx_allowed(
                 class,
                 freq,
@@ -30177,7 +33776,7 @@ fn cluster_spot_heards(
             };
             voices = ordered;
         }
-        let class = propagation::classify_spot_mode(freq);
+        let class = propagation::classify_spot_mode(freq, &cs.dx_call);
         // PRIVILEGE GATE (operator 2026-07-22, "LU6HL on 7.140 shouldn't show"): a station
         // on a frequency the operator may not TRANSMIT to is not a need — the Needed board is
         // a "work these" list, and 7.140 SSB sits in the Extra-only 40 m phone segment a
@@ -30314,11 +33913,7 @@ fn live_activations<'a>(
         .filter(|sp| tempo_core::message::same_call(&sp.activator, call))
         .map(|sp| {
             // The hunt target is set with the programme CODE, never the feed's own spelling.
-            let program = if sp.program.eq_ignore_ascii_case("SOTA") {
-                "SOTA"
-            } else {
-                "POTA"
-            };
+            let (_, program) = propagation::program_chip(&sp.program);
             (program.to_string(), sp.reference.clone())
         })
         .collect();
@@ -31629,6 +35224,13 @@ fn read_need_alerts(
     // the same station: they read the same alerts, and those alerts read this.
     let hunted_rows = eng.log_rows();
     let snap = eng.snapshot();
+    // The grid each decoded station's contact would be credited with (roster, then the grid it
+    // sent this session, then a logged one): what its own-decode record scores New grid with.
+    let credited: std::collections::HashMap<String, String> = snap
+        .stations
+        .iter()
+        .filter_map(|s| eng.credited_grid(&s.call).map(|g| (s.call.clone(), g)))
+        .collect();
     // The watch list the desktop last sent — its stations lead the board (see the end).
     let watch = eng.watch_list().to_vec();
     let confirm_tier = eng.settings().alert_confirm_tier;
@@ -31650,15 +35252,20 @@ fn read_need_alerts(
     // of wall clock. The conversion (and the tier-switch refusal it carries) is
     // `own_decode_heards` → `roster_spot_age_secs`.
     const OWN_DECODE_MAX_AGE_SECS: i64 = 120;
-    let mut heard: Vec<propagation::Heard> = own_decode_heards(
+    let own_decodes: Vec<propagation::Heard> = own_decode_heards(
         &snap.stations,
         snap.radio.slot,
         snap.radio.tr_period_secs,
         &band,
         &tier_mode,
         OWN_DECODE_MAX_AGE_SECS,
+        &credited,
     );
-    heard.extend(jtty_heards(&jtty_heard));
+    // This radio's JTTY decodes are its own decodes too: a grid one of them carried is a grid the
+    // station sent on the air, and must not be overwritten by an FT roster entry without one.
+    let jtty = jtty_heards(&jtty_heard);
+    let own_decodes: Vec<propagation::Heard> = own_decodes.into_iter().chain(jtty).collect();
+    let mut heard = own_decodes.clone();
     // The real value (empirical evidence, not a model): two complementary signals
     // over the PSK Reporter firehose + near-region feed —
     //   1. heard_near_me: a receiver NEAR YOU is hearing the DX (their signal
@@ -31736,6 +35343,9 @@ fn read_need_alerts(
             license_class,
         ));
     }
+    // A station this radio is decoding scores the grid it sent on the air (or none), never a PSK
+    // Reporter locator: that is the grid its contact will be credited with.
+    propagation::grids_from_own_decodes(&mut heard, &own_decodes);
     // Each heard station's US state, for the New State need: a live activator's park's, any other
     // station's own (see `place_heards`). Live as the decoration pass below reads it.
     let live_spots: Vec<propagation::OtaSpot> = ota_cache
@@ -31814,11 +35424,7 @@ fn read_need_alerts(
                 // A chip per programme the activator is live on — both, when they are on a
                 // summit that is also a park. The chip is a label, so it is safe either way.
                 for (program, _) in &live {
-                    let tag = if program == "SOTA" {
-                        propagation::NeedTag::Sota
-                    } else {
-                        propagation::NeedTag::Pota
-                    };
+                    let (tag, _) = propagation::program_chip(program);
                     if !a.tags.contains(&tag) {
                         a.tags.push(tag);
                     }
@@ -31958,11 +35564,89 @@ fn read_need_alerts(
             a.freq_mhz = h.freq_mhz;
             a.admitted_at = h.admitted_at;
             a.evidence = h.evidence.clone();
+            a.state = h.us_state.as_ref().map(|(state, _)| state.clone());
             alerts.push(a);
         }
         alerts.sort_by(|x, y| y.priority.cmp(&x.priority));
     }
+    // "My privileges" on the Needed board: each row says whether the operator may transmit to it,
+    // as each Spots row does. A flag, never a drop — the gates above already keep out what the
+    // board must never show; this is the operator's chip to ask for the rest.
+    for a in &mut alerts {
+        a.licensed = need_licensed(license_class, a);
+    }
     Ok(alerts)
+}
+
+/// May the operator TRANSMIT to this need? The Spots board's `licensed` question, asked of a need
+/// row: [`tempo_app::privileges::tx_allowed`] at the row's frequency, in its mode class (CW, Phone,
+/// anything else Digital — the mapping `read_spots_with` uses). A row with no frequency is a
+/// band-level reception need, judged as Digital at the band's FT8 dial, as the digital evidence
+/// gate in [`read_need_alerts`] judges it; a band-level CW or Phone row, or a band off the plan, is
+/// allowed (fail open, never wrongly hide). The Open class is allowed everywhere.
+fn need_licensed(class: tempo_app::settings::LicenseClass, a: &propagation::NeedAlert) -> bool {
+    use tempo_app::settings::OperatingMode;
+    let mode = match a.mode.as_str() {
+        "Phone" => OperatingMode::Phone,
+        "CW" => OperatingMode::Cw,
+        _ => OperatingMode::Digital,
+    };
+    let freq = a.freq_mhz.or_else(|| {
+        (mode == OperatingMode::Digital)
+            .then(|| propagation::Band::from_label(&a.band).map(propagation::band_digital_mhz))
+            .flatten()
+    });
+    freq.is_none_or(|f| tempo_app::privileges::tx_allowed(class, f, mode))
+}
+
+#[cfg(test)]
+mod need_licensed_tests {
+    use super::need_licensed;
+    use tempo_app::settings::LicenseClass;
+
+    fn row(band: &str, mode: &str, freq: Option<f64>) -> propagation::NeedAlert {
+        serde_json::from_value(serde_json::json!({
+            "call": "LU6HL", "entity": "Argentina", "band": band, "zone": 13, "tags": ["NewBand"],
+            "priority": 50, "headline": "New band", "mode": mode, "freqMhz": freq,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_need_is_judged_by_the_tables_the_spots_board_uses() {
+        // 7.140 SSB is in the Extra-only 40 m phone segment: a General may not transmit there…
+        let phone = row("40m", "Phone", Some(7.140));
+        assert!(!need_licensed(LicenseClass::General, &phone));
+        assert!(need_licensed(LicenseClass::Extra, &phone));
+        // …and the Open class (outside the US) is never restricted, here or anywhere.
+        assert!(need_licensed(LicenseClass::Open, &phone));
+        // An FT8 row is Digital, judged at its frequency.
+        let ft8 = row("20m", "FT8", Some(14.074));
+        assert!(!need_licensed(LicenseClass::Technician, &ft8));
+        assert!(need_licensed(LicenseClass::General, &ft8));
+    }
+
+    #[test]
+    fn a_band_level_need_is_judged_at_the_digital_dial_or_kept() {
+        // No frequency: a reception-report need is digital, judged at the band's FT8 dial.
+        assert!(!need_licensed(
+            LicenseClass::Technician,
+            &row("20m", "Digital", None)
+        ));
+        assert!(need_licensed(
+            LicenseClass::Technician,
+            &row("10m", "Digital", None)
+        ));
+        // A band-level CW or Phone row, or a band off the plan, is kept: never wrongly hide.
+        assert!(need_licensed(
+            LicenseClass::Technician,
+            &row("20m", "Phone", None)
+        ));
+        assert!(need_licensed(
+            LicenseClass::Technician,
+            &row("", "Digital", None)
+        ));
+    }
 }
 
 /// Import an external ADIF logbook (deduped merge → real "needs"). Takes the
@@ -35116,6 +38800,63 @@ async fn upload_lotw_report_impl(
         .map_err(|e| format!("LoTW upload task failed: {e}"))?
 }
 
+/// #163: the past satellite contacts that went to LoTW with the wrong band (the downlink's) and
+/// can go again corrected, by id — what the LoTW controls offer as one batch. Read off the store
+/// with the Engine lock released; changes nothing.
+#[tauri::command]
+async fn lotw_sat_band_fixes(state: State<'_, SharedEngine>) -> Result<Vec<String>, String> {
+    let rows = engine_lock(&state).log_rows();
+    tokio::task::spawn_blocking(move || {
+        tempo_app::station::lotw_sat_band_fixes(&rows)
+            .map(|ids| ids.iter().map(ToString::to_string).collect())
+    })
+    .await
+    .map_err(|e| format!("logbook task failed: {e}"))?
+}
+
+/// #163: the operator took the offer — rewrite the satellite contacts `ids` into the corrected
+/// shape (FREQ the nominal uplink, FREQ_RX the downlink; their band, which they are counted on,
+/// unchanged) and upload them to LoTW through the ordinary TQSL batch, which stamps them as any
+/// upload does. Never run without the operator's click. The rewrite stamps them not sent in the
+/// same change, so a re-upload that never stamps them — no TQSL, a run that never starts, the app
+/// closed mid-run — leaves them owed, and the ordinary upload sends them.
+#[tauri::command]
+async fn lotw_fix_sat_bands(
+    state: State<'_, SharedEngine>,
+    ids: Vec<String>,
+) -> Result<UploadReportDto, String> {
+    let ids: Vec<tempo_core::logbook::RecordId> = ids
+        .iter()
+        .map(|id| id.parse().map_err(|()| format!("'{id}' names no contact.")))
+        .collect::<Result<_, _>>()?;
+    let engine = Arc::clone(&state);
+    let report = tokio::task::spawn_blocking(move || {
+        // Rewritten AND stamped not sent in one change, so a re-upload that never stamps them
+        // leaves them owed to the ordinary upload (`fix_sat_bands`).
+        let (fixed, durability) = tempo_app::logwrite::fix_sat_bands(&engine, &ids, now_unix());
+        let fixed = fixed?;
+        if durability.turned_back(tempo_app::logstore::DURABLE_WAIT) {
+            return Err(tempo_app::station::LOG_BUSY.to_string());
+        }
+        durability
+            .wait(tempo_app::logstore::DURABLE_WAIT)
+            .map_err(durability_failed)?;
+        lotw_upload_batch(&engine, LotwPick::Ids(fixed), true)
+    })
+    .await
+    .map_err(|e| format!("LoTW upload task failed: {e}"))?;
+    conn_logged(
+        "LoTW",
+        |r| {
+            format!(
+                "satellite re-upload — {} QSO(s), outcome: {}",
+                r.dispatched, r.outcome
+            )
+        },
+        report,
+    )
+}
+
 /// The contacts an upload to LoTW signs.
 #[derive(Debug, PartialEq)]
 enum LotwPick {
@@ -35163,31 +38904,42 @@ fn lotw_upload_batch(
     lotw_upload_batch_with(state, pick, wait, run_tqsl)
 }
 
-/// [`lotw_upload_batch`], with TQSL named: `tqsl` runs it once over the batch file, to
+/// [`lotw_upload_batch`], with TQSL named: `tqsl` runs it once over a batch file, to
 /// completion, and answers its exit code and stderr. The shipped runner is [`run_tqsl`]; a test
 /// stands in for it to change the log while "TQSL" runs — the window this function's stamp has
 /// to survive.
+///
+/// TQSL signs a file with one Station Location, so the batch is signed in one run per location
+/// ([`tempo_app::station::lotw_runs`]): each contact with the location of the station profile it
+/// was logged under, or the station's own. A station whose contacts need one location makes one
+/// run, as before profiles. Each run is stamped with its own outcome.
 fn lotw_upload_batch_with(
     state: &SharedEngine,
     pick: LotwPick,
     wait: bool,
-    tqsl: impl FnOnce(&str, &[String]) -> Result<(i32, String), String>,
+    mut tqsl: impl FnMut(&str, &[String]) -> Result<(i32, String), String>,
 ) -> Result<UploadReportDto, String> {
     // Brief lock: read config and what the batch is, then release it — before the batch is read
     // from the store, and before TQSL is spawned. Held across the spawn it would freeze the
     // whole UI for as long as ARRL takes to answer, which is tens of seconds on a big batch.
-    let (chosen, rows, location, tqsl_path, (adif_location, call, grid)) = {
+    let (chosen, rows, location, tqsl_path, (call, grid), profiles) = {
         let mut eng = engine_lock(state);
         let use_adif_location = eng.settings().lotw_use_adif_location;
         let location = eng.settings().lotw_station_location.trim().to_string();
+        // The profiles, the one the station is on with its live call and grid.
+        let profiles = {
+            let mut s = eng.settings().clone();
+            s.sync_active_station_from_flat();
+            s.station_profiles
+        };
         // A named Station Location is required UNLESS the operator signs from the ADIF
-        // (travelers who never create TQSL station locations).
-        if location.is_empty() && !use_adif_location {
-            return Err(
-                "Set your LoTW Station Location in Settings before uploading (or enable \
-                        \"sign from ADIF location\" if you don't create TQSL station locations)."
-                    .into(),
-            );
+        // (travelers who never create TQSL station locations), or a profile names one: then it
+        // is required only when a contact of the batch needs the station's own (below).
+        if location.is_empty()
+            && !use_adif_location
+            && profiles.iter().all(|p| p.lotw_location.trim().is_empty())
+        {
+            return Err(LOTW_NO_LOCATION.into());
         }
         // A batch chosen by hand names its contacts by id. The contacts themselves are read from
         // the store once the lock is released, as the default batch's are.
@@ -35198,15 +38950,18 @@ fn lotw_upload_batch_with(
         let tqsl_path = eng.settings().tqsl_path.clone();
         // None in ADIF-location mode → tqsl_args omits `-l`.
         let location = (!use_adif_location).then_some(location);
-        let station = (
-            use_adif_location,
-            eng.settings().mycall.clone(),
-            eng.settings().mygrid.clone(),
-        );
+        let station = (eng.settings().mycall.clone(), eng.settings().mygrid.clone());
         // Counted from here to the last return: while it runs, an undo of a callsign correction
         // cannot tell whether LoTW has the corrected call, so it does not put LoTW's marks back.
         eng.lotw_batch_begun();
-        (chosen, eng.log_rows(), location, tqsl_path, station)
+        (
+            chosen,
+            eng.log_rows(),
+            location,
+            tqsl_path,
+            station,
+            profiles,
+        )
     };
     struct Running<'a>(&'a SharedEngine);
     impl Drop for Running<'_> {
@@ -35249,9 +39004,201 @@ fn lotw_upload_batch_with(
             skipped_edited: 0,
             skipped_deleted: 0,
             held_mode,
+            location_tie: 0,
+            location_unmatched: 0,
+            location_from_adif: false,
+            unsent_after_error: 0,
+            unsent_error: None,
+            unconfirmed_after_error: 0,
         });
     }
-    let adif = tempo_app::station::lotw_batch_adif(&batch, adif_location, &call, &grid);
+    let (runs, fallback) = tempo_app::station::lotw_runs(batch, location.as_deref(), &profiles);
+    if runs.iter().any(|r| r.location.as_deref() == Some("")) {
+        return Err(LOTW_NO_LOCATION.into());
+    }
+    // Signing from the ADIF, a contact no profile tells apart goes with the call, grid and place
+    // fields it carries; otherwise with the Station Location in Settings.
+    let from_adif = location.is_none();
+    let how = if from_adif {
+        "from the call, grid, state, county, zones and IOTA they carry"
+    } else {
+        "with the Station Location in Settings"
+    };
+    if fallback.tie > 0 {
+        conn_log(
+            "LoTW",
+            "info",
+            format!(
+                "{} contact(s) fit two station profiles that name different TQSL Station \
+                 Locations, so they are signed {how}.",
+                fallback.tie
+            ),
+        );
+    }
+    if fallback.unmatched > 0 {
+        conn_log(
+            "LoTW",
+            "info",
+            format!(
+                "{} contact(s) fit none of the station profiles by call and grid, so they are \
+                 signed {how}.",
+                fallback.unmatched
+            ),
+        );
+    }
+    let mut report: Option<UploadReportDto> = None;
+    let mut runs = runs.into_iter();
+    while let Some(run) = runs.next() {
+        let (done, unconfirmed) = match lotw_sign_run(
+            state,
+            &run.batch,
+            run.location.as_deref(),
+            (&call, &grid),
+            &tqsl_path,
+            wait,
+            held_mode,
+            &mut tqsl,
+        ) {
+            Ok(done) => done,
+            // A run that cannot run at all after earlier runs sent theirs: what they sent stays
+            // on the report, and this run's contacts and the rest are left unsent, and counted.
+            // The first run failing is the error, as it was before runs.
+            Err(e) => {
+                let Some(sent) = report else {
+                    return Err(e);
+                };
+                let unsent = run.batch.len() + runs.map(|r| r.batch.len()).sum::<usize>();
+                conn_log(
+                    "LoTW",
+                    "error",
+                    format!(
+                        "{unsent} contact(s) not sent ({e}). The earlier TQSL runs' contacts \
+                         were sent; these are offered again with the next upload."
+                    ),
+                );
+                report = Some(UploadReportDto {
+                    unsent_after_error: unsent,
+                    unsent_error: Some(e),
+                    ..sent
+                });
+                break;
+            }
+        };
+        // A run whose stamps could not be shown on disk. After earlier runs, a run TQSL signed and
+        // sent (or LoTW already had) went to LoTW, so its contacts are counted with what went and
+        // said to be unconfirmed (a stamp the disk refused leaves its contact owed, sent again
+        // next time). A run TQSL REFUSED sent nothing: the report shows the refusal, and none of
+        // it is counted as gone. Either way only the runs after it, which do not start, are
+        // unsent. The first run's is the error, as it was before runs.
+        if let Some(why) = unconfirmed {
+            let Some(sent) = report else {
+                return Err(durability_failed(why));
+            };
+            let went = matches!(done.outcome.as_str(), "pending" | "duplicate");
+            let signed = done.dispatched;
+            let unsent = runs.map(|r| r.batch.len()).sum::<usize>();
+            let unsent_words = if unsent > 0 {
+                format!(
+                    " {unsent} contact(s) not sent; they are offered again with the next upload."
+                )
+            } else {
+                String::new()
+            };
+            let said = if went {
+                format!(
+                    "{signed} contact(s) went to LoTW, but Nexus could not confirm their upload \
+                     mark was saved to disk ({why}); any not saved are offered again with the next \
+                     upload, and LoTW ignores a contact it already has.{unsent_words}"
+                )
+            } else {
+                format!(
+                    "TQSL refused the {signed} contact(s) of the run {} ({}), so none of them \
+                     went to LoTW, and Nexus could not confirm their refusal mark was saved to \
+                     disk ({why}). They stay unsent.{unsent_words}",
+                    run.location.as_deref().map_or_else(
+                        || "signed from the ADIF".to_string(),
+                        |l| format!("with Station Location {l}")
+                    ),
+                    done.outcome
+                )
+            };
+            conn_log("LoTW", "error", said);
+            report = Some(UploadReportDto {
+                unsent_after_error: unsent,
+                unsent_error: Some(why),
+                unconfirmed_after_error: if went { signed } else { 0 },
+                ..lotw_reports_together(sent, done)
+            });
+            break;
+        }
+        report = Some(match report {
+            None => done,
+            Some(before) => lotw_reports_together(before, done),
+        });
+    }
+    // Said on the screen as well: a contact signed with a location it was not made at is one
+    // LoTW never matches.
+    Ok(UploadReportDto {
+        location_tie: fallback.tie,
+        location_unmatched: fallback.unmatched,
+        location_from_adif: from_adif,
+        ..report.expect("a batch that is not empty makes a run")
+    })
+}
+
+/// Why a LoTW upload does not start: a contact needs the station's own Station Location, and
+/// none is set.
+const LOTW_NO_LOCATION: &str = "Set your LoTW Station Location in Settings before uploading (or \
+     enable \"sign from ADIF location\" if you don't create TQSL station locations).";
+
+/// Two runs' reports as one, for the screen: the counts added, and the outcome the operator most
+/// needs to read (a sign-in or location failure, then a rejection, then a retry, then sent, then
+/// already on file), with that run's detail.
+fn lotw_reports_together(a: UploadReportDto, b: UploadReportDto) -> UploadReportDto {
+    let rank = |o: &str| match o {
+        "authfail" => 4,
+        "rejected" => 3,
+        "retry" => 2,
+        "pending" => 1,
+        _ => 0,
+    };
+    let (first, other) = if rank(&b.outcome) > rank(&a.outcome) {
+        (b, a)
+    } else {
+        (a, b)
+    };
+    UploadReportDto {
+        dispatched: first.dispatched + other.dispatched,
+        outcome: first.outcome,
+        detail: first.detail.or(other.detail),
+        skipped_edited: first.skipped_edited + other.skipped_edited,
+        skipped_deleted: first.skipped_deleted + other.skipped_deleted,
+        held_mode: first.held_mode,
+        location_tie: 0,
+        location_unmatched: 0,
+        location_from_adif: false,
+        unsent_after_error: 0,
+        unsent_error: None,
+        unconfirmed_after_error: 0,
+    }
+}
+
+/// One TQSL run of a LoTW upload: `batch` signed with `location` (`None`: from the location in
+/// the ADIF, `station` = the live call and grid as the fallback), and stamped with its outcome.
+/// With the report, why its stamps could not be shown on disk when `wait` asked for that: TQSL
+/// had answered by then (signed and sent, or refused), so the caller says which happened.
+#[allow(clippy::too_many_arguments)]
+fn lotw_sign_run(
+    state: &SharedEngine,
+    batch: &[tempo_core::logbook::QsoRecord],
+    location: Option<&str>,
+    (call, grid): (&str, &str),
+    tqsl_path: &str,
+    wait: bool,
+    held_mode: usize,
+    tqsl: &mut impl FnMut(&str, &[String]) -> Result<(i32, String), String>,
+) -> Result<(UploadReportDto, Option<String>), String> {
+    let adif = tempo_app::station::lotw_batch_adif(batch, location.is_none(), call, grid);
     // The contacts by id, taken with the file: the stamp below finds them by id once TQSL is
     // done, and only where each is still the contact that was signed.
     let signed: Vec<tempo_app::station::LotwSigned> = batch
@@ -35289,8 +39236,8 @@ fn lotw_upload_batch_with(
     let path_str = path.to_string_lossy().to_string();
 
     // Run TQSL one-shot, capturing its result.
-    let args = tempo_core::lotw_upload::tqsl_args(location.as_deref(), &path_str);
-    let (code, stderr) = tqsl(&tqsl_path, &args)?;
+    let args = tempo_core::lotw_upload::tqsl_args(location, &path_str)?;
+    let (code, stderr) = tqsl(tqsl_path, &args)?;
     // ⛔ TWO details, and they are not interchangeable. `detail` is TQSL's own tail and goes
     // to the operator's toast — a screen. `stamped` is the CLASS and is the only one written
     // into `log.adi`, because `log.adi` is the file TQSL then signs and uploads to ARRL: a
@@ -35301,14 +39248,23 @@ fn lotw_upload_batch_with(
 
     match tempo_core::lotw_upload::classify_tqsl_exit(code, &stderr) {
         // Network error → leave state untouched so the next attempt retries cleanly.
-        None => Ok(UploadReportDto {
-            dispatched: batch.len(),
-            outcome: "retry".into(),
-            detail: detail.or_else(|| Some("LoTW unreachable — try again shortly.".into())),
-            skipped_edited: 0,
-            skipped_deleted: 0,
-            held_mode,
-        }),
+        None => Ok((
+            UploadReportDto {
+                dispatched: batch.len(),
+                outcome: "retry".into(),
+                detail: detail.or_else(|| Some("LoTW unreachable — try again shortly.".into())),
+                skipped_edited: 0,
+                skipped_deleted: 0,
+                held_mode,
+                location_tie: 0,
+                location_unmatched: 0,
+                location_from_adif: false,
+                unsent_after_error: 0,
+                unsent_error: None,
+                unconfirmed_after_error: 0,
+            },
+            None,
+        )),
         Some(outcome) => {
             // By id, planned with the Engine lock released (SPEC-2 v3 C19): each contact read off
             // the store, and stamped under the lock only while it is still the one TQSL signed.
@@ -35354,11 +39310,12 @@ fn lotw_upload_batch_with(
             }
             // The Logbook button waits for the stamps to reach the disk; the six-hourly
             // automatic batch does not (a stamp it loses is re-derived by the next echo).
-            if wait {
-                durable
-                    .wait(tempo_app::logstore::DURABLE_WAIT)
-                    .map_err(durability_failed)?;
-            }
+            // TQSL has answered by now (signed and sent, or refused), whatever the wait answers.
+            let unconfirmed = if wait {
+                durable.wait(tempo_app::logstore::DURABLE_WAIT).err()
+            } else {
+                None
+            };
             // ⛔ THE LINE THAT MAKES THE STAMP'S OWN SENTENCE TRUE.
             //
             // `UploadDetail`'s sentences tell the operator the service's own wording "was in
@@ -35383,21 +39340,32 @@ fn lotw_upload_batch_with(
                     "LoTW",
                     "error",
                     format!(
-                        "TQSL exit {code} — {}",
+                        "TQSL exit {code}{} — {}",
+                        // Which run, when a batch is signed in more than one.
+                        location.map_or(String::new(), |l| format!(" (Station Location {l})")),
                         detail.as_deref().unwrap_or("no output from TQSL")
                     ),
                 );
             }
-            Ok(UploadReportDto {
-                dispatched: batch.len(),
-                outcome: outcome.code().to_string(),
-                detail,
-                // The same counts as the connection-log line above, for the screen: an upload
-                // count that does not clear otherwise reads as an upload that failed.
-                skipped_edited: done.changed,
-                skipped_deleted: done.gone,
-                held_mode,
-            })
+            Ok((
+                UploadReportDto {
+                    dispatched: batch.len(),
+                    outcome: outcome.code().to_string(),
+                    detail,
+                    // The same counts as the connection-log line above, for the screen: an upload
+                    // count that does not clear otherwise reads as an upload that failed.
+                    skipped_edited: done.changed,
+                    skipped_deleted: done.gone,
+                    held_mode,
+                    location_tie: 0,
+                    location_unmatched: 0,
+                    location_from_adif: false,
+                    unsent_after_error: 0,
+                    unsent_error: None,
+                    unconfirmed_after_error: 0,
+                },
+                unconfirmed,
+            ))
         }
     }
 }
@@ -37142,6 +41110,29 @@ mod upload_record_tests {
         &src[start..start + len]
     }
 
+    /// ⛔ A contact another program logged into Nexus (its `APP_NEXUS_VIA` mark) is pushed to no
+    /// DXKeeper, which may be the program that sent it; the operator's own contact is, while the
+    /// push is on, and nothing is while it is off.
+    #[test]
+    fn a_contact_another_program_logged_is_not_pushed_to_dxkeeper() {
+        let dxk = ("127.0.0.1".to_string(), 52000u16, false);
+        let mut mine = tempo_core::logbook::parse_adif(
+            "<CALL:5>W1ABC<QSO_DATE:8>20261014<TIME_ON:4>0102<BAND:3>20m<MODE:2>CW<EOR>",
+        )
+        .pop()
+        .unwrap();
+        assert_eq!(
+            crate::dxkeeper_target_for(Some(&dxk), &mine),
+            Some(dxk.clone())
+        );
+        assert_eq!(crate::dxkeeper_target_for(None, &mine), None);
+        mine.extra.push((
+            tempo_app::log_intake::VIA_FIELD.to_string(),
+            "WSJT-X".to_string(),
+        ));
+        assert_eq!(crate::dxkeeper_target_for(Some(&dxk), &mine), None);
+    }
+
     /// Every service push sends the contact `upload_record` makes of its row, and the DXKeeper
     /// push the contact `log_queries::sent` makes, so each names `COUNTRY` by the DXCC number; and
     /// the launch wires the station's resolver of that country. These reach the keychain, the
@@ -38185,6 +42176,12 @@ fn eqsl_answered(
                 skipped_edited: 0,
                 skipped_deleted: 0,
                 held_mode: 0,
+                location_tie: 0,
+                location_unmatched: 0,
+                location_from_adif: false,
+                unsent_after_error: 0,
+                unsent_error: None,
+                unconfirmed_after_error: 0,
             },
             None,
         )),
@@ -38225,6 +42222,12 @@ fn eqsl_answered(
                     skipped_edited: 0,
                     skipped_deleted: 0,
                     held_mode: 0,
+                    location_tie: 0,
+                    location_unmatched: 0,
+                    location_from_adif: false,
+                    unsent_after_error: 0,
+                    unsent_error: None,
+                    unconfirmed_after_error: 0,
                 },
                 detail,
             ))
@@ -38401,6 +42404,18 @@ fn hrd_send_connected(addr: &str, bytes: &[u8]) -> bool {
 /// (`adif_record_own_logger`).
 fn dxkeeper_adif(rec: &tempo_core::logbook::QsoRecord) -> String {
     tempo_core::logbook::adif_record_own_logger(&log_queries::sent(rec.clone()))
+}
+
+/// Where the upload worker pushes `rec` in DXKeeper (`dxk`, the push's host, base port and uploads
+/// switch while it is on): nowhere for a contact another program logged into Nexus
+/// (`tempo_app::log_intake::from_another_program`), since DXKeeper may be the program that sent it
+/// and it would come back in.
+fn dxkeeper_target_for(
+    dxk: Option<&(String, u16, bool)>,
+    rec: &tempo_core::logbook::QsoRecord,
+) -> Option<(String, u16, bool)> {
+    dxk.filter(|_| !tempo_app::log_intake::from_another_program(rec))
+        .cloned()
 }
 
 fn dxkeeper_push_async(host: String, base_port: u16, uploads: bool, adif: String) {
@@ -39074,7 +43089,7 @@ fn activation_now(eng: &tempo_app::engine::Engine) -> tempo_app::dto::Activation
     eng.activation_dto(u64::try_from(now_unix()).unwrap_or(0))
 }
 
-/// Activators currently on the air for `program` ("POTA" | "SOTA") — the hunter
+/// Activators currently on the air for `program` ("POTA" | "SOTA" | "WWFF") — the hunter
 /// feed. Network fetch (no auth); empty/Err only on a feed problem.
 /// One hunter-feed row: the raw activator spot annotated with what THIS
 /// operator cares about — is the park a new one, and is the band currently
@@ -39212,6 +43227,29 @@ fn cached_ota_spots(
         .ok_or_else(|| format!("No {program} spots cached yet."))
 }
 
+/// The rows the hunter board lists for `program`: every one, except that WWFF's are only the
+/// activations on the air now. WWFF Spotline's `spots.json` keeps the latest spot of every
+/// activator over about the last day (49 rows, 8 under an hour old, on 2026-11-03), and the board
+/// lists "activators on the air now", so a WWFF row is kept only while its spot is under
+/// [`OTA_ACTIVE_SECS`] old, the window the Needed board's activation rows use. A row with no spot
+/// time is kept, as there. The cache keeps the whole list; its readers apply their own window.
+fn ota_board_rows(
+    program: &str,
+    spots: Vec<propagation::OtaSpot>,
+    now: i64,
+) -> Vec<propagation::OtaSpot> {
+    if !program.eq_ignore_ascii_case("WWFF") {
+        return spots;
+    }
+    spots
+        .into_iter()
+        .filter(|sp| {
+            sp.spot_time_unix
+                .is_none_or(|t| now.saturating_sub(t) <= OTA_ACTIVE_SECS)
+        })
+        .collect()
+}
+
 /// `cached`: re-derive the log's flags over the cached rows instead of fetching — see
 /// [`cached_ota_spots`]. Absent or false is the poll and the Refresh button, which fetch.
 #[tauri::command]
@@ -39239,7 +43277,19 @@ async fn get_ota_spots(
                 })
                 .await
             }
-            other => return Err(format!("Unknown program '{other}' — use POTA or SOTA.")),
+            // WWFF Spotline, at most once per 30 s whoever asks (its terms; see
+            // `propagation::live::wwff`).
+            "WWFF" => {
+                tauri::async_runtime::spawn_blocking(|| {
+                    propagation::live::wwff::fetch_wwff_spots(env!("CARGO_PKG_VERSION"))
+                })
+                .await
+            }
+            other => {
+                return Err(format!(
+                    "Unknown program '{other}' — use POTA, SOTA or WWFF."
+                ))
+            }
         }
         .map_err(|e| e.to_string())??;
         // Refresh the lock-only cache the Needed scorer reads for POTA/SOTA tags —
@@ -39251,6 +43301,7 @@ async fn get_ota_spots(
         spots
     };
     let now = now_unix();
+    let spots = ota_board_rows(&program, spots, now);
     // The needs model every reader shares ([`NeedsKept`]), for the states a row would add to WAS.
     let kept = tallies.needs.clone();
     let (mycall, capture, needs) = {
@@ -39494,14 +43545,15 @@ fn tv_rpc(cmd: &str, args: &str) -> tempo_app::connect_web::RpcOutcome {
             .await),
             "get_kc2g_muf" => ok(get_kc2g_muf(app.state()).await),
             "get_space_wx_scales" => ok(get_space_wx_scales(app.state()).await),
-            "get_xray_now" => ok(get_xray_now().await),
+            "get_xray_now" => ok(get_xray_now(app.state()).await),
             "get_aurora" => ok(get_aurora(app.state()).await),
             "get_pca" => ok(get_pca(app.state(), app.state()).await),
+            "get_solar_regions" => ok(solar_regions::get_solar_regions().await),
             "get_satellites" => ok(get_satellites(app.state()).await),
             "get_ota_map_spots" => ok(get_ota_map_spots(app.state(), app.state()).await),
             "get_kp_forecast" => ok(get_kp_forecast(app.state()).await),
             "get_solar_indices" => ok(get_solar_indices(app.state()).await),
-            "get_band_outlook" => ok(get_band_outlook(app.state(), app.state()).await),
+            "get_band_outlook" => ok(get_band_outlook(app.state(), app.state(), app.state()).await),
             "get_path_regions" => ok(get_path_regions(app.state(), app.state(), app.state()).await),
             "get_path_outlook" => {
                 let grid = v
@@ -39509,10 +43561,15 @@ fn tv_rpc(cmd: &str, args: &str) -> tempo_app::connect_web::RpcOutcome {
                     .and_then(|x| x.as_str())
                     .unwrap_or("")
                     .to_string();
-                ok(
-                    get_path_outlook(grid, app.state(), app.state(), app.state(), app.state())
-                        .await,
+                ok(get_path_outlook(
+                    grid,
+                    app.state(),
+                    app.state(),
+                    app.state(),
+                    app.state(),
+                    app.state(),
                 )
+                .await)
             }
             "get_getting_out" => {
                 ok(get_getting_out(tv_getting_out_since(&v), app.state(), app.state()).await)
@@ -40847,16 +44904,46 @@ fn clear_hunt_target(state: State<'_, SharedEngine>) -> Result<AppSnapshot, Stri
 }
 
 /// Begin an activation — subsequent logged QSOs are tagged (your side). Validates +
-/// normalizes the reference; returns the activation state.
+/// normalizes the reference; returns the activation state. A station profile it puts the station
+/// on is applied and saved exactly as the top bar's picker does it ([`switch_station_profile`]),
+/// so the feeds bound to the call follow it. `afar`: started from a computer driving the station,
+/// which may not switch the call the station transmits under.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command(async)]
 fn set_activation(
     state: State<'_, SharedEngine>,
     ota_cache: State<'_, SharedOtaSpots>,
     parks: State<'_, SharedParks>,
+    spots: State<'_, SharedSpots>,
+    live_paths: State<'_, SharedLivePaths>,
+    region_paths: State<'_, SharedRegionPaths>,
+    health: State<'_, SharedHealth>,
+    cache: State<'_, PropCache>,
     program: String,
     reference: String,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<tempo_app::dto::ActivationDto, String> {
-    set_activation_on(&state, &ota_cache, &parks, &program, &reference)
+    let (dto, moved) = set_activation_on(
+        &state,
+        &ota_cache,
+        &parks,
+        &program,
+        &reference,
+        afar.as_ref(),
+    )?;
+    if let Some(settings) = moved {
+        apply_and_persist(
+            state,
+            spots,
+            live_paths,
+            region_paths,
+            health,
+            cache,
+            settings,
+            false,
+        )?;
+    }
+    Ok(dto)
 }
 
 /// [`set_activation`]'s body, over plain handles so a test drives exactly what the command runs.
@@ -40868,13 +44955,17 @@ fn set_activation(
 /// And the grid it is activated from: the park directory's grid of its first park
 /// ([`ota_park_grid`]), carried as the contacts' `MY_GRIDSQUARE` instead of the home grid. A park
 /// the directory does not hold starts with none; the strip takes one typed.
+///
+/// With it, the settings to apply and save when the start put the station on another station
+/// profile (a profile naming the park), `None` when the profile stayed.
 fn set_activation_on(
     engine: &SharedEngine,
     ota_cache: &SharedOtaSpots,
     parks: &SharedParks,
     program: &str,
     reference: &str,
-) -> Result<tempo_app::dto::ActivationDto, String> {
+    afar: Option<&command_dispatch::Afar>,
+) -> Result<(tempo_app::dto::ActivationDto, Option<Settings>), String> {
     let refs: Vec<&str> = reference
         .split(|c: char| c == ',' || c == ';' || c.is_whitespace())
         .filter(|one| !one.is_empty())
@@ -40891,12 +44982,19 @@ fn set_activation_on(
         .first()
         .and_then(|first| ota_park_grid(parks, program, first));
     let mut eng = engine_lock(engine);
-    eng.set_activation(program, reference, places)?;
+    let profile = eng.settings().active_station_profile.clone();
+    eng.set_activation_from(program, reference, places, afar.is_some())?;
     if let Some(grid) = grid {
         // A directory grid that is not a locator is left out, never the activation refused.
         let _ = eng.set_activation_grid(&grid);
     }
-    Ok(activation_now(&eng))
+    Ok((activation_now(&eng), profile_moved(&eng, &profile)))
+}
+
+/// The settings to apply and save when the station profile is no longer `before`: an activation's
+/// start or stop moved it ([`set_activation`], [`clear_activation`]).
+fn profile_moved(eng: &tempo_app::engine::Engine, before: &str) -> Option<Settings> {
+    (eng.settings().active_station_profile != before).then(|| eng.settings().clone())
 }
 
 /// The park directory's grid for a POTA park, if it holds one. A summit has none here.
@@ -40937,15 +45035,51 @@ fn set_activation_grid(
     Ok(activation_now(&eng))
 }
 
-/// End the current activation (subsequent QSOs untagged).
+/// End the current activation (subsequent QSOs untagged). The station profile it goes back to
+/// is applied and saved as [`set_activation`]'s is. `afar`: stopped from a computer driving the
+/// station, which may not switch the call the station transmits under.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command(async)]
 fn clear_activation(
     state: State<'_, SharedEngine>,
+    spots: State<'_, SharedSpots>,
+    live_paths: State<'_, SharedLivePaths>,
+    region_paths: State<'_, SharedRegionPaths>,
+    health: State<'_, SharedHealth>,
+    cache: State<'_, PropCache>,
+    afar: Option<command_dispatch::Afar>,
 ) -> Result<tempo_app::dto::ActivationDto, String> {
-    let mut eng = engine_lock(&state);
-    eng.clear_activation();
+    let (dto, moved) = clear_activation_on(&state, afar.as_ref());
+    if let Some(settings) = moved {
+        apply_and_persist(
+            state,
+            spots,
+            live_paths,
+            region_paths,
+            health,
+            cache,
+            settings,
+            false,
+        )?;
+    }
+    Ok(dto)
+}
+
+/// [`clear_activation`]'s body, over the plain handle: the activation now, and the settings to
+/// apply and save when the stop moved the station profile.
+fn clear_activation_on(
+    engine: &SharedEngine,
+    afar: Option<&command_dispatch::Afar>,
+) -> (tempo_app::dto::ActivationDto, Option<Settings>) {
+    let mut eng = engine_lock(engine);
+    let profile = eng.settings().active_station_profile.clone();
+    let back = eng.clear_activation_from(afar.is_some());
     self_spot::activation_ended();
-    Ok(activation_now(&eng))
+    let dto = tempo_app::dto::ActivationDto {
+        station_profile_back: back,
+        ..activation_now(&eng)
+    };
+    (dto, profile_moved(&eng, &profile))
 }
 
 /// The operator's "Still activating": an activation taken up at launch, paused until now, stamps
@@ -40970,6 +45104,8 @@ fn get_activation(state: State<'_, SharedEngine>) -> Result<tempo_app::dto::Acti
 /// endpoint + column layout should be verified against a live response — the parser is header-
 /// aware + tolerant, and `import_parks_csv` is the fallback if this URL ever changes.
 const PARKS_CSV_URL: &str = "https://pota.app/all_parks_ext.csv";
+/// The most the all-parks list is read to. It was 10.3 MB on 2026-11-03 and only grows.
+const PARKS_CSV_BYTES: u64 = 64 * 1024 * 1024;
 
 /// A park directory search result (serde mirror of `tempo_core::pota::Park`).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -41017,12 +45153,27 @@ impl From<propagation::live::pota::LiveParkDetail> for ParkDto {
     }
 }
 
+/// The park list's revision: moved each time a list is put in ([`swap_parks`]), so an order the
+/// Logbook's park name column sorts on is built again from the new names
+/// (`log_queries::OrderKey`).
+static PARKS_REV: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) fn parks_rev() -> u64 {
+    PARKS_REV.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Put `idx` in as the station's park list — loaded, imported or downloaded — and move
+/// [`parks_rev`].
+fn swap_parks(parks: &SharedParks, idx: tempo_core::pota::ParkIndex) -> Result<(), String> {
+    *parks.lock().map_err(|e| e.to_string())? = idx;
+    PARKS_REV.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    Ok(())
+}
+
 /// Load the cached park CSV (if any) into the shared index at startup. Best-effort.
 fn load_parks_cache(parks: &SharedParks) {
     if let Ok(csv) = std::fs::read_to_string(parks_cache_path()) {
-        if let Ok(mut idx) = parks.lock() {
-            *idx = tempo_core::pota::ParkIndex::parse_csv(&csv);
-        }
+        let _ = swap_parks(parks, tempo_core::pota::ParkIndex::parse_csv(&csv));
     }
 }
 
@@ -41068,7 +45219,7 @@ fn import_parks_csv(parks: State<'_, SharedParks>, csv: String) -> Result<usize,
     }
     let n = idx.len();
     let _ = std::fs::write(parks_cache_path(), &csv); // cache; failure is non-fatal
-    *parks.lock().map_err(|e| e.to_string())? = idx;
+    swap_parks(&parks, idx)?;
     Ok(n)
 }
 
@@ -41119,7 +45270,7 @@ fn import_hunted_parks_csv(engine: State<'_, SharedEngine>, csv: String) -> Resu
 #[tauri::command]
 async fn download_parks(parks: State<'_, SharedParks>) -> Result<usize, String> {
     let csv = tauri::async_runtime::spawn_blocking(|| -> Result<String, String> {
-        reqwest::blocking::Client::builder()
+        let resp = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(60))
             .user_agent(concat!("nexus/", env!("CARGO_PKG_VERSION"), " (+parks)"))
             .build()
@@ -41128,9 +45279,8 @@ async fn download_parks(parks: State<'_, SharedParks>) -> Result<usize, String> 
             .send()
             .map_err(|e| e.to_string())?
             .error_for_status()
-            .map_err(|e| e.to_string())?
-            .text()
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string())?;
+        propagation::live::body::read_capped(resp, PARKS_CSV_BYTES, "POTA parks list")
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -41143,7 +45293,7 @@ async fn download_parks(parks: State<'_, SharedParks>) -> Result<usize, String> 
     }
     let n = idx.len();
     let _ = std::fs::write(parks_cache_path(), &csv);
-    *parks.lock().map_err(|e| e.to_string())? = idx;
+    swap_parks(&parks, idx)?;
     Ok(n)
 }
 
@@ -43553,7 +47703,16 @@ fn update_route() -> UpdateRoute {
 /// Blocking GET of a text/JSON URL — mirrors the propagation crate's reqwest usage (rustls, short
 /// timeout, a UA). Returns the raw body; call it via `spawn_blocking` from the command.
 fn fetch_text(url: &str) -> Result<String, String> {
-    reqwest::blocking::Client::builder()
+    fetch_text_limited(url, UPDATE_FEED_BYTES)
+}
+
+/// The most an update feed is read to. GitHub's list of the last 20 releases was the largest,
+/// 1.0 MB on 2026-11-03; our own version.json 26 KB, SourceForge's best_release.json 3 KB.
+const UPDATE_FEED_BYTES: u64 = 16 * 1024 * 1024;
+
+/// [`fetch_text`] with its byte ceiling supplied.
+fn fetch_text_limited(url: &str, limit: u64) -> Result<String, String> {
+    let resp = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
         .user_agent(concat!(
             "nexus/",
@@ -43566,9 +47725,8 @@ fn fetch_text(url: &str) -> Result<String, String> {
         .send()
         .map_err(|e| e.to_string())?
         .error_for_status()
-        .map_err(|e| e.to_string())?
-        .text()
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    propagation::live::body::read_capped(resp, limit, "Update check")
 }
 
 /// Resolve the latest released version: try our own endpoint first (authoritative `latest`), then
@@ -44002,6 +48160,16 @@ fn quit_cleanup(app_handle: &tauri::AppHandle) {
     // held has already done it, before it waited on anything; the second run finds the loop gone
     // and returns at once, and sweeps any daemon started since.
     stop_the_radio();
+    // The contact port's listeners log what they hold (a contact another program logged, still
+    // in its 2 s wait for the fuller second message) and let go: before the log's last flush
+    // below, so it is in the log the quit writes. Bounded: a listener lets go within a quarter
+    // second.
+    if !tempo_app::log_intake::stop_for_quit(std::time::Duration::from_secs(2)) {
+        tempo_core::applog::warn(
+            "log-intake",
+            "a contact listener did not stop in time at the quit",
+        );
+    }
     // Programs on JS8Call's API hear that the station is closing, as JS8Call tells them. After the
     // unkey, and bounded: it never delays taking the transmitter off the air.
     js8_api::closing();
@@ -44039,6 +48207,10 @@ fn stop_the_radio() {
     {
         use std::sync::atomic::Ordering;
         tempo_audio::service::SHUTDOWN.store(true, Ordering::Relaxed);
+        // A radio picker's quit (a pick relaunches the radio as its own window): its loop was
+        // held and never ran, so nothing was keyed and nothing will answer the wait below. Taking
+        // it also means nothing can start it now.
+        let never_ran = PICKER_HELD_RADIO.quit();
         // Wait until the loop has actually unkeyed (SHUTDOWN_DONE),
         // not a fixed sleep: the loop only reaches the un-key after
         // its current step() returns, and a step can be blocked in a
@@ -44046,7 +48218,8 @@ fn stop_the_radio() {
         // in tens of ms while the worst case still flushes the
         // un-key before we let the process exit.
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(3_000);
-        while !tempo_audio::service::SHUTDOWN_DONE.load(Ordering::Relaxed)
+        while !never_ran
+            && !tempo_audio::service::SHUTDOWN_DONE.load(Ordering::Relaxed)
             && std::time::Instant::now() < deadline
         {
             std::thread::sleep(std::time::Duration::from_millis(20));
@@ -44481,6 +48654,9 @@ pub fn run() {
             active_profile()
         );
     }
+    // One radio, one window: every window's claims live in the BASE profile's folder, so any
+    // window sees any other's (`tempo_app::radio_claim`). Before anything can claim or switch.
+    tempo_app::radio_claim::init(config_dir_for(None).join("radio-claims"));
 
     // First launch of a radio profile: seed its per-instance settings from the default (shared)
     // profile so the new window inherits the radios list + all prefs — otherwise it would boot on
@@ -44746,7 +48922,12 @@ pub fn run() {
     let persisted_source = settings.source;
     // Cluster/RBN feed config (captured before `settings` moves into the engine).
     // `cluster_active()` folds in Unassisted mode, so an unassisted entry connects nothing.
+    // Read here only by a build without the radio feature; the others go by
+    // `cluster_nodes::config()`, published from the same settings below.
+    #[cfg(not(any(feature = "radio", test)))]
     let cluster_active = settings.cluster_active();
+    // The window opens on the radio picker: its cluster waits for it (`PICKER_HELD_CLUSTER`).
+    let cluster_held_for_picker = opens_on_the_radio_picker(&settings, active_profile());
     // Mirror the persisted flag to the atomic the feed callbacks read BEFORE any feed can be
     // spawned, so the "atomic always agrees with settings" invariant holds from the earliest
     // possible moment rather than depending on startup ordering.
@@ -44831,6 +49012,15 @@ pub fn run() {
     ))));
     let health: SharedHealth = Arc::new(FeedHealthState::default());
     cluster_nodes::set_config(node_config);
+    // Held while this window shows the radio picker, else started now: `start_cluster_from_config`
+    // reads the node settings just published, the same `cluster_active`, call and SSID.
+    #[cfg(any(feature = "radio", test))]
+    PICKER_HELD_CLUSTER.hold_or_start(
+        || cluster_held_for_picker,
+        (spots.clone(), health.clone()),
+        start_cluster_from_config,
+    );
+    #[cfg(not(any(feature = "radio", test)))]
     if cluster_active {
         start_cluster_feeds(&spots, &cluster_call, &cluster_ssid, &health, false);
     }
@@ -44878,10 +49068,10 @@ pub fn run() {
     std::thread::spawn(|| {
         let _ = propagation::live::dxped::fetch_plans();
     });
-    // Warm the POTA/SOTA activator cache in the background on a slow cadence (~3 min;
+    // Warm the POTA/SOTA/WWFF activator cache in the background on a slow cadence (~3 min;
     // activations run minutes-to-hours), so the Needed board surfaces live park/summit
     // chase rows from launch — without waiting for the operator to open the POTA/SOTA
-    // panel. Both programs each cycle; failures are ignored (transient feed hiccup) and
+    // panel. Every programme each cycle; failures are ignored (transient feed hiccup) and
     // retried next tick. Lock-only writes to the same per-program cache the panel + the
     // need scorer read. SOTA fetches a wider window (50) since it's sparse and count-based.
     {
@@ -44890,6 +49080,10 @@ pub fn run() {
             for (prog, fetched) in [
                 ("POTA", propagation::live::pota::fetch_pota_spots()),
                 ("SOTA", propagation::live::pota::fetch_sota_spots(50)),
+                (
+                    "WWFF",
+                    propagation::live::wwff::fetch_wwff_spots(env!("CARGO_PKG_VERSION")),
+                ),
             ] {
                 if let Ok(v) = fetched {
                     if let Ok(mut c) = ota.lock() {
@@ -45064,6 +49258,93 @@ fn radio_loop_end(
         Err(_) => "RADIO ENGINE CRASHED — TX/RX is dead until you restart Nexus.".to_string(),
     };
     (tempo_app::dto::AudioErrorKind::EngineStopped, msg)
+}
+
+/// How often a window refused its launch radio asks again ([`retry_the_refused_radio`]).
+#[cfg(feature = "radio")]
+const REFUSED_RADIO_RETRY: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// A launch refused its radio (another window drives it, `tempo_app::radio_claim`) waits with no
+/// radio loop. Ask again every [`REFUSED_RADIO_RETRY`] while it waits: once the other window has
+/// closed, or a Settings save has moved this window's radio to a free port, the claim succeeds and
+/// the loop starts on the radio as the settings now name it. A switch to a free radio starts it
+/// too, at once (`set_active_radio`); whichever comes first releases the gate, and the other then
+/// finds nothing held. Stops when the gate holds nothing more, and at a quit.
+#[cfg(feature = "radio")]
+fn retry_the_refused_radio(engine: SharedEngine) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(REFUSED_RADIO_RETRY);
+        if tempo_audio::service::SHUTDOWN.load(std::sync::atomic::Ordering::Relaxed)
+            || !PICKER_HELD_RADIO.is_held()
+        {
+            return;
+        }
+        // Patient, off the engine lock.
+        if claim_active_radio(&engine).is_ok() {
+            tempo_core::applog::info("radio", "the radio is free again; starting it");
+            // The settings are read again INSIDE the release, just as it starts the loop, so the
+            // loop starts on the radio the station is on now, not the one the claim above asked
+            // about: a switch in between moved the claim itself. `release` has already let go of
+            // the gate's mutex by then, so a switch can still land in the microseconds between
+            // this read and the start; the loop then follows it on its first tick, as it follows
+            // any switch.
+            PICKER_HELD_RADIO.release(|(engine, cfg)| {
+                let now = engine_lock(&engine).settings().clone();
+                start_radio_loop((engine, radio_config_now(cfg, &now)))
+            });
+            return;
+        }
+    });
+}
+
+/// `cfg`, held since the launch, brought up to `settings` now: every field the launch took from
+/// the settings is taken again; the two the launch set afterwards (the profile-change notifier and
+/// the version) are kept.
+#[cfg(feature = "radio")]
+fn radio_config_now(
+    cfg: tempo_audio::service::RadioConfig,
+    settings: &tempo_app::settings::Settings,
+) -> tempo_audio::service::RadioConfig {
+    let mut now = radio_config_for(settings, &cfg.spectrum_feed, &cfg.rx_tap, &cfg.meter_feed);
+    now.on_active_profile_change = cfg.on_active_profile_change;
+    now.app_version = cfg.app_version;
+    now
+}
+
+/// Start the radio loop on its own thread: at the launch, or when the radio picker's "use one radio"
+/// releases it ([`PICKER_HELD_RADIO`]).
+#[cfg(feature = "radio")]
+fn start_radio_loop((radio_engine, radio_cfg): (SharedEngine, tempo_audio::service::RadioConfig)) {
+    std::thread::spawn(move || {
+        // The radio loop is the heartbeat — if it dies (error OR panic), TX/RX
+        // is silently dead. Surface it loudly in the UI (the audio_error lane
+        // renders as a persistent banner) instead of an invisible eprintln.
+        let eng_for_report = radio_engine.clone();
+        let eng_for_loop = radio_engine;
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            tempo_audio::service::run_radio(eng_for_loop, radio_cfg)
+        }));
+        // The loop returns `Ok(())` only when a quit told it to stop, having unkeyed: that is the
+        // quit, not a fault, and the file says so. Logged as "stopped unexpectedly", it read as a
+        // radio engine that died the moment a second window started, in the very log a field
+        // report hands us.
+        if matches!(result, Ok(Ok(())))
+            && tempo_audio::service::SHUTDOWN.load(std::sync::atomic::Ordering::Relaxed)
+        {
+            tempo_core::applog::info("radio", "radio loop stopped for the quit");
+            return;
+        }
+        let (kind, msg) = radio_loop_end(result);
+        eprintln!("tempo: {msg}");
+        tempo_core::applog::error("radio", &msg);
+        // `unwrap_or_else(into_inner)`, NOT `.map` on the Result: the one case
+        // this banner exists for — the loop died from a panic under the engine
+        // guard — is exactly the case where the lock is POISONED, and the old
+        // form silently skipped the write then.
+        engine_lock_result(&eng_for_report)
+            .unwrap_or_else(|e| e.into_inner())
+            .set_audio_error(Some((kind, msg)));
+    });
 }
 
 /// The launch from the logbook on: [`finish_launch`] calls it once the splash is on screen and the
@@ -45712,7 +49993,9 @@ fn start_on_the_logbook(
                 // acknowledges, so there is no success to distinguish from failure and
                 // nothing meaningful to retry. A failed connect almost always just means
                 // DXLab is not running. Fire it and move on.
-                if let Some((host, base, uploads)) = dxk.clone() {
+                // …but never a contact another program logged into Nexus (`tempo_app::log_intake`):
+                // DXKeeper may be the program that sent it, and it would come back in.
+                if let Some((host, base, uploads)) = dxkeeper_target_for(dxk.as_ref(), &rec) {
                     // ⭐ THE PRIVATE NOTE RIDES ALONG HERE, deliberately — the one outbound
                     // call site that does. DXKeeper is the operator's OWN logging software on
                     // their OWN machine (the comment above says it: a failed connect just means
@@ -45848,32 +50131,66 @@ fn start_on_the_logbook(
         tempo_audio::icomlan::set_credential_source(std::sync::Arc::new(move |radio_id| {
             icom_lan_password_for_login(&login_engine, &OsKeychain, radio_id)
         }));
-        let radio_engine = engine.clone();
-        std::thread::spawn(move || {
-            // The radio loop is the heartbeat — if it dies (error OR panic), TX/RX
-            // is silently dead. Surface it loudly in the UI (the audio_error lane
-            // renders as a persistent banner) instead of an invisible eprintln.
-            let eng_for_report = radio_engine.clone();
-            let eng_for_loop = radio_engine;
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-                tempo_audio::service::run_radio(eng_for_loop, radio_cfg)
-            }));
-            let (kind, msg) = radio_loop_end(result);
-            eprintln!("tempo: {msg}");
-            tempo_core::applog::error("radio", &msg);
-            // `unwrap_or_else(into_inner)`, NOT `.map` on the Result: the one case
-            // this banner exists for — the loop died from a panic under the engine
-            // guard — is exactly the case where the lock is POISONED, and the old
-            // form silently skipped the write then.
-            engine_lock_result(&eng_for_report)
-                .unwrap_or_else(|e| e.into_inner())
-                .set_audio_error(Some((kind, msg)));
-        });
+        // A window that opens on the radio picker drives no radio until the operator answers it
+        // (see `PICKER_HELD_RADIO`), and no window drives a radio another Nexus window runs
+        // (`tempo_app::radio_claim`): it says why and waits for a switch to a free one. Every other launch
+        // claims its radio and starts its loop here, as always.
+        let picker_engine = engine.clone();
+        let retry_engine = engine.clone();
+        PICKER_HELD_RADIO.hold_or_start(
+            move || {
+                let mut eng = engine_lock(&picker_engine);
+                if opens_on_the_radio_picker(eng.settings(), active_profile()) {
+                    return true;
+                }
+                match claim_active_radio_of(eng.settings()) {
+                    Ok(()) => false,
+                    Err(why) => {
+                        tempo_core::applog::warn("radio", &why);
+                        eng.set_cat_status(Some(false), why);
+                        retry_the_refused_radio(retry_engine);
+                        true
+                    }
+                }
+            },
+            (engine.clone(), radio_cfg),
+            start_radio_loop,
+        );
     }
 
     // AI CW decoder (beta) is started in the Tauri `.setup()` below, where the app's
     // cross-platform resource dir is available — the DeepCW model ships as a bundled
     // resource, and resolving it by hand from the exe path only worked on Windows.
+
+    // The contact port, RECEIVE ONLY: the contacts FreeDV and other programs log (127.0.0.1
+    // alone unless "Accept from devices on my network" is on, `tempo_app::log_intake`) and, when
+    // the operator asks for them, the calls FreeDV hears. The manager follows the settings once a
+    // second; nothing it reads can key or tune the radio (`tempo_app::freedv`).
+    {
+        let freedv_engine = engine.clone();
+        let note: tempo_app::freedv::Note =
+            std::sync::Arc::new(|level, msg| conn_log("FreeDV", level, msg));
+        let intake_note: tempo_app::freedv::Note =
+            std::sync::Arc::new(|level, msg| conn_log("Other programs", level, msg));
+        let spawned = std::thread::Builder::new()
+            .name("nexus-freedv".into())
+            .spawn(move || {
+                tempo_app::freedv::run(
+                    freedv_engine,
+                    note,
+                    intake_note,
+                    // Shared by every Nexus window of this install (#431: the second radio
+                    // window says the first takes the contacts, rather than an error).
+                    Some(config_dir_for(None)),
+                )
+            });
+        if let Err(e) = spawned {
+            tempo_core::applog::error(
+                "freedv",
+                &format!("the FreeDV listeners could not start: {e}"),
+            );
+        }
+    }
 
     // CAT broker: let other apps (WSJT-X / N1MM / loggers) share the radio THROUGH
     // Nexus over the rigctld protocol. Localhost-only (never expose the rig to the
@@ -46813,6 +51130,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         ui_state_load,
         ui_state_save,
         get_snapshot,
+        get_decode_refill,
         remote_monitor::get_remote_monitor_frame,
         remote_service::get_remote_station_status,
         get_stream_watched,
@@ -46877,6 +51195,8 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         radio_launch_info,
         choose_radio,
         use_single_radio,
+        radio_picker_timed_out,
+        radio_picker_unavailable,
         import_pota_log,
         set_skip_tx1,
         civ_diagnostic_status,
@@ -46902,6 +51222,8 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         start_sat_track,
         stop_sat_track,
         sat_track_status,
+        moon_status,
+        start_moon_track,
         point_rotator_at_call,
         rotator_bearing_to_call,
         read_rotator,
@@ -47022,6 +51344,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         dxcc_entity_locations,
         set_frequency,
         sstv_tune,
+        sstv_tune_on_open,
         pick_band,
         tune_channel,
         set_operating_mode,
@@ -47105,6 +51428,9 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         set_routing_rules,
         set_default_radio,
         set_radio_switch_policy,
+        switch_station_profile,
+        save_station_profile,
+        remove_station_profile,
         set_experience_level,
         mark_setup_wizard_seen,
         route_preview,
@@ -47277,6 +51603,8 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         download_lotw_report,
         reset_lotw_cursor,
         upload_lotw_report,
+        lotw_sat_band_fixes,
+        lotw_fix_sat_bands,
         mark_lotw_uploaded,
         set_eqsl_password,
         clear_eqsl_password,
@@ -47318,6 +51646,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         get_ota_map_spots,
         get_kp_forecast,
         arrival_outlook::get_arrival_outlook,
+        solar_regions::get_solar_regions,
         get_solar_indices,
         connect_web_status,
         search_parks,
@@ -51325,8 +55654,24 @@ mod tests {
     /// rigctld could never start there and the radio was refused as Nexus itself. Now sharing
     /// serves on the next free port and P stays free: the operator's rigctld binds it, and a
     /// client on P reaches that rigctld, not Nexus. Real sockets, the station's own lists.
+    ///
+    /// P has to be free with nothing listening on it (the operator's rigctld is not running yet),
+    /// so it is a port the system handed out and let go of. A test running alongside can be handed
+    /// the same port in between and hold it when the operator's rigctld binds; that run is not
+    /// about sharing (sharing is already proved off P by then), so it starts over on a fresh port.
     #[test]
     fn sharing_leaves_the_operators_rigctld_port_free_when_nothing_is_on_it_yet() {
+        for _ in 0..20 {
+            if operators_rigctld_binds_its_port_beside_sharing() {
+                return;
+            }
+        }
+        panic!("another program took the operator's rigctld port on every try");
+    }
+
+    /// One run of the test above on a fresh port: `false` when something outside the test took the
+    /// port before the operator's rigctld could bind it.
+    fn operators_rigctld_binds_its_port_beside_sharing() -> bool {
         use std::io::{Read, Write};
         let probe = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let port = probe.local_addr().unwrap().port();
@@ -51347,14 +55692,19 @@ mod tests {
         assert_ne!(got, port, "sharing took the operator's rigctld port");
         assert!(got > port && got <= port.saturating_add(super::BROKER_MOVE_SPAN));
         // The operator starts their rigctld now: its port is free, and a client reaches it.
-        let rigctld = std::net::TcpListener::bind(("127.0.0.1", port))
-            .expect("the operator's rigctld can bind its port");
+        let rigctld = match std::net::TcpListener::bind(("127.0.0.1", port)) {
+            Ok(l) => l,
+            // Sharing is on `got`, not P (asserted above): whatever holds P is outside the test.
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => return false,
+            Err(e) => panic!("the operator's rigctld could not bind its port: {e}"),
+        };
         let mut c = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
         c.write_all(b"f\n").unwrap();
         let (mut srv, _) = rigctld.accept().unwrap();
         let mut buf = [0u8; 2];
         srv.read_exact(&mut buf).unwrap();
         assert_eq!(&buf, b"f\n");
+        true
     }
 
     /// The reserved port is never even tried, and never moved onto; a port no radio expects
@@ -53116,19 +57466,21 @@ mod tests {
     }
 
     use super::{
-        assistance_posture_changed, b64_decode, b64_encode, callbook_candidates, catalog_marks,
-        cluster_spot_heards, dxped_page_url, engine_lock, install_block_reason,
+        arm_moon_track, assistance_posture_changed, b64_decode, b64_encode, callbook_candidates,
+        catalog_marks, cluster_spot_heards, dxped_page_url, engine_lock, install_block_reason,
         is_complete_lotw_body, iso_from_stamp, iss_pass_from_tles, jtty_heards,
-        load_tle_snapshot_from, migrate_sstv_gallery_between, own_decode_heards, parse_sstv_mode,
-        profile_dir_name, qso_is_sat, reconcile_gallery, rect_lands_on_work_area,
-        redact_for_backup, resolve_bird, resolve_birds, roster_local_spots, roster_spot_age_secs,
-        run_sat_track, sanitize_profile, sat_excluded, set_operator_qth, spotter_evidence_rank,
-        spotter_evidence_rank_at, tle_absorb_foreign, tle_act_gate, tle_extend_aliases,
+        load_tle_snapshot_from, migrate_sstv_gallery_between, moon_drives_elevation,
+        moon_track_now, own_decode_heards, parse_sstv_mode, profile_dir_name, qso_is_sat,
+        reconcile_gallery, rect_lands_on_work_area, redact_for_backup, resolve_bird, resolve_birds,
+        roster_local_spots, roster_spot_age_secs, run_moon_track, run_sat_track, sanitize_profile,
+        sat_excluded, set_operator_qth, spotter_evidence_rank, spotter_evidence_rank_at,
+        test_live_sat_track, tle_absorb_foreign, tle_act_gate, tle_extend_aliases,
         tle_merge_imports, tle_merged_elements, tle_record_aliases, tle_seed, tle_seed_floor,
         tle_seed_path, tle_set_currency, view_passes, write_json_atomic, write_qso_wav_in,
-        AssistanceEvent, AssistanceSourceState, SatBird, SatTrackDto, SatTrackLoss, SatTrackRun,
-        SatnogsFetchState, SharedEngine, SpotIotaLog, TleFlightGuard, TleSnapshot, SAT_TRACK,
-        SAT_TRACK_GEN, SPOTS_WINDOW, TLE_ACT_STALE_DAYS, TLE_FETCHING, TLE_STALE_LINE_DAYS,
+        AssistanceEvent, AssistanceSourceState, MoonRun, MoonTrackDto, SatBird, SatTrackDto,
+        SatTrackLoss, SatTrackRun, SatnogsFetchState, SharedEngine, SpotIotaLog, TleFlightGuard,
+        TleSnapshot, SAT_TRACK, SAT_TRACK_GEN, SPOTS_WINDOW, TLE_ACT_STALE_DAYS, TLE_FETCHING,
+        TLE_STALE_LINE_DAYS,
     };
 
     /// A scratch file path unique to this test process (std-only — no tempfile
@@ -54342,6 +58694,61 @@ mod tests {
         assert_eq!(out[0].time, t - 60);
     }
 
+    /// A station decoded here WITHOUT a grid scores the grid its contact would be credited with
+    /// (`Engine::credited_grid`): worked on 40 m from FN42 and logged with it, it is a new grid on
+    /// 20 m, and a 20 m contact would log FN42 — so the own-decode record carries FN42 and the
+    /// board says New grid. A grid the decode itself carried still wins.
+    #[test]
+    fn a_gridless_decode_scores_the_grid_its_contact_would_be_credited_with() {
+        let st = |grid: Option<&str>| tempo_app::dto::Station {
+            call: "W9XYZ".into(),
+            grid: grid.map(str::to_string),
+            snr: -10,
+            last_heard_slot: 100,
+            heard_count: 1,
+            presence: tempo_app::dto::Presence::Active,
+            worked: true,
+            worked_band: false,
+            worked_ago_secs: None,
+            worked_today_utc: false,
+            country: None,
+            tier: None,
+            grid_rarity: None,
+            lotw_user: false,
+            freq_hz: None,
+            calling: None,
+            cq_dir: None,
+            state: None,
+        };
+        let credited: std::collections::HashMap<String, String> =
+            [("W9XYZ".to_string(), "FN42".to_string())].into();
+        let heard = own_decode_heards(&[st(None)], 100, 15.0, "20m", "FT8", 120, &credited);
+        assert_eq!(heard[0].grid.as_deref(), Some("FN42"));
+        let mut needs = propagation::LogNeeds::new();
+        needs.add("W9XYZ", "40m", "FT8", Some("FN42"), None, false);
+        let alerts = propagation::rank_needs(&heard, &needs, &needs.slots());
+        assert!(
+            alerts
+                .iter()
+                .any(|a| a.call == "W9XYZ" && a.tags.contains(&propagation::NeedTag::NewGrid)),
+            "FN42 worked on 40 m only: new on 20 m, {alerts:?}"
+        );
+        // Without a credited grid: none, so no New grid (the control).
+        let bare = own_decode_heards(
+            &[st(None)],
+            100,
+            15.0,
+            "20m",
+            "FT8",
+            120,
+            &Default::default(),
+        );
+        assert_eq!(bare[0].grid, None);
+        // The decode's own grid wins over a credited one.
+        let own = own_decode_heards(&[st(Some("EN37"))], 100, 15.0, "20m", "FT8", 120, &credited);
+        assert_eq!(own[0].grid.as_deref(), Some("EN37"));
+    }
+
     /// REGRESSION (the same tier-switch defect, SECOND consumer): the fix above landed
     /// on the opening detector's arm and not on the Needed board's — the same two
     /// fields, off the same roster, in the same file, one `last_heard_slot` grep apart.
@@ -54396,14 +58803,31 @@ mod tests {
             "the pre-switch number must be AHEAD of the new clock: {on_ft4_at_1700} vs {ft8_now}"
         );
         assert!(
-            own_decode_heards(&[st(on_ft4_at_1700)], ft8_now, 15.0, "6m", "FT8", 120).is_empty(),
+            own_decode_heards(
+                &[st(on_ft4_at_1700)],
+                ft8_now,
+                15.0,
+                "6m",
+                "FT8",
+                120,
+                &Default::default()
+            )
+            .is_empty(),
             "an hour-old FT4-numbered decode must not reach the Needed board as fresh"
         );
 
         // …and the gate must still admit what it is for. A decode four FT8 slots back
         // is one minute old, inside the 2-minute window, and carries its grid + state
         // hint through.
-        let fresh = own_decode_heards(&[st(ft8_now - 4)], ft8_now, 15.0, "6m", "FT8", 120);
+        let fresh = own_decode_heards(
+            &[st(ft8_now - 4)],
+            ft8_now,
+            15.0,
+            "6m",
+            "FT8",
+            120,
+            &Default::default(),
+        );
         assert_eq!(
             fresh.len(),
             1,
@@ -54415,7 +58839,16 @@ mod tests {
         // …while one past the 2-minute cap is dropped on the SAME clock (the original
         // 2026-07-23 freshness gate, still doing its job).
         assert!(
-            own_decode_heards(&[st(ft8_now - 12)], ft8_now, 15.0, "6m", "FT8", 120).is_empty(),
+            own_decode_heards(
+                &[st(ft8_now - 12)],
+                ft8_now,
+                15.0,
+                "6m",
+                "FT8",
+                120,
+                &Default::default()
+            )
+            .is_empty(),
             "12 FT8 slots = 3 minutes, past the freshness cap"
         );
         // The other switch direction (FT8 → FT4) ages out rather than being refused —
@@ -54423,7 +58856,16 @@ mod tests {
         let on_ft8_at_1700 = ft8.slot_index(at_1700_ms);
         let ft4_now = ft4.slot_index(at_1800_ms);
         assert!(
-            own_decode_heards(&[st(on_ft8_at_1700)], ft4_now, 7.5, "6m", "FT4", 120).is_empty(),
+            own_decode_heards(
+                &[st(on_ft8_at_1700)],
+                ft4_now,
+                7.5,
+                "6m",
+                "FT4",
+                120,
+                &Default::default()
+            )
+            .is_empty(),
             "the shrinking direction must not survive as a merely-old entry either"
         );
     }
@@ -54653,7 +59095,19 @@ mod tests {
             let len = src[start..].find("\n}\n").expect("its end");
             &src[start..start + len]
         };
-        for feed in ["start_cluster_feed", "start_human_cluster_feed"] {
+        // Each feed hands its spots to an intake, which a window following another's cluster
+        // logins also takes the relayed ones through (`cluster_share`)…
+        for (feed, intake) in [
+            ("start_cluster_feed", "take_rbn_spot("),
+            ("start_human_cluster_feed", "take_node_spot("),
+        ] {
+            assert!(
+                body(feed).contains(intake),
+                "{feed} takes its spots via {intake}"
+            );
+        }
+        // …and the intake gates, notes and keeps each one.
+        for feed in ["take_rbn_spot", "take_node_spot"] {
             let b = body(feed);
             let gate = b
                 .find("if unassisted() {")
@@ -55415,6 +59869,137 @@ mod tests {
         assert_eq!(crate::pca_kp(Some(&snap), now), None, "an hours-old Kp");
     }
 
+    /// The cap's edge line travels only with a measured Kp, beside the S-scale and NOAA's
+    /// recovery rule from the same J(≥10 MeV).
+    #[test]
+    fn the_pca_view_draws_its_edge_only_at_a_measured_kp() {
+        let now = 1_761_800_000;
+        let flux = propagation::live::protons::ProtonFlux {
+            j1: 5000.0,
+            j5: 800.0,
+            j10: 150.0,
+            at: Some(now - 300),
+        };
+        let v = serde_json::to_value(crate::pca_view(flux, Some(5.0), now)).unwrap();
+        assert_eq!(v["sScale"], 2);
+        assert!((v["sepRecoveryH"].as_f64().unwrap() - 24.235).abs() < 1e-9);
+        assert_eq!(v["cutoffDeg"], 60.0);
+        let north = v["edge"][0].as_array().unwrap();
+        let p = &north[0];
+        let m =
+            propagation::geo::geomagnetic_lat_deg(p[1].as_f64().unwrap(), p[0].as_f64().unwrap());
+        assert!((m - 60.0).abs() < 1e-3, "the edge is at the cutoff, {m}");
+        let blind = serde_json::to_value(crate::pca_view(flux, None, now)).unwrap();
+        assert!(blind["edge"].is_null() && blind["cutoffDeg"].is_null());
+        let quiet = propagation::live::protons::ProtonFlux { j10: 12.0, ..flux };
+        let q = serde_json::to_value(crate::pca_view(quiet, Some(5.0), now)).unwrap();
+        assert_eq!(q["sScale"], 1);
+        assert!(
+            q["sepRecoveryH"].is_null(),
+            "NOAA's rule says nothing at 12 pfu"
+        );
+    }
+
+    /// `protonEvent` is `pca::proton_event` on the reading served: S1+, dated, under 30 min. The
+    /// cases are the path overlay's probe set (a quiet or sub-S1 fresh reading is no event; nor is a
+    /// stale or an undated one).
+    #[test]
+    fn the_pca_view_says_whether_a_proton_event_is_held() {
+        let now = 1_761_800_000;
+        let ev = |j10: f64, at: Option<i64>| {
+            let flux = propagation::live::protons::ProtonFlux {
+                j1: 1.0,
+                j5: 1.0,
+                j10,
+                at,
+            };
+            serde_json::to_value(crate::pca_view(flux, Some(3.0), now)).unwrap()["protonEvent"]
+                .as_bool()
+                .unwrap()
+        };
+        assert!(ev(20.0, Some(now - 300)), "S1, fresh (A, F1, H)");
+        assert!(ev(1000.0, Some(now - 300)), "S3, fresh (D)");
+        assert!(ev(150.0, Some(now - 1799)), "S2 just under 30 min");
+        assert!(!ev(0.3, Some(now - 300)), "quiet, fresh (Bp, F2, Q1)");
+        assert!(!ev(5.0, Some(now - 300)), "5 pfu, fresh (E)");
+        assert!(!ev(200.0, Some(now - 1860)), "S2, 31 min (S2)");
+        assert!(!ev(200.0, Some(now - 6 * 3600)), "S2, 6 h (S1)");
+        assert!(!ev(0.3, Some(now - 6 * 3600)), "quiet, 6 h (F3, Q3)");
+        assert!(!ev(150.0, None), "undated");
+        // A reading dated 3 min ahead of the shack's clock is refused: no event, so no cap is drawn.
+        assert!(!ev(150.0, Some(now + 180)), "3 min in the future");
+        assert!(ev(150.0, Some(now + 120)), "the 120 s skew allowance");
+        // A non-finite flux is no reading; a huge finite one is S5.
+        assert!(!ev(f64::INFINITY, Some(now - 300)), "+inf");
+        assert!(!ev(f64::NAN, Some(now - 300)), "NaN");
+        assert!(ev(1e300, Some(now - 300)), "huge finite");
+    }
+
+    /// `protonEventUntil` travels exactly with `protonEvent` (the sample time + 30 min), and
+    /// `protonWhy` names the reason in the shack's words.
+    #[test]
+    fn the_pca_view_says_until_when_and_why() {
+        let now = 1_761_800_000;
+        let view = |j10: f64, at: Option<i64>| {
+            let flux = propagation::live::protons::ProtonFlux {
+                j1: 1.0,
+                j5: 1.0,
+                j10,
+                at,
+            };
+            serde_json::to_value(crate::pca_view(flux, Some(3.0), now)).unwrap()
+        };
+        let held = view(150.0, Some(now - 300));
+        assert_eq!(held["protonEvent"], true);
+        assert_eq!(held["protonEventUntil"], now - 300 + 30 * 60);
+        assert_eq!(held["protonWhy"], "held");
+        for (j10, at, why) in [
+            (0.3, Some(now - 300), "quiet"),
+            (150.0, Some(now - 31 * 60), "stale"),
+            (150.0, Some(now + 180), "ahead"),
+            (150.0, None, "undated"),
+        ] {
+            let v = view(j10, at);
+            assert_eq!(v["protonEvent"], false, "{why}");
+            assert!(
+                v["protonEventUntil"].is_null(),
+                "no until without an event ({why})"
+            );
+            assert_eq!(v["protonWhy"], why);
+        }
+    }
+
+    /// NOAA's grid is asked during a flare or during a measured proton event, and not on a quiet
+    /// sun, nor for an undated or old proton sample.
+    #[test]
+    fn the_drap_grid_is_wanted_for_a_flare_or_a_proton_event() {
+        let now = 1_761_800_000;
+        let p = |j10: f64, at: Option<i64>| {
+            Some(propagation::live::protons::ProtonFlux {
+                j1: 1.0,
+                j5: 1.0,
+                j10,
+                at,
+            })
+        };
+        let (qx, qat) = (2e-7_f32, now - 60);
+        assert!(crate::drap_wanted(2e-5, now - 60, None, now), "an M2 flare");
+        assert!(!crate::drap_wanted(qx, qat, None, now), "quiet");
+        assert!(
+            crate::drap_wanted(qx, qat, p(40.0, Some(now - 300)), now),
+            "S1"
+        );
+        assert!(
+            !crate::drap_wanted(qx, qat, p(5.0, Some(now - 300)), now),
+            "below S1"
+        );
+        assert!(!crate::drap_wanted(qx, qat, p(40.0, None), now), "undated");
+        assert!(
+            !crate::drap_wanted(qx, qat, p(40.0, Some(now - 7200)), now),
+            "old"
+        );
+    }
+
     /// A KC2G set served after a failed refetch is older by the time since it was fetched.
     #[test]
     fn a_stale_kc2g_set_ages() {
@@ -55848,7 +60433,11 @@ mod tests {
         // CONTROL: a free engine answers with its own row, window and all.
         let free = super::spectrum_fallback(&engine);
         assert_eq!(free, engine_lock(&engine).spectrum_row());
-        assert_eq!(free.hi_hz, 4000.0, "the engine's answer, not the busy one");
+        assert_eq!(
+            free.hi_hz,
+            f64::from(tempo_app::engine::SPECTRUM_HI_HZ),
+            "the engine's answer (its 0-5000 Hz row), not the busy one"
+        );
 
         let (held, is_held) = std::sync::mpsc::channel();
         let holder = {
@@ -56382,6 +60971,33 @@ mod tests {
         );
     }
 
+    /// The spot and award side names a band by `propagation::Band::from_mhz`; the engine names
+    /// it by `band_for_dial`. Wherever the engine names a band that the award side knows, both
+    /// must name the same one, or a UK 60 m spot at 5.2585 MHz is "60m" on the dial and no band
+    /// on the board. The award side may be wider at an edge (it labels spots, never cuts an
+    /// over); it has no 2200 m, 630 m, 8 m, 5 m or 1.25 m, which it does not count, so those
+    /// stay unnamed there.
+    #[test]
+    fn the_award_band_table_names_every_band_the_engine_does() {
+        use propagation::model::Band;
+        // Every 0.1 kHz to 30 MHz, then every 1 kHz to 1300 MHz: each edge of both tables is hit.
+        let points = (1..=300_000)
+            .map(|i| i as f64 / 10_000.0)
+            .chain((30_000..=1_300_000).map(|i| i as f64 / 1_000.0));
+        let mut checked = 0;
+        for mhz in points {
+            let Some(label) = tempo_app::bandplan::band_for_dial(mhz) else {
+                continue;
+            };
+            let Some(band) = Band::from_label(label) else {
+                continue;
+            };
+            assert_eq!(Band::from_mhz(mhz), Some(band), "{mhz} MHz is {label}");
+            checked += 1;
+        }
+        assert!(checked > 100_000, "the sweep reached the bands ({checked})");
+    }
+
     /// THE PASSBAND GATE, censused across every band label the app can produce
     /// (2026-08-10, tagging live): a logged contact whose dial sits in the held
     /// bird's downlink passband is stamped and credited to the SATELLITE
@@ -56409,7 +61025,11 @@ mod tests {
             ("12m", 24.915, true),
             // AO-7 mode A comes down here — a metre band that DOES take it.
             ("10m", 29.450, true),
+            // ADIF's 8 m and 5 m: a few countries' allocations, no DXCC `Band` variant, so
+            // their grids are label-keyed like 1.25 m's.
+            ("8m", 40.680, false),
             ("6m", 50.313, true),
+            ("5m", 60.000, false),
             ("4m", 70.154, true),
             // Every U/V bird's downlink — the ordinary wrong-credit case.
             ("2m", 145.960, true),
@@ -56711,6 +61331,24 @@ mod tests {
 
     impl FakeRotctld {
         fn start(ok_points: usize) -> FakeRotctld {
+            let mut points = 0usize;
+            FakeRotctld::serve(move |cmd| {
+                // `P` is a pointing command; `S` is the halt.
+                let pointing = cmd.starts_with('P');
+                if pointing {
+                    points += 1;
+                }
+                if pointing && points > ok_points {
+                    "RPRT -6\n"
+                } else {
+                    "RPRT 0\n"
+                }
+                .to_string()
+            })
+        }
+
+        /// A rotctld that answers each command line with `answer(line)`.
+        fn serve(mut answer: impl FnMut(&str) -> String + Send + 'static) -> FakeRotctld {
             let listener =
                 std::net::TcpListener::bind("127.0.0.1:0").expect("a loopback port for rotctld");
             let addr = listener.local_addr().expect("bound address").to_string();
@@ -56719,7 +61357,6 @@ mod tests {
             let (log, halt) = (seen.clone(), stop.clone());
             let thread = std::thread::spawn(move || {
                 use std::io::{BufRead, BufReader, Write};
-                let mut points = 0usize;
                 for conn in listener.incoming() {
                     if halt.load(std::sync::atomic::Ordering::SeqCst) {
                         break;
@@ -56734,17 +61371,8 @@ mod tests {
                     if cmd.is_empty() {
                         continue;
                     }
-                    // `P` is a pointing command; `S` is the halt.
-                    let pointing = cmd.starts_with('P');
-                    if pointing {
-                        points += 1;
-                    }
+                    let reply = answer(&cmd);
                     log.lock().expect("rotctld log").push(cmd);
-                    let reply = if pointing && points > ok_points {
-                        "RPRT -6\n"
-                    } else {
-                        "RPRT 0\n"
-                    };
                     let _ = sock.write_all(reply.as_bytes());
                 }
             });
@@ -56979,15 +61607,17 @@ mod tests {
             "the pass ended — the dial is the operator's again"
         );
 
-        // THE WIRE. Every failed pointing command costs two connections
-        // (`send_rot_step` retries azimuth-only), and after the give-up the
-        // loop stops writing to the mast entirely — no hammering a dead
-        // controller for the rest of the pass.
+        // THE WIRE. Every failed pointing command costs ONE connection — `RPRT -6` is the
+        // daemon's I/O error, not a mount refusing the elevation, so `send_rot_step` does not
+        // retry azimuth-only (it used to, and a single slow round trip on a G-5500 then dropped
+        // the elevation for a minute) — and after the give-up the loop stops writing to the mast
+        // entirely: what it sends a rotator it gave up on is a position READ now and then,
+        // which moves nothing, never a command.
         let cmds = rot.commands();
         let points = cmds.iter().filter(|c| c.starts_with('P')).count();
         assert_eq!(
             points,
-            GOOD + 2 * MISS_LIMIT as usize,
+            GOOD + MISS_LIMIT as usize,
             "the loop stopped commanding once it gave up: {cmds:?}"
         );
         // The halt IS attempted on a rotator that gave up — it can only remove
@@ -57024,6 +61654,72 @@ mod tests {
             .collect();
         assert_eq!(tail, vec!["S", "P 180.0 0.0"], "{cmds:?}");
 
+        // ── A ROTATOR THAT COMES BACK MID-PASS ───────────────────────────────
+        // ⭐ The give-up used to hold for the rest of the pass, so a hiccup on an internet link
+        // cost the whole pass after the link was back. Now the loop asks again (a position
+        // read every REPROBE_AFTER_TICKS ticks) and an answer gives the pass its mast back.
+        // This controller misses MISS_LIMIT commands, fails the first re-probe, and answers the
+        // second.
+        let (mut points, mut dead_reads, mut back) = (0usize, 0usize, false);
+        let rot = FakeRotctld::serve(move |cmd| {
+            let dead = !back && points >= GOOD;
+            match cmd.chars().next() {
+                Some('P') => {
+                    points += 1;
+                    if dead { "RPRT -6\n" } else { "RPRT 0\n" }.to_string()
+                }
+                Some('p') if dead && points >= GOOD + MISS_LIMIT as usize => {
+                    dead_reads += 1;
+                    back = dead_reads >= 2;
+                    if back { "100.0\n20.0\n" } else { "RPRT -5\n" }.to_string()
+                }
+                Some('p') if dead => "RPRT -5\n".to_string(),
+                Some('p') => "100.0\n20.0\n".to_string(),
+                _ => "RPRT 0\n".to_string(),
+            }
+        });
+        let eng = sat_station();
+        let badges = run_simulated_pass(&eng, Some(rot.addr.clone()), cfg);
+        let lost = badges
+            .iter()
+            .position(|b| b.rotor_lost)
+            .expect("the loop gave the mast up");
+        let back_at = badges
+            .iter()
+            .skip(lost)
+            .position(|b| !b.rotor_lost)
+            .map(|i| i + lost)
+            .expect("…and took it back when the rotator answered again");
+        // Two re-probes: one unanswered, one answered, REPROBE_AFTER_TICKS ticks apart.
+        let gap = back_at - lost;
+        let every = tempo_core::rotator::REPROBE_AFTER_TICKS as usize;
+        assert!(
+            (2 * every - 1..=2 * every + 1).contains(&gap),
+            "taken back {gap} ticks after the give-up"
+        );
+        let retaken = &badges[back_at];
+        assert_eq!(
+            retaken.mode, "rotor+doppler",
+            "the track claims the mast again"
+        );
+        assert!(retaken.az_deg.is_some(), "…because it commanded it again");
+        assert!(
+            badges[back_at..].iter().all(|b| !b.rotor_lost),
+            "and keeps it to LOS"
+        );
+        let cmds = rot.commands();
+        let after_give_up: Vec<&String> = cmds
+            .iter()
+            .filter(|c| c.starts_with('P'))
+            .skip(GOOD + MISS_LIMIT as usize)
+            .collect();
+        assert!(
+            !after_give_up.is_empty(),
+            "the mast was commanded again after it answered: {cmds:?}"
+        );
+        // The operator's pick stood through all of it.
+        assert!(badges.iter().all(|b| b.doppler_downlink));
+
         // EVERY EXIT, CLASSIFIED. Only the two that end the PASS release the
         // dial: the bird setting (above), and a propagation that diverged — the
         // MODEL failing rather than the bird, and both surfaces are computed
@@ -57036,6 +61732,155 @@ mod tests {
         // …and the browser going away ends the pass for the same reason the bird setting does:
         // there is nobody the correction is being made for any more.
         assert!(SatTrackLoss::RemoteAuthorityEnded.ends_pass());
+    }
+
+    /// FOLLOW THE MOON, through the shipped loop against a rotctld socket: a G-5500 from Greenwich
+    /// over 2026-11-03, the Moon rising at 03:00 and setting a little after 14:00 (JPL Horizons:
+    /// `propagation::moon`'s tests). An hour a tick, so every tick moves it past the deadband.
+    fn fly_moon(rot: &FakeRotctld, elevation: bool, ticks: usize) -> (Vec<MoonTrackDto>, u64) {
+        const T0: i64 = 1_793_674_800; // 2026-11-03 03:00 UTC
+        let now = std::cell::Cell::new(T0);
+        let seen = std::cell::RefCell::new(Vec::new());
+        let gen = SAT_TRACK_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+        run_moon_track(
+            MoonRun {
+                addr: rot.addr.clone(),
+                obs: (51.4769, 0.0),
+                cfg: tempo_core::rotator::RotatorConfig::default(),
+                elevation,
+                gen,
+            },
+            &|| now.get(),
+            &|| {
+                now.set(now.get() + 3_600);
+                if let Some(d) = moon_track_now() {
+                    seen.borrow_mut().push(d);
+                }
+                // The Stop: the generation moves on, and the loop is gone on its next tick.
+                if seen.borrow().len() >= ticks {
+                    SAT_TRACK_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            },
+        );
+        (seen.into_inner(), gen)
+    }
+
+    #[test]
+    fn following_the_moon_points_at_it_while_it_is_up_and_holds_while_it_is_down() {
+        let _alone = crate::sat_track_alone();
+        let rot = FakeRotctld::start(usize::MAX);
+        let (badges, gen) = fly_moon(&rot, true, 16);
+        assert_eq!(badges.len(), 16);
+        let cmds = rot.commands();
+        let points: Vec<&String> = cmds.iter().filter(|c| c.starts_with('P')).collect();
+        let at =
+            |i: usize| propagation::moon::look((51.4769, 0.0), 1_793_674_800 + 3_600 * i as i64);
+        // The hours the Moon is up: from 03:00 (26.4°, Horizons) until it sets after 14:00.
+        let up = (0..16).take_while(|&i| at(i).el_deg >= 0.0).count();
+        assert!((11..=12).contains(&up), "{up}");
+        assert!(
+            (up..16).all(|i| at(i).el_deg < 0.0),
+            "it does not rise again that day"
+        );
+        // One command an hour while it is up, each where the Moon is.
+        assert_eq!(points.len(), up, "{cmds:?}");
+        for (i, line) in points.iter().enumerate() {
+            let m = at(i);
+            assert_eq!(
+                **line,
+                format!("P {:.1} {:.1}", m.az_deg, m.el_deg),
+                "hour {i}"
+            );
+        }
+        assert!(badges[..up]
+            .iter()
+            .all(|b| b.state == "following" && b.elevation));
+        assert!(
+            badges[0].el_deg.is_some_and(|e| (e - 26.38).abs() < 0.1),
+            "{:?}",
+            badges[0]
+        );
+        // Once it is down: held, nothing sent, and the pane is told why.
+        assert!(
+            badges[up..].iter().all(|b| b.state == "belowHorizon"),
+            "{badges:?}"
+        );
+        // …and after the Stop the follow is gone: no stale badge claims the mast.
+        assert!(SAT_TRACK_GEN.load(std::sync::atomic::Ordering::SeqCst) > gen);
+        assert_eq!(moon_track_now(), None);
+        assert!(
+            !cmds.iter().any(|c| c == "S"),
+            "holding is not a halt: {cmds:?}"
+        );
+    }
+
+    #[test]
+    fn an_azimuth_only_rotator_follows_the_moon_with_the_line_it_always_gets() {
+        let _alone = crate::sat_track_alone();
+        let rot = FakeRotctld::start(usize::MAX);
+        let (badges, _) = fly_moon(&rot, false, 3);
+        let points: Vec<String> = rot
+            .commands()
+            .into_iter()
+            .filter(|c| c.starts_with('P'))
+            .collect();
+        assert_eq!(points.len(), 3);
+        for (i, line) in points.iter().enumerate() {
+            let m = propagation::moon::look((51.4769, 0.0), 1_793_674_800 + 3_600 * i as i64);
+            assert_eq!(
+                format!("{line}\n"),
+                tempo_audio::rotator::point_line(m.az_deg),
+                "hour {i}"
+            );
+        }
+        assert!(badges.iter().all(|b| !b.elevation && b.el_deg.is_none()));
+    }
+
+    #[test]
+    fn the_moon_follow_drives_elevation_exactly_when_the_backend_declares_an_axis() {
+        use tempo_audio::rotator::parse_limits;
+        // What rotctld 4.6.5 answers `\dump_state` with for each, on a pty.
+        let gs232b = parse_limits(
+            "1\n603\nmin_az=-180.000000\nmax_az=450.000000\nmin_el=0.000000\n\
+             max_el=180.000000\nsouth_zero=0\nrot_type=AzEl\ndone\n",
+        );
+        let gs232b_az = parse_limits(
+            "1\n611\nmin_az=-180.000000\nmax_az=450.000000\nmin_el=0.000000\n\
+             max_el=0.000000\nsouth_zero=0\nrot_type=Az\ndone\n",
+        );
+        assert!(
+            moon_drives_elevation(gs232b.as_ref()),
+            "a G-5500 on its GS-232B"
+        );
+        assert!(
+            !moon_drives_elevation(gs232b_az.as_ref()),
+            "Hamlib's GS-232B azimuth model"
+        );
+        assert!(
+            !moon_drives_elevation(None),
+            "a daemon that declares nothing"
+        );
+    }
+
+    #[test]
+    fn the_moon_and_a_satellite_pass_never_hold_the_mast_together() {
+        let _alone = crate::sat_track_alone();
+        let eng = sat_station();
+        // A pass is live, with its transponder held: following the Moon disarms it as Stop
+        // does, dial handed back.
+        test_live_sat_track("SO-50");
+        assert!(engine_lock(&eng).sat_transponder_held().is_some());
+        let (gen, _) = arm_moon_track(&eng, true);
+        assert!(SAT_TRACK.lock().unwrap().is_none(), "the pass is disarmed");
+        assert!(
+            engine_lock(&eng).sat_transponder_held().is_none(),
+            "…and its dial handed back"
+        );
+        assert!(moon_track_now().is_some());
+        // Arming a pass (or any Stop) moves the generation on: the Moon follow is over at once.
+        SAT_TRACK_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(moon_track_now(), None);
+        assert!(SAT_TRACK_GEN.load(std::sync::atomic::Ordering::SeqCst) > gen);
     }
 
     /// ⛔ **A PASS A BROWSER ARMED DOES NOT OUTLIVE THAT BROWSER.** A track steers the dial, the
@@ -59246,6 +64091,46 @@ mod tests {
         }
     }
 
+    /// The FT drive the operator set per band and mode is a station setting: a settings backup
+    /// carries each radio's, and a restore brings it back. In a backup hand-edited to a level the
+    /// slider cannot reach, that entry is dropped (never clamped to full drive), as is one that is
+    /// not a level; the backup still restores.
+    #[test]
+    fn a_backup_carries_the_ft_drive_per_band_and_mode() {
+        let mut s = tempo_app::settings::Settings {
+            mycall: "W9XYZ".into(),
+            ..Default::default()
+        };
+        s.ensure_radio_profiles();
+        s.radios[0].remember_ft_drive("20m", "FT8", 0.30);
+        s.radios[0].remember_ft_drive("6m", "FT4", 0.80);
+        let engine: super::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::with_settings(s.clone()),
+        ));
+        let text = super::settings_bundle(&engine, Default::default(), None).expect("exports");
+        let mut bundle: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let restored = super::settings_from_bundle(bundle["settings"].clone()).unwrap();
+        assert_eq!(restored.radios[0].ft_drive, s.radios[0].ft_drive);
+        assert_eq!(restored.radios[0].ft_drive_for("20m", "FT8"), Some(0.30));
+        assert_eq!(restored.radios[0].ft_drive_for("6m", "FT4"), Some(0.80));
+
+        let drive = &mut bundle["settings"]["radios"][0]["ftDrive"];
+        drive["20m/FT8"] = serde_json::json!(9.0);
+        drive["40m/FT8"] = serde_json::json!("max");
+        let restored = super::settings_from_bundle(bundle["settings"].clone()).unwrap();
+        assert_eq!(restored.mycall, "W9XYZ", "the backup restores");
+        assert!(
+            !restored.radios[0].ft_drive.contains_key("20m/FT8"),
+            "out of range: dropped, never clamped to full drive"
+        );
+        assert_eq!(
+            restored.radios[0].ft_drive_for("20m", "FT8"),
+            Some(0.30),
+            "the band's own drive stands in"
+        );
+        assert!(!restored.radios[0].ft_drive.contains_key("40m/FT8"));
+    }
+
     /// A backup from before the cluster node choice restores the way an upgraded settings file
     /// loads: a list the operator wrote stays theirs, a list Nexus shipped goes automatic, and a
     /// backup that carries the choice keeps it. A restore runs none of `Settings::load`'s
@@ -59726,14 +64611,16 @@ mod tests {
         line.reference = "US-0003".into();
         let cache = hunter_cache(&[("POTA", &[state_spot("K0ABC", 14_285.0, &["US-ND"]), line])]);
         let parks = crate::SharedParks::default();
-        let dto = crate::set_activation_on(&engine, &cache, &parks, "POTA", "US-0001")
-            .expect("the activation starts");
+        let dto = crate::set_activation_on(&engine, &cache, &parks, "POTA", "US-0001", None)
+            .expect("the activation starts")
+            .0;
         assert_eq!(
             (dto.states, dto.my_state),
             (codes(&["US-ND"]), Some("ND".to_string()))
         );
-        let dto = crate::set_activation_on(&engine, &cache, &parks, "POTA", "US-0003")
-            .expect("the activation starts");
+        let dto = crate::set_activation_on(&engine, &cache, &parks, "POTA", "US-0003", None)
+            .expect("the activation starts")
+            .0;
         assert_eq!(
             (dto.states, dto.my_state),
             (codes(&["US-MT", "US-ND"]), None)
@@ -59762,17 +64649,254 @@ mod tests {
             ),
         ));
         let home = engine_lock(&engine).settings().mygrid.clone();
-        let dto = crate::set_activation_on(&engine, &cache, &parks, "POTA", "us-0001, US-0002")
-            .expect("the activation starts");
+        let dto =
+            crate::set_activation_on(&engine, &cache, &parks, "POTA", "us-0001, US-0002", None)
+                .expect("the activation starts")
+                .0;
         assert_eq!(dto.reference.as_deref(), Some("US-0001,US-0002"));
         assert_eq!(dto.grid.as_deref(), Some("EN07AB"), "the first park's grid");
         assert_eq!(dto.states, codes(&["US-ND", "US-MT"]));
         assert_eq!(dto.my_state, None, "two states: asked, never guessed");
         assert_eq!(dto.parks.len(), 2);
-        let dto = crate::set_activation_on(&engine, &cache, &parks, "POTA", "US-0003")
-            .expect("the activation starts");
+        let dto = crate::set_activation_on(&engine, &cache, &parks, "POTA", "US-0003", None)
+            .expect("the activation starts")
+            .0;
         assert_eq!(dto.grid, None, "a park the directory does not hold");
         assert_eq!(engine_lock(&engine).settings().mygrid, home);
+    }
+
+    /// ⛔ The keying-time call check on an SSTV picture's preset text, through the `sstv_send`
+    /// command itself (the webview's call, the picture encoded and handed to the engine). No
+    /// profiles, Phone on 20 m, TX on. A picture whose preset text names KD9TAW goes out while the
+    /// call is KD9TAW. After the call is saved as KD9TAW/P, the same picture is refused with the
+    /// reason before anything is encoded, and nothing waits to key; one naming KD9TAW/P goes out.
+    #[test]
+    fn sstv_send_refuses_a_picture_whose_preset_names_the_old_call() {
+        use tauri::Manager;
+        let spec = tempo_sstv::for_mode(tempo_sstv::SstvMode::Robot36);
+        let (w, h) = (spec.line_pixels, spec.image_lines);
+        let rgb = b64_encode(&vec![128u8; w as usize * h as usize * 3]);
+        // A fresh station on `call`, the picture sent with `preset` in its text: the command's
+        // answer, and whether a picture now waits for the radio loop to key it.
+        let send = |call: &str, preset: &str| {
+            let engine = fresh_engine();
+            {
+                let mut e = engine_lock(&engine);
+                e.set_frequency(14.230, "20m", "USB");
+                e.set_operating_mode("phone", false);
+                if call != "KD9TAW" {
+                    let mut s = e.settings().clone();
+                    s.mycall = call.into();
+                    e.apply_settings(s);
+                }
+                assert!(e.settings().station_profiles.is_empty(), "premise");
+                assert_eq!(e.settings().mycall, call, "premise");
+            }
+            let app = tauri::test::mock_builder()
+                .manage(engine.clone())
+                .build(tauri::test::mock_context(tauri::test::noop_assets()))
+                .expect("a mock app");
+            let answer = crate::sstv_send(
+                app.state::<SharedEngine>(),
+                "robot36".into(),
+                w,
+                h,
+                rgb.clone(),
+                None,
+                Some(vec![preset.to_string()]),
+                None,
+            )
+            .map(|_| ());
+            let waits = engine_lock(&engine).poll_sstv_tx().is_some();
+            (answer, waits)
+        };
+        assert_eq!(send("KD9TAW", "KD9TAW"), (Ok(()), true), "CONTROL");
+        assert_eq!(
+            send("KD9TAW/P", "KD9TAW"),
+            (
+                Err(tempo_app::settings::STATION_CALL_CHANGED_TX_REFUSED.to_string()),
+                false
+            )
+        );
+        assert_eq!(send("KD9TAW/P", "KD9TAW/P"), (Ok(()), true));
+    }
+
+    /// A station with Home (KD9TAW) and a park profile (KD9TAW/P at US-0001).
+    fn station_with_a_park_profile() -> (SharedEngine, String) {
+        let engine = fresh_engine();
+        let id = engine_lock(&engine)
+            .save_station_profile(tempo_app::settings::StationProfile {
+                name: "Park".into(),
+                call: "KD9TAW/P".into(),
+                grid: "EN43".into(),
+                park: "US-0001".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        (engine, id)
+    }
+
+    /// ⭐ POTA Start that puts the station on the park's profile hands its settings to the same
+    /// apply-and-save the top bar's picker uses, so the switch is written to disk and the feeds log
+    /// in again under the new call; Stop that goes back does the same. One that moves nothing hands
+    /// nothing. From a computer driving the station, the call does not change and nothing is handed,
+    /// while the activation itself starts and ends.
+    #[test]
+    fn pota_start_and_stop_hand_a_profile_switch_to_the_save() {
+        let (engine, park) = station_with_a_park_profile();
+        let cache = hunter_cache(&[]);
+        let parks = crate::SharedParks::default();
+        let afar = crate::command_dispatch::Afar {
+            stand_down: 0,
+            starts_voided: 0,
+        };
+        let (dto, moved) =
+            crate::set_activation_on(&engine, &cache, &parks, "POTA", "US-0001", Some(&afar))
+                .expect("the activation starts");
+        assert_eq!(
+            dto.reference.as_deref(),
+            Some("US-0001"),
+            "started from afar"
+        );
+        assert!(moved.is_none(), "from afar: the call stays");
+        assert_eq!(engine_lock(&engine).settings().mycall, "KD9TAW");
+        let (_, moved) = crate::clear_activation_on(&engine, Some(&afar));
+        assert!(moved.is_none());
+        let (_, moved) = crate::set_activation_on(&engine, &cache, &parks, "POTA", "US-0001", None)
+            .expect("the activation starts");
+        let moved = moved.expect("the switch is handed to the save");
+        assert_eq!(
+            (moved.mycall.as_str(), moved.active_station_profile.as_str()),
+            ("KD9TAW/P", park.as_str())
+        );
+        let (dto, moved) = crate::clear_activation_on(&engine, None);
+        assert_eq!(dto.reference, None, "stopped");
+        let moved = moved.expect("going back is handed to the save");
+        assert_eq!(moved.mycall, "KD9TAW");
+        let (_, moved) = crate::set_activation_on(&engine, &cache, &parks, "POTA", "US-0002", None)
+            .expect("another park starts");
+        assert!(
+            moved.is_none(),
+            "CONTROL: no profile names it, nothing handed"
+        );
+    }
+
+    /// A settings reset during a CQ run on a station with profiles is refused whole, with the
+    /// reason: it would change the call the run sends under. Idle, it goes.
+    #[test]
+    fn a_reset_mid_run_is_refused_with_profiles() {
+        let (engine, _) = station_with_a_park_profile();
+        {
+            let mut e = engine_lock(&engine);
+            e.set_tier(tempo_app::dto::Tier::Ft8);
+            e.set_frequency(14.074, "20m", "USB");
+            e.start_cq(None).unwrap();
+        }
+        let refused =
+            crate::save_and_publish(&engine, crate::Settings::default(), true).map(|_| ());
+        assert_eq!(
+            refused,
+            Err(tempo_app::settings::STATION_PROFILE_RESTORE_REFUSED.to_string())
+        );
+        assert_eq!(engine_lock(&engine).settings().mycall, "KD9TAW");
+        assert_eq!(engine_lock(&engine).settings().station_profiles.len(), 2);
+        {
+            let mut e = engine_lock(&engine);
+            e.halt_tx();
+            e.set_mode("qso-monitor").unwrap();
+        }
+        crate::save_and_publish(&engine, crate::Settings::default(), true).expect("idle: reset");
+        assert!(engine_lock(&engine).settings().station_profiles.is_empty());
+    }
+
+    /// Stop during a CQ run cannot take the station back from the park's profile: its answer names
+    /// the profile to pick in the top bar, once. Nothing else carries it.
+    #[test]
+    fn a_stop_that_cannot_go_back_names_the_profile_to_pick() {
+        let (engine, park) = station_with_a_park_profile();
+        let cache = hunter_cache(&[]);
+        let parks = crate::SharedParks::default();
+        crate::set_activation_on(&engine, &cache, &parks, "POTA", "US-0001", None)
+            .expect("the activation starts");
+        {
+            let mut e = engine_lock(&engine);
+            assert_eq!(e.settings().active_station_profile, park, "premise");
+            e.set_tier(tempo_app::dto::Tier::Ft8);
+            e.set_frequency(14.074, "20m", "USB");
+            e.start_cq(None).unwrap();
+        }
+        let (dto, moved) = crate::clear_activation_on(&engine, None);
+        assert!(moved.is_none(), "the station stays on the park's profile");
+        assert_eq!(
+            dto.station_profile_back.map(|p| (p.id, p.call)),
+            Some((
+                tempo_app::settings::HOME_STATION_PROFILE.to_string(),
+                "KD9TAW".to_string()
+            ))
+        );
+        let again = serde_json::to_string(&crate::activation_now(&engine_lock(&engine))).unwrap();
+        assert!(!again.contains("stationProfileBack"), "{again}");
+    }
+
+    /// Editing a profile the station is not on during a CQ run is only written to disk: no settings
+    /// apply, so the over already planned keys in its slot (the radio loop builds it with the Engine
+    /// unlocked, and an apply in between cancels it). CONTROL: the same over is cancelled by a
+    /// settings apply, which is what saving the profile the station is on still runs.
+    #[test]
+    fn saving_a_profile_the_station_is_not_on_keeps_the_planned_over() {
+        let (engine, park) = station_with_a_park_profile();
+        let plan_cq = |engine: &SharedEngine, slot: u64| {
+            engine_lock(engine)
+                .plan_tx(slot)
+                .expect("premise: the CQ is planned")
+        };
+        {
+            let mut e = engine_lock(&engine);
+            e.set_tier(tempo_app::dto::Tier::Ft8);
+            e.set_frequency(14.074, "20m", "USB");
+            e.start_cq(None).unwrap();
+        }
+        let plan = plan_cq(&engine, 0);
+        let mut edit = engine_lock(&engine)
+            .settings()
+            .station_profiles
+            .iter()
+            .find(|p| p.id == park)
+            .cloned()
+            .unwrap();
+        edit.antenna = "Vertical".into();
+        let applied = crate::save_station_profile_on(&engine, edit).expect("saved");
+        if let Some(settings) = applied.clone() {
+            crate::save_and_publish(&engine, settings, false).expect("applied");
+        }
+        let mut e = engine_lock(&engine);
+        let wave = plan.waveform.build();
+        assert!(
+            !e.commit_tx(&plan, wave, 0).is_empty(),
+            "the planned over keys"
+        );
+        assert!(applied.is_none(), "the list alone: no settings apply");
+        assert_eq!(e.settings().station_profiles[1].antenna, "Vertical");
+        drop(e);
+        // CONTROL: a settings apply between plan and key cancels the over.
+        let plan = plan_cq(&engine, 2);
+        let now = engine_lock(&engine).settings().clone();
+        crate::save_and_publish(&engine, now, false).expect("applied");
+        let wave = plan.waveform.build();
+        assert!(engine_lock(&engine).commit_tx(&plan, wave, 2).is_empty());
+    }
+
+    /// A Settings form loaded on Home and saved after a switch to the park profile keeps the station
+    /// on the profile, and the feeds and the spot ranking bind to the station's call, KD9TAW/P, not
+    /// the form's.
+    #[test]
+    fn a_stale_form_save_binds_the_feeds_to_the_stations_call() {
+        let (engine, park) = station_with_a_park_profile();
+        let stale = engine_lock(&engine).settings().clone();
+        engine_lock(&engine).switch_station_profile(&park).unwrap();
+        let (_, mycall, mygrid) = crate::save_and_publish(&engine, stale, false).expect("saved");
+        assert_eq!((mycall.as_str(), mygrid.as_str()), ("KD9TAW/P", "EN43"));
+        assert_eq!(engine_lock(&engine).settings().mycall, "KD9TAW/P");
     }
 
     /// The log form places a typed park by the states its lookup names, read by the hunter feed's
@@ -61158,6 +66282,32 @@ mod tests {
         sp
     }
 
+    /// ⭐ THE WWFF TAB LISTS WHO IS ON THE AIR NOW. Spotline's list keeps every activator's latest
+    /// spot for about a day; one spotted two hours ago went QRT and is no row to HUNT. A WWFF row is
+    /// kept under the hour (`OTA_ACTIVE_SECS`), and one with no spot time is kept. The other
+    /// programmes' rows are left as their feeds send them (the control).
+    #[test]
+    fn the_wwff_board_lists_only_activations_on_the_air_now() {
+        let now = crate::now_unix();
+        let mut untimed = live_spot("WWFF", "G0XYZ", "GFF-0001", 0);
+        untimed.spot_time_unix = None;
+        let rows = |program: &str, spots: Vec<propagation::OtaSpot>| -> Vec<String> {
+            crate::ota_board_rows(program, spots, now)
+                .into_iter()
+                .map(|sp| sp.activator)
+                .collect()
+        };
+        let wwff = vec![
+            live_spot("WWFF", "DL0XYZ", "DLFF-0001", 600),
+            live_spot("WWFF", "K1ABC", "KFF-1234", 7_200),
+            live_spot("WWFF", "VK9ZZZ", "VKFF-0001", 3_600),
+            untimed,
+        ];
+        assert_eq!(rows("WWFF", wwff), ["DL0XYZ", "VK9ZZZ", "G0XYZ"]);
+        let sota = vec![live_spot("SOTA", "W7A", "W7A/MN-001", 7_200)];
+        assert_eq!(rows("SOTA", sota), ["W7A"]);
+    }
+
     /// The Needed board through the REAL `read_need_alerts`: `cluster` calls arrive as 20 m CW
     /// cluster spots (the decorated path), `feed` fills the hunter cache per programme (the
     /// `activation_alert` path). An empty log, so every row is a need.
@@ -61345,6 +66495,40 @@ mod tests {
         assert_eq!(
             board_park(&alerts, "W9XYZ", "Phone"),
             Some(("POTA".into(), "US-0002".into()))
+        );
+    }
+
+    /// A WWFF activator on the hunter feed is WWFF's on the board, on both of its rows: the WWFF
+    /// chip (never POTA's), and the park a Work from the board hunts with, WWFF and the area.
+    /// The roster call logs the contact the same way. A live POTA activator beside it is the
+    /// control: still POTA.
+    #[test]
+    fn a_wwff_activator_is_filed_as_wwff_on_the_board_and_in_the_log() {
+        let wwff = [live_spot("WWFF", "K1ABC", "KFF-1234", 60)];
+        let pota = [live_spot("POTA", "W9XYZ", "US-0002", 60)];
+        let feed: [(&str, &[propagation::OtaSpot]); 2] = [("WWFF", &wwff), ("POTA", &pota)];
+        let alerts = needed_board(&["K1ABC"], &feed);
+        for mode in ["CW", "Phone"] {
+            let row = board_row(&alerts, "K1ABC", mode);
+            assert!(
+                row.tags.contains(&propagation::NeedTag::Wwff)
+                    && !row.tags.contains(&propagation::NeedTag::Pota),
+                "{mode} row: {:?}",
+                row.tags
+            );
+            assert_eq!(
+                board_park(&alerts, "K1ABC", mode),
+                Some(("WWFF".into(), "KFF-1234".into())),
+                "{mode} row"
+            );
+        }
+        assert_eq!(
+            board_park(&alerts, "W9XYZ", "Phone"),
+            Some(("POTA".into(), "US-0002".into()))
+        );
+        assert_eq!(
+            work_then_log(fresh_engine(), &feed, "K1ABC"),
+            Some(("WWFF".into(), "KFF-1234".into()))
         );
     }
 
@@ -66380,7 +71564,11 @@ mod secrets_toward_remote_tests {
         let read = serde_json::to_value(settings_read(&shack, Some(&afar), false)).unwrap();
         assert_eq!(
             read[command_dispatch::SET_AT_THE_STATION],
-            serde_json::json!(command_dispatch::station_only_settings(Some(&afar)).unwrap())
+            serde_json::json!(command_dispatch::station_only_settings(
+                Some(&afar),
+                &Settings::default()
+            )
+            .unwrap())
         );
         assert_eq!(
             read.to_string()
@@ -67371,5 +72559,225 @@ mod getting_out_since_tests {
         );
         assert_eq!(tv_getting_out_since(&json!({})), None);
         assert_eq!(tv_getting_out_since(&Value::Null), None);
+    }
+}
+
+#[cfg(test)]
+mod fetch_cap_tests {
+    use std::io::{Read, Write};
+
+    /// A loopback server answering one connection with `200 OK` and `body`. Its port.
+    fn serve(body: Vec<u8>) -> u16 {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = l.local_addr().expect("addr").port();
+        std::thread::spawn(move || {
+            let Ok((mut s, _)) = l.accept() else { return };
+            let mut head = Vec::new();
+            let mut b = [0u8; 1];
+            while !head.ends_with(b"\r\n\r\n") && matches!(s.read(&mut b), Ok(1)) {
+                head.push(b[0]);
+            }
+            let _ = write!(
+                s,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = s.write_all(&body);
+            let _ = s.flush();
+        });
+        port
+    }
+
+    /// An update feed is read only up to its limit: a body at the limit whole, one byte more
+    /// refused with a sentence, not read to the end.
+    #[test]
+    fn an_update_feed_past_its_limit_is_refused() {
+        let url = |port: u16| format!("http://127.0.0.1:{port}/version.json");
+        let port = serve(vec![b' '; 4096]);
+        assert_eq!(
+            super::fetch_text_limited(&url(port), 4096).map(|s| s.len()),
+            Ok(4096)
+        );
+        let port = serve(vec![b' '; 4097]);
+        let err = super::fetch_text_limited(&url(port), 4096).unwrap_err();
+        assert!(
+            err.starts_with("Update check: ") && err.contains("larger than"),
+            "{err}"
+        );
+    }
+
+    /// Ways a reqwest response is read to its end with no limit, matched with whitespace removed
+    /// so a chain split over lines is still caught.
+    const UNCAPPED_READS: [&str; 7] = [
+        ".text()",
+        ".json()",
+        ".json::<",
+        ".bytes()?",
+        ".bytes().map_err",
+        ".bytes().await",
+        ".copy_to(",
+    ];
+
+    /// Reads through `std::io::Read`, which a blocking reqwest response implements. Uncapped unless
+    /// the statement bounds them with `.take(`; one whose call is `.await`ed is tokio's AsyncRead
+    /// (a socket in a test), which a reqwest response never is.
+    const IO_READS: [&str; 3] = [".read_to_end(", ".read_to_string(", "io::copy("];
+
+    /// Whether `code` (whitespace removed) has an `IO_READS` call `p` with no `.take(` in its
+    /// statement and no `.await` on its result.
+    fn unbounded_io_read(code: &str, p: &str) -> bool {
+        code.match_indices(p).any(|(at, _)| {
+            let start = code[..at].rfind([';', '{', '}']).map_or(0, |i| i + 1);
+            let end = code[at..].find(';').map_or(code.len(), |i| at + i);
+            // The call's closing paren, then whether `.await` follows it.
+            let mut depth = 0usize;
+            let mut close = code.len();
+            for (i, c) in code[at + p.len() - 1..].char_indices() {
+                match c {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            close = at + p.len() - 1 + i + 1;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            !code[start..end].contains(".take(") && !code[close..].starts_with(".await")
+        })
+    }
+
+    /// The uncapped reads in `source`: `//` comments dropped (whole-line, or trailing after
+    /// ` // `, so a URL's `https://` stays) and whitespace removed.
+    fn uncapped_reads(source: &str) -> Vec<&'static str> {
+        let code: String = source
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .map(|l| l.split(" // ").next().unwrap_or_default())
+            .collect::<String>()
+            .split_whitespace()
+            .collect();
+        UNCAPPED_READS
+            .into_iter()
+            .filter(|p| code.contains(p))
+            .chain(IO_READS.into_iter().filter(|p| unbounded_io_read(&code, p)))
+            .collect()
+    }
+
+    /// Names `source` gives a reqwest type of its own: `use reqwest::…::Response as Reply;` or
+    /// `type Reply = reqwest::…;`. A file that uses one of them speaks HTTP too.
+    fn reqwest_aliases(source: &str) -> Vec<String> {
+        source
+            .lines()
+            .map(str::trim)
+            .filter(|l| l.contains("reqwest"))
+            .filter_map(|l| {
+                let name =
+                    if let Some(rest) = l.strip_prefix("type ").or(l.strip_prefix("pub type ")) {
+                        rest.split(['=', '<', ' ']).next()?
+                    } else {
+                        l.rsplit_once(" as ")?.1
+                    };
+                let name = name.trim_end_matches([';', ',', '}']).trim();
+                (!name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_'))
+                    .then(|| name.to_string())
+            })
+            .collect()
+    }
+
+    /// No file here that speaks HTTP reads an answer whole: the blocking fetchers go through
+    /// `propagation::live::body` (or `contest_lists`' own `take`), the async service clients
+    /// through their own chunk loops with a limit.
+    #[test]
+    fn no_fetcher_here_reads_an_answer_without_a_limit() {
+        // CONTROLS: the scan sees an uncapped read split over lines, and passes a capped one.
+        assert_eq!(
+            uncapped_reads("let t = resp\n    .text()\n    .map_err(f)?;"),
+            [".text()"]
+        );
+        assert!(uncapped_reads("body::read_capped(resp, L, \"X\")").is_empty());
+        // CONTROLS for the `std::io::Read` route: an unbounded read, `io::copy` included, is seen;
+        // one bounded by `.take(` and a tokio socket's `.await`ed read are not.
+        assert_eq!(
+            uncapped_reads("let mut v = Vec::new();\n resp.read_to_end(&mut v)?;"),
+            [".read_to_end("]
+        );
+        assert_eq!(
+            uncapped_reads("std::io::copy(&mut resp, &mut file)?;"),
+            ["io::copy("]
+        );
+        assert!(uncapped_reads(
+            "resp.take(LIMIT + 1)\n    .read_to_end(&mut body)\n    .map_err(f)?;"
+        )
+        .is_empty());
+        assert!(uncapped_reads("let _ = stream.read_to_string(&mut page).await;").is_empty());
+        // CONTROLS for the alias rule.
+        assert_eq!(
+            reqwest_aliases("use reqwest::blocking::Response as Reply;\npub type Wire = reqwest::blocking::Client;"),
+            ["Reply", "Wire"]
+        );
+        assert!(reqwest_aliases("use std::io::Read as _;").is_empty());
+
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for entry in std::fs::read_dir(dir).expect("dir") {
+                let path = entry.expect("entry").path();
+                if path.is_dir() {
+                    walk(&path, out);
+                } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
+                    out.push(path);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        walk(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+            &mut files,
+        );
+        let sources: Vec<(std::path::PathBuf, String)> = files
+            .into_iter()
+            .map(|path| {
+                let source = std::fs::read_to_string(&path).expect("source");
+                (path, source)
+            })
+            .collect();
+        let aliases: Vec<String> = sources
+            .iter()
+            .flat_map(|(_, source)| reqwest_aliases(source))
+            .collect();
+        let speaks_http = |source: &str| {
+            source.contains("reqwest")
+                || aliases.iter().any(|a| {
+                    source.match_indices(a.as_str()).any(|(i, _)| {
+                        let word =
+                            |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+                        !word(source[..i].chars().next_back())
+                            && !word(source[i + a.len()..].chars().next())
+                    })
+                })
+        };
+        let mut checked = 0;
+        for (path, source) in &sources {
+            if !speaks_http(source) {
+                continue;
+            }
+            // This scan's own patterns.
+            let source = source
+                .split("mod fetch_cap_tests {")
+                .next()
+                .unwrap_or_default();
+            let found = uncapped_reads(source);
+            assert!(
+                found.is_empty(),
+                "{} reads a response with no limit: {found:?}",
+                path.display()
+            );
+            checked += 1;
+        }
+        assert!(
+            checked >= 5,
+            "only {checked} HTTP files were found; is the scan looking?"
+        );
     }
 }

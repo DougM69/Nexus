@@ -14,7 +14,7 @@ import { callCardTrigger } from './CallCard'
 import { flushSync } from 'react-dom'
 import type { AprsStation } from '../api'
 import { bandLabelForMhz } from '../band'
-import type { OtaMapSpot } from '../types'
+import type { OtaMapSpot, PathSegmentNow } from '../types'
 import {
   ageFade,
   aprsRedrawMs,
@@ -29,6 +29,7 @@ import { MapLegend, MufLegend } from './MapLegend'
 import { geoPath, type GeoPermissibleObjects, type GeoProjection } from 'd3-geo'
 import { Crosshair, Layers as LayersIcon, Maximize2, Minimize2, RotateCcw } from 'lucide-react'
 import type {
+  AuroraOval,
   AuroraPoint,
   PcaView,
   SatView,
@@ -41,7 +42,7 @@ import type {
   WorkableCard,
 } from '../types'
 import { MapInsightRail } from './prop/MapInsightRail'
-import { ArrivalChip } from './prop/ArrivalChip'
+import { WxChipStack } from './prop/WxChipStack'
 import { agoLabel } from './prop/SpaceWxGauges'
 import { MapLayersPanel, OVERLAYS_SIDE_BY_SIDE_PX } from './MapLayersPanel'
 import type { Theme } from '../useTheme'
@@ -112,9 +113,18 @@ import { t, type MessageKey } from '../i18n'
 import { StateBlock } from './StateBlock'
 import { usePaletteKey } from '../usePaletteRoles'
 import { STANDARD_MAP, STANDARD_SKY, type MapToken, type SkyToken } from '../features/skins'
+import { mapPaletteFor, useMapStyle } from '../features/mapStyle'
+import { MapStylePick } from './MapStylePick'
 import { MOON_DISC, SUN_DISC, drawMoon, drawSun } from '../features/skyGlyphs'
 import { bandRings, flareFootprint, sunWarmth, warmSunInk, XRAY_LIVE_SECS, type FlareNoaa } from '../flareNow'
 import { FlareChip } from './prop/FlareChip'
+import { AuroraChip, PcaChip } from './prop/CapsChips'
+import { auroraPicture, auroraStorm, auroraStormWhy, capPicture, capShown, heldUntil, kpAlert, setAuroraDismissal, useAuroraDismissal, useWakeAt } from '../capsNow'
+import { ARRIVAL_OUTLOOK, KP_FORECAST, SOLAR_REGIONS, useFeed } from '../features/connectFeeds'
+import { clampReplay, replayFlux, replayStart, replayWindow, REPLAY_SPAN_SECS } from '../replay'
+import { regionsShown, regionsDayLabel, regionsUntil } from '../sunRegions'
+import { ReplayBar, ReplayButton } from './prop/ReplayBar'
+import { regionWithLimb } from './prop/SunRegionsDisc'
 import { useViewportClass } from '../useViewport'
 // The base geography (Natural Earth 1:110m/50m/10m by zoom, public domain) and the shaded relief
 // laid over the World view's land (Natural Earth's hillshade, public domain). See basemap.ts.
@@ -496,7 +506,7 @@ function rarityRing(r: import('../types').GridRarity | null | undefined): string
 
 /** Need tier → a dot color (matches the decode/roster palette). `null` = no
  * specific need (fall back to worked/SNR coloring). */
-function needColor(tag: NeedTag | undefined): string | null {
+export function needColor(tag: NeedTag | undefined): string | null {
   // Matches the shared --need-* palette (styles.css) so the map, roster, and
   // decode feed speak ONE color language for what's needed.
   switch (tag) {
@@ -678,6 +688,16 @@ const RINGS_KM = [1000, 3000, 5000, 10000]
  * catalog. */
 const PATH_SP = 'SP'
 const PATH_LP = 'LP'
+/** The ink of each ribbon stretch: the polar cap and the grey line, then what a flare or a proton
+ * event hits on the drawn band NOW (features/pathNow; weakened ≥ 1 dB / out ≥ 10 dB on a vertical
+ * pass, the flare rings' lines; ≥ 1 dB of proton absorption). */
+const STRETCH_INK: Record<PathSegmentNow['kind'], string> = {
+  polar: '--route-polar',
+  grey: '--route-grey',
+  flareWeak: '--route-flare-weak',
+  flareOut: '--route-flare-out',
+  pca: '--route-pca',
+}
 
 // Cartographic palette — a map should read as a MAP (filled land + ocean), not a
 // wireframe. The basemap's colours are THEME TOKENS (styles.css MAP BASEMAP): the standard
@@ -702,6 +722,16 @@ const MAP_ATMO = 'rgba(104, 168, 226, 0.55)' // atmosphere glow at the limb
  *  than the standard basemap's --map-ocean-deep so it separates even from the globe's own limb.
  *  Exported for the 3-D globe's sun and moon, which are the same glyphs (features/skyGlyphs). */
 export const MARKER_HALO = 'rgba(2, 7, 12, 0.9)'
+/** The greyline's night side, a near-black laid over the basemap in stacked twilight caps, and the
+ *  day/night line in warm gold (the twice-daily greyline DX window). Exported for the map-style
+ *  contrast guard (features/mapStyle.test.ts): both must read on every basemap. */
+export const NIGHT_INK = 'rgb(4, 8, 20)'
+export const GREYLINE_INK = 'rgba(255, 200, 110, 0.9)'
+/** The aurora oval's equatorward edge: the aurora layer's high-probability green, so the line
+ *  reads as the oval's own. */
+const AURORA_EDGE_INK = 'rgb(120, 230, 140)'
+/** The polar cap's edge: the cap shading's violet. */
+const CAP_EDGE_INK = 'rgb(200, 110, 240)'
 
 /** ⭐ A LABEL'S HALO FOLLOWS ITS INK. MARKER_HALO under a label is the contrast step that lifts a
  *  LIGHT ink off the map (the dark theme's --text, a band colour). The light theme letters its labels
@@ -727,6 +757,18 @@ function rgbOf(c: string): [number, number, number] | null {
 // Each halo's own luminance: the alpha (0.9) is the same on both, so it does not move the choice.
 const Y_HALO_DARK = relLuminance(rgbOf(MARKER_HALO)!)
 const Y_HALO_LIGHT = relLuminance(rgbOf(LABEL_HALO_LIGHT)!)
+/** HOW THE NIGHT SIDE IS SHADED on a basemap whose land is `land`: three stacked twilight caps, each
+ *  laid at `alpha` (times the layer's opacity) in `ink`. On a light map (Atlas, the light themes) it is
+ *  NIGHT_INK at 0.2, as it always was. A dark map's land is already near the bottom of the scale, so the
+ *  same near-black barely showed there (Midnight's night land stood 0.046 OKLab lightness off its day
+ *  land): a dark map shades in black at 0.3 a cap, about twice the step, and still light enough
+ *  that the coasts, the grid and the rings under it stand off the night land. features/mapStyle.test.ts
+ *  holds both, and everything drawn over the night side, on Dark and every dark built-in theme. */
+export function nightShadeFor(land: string): { ink: string; alpha: number } {
+  const c = rgbOf(land)
+  return c && relLuminance(c) < 0.1 ? { ink: NIGHT_DARK_INK, alpha: 0.3 } : { ink: NIGHT_INK, alpha: 0.2 }
+}
+const NIGHT_DARK_INK = 'rgb(0, 0, 0)'
 /** The halo for a label lettered in `ink`. An ink it cannot read keeps MARKER_HALO, as every label did. */
 function labelHalo(ink: string): string {
   const c = rgbOf(ink)
@@ -801,7 +843,7 @@ export function placeHoverCard(o: {
 
 // Per-band spot colors (low bands cool → high bands warm), so the live-spot
 // firehose reads by band at a glance. "Heard me" spots override to green.
-const BAND_COLOR: Record<string, string> = {
+export const BAND_COLOR: Record<string, string> = {
   '160m': '#7c5cff',
   '80m': '#5c7cff',
   '40m': '#3aa0ff',
@@ -819,14 +861,14 @@ const BAND_COLOR: Record<string, string> = {
   '23cm': '#944dff',
 }
 const bandColor = (b: string): string => BAND_COLOR[b] ?? '#8aa0b0'
-const GETTING_OUT = '#3ddc6a' // a station that heard ME
+export const GETTING_OUT = '#3ddc6a' // a station that heard ME
 
 // TX/RX path lines (`features/mapPaths.ts` decides WHICH stations earn one). TX reuses
 // GETTING_OUT so "green = they heard me" means one thing on dots and lines alike; RX is a
 // quiet cool grey-blue because it is the bigger, less newsworthy set and must recede under
 // the spots it connects. The two DASH patterns are a redundant, CVD-safe channel — the same
 // habit as the station dots encoding SNR as size on top of color.
-const PATH_RX = '#8fb8d8'
+export const PATH_RX = '#8fb8d8'
 const PATH_TX_DASH = [5, 4] // dashes — "getting out"
 const PATH_RX_DASH = [1, 3] // dots — "hearing"
 
@@ -845,13 +887,23 @@ function fadeStop(hex: string): string {
 // worst during a big opening when the frame budget is already gone. The values
 // are pure theme tokens, so the cache empties when the theme changes (below).
 const cssVarCache = new Map<string, string>()
-export function invalidateCssVarCache(): void {
+/** Where the tokens are read: <html>, or the map's display-well probe while it paints a Dark map
+ *  (features/mapStyle: a Dark map's markers are the dark palette's, in either UI theme). Set by each
+ *  draw, right after it empties the cache, and every read below happens inside that draw. */
+let cssVarScope: Element | null = null
+export function invalidateCssVarCache(scope: Element | null = null): void {
   cssVarCache.clear()
+  cssVarScope = scope
 }
 function cssVar(name: string, fallback = '#888'): string {
   const hit = cssVarCache.get(name)
   if (hit !== undefined) return hit
-  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
+  // The scope inherits every token it does not declare, so a browser answers from it alone; the root
+  // is asked as well for a DOM that does not inherit custom properties (jsdom).
+  const v =
+    (cssVarScope && getComputedStyle(cssVarScope).getPropertyValue(name).trim()) ||
+    getComputedStyle(document.documentElement).getPropertyValue(name).trim() ||
+    fallback
   cssVarCache.set(name, v)
   return v
 }
@@ -1013,6 +1065,13 @@ export function MapView({
   // The key also moves with Night and with a built-in theme, which retune the base map's own
   // tokens (a dark theme's basemap, the grid's --border-soft), so the base cache is keyed on it too.
   const colourRoles = usePaletteKey()
+  // THE MAP STYLE (Map layers ▸ Map style; features/mapStyle): this window's pick paints the basemap
+  // in its own palette, and no pick leaves it to the theme's tokens, as before. A Dark map reads its
+  // marker inks from `inkWellRef`, a display well (the dark palette), so the light theme's dark inks
+  // never land on dark land. The 3-D globe does not read it.
+  const [mapStyle, setMapStyle] = useMapStyle()
+  const stylePalette = mapPaletteFor(mapStyle)
+  const inkWellRef = useRef<HTMLSpanElement>(null)
   // Opening-pulse tick: the main nowMs clock is a 60 s greyline tick, far too
   // coarse to animate the heat pulse (it froze the sine). Run a 1 s tick ONLY
   // while the heat layer is on AND an opening is actually detected — an idle map
@@ -1134,9 +1193,26 @@ export function MapView({
     const id = setInterval(() => setNowMs(Date.now()), 60_000)
     return () => clearInterval(id)
   }, [])
-  // The sky's time: now, or the hour the path-over-the-day strip is scrubbed to (terminator, sun,
-  // moon and ribbon move together; live layers such as the flare stay at now).
-  const skyMs = scrubMs ?? nowMs
+  // THE REPLAY (replay.ts): the last six hours of the sun, the night side and the flare, from the
+  // GOES trace the fast lane already holds. Never saved; a remount is back at now. While it is on, the
+  // flare is the analytic field from the replayed flux at the replayed sun (never NOAA's grid, which
+  // is kept only for now), nothing breathes, and the replay bar heads the chip stack.
+  const [replayMs, setReplayMs] = useState<number | null>(null)
+  const replayWin = useMemo(() => replayWindow(flareNoaa?.series, nowMs), [flareNoaa, nowMs])
+  // Held inside the window; with the trace gone mid-replay, inside the last six hours (the sky alone).
+  const replayAt =
+    replayMs == null ? null : clampReplay(replayMs, replayWin ?? { loMs: nowMs - REPLAY_SPAN_SECS * 1000, hiMs: nowMs })
+  const replayX = useMemo(
+    () => (replayAt == null ? null : replayFlux(flareNoaa?.series, replayAt, nowMs)),
+    [replayAt, flareNoaa, nowMs],
+  )
+  // The sky's time: the replay's, else the hour the path-over-the-day strip is scrubbed to, else now
+  // (terminator, sun and moon move together; on a scrubbed hour live layers such as the flare stay at
+  // now, on a replay the flare is replayed too).
+  const skyMs = replayAt ?? scrubMs ?? nowMs
+  const skyScrubbed = replayAt != null || scrubMs != null
+  // The flux the flare layer draws: the replayed reading (or none), else now's.
+  const flareFlux = replayAt != null ? (replayX?.flux ?? null) : xrayEff
   // D-RAP flare state. The visualization gates at M1 (R1) — the SAME onset as
   // the flare insight and toast, so the map never announces a "blackout" the
   // rest of the app calls quiet. (C-class flux is routine background at solar
@@ -1144,10 +1220,13 @@ export function MapView({
   // the pulse tick + fx canvas running near-continuously; below M1 only the
   // sun disc warms.) The footprint is NOAA's D-RAP grid while it is current,
   // else the analytic field from the GOES flux (flareNow.ts says which).
-  const flareFoot = useMemo(() => flareFootprint(nowMs, xrayEff, noaaNow?.drap), [nowMs, xrayEff, noaaNow])
+  const flareFoot = useMemo(
+    () => (replayAt != null ? flareFootprint(replayAt, flareFlux, null) : flareFootprint(nowMs, xrayEff, noaaNow?.drap)),
+    [replayAt, flareFlux, nowMs, xrayEff, noaaNow],
+  )
   const flareHafNow = flareFoot?.hafSub ?? 0
   const flareActive = flareFoot != null
-  const flareRings = useMemo(() => (flareFoot ? bandRings(flareFoot, nowMs) : []), [flareFoot, nowMs])
+  const flareRings = useMemo(() => (flareFoot ? bandRings(flareFoot, replayAt ?? nowMs) : []), [flareFoot, replayAt, nowMs])
   // Ring labels only where there is room for them (md and up).
   const viewport = useViewportClass()
   const ringLabels = viewport === 'md' || viewport === 'lg' || viewport === 'xl'
@@ -1226,7 +1305,7 @@ export function MapView({
   // A GOES sample older than XRAY_LIVE_SECS freezes the footprint: still drawn, no longer breathing,
   // and the chip says how old it is.
   const xrayLive = noaaNow == null || nowMs / 1000 - noaaNow.xrayAt < XRAY_LIVE_SECS
-  const flarePulsing = flareShown && xrayLive
+  const flarePulsing = flareShown && xrayLive && replayAt == null
   const satsMoving = layers.sats.visible && sats != null && sats.birds.length > 0
   useEffect(() => {
     if (!heatPulsing && !openingsPulsing && !flarePulsing && !satsMoving) return
@@ -1599,11 +1678,35 @@ export function MapView({
   const auroraPts=nativeAuroraPts
   // OVATION is a FORECAST: the time it is for (and when its input was observed) label the layer row.
   const [auroraTimes, setAuroraTimes] = useState<{ forecastAt: number | null; observedAt: number | null } | null>(null)
-  const auroraOn = layers.aurora.visible
+  const [auroraOval, setAuroraOval] = useState<AuroraOval | null>(null)
+  // THE STORM TURNS THE AURORA LAYER ON (capsNow `auroraStorm`: Kp ≥ 5 now, or a NOAA G watch in
+  // force) and off again after. Never saved: the operator's own choice is `layers.aurora`, and an
+  // explicit off during the storm sticks until it is over. Both feeds are ones this window already
+  // polls (App's storm and watch toasts; the arrival chip).
+  const kpFc = useFeed(KP_FORECAST).value ?? null
+  const arrival = useFeed(ARRIVAL_OUTLOOK).value ?? null
+  // The Kp to warn on: the higher of NOAA's recent measurement and the usable estimate (capsNow `kpAlert`).
+  const kn = useMemo(() => kpAlert(prop?.spaceWx, kpFc, nowMs), [prop, kpFc, nowMs])
+  const storm = auroraStorm(kn, arrival)
+  // The storm's untick is ONE for the window (capsNow `useAuroraDismissal`): it holds across every
+  // map surface and a remount, and clears when the storm ends: here only when this map SEES it end
+  // (on, then off — a map mounting before its data has arrived sees "no storm" for a moment, and that
+  // must not throw the untick away), and in App's poll whether or not a map is on screen.
+  const auroraDismissed = useAuroraDismissal()
+  const stormSeen = useRef(storm)
+  useEffect(() => {
+    if (stormSeen.current && !storm) setAuroraDismissal(false)
+    stormSeen.current = storm
+  }, [storm])
+  const auroraAuto = storm && !auroraDismissed && !layers.aurora.visible
+  const auroraOn = layers.aurora.visible || auroraAuto
+  // What is drawn: OVATION while current, else nothing at all (capsNow `auroraPicture`).
+  const auroraPic = useMemo(() => (auroraOn ? auroraPicture(auroraOval, nowMs) : null), [auroraOn, auroraOval, nowMs])
   useEffect(() => {
     if (!auroraOn) {
       setAuroraPts([])
       setAuroraTimes(null)
+      setAuroraOval(null)
       return
     }
     let live = true
@@ -1613,6 +1716,7 @@ export function MapView({
           if (!live) return
           setAuroraPts(o?.points ?? [])
           setAuroraTimes(o ? { forecastAt: o.forecastAt, observedAt: o.observedAt } : null)
+          setAuroraOval(o ?? null)
         })
         .catch(() => {})
     load()
@@ -1629,7 +1733,20 @@ export function MapView({
   const [nativePca, setPca] = useState<PcaView | null>(null)
   const pca=nativePca
   const pcaOn = layers.pca.visible
-  const pcaChip = pcaOn && pca != null && pca.points.length > 0
+  // NOAA's D-RAP grid is the cap while it is current, else the model (capsNow `capPicture`); never
+  // beside the simulated Preview flux (`noaaNow` is null then).
+  // The cap goes at the moment its event stops being held (the shack's `protonEventUntil`), not at
+  // the next 60 s tick: one timer wakes the clock then (capsNow `useWakeAt`).
+  useWakeAt(heldUntil(pca), setNowMs)
+  // NOAA's active regions (sunRegions.ts): polled only while this map shows the sun or the flare,
+  // drawn only while the shack holds the list, and dropped at its own `until` with no poll needed.
+  const solarRegions = useFeed(SOLAR_REGIONS, !embedded && (layers.sunMoon.visible || layers.flare.visible)).value ?? null
+  useWakeAt(regionsUntil(solarRegions), setNowMs)
+  const capPic = useMemo(
+    () => (pcaOn ? capPicture(pca, noaaNow?.drap, noaaNow ? xrayLong ?? null : null, nowMs) : null),
+    [pcaOn, pca, noaaNow, xrayLong, nowMs],
+  )
+  const pcaChip = pcaOn && capShown(pca, capPic)
   useEffect(() => {
     if (!pcaOn) {
       setPca(null)
@@ -1745,7 +1862,10 @@ export function MapView({
     // Empty the cssVar memo BEFORE any token is read: each draw then resolves
     // each token exactly once (the point of the memo), and the first frame
     // after a theme switch can never paint from the old theme's cache.
-    invalidateCssVarCache()
+    // A Dark map is read from the well (see `inkWellRef`); Street is MapLibre's map, in the UI theme.
+    invalidateCssVarCache(mapStyle === 'dark' && kind !== 'street' ? inkWellRef.current : null)
+    /** A basemap ink: the picked style's, or the theme's token where nothing is picked. */
+    const baseInk = (token: MapToken) => stylePalette?.[token] ?? mapInk(token)
     const canvas = canvasRef.current
     const { w, h } = size
     if (!canvas || w === 0 || h === 0 || !me) return
@@ -1808,6 +1928,30 @@ export function MapView({
         mid && Number.isFinite(mid[0]) && Number.isFinite(mid[1]) ? { lat: mid[1], lon: mid[0] } : (myQth ?? me)
     }
     const path = geoPath(proj, ctx)
+    /** One label for an edge line (the aurora edge, the cap edge): at its point nearest the equator
+     *  that is on screen, in the line's ink. */
+    const edgeLabel = (lines: [number, number][][], text: string, ink: string) => {
+      let best: [number, number] | null = null
+      let bestLat = Infinity
+      for (const line of lines) {
+        for (const [lon, lat] of line) {
+          if (Math.abs(lat) >= bestLat) continue
+          const p = placePoint(kind, proj, { lat, lon })
+          if (!p || p[0] < 40 || p[0] > w - 40 || p[1] < 12 || p[1] > h - 12) continue
+          best = p
+          bestLat = Math.abs(lat)
+        }
+      }
+      if (!best) return
+      ctx.font = `600 ${Math.round(10 * ms)}px system-ui, sans-serif`
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.lineWidth = 3
+      ctx.strokeStyle = MARKER_HALO
+      ctx.fillStyle = ink
+      ctx.strokeText(text, best[0], best[1] - 8 * ms)
+      ctx.fillText(text, best[0], best[1] - 8 * ms)
+    }
     const c = showQth && !streetScale ? placePoint(kind, proj, myQth ?? me) : null
     /** STREET SCALE (features/streetOverlay): a position known only by its grid square is drawn as
      *  that square, never as a pin on a street it does not know. Its name sits at the centre, where
@@ -1900,15 +2044,15 @@ export function MapView({
             gcy,
             gR * 1.02,
           )
-          sea.addColorStop(0, mapInk('--map-ocean-lit'))
-          sea.addColorStop(0.55, mapInk('--map-ocean'))
-          sea.addColorStop(1, mapInk('--map-ocean-deep'))
+          sea.addColorStop(0, baseInk('--map-ocean-lit'))
+          sea.addColorStop(0.55, baseInk('--map-ocean'))
+          sea.addColorStop(1, baseInk('--map-ocean-deep'))
           ctx.fillStyle = sea
         } else {
-          ctx.fillStyle = mapInk('--map-ocean')
+          ctx.fillStyle = baseInk('--map-ocean')
         }
         ctx.fill()
-        ctx.strokeStyle = mapInk('--map-rim')
+        ctx.strokeStyle = baseInk('--map-rim')
         ctx.lineWidth = 1
         ctx.stroke()
 
@@ -1924,13 +2068,13 @@ export function MapView({
           map: basemapAt(scaleFor(ppd)),
           region: visibleRegion(kind, proj, w, h),
           inks: {
-            land: mapInk(isGlobe ? '--map-land-globe' : '--map-land'),
-            water: mapInk('--map-ocean'),
+            land: baseInk(isGlobe ? '--map-land-globe' : '--map-land'),
+            water: baseInk('--map-ocean'),
             // The rim's blue: a step from the sea in every theme (lighter on a dark map, deeper on
             // a light one), so a river one pixel wide still reads against the land.
-            river: mapInk('--map-rim'),
-            coast: mapInk('--map-coast'),
-            state: mapInk('--map-state'),
+            river: baseInk('--map-rim'),
+            coast: baseInk('--map-coast'),
+            state: baseInk('--map-state'),
           },
           pxPerDeg: ppd,
           coast: layers.coast.visible ? layers.coast.opacity : 0,
@@ -1997,7 +2141,7 @@ export function MapView({
         ctx.globalAlpha = layers.grid.opacity * 0.6
         ctx.beginPath()
         path(graticule())
-        ctx.strokeStyle = mapInk('--map-coast')
+        ctx.strokeStyle = baseInk('--map-coast')
         ctx.lineWidth = 0.5
         ctx.stroke()
       }
@@ -2101,7 +2245,7 @@ export function MapView({
         ctx.globalAlpha = 1
       }
     }
-    const baseDeps = [kind, w, h, dpr, view, streetView, me, focusLL, theme, colourRoles, reliefReady, basemapRev, stars, layers.relief, layers.coast, layers.states, layers.grid, layers.gridLabels, layers.cqzones, layers.coverage, cqzones, coverageDim, coverageGridGeo, workedZones]
+    const baseDeps = [kind, w, h, dpr, view, streetView, me, focusLL, theme, colourRoles, mapStyle, reliefReady, basemapRev, stars, layers.relief, layers.coast, layers.states, layers.grid, layers.gridLabels, layers.cqzones, layers.coverage, cqzones, coverageDim, coverageGridGeo, workedZones]
     const cache = baseRef.current
     const base = cache.canvas ?? (cache.canvas = document.createElement('canvas'))
     if (
@@ -2486,7 +2630,7 @@ export function MapView({
     if (layers.rings.visible && kind !== 'world') {
       ctx.globalAlpha = layers.rings.opacity
       // The map's line ink, like the grid: the rings lie on the basemap, not on a UI surface.
-      ctx.strokeStyle = mapInk('--map-coast')
+      ctx.strokeStyle = baseInk('--map-coast')
       ctx.setLineDash([3, 3])
       ctx.lineWidth = 0.75
       for (const km of RINGS_KM) {
@@ -2505,9 +2649,11 @@ export function MapView({
     // spots/openings so stations stay bright on the dark side.
     if (layers.daynight.visible) {
       const term = terminator(skyMs)
-      ctx.fillStyle = 'rgb(4, 8, 20)' // near-black night
+      // A dark basemap shades its night deeper (`nightShadeFor`); Street is MapLibre's map, shaded as before.
+      const shade = kind === 'street' ? nightShadeFor('') : nightShadeFor(baseInk(kind === 'globe' ? '--map-land-globe' : '--map-land'))
+      ctx.fillStyle = shade.ink
       for (const cap of term.caps) {
-        ctx.globalAlpha = layers.daynight.opacity * 0.2 // stacks: ~0.2 twilight → ~0.6 core
+        ctx.globalAlpha = layers.daynight.opacity * shade.alpha // stacks: twilight → core
         ctx.beginPath()
         path(cap)
         ctx.fill()
@@ -2515,7 +2661,7 @@ export function MapView({
       ctx.globalAlpha = layers.daynight.opacity * 0.85
       ctx.beginPath()
       path(term.line)
-      ctx.strokeStyle = 'rgba(255, 200, 110, 0.9)' // greyline glow (prime DX zone)
+      ctx.strokeStyle = GREYLINE_INK
       ctx.lineWidth = 1.1
       ctx.stroke()
       ctx.globalAlpha = 1
@@ -2530,7 +2676,7 @@ export function MapView({
     // breathes on the 1 s pulse tick (faster = stronger flare). The animated
     // sun + rays live on the separate fx canvas (below). Drawn over the night
     // shading, under spots/stations, so real activity stays legible.
-    if (flareShown && flareFoot && xrayEff) {
+    if (flareShown && flareFoot && flareFlux) {
       const hw = Math.max(1, Math.floor(w / 3))
       const hh = Math.max(1, Math.floor(h / 3))
       const off =
@@ -2541,7 +2687,7 @@ export function MapView({
       if (fctx) {
         fctx.clearRect(0, 0, hw, hh)
         fctx.globalCompositeOperation = 'lighter'
-        const r = Math.max(1, flareRScale(xrayEff))
+        const r = Math.max(1, flareRScale(flareFlux))
         // Live time like the heat pulse — the 1 s pulseTick forces the redraws. Frozen (an old GOES
         // sample): no breath.
         const pulse = flarePulsing ? 0.8 + 0.2 * Math.sin((Date.now() * 2 * Math.PI) / flarePulsePeriodMs(r)) : 1
@@ -2620,7 +2766,7 @@ export function MapView({
       // Below the flare gate a C-class flare warms the disc toward orange (flareNow `sunWarmth`); its
       // class is on the disc's hover. A flare-layer visual: with that layer off the sun stays the
       // theme's, as it does on a scrubbed sky (another hour's).
-      const sunInk = warmSunInk(skyInk('--map-sun'), layers.flare.visible && scrubMs == null ? sunWarmth(xrayEff) : 0)
+      const sunInk = warmSunInk(skyInk('--map-sun'), layers.flare.visible && !skyScrubbed ? sunWarmth(xrayEff) : 0)
       if (sp) drawSun(ctx, sp[0], sp[1], SUN_DISC * ms, sunInk, MARKER_HALO)
       // The moon, in its phase, lit as it looks from the operator's hemisphere: a waxing moon is lit
       // on the right in the north and on the left in the south. A flare leaves it alone.
@@ -2666,8 +2812,9 @@ export function MapView({
     // red (high) by probability.
     // High aurora = degraded high-lat/polar HF paths, so it's both pretty and
     // operationally meaningful. Drawn over the field layers, under spots.
-    if (layers.aurora.visible) {
-      for (const a of auroraPts) {
+    if (auroraOn && auroraPic) {
+      // Only while OVATION is the picture: a stale or missing oval draws nothing at all.
+      for (const a of auroraPic.mode === 'ovation' ? auroraPts : []) {
         const p = placePoint(kind, proj, { lat: a.lat, lon: a.lon })
         if (!p) continue
         const t = Math.max(0, Math.min(1, (a.prob - 8) / (90 - 8)))
@@ -2680,14 +2827,28 @@ export function MapView({
         ctx.fillStyle = `rgb(${r}, ${g}, ${b})`
         ctx.fill()
       }
+      // THE EQUATORWARD EDGE: OVATION's own 10 % line, labelled at md and up.
+      const lines = auroraPic.mode === 'ovation' ? auroraPic.edge : []
+      if (lines.length > 0) {
+        ctx.globalAlpha = Math.min(1, layers.aurora.opacity + 0.15)
+        ctx.lineWidth = 1.6
+        ctx.strokeStyle = AURORA_EDGE_INK
+        ctx.setLineDash([])
+        for (const line of lines) {
+          ctx.beginPath()
+          path({ type: 'LineString', coordinates: line } as unknown as GeoPermissibleObjects)
+          ctx.stroke()
+        }
+        if (ringLabels) edgeLabel(lines, t('map.aurora.edge.label'), AURORA_EDGE_INK)
+      }
       ctx.globalAlpha = 1
     }
 
     // Proton polar-cap absorption (PCA, D-RAP2) — violet shading over the polar
     // caps during a solar proton event; opacity tracks the 30 MHz absorption
     // (0.5 dB faint → 10 dB+ solid). Quiet sun = zero points = nothing drawn.
-    if (layers.pca.visible && pca && pca.points.length > 0) {
-      for (const s of pca.points) {
+    if (layers.pca.visible && capPic && capPic.points.length > 0) {
+      for (const s of capPic.points) {
         const p = placePoint(kind, proj, { lat: s.lat, lon: s.lon })
         if (!p) continue
         const t = Math.max(0, Math.min(1, s.db30 / 10))
@@ -2697,6 +2858,22 @@ export function MapView({
         ctx.fillStyle = `rgb(${Math.round(150 + 60 * t)}, 80, ${Math.round(220 - 30 * t)})`
         ctx.fill()
       }
+      ctx.globalAlpha = 1
+    }
+    // THE CAP'S EDGE — the model's 66° − 1.2·Kp line, dashed violet, "cap edge (approx.)"; only beside
+    // the model's own shading and at a measured Kp (capsNow `capPicture`).
+    if (layers.pca.visible && capPic?.edge && capPic.points.length > 0) {
+      ctx.globalAlpha = Math.min(1, layers.pca.opacity + 0.15)
+      ctx.lineWidth = 1.4
+      ctx.strokeStyle = CAP_EDGE_INK
+      ctx.setLineDash([4, 4])
+      for (const ring of capPic.edge) {
+        ctx.beginPath()
+        path({ type: 'LineString', coordinates: ring } as unknown as GeoPermissibleObjects)
+        ctx.stroke()
+      }
+      ctx.setLineDash([])
+      if (ringLabels) edgeLabel(capPic.edge, t('map.pca.edge.label'), CAP_EDGE_INK)
       ctx.globalAlpha = 1
     }
 
@@ -2966,7 +3143,7 @@ export function MapView({
           polyline(l.points)
           ctx.stroke()
           for (const st of l.stretches) {
-            ctx.strokeStyle = cssVar(st.kind === 'polar' ? '--route-polar' : '--route-grey')
+            ctx.strokeStyle = cssVar(STRETCH_INK[st.kind])
             ctx.lineWidth = width + 1.5
             ctx.beginPath()
             polyline(st.points)
@@ -3202,7 +3379,7 @@ export function MapView({
     // cssVar memo is emptied at the top of this effect).
     void theme
     void colourRoles
-  }, [me, myQth, myGrid, showQth, kind, streetView, streetScale, devScale, markerScale, colorBy, pathMode, outlook, view, size, layers, placed, placedSpots, placedDxped, txLines, rxLines, mufStations, auroraPts, pca, cqzones, sats, reliefReady, basemapRev, prop, selStation, selectedCall, needByCall, theme, colourRoles, nowMs, skyMs, scrubHour, focusBand, pulseTick, xrayEff, flareActive, flarePulsing, flareHafNow, flareFoot, flareRings, ringLabels, hoverKey, focusSat, placedMyParks, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev, aprsNowSec, aprsTracks, aprsTrailMin, aprsLabels, followAt, focusLL])
+  }, [me, myQth, myGrid, showQth, kind, streetView, streetScale, devScale, markerScale, colorBy, pathMode, outlook, view, size, layers, placed, placedSpots, placedDxped, txLines, rxLines, mufStations, auroraPts, auroraOn, auroraPic, pca, capPic, cqzones, sats, reliefReady, basemapRev, prop, selStation, selectedCall, needByCall, theme, colourRoles, mapStyle, stylePalette, nowMs, skyMs, scrubHour, focusBand, pulseTick, xrayEff, flareActive, flarePulsing, flareHafNow, flareFoot, flareRings, ringLabels, hoverKey, focusSat, placedMyParks, coverageDim, coverageGridGeo, workedZones, aprs, selectedAprs, aprsFadeAfterMin, aprsTtlMin, aprsTick, satFav, satChaseRev, aprsNowSec, aprsTracks, aprsTrailMin, aprsLabels, followAt, focusLL])
 
   // THE SUN + RADIATING ENERGY — the flare layer's animated half, on its own
   // transparent canvas at ~20 fps, mounted ONLY while a flare is active and the
@@ -3511,9 +3688,10 @@ export function MapView({
       }
       if (best) return best
     }
-    // The sun disc: its hover carries the X-ray class it is warmed by (info only, like a sonde). Not
-    // on a scrubbed sky (another hour's sun) and not for the simulated Preview flux.
-    if (layers.sunMoon.visible && scrubMs == null && !flarePreview && size.w > 0) {
+    // The sun disc: its hover carries the X-ray class it is warmed by and NOAA's active regions (info
+    // only, like a sonde). Not on a scrubbed or replayed sky (another hour's sun) and not for the
+    // simulated Preview flux.
+    if (layers.sunMoon.visible && !skyScrubbed && !flarePreview && size.w > 0) {
       const proj = projectionFor(size.w, size.h)
       const ss = subsolarPoint(nowMs)
       const p = proj && inView(kind, proj, ss) ? project(proj, ss) : null
@@ -3581,9 +3759,19 @@ export function MapView({
     if (hit.kind === 'sun') {
       // The class with the GOES sample's own time: the fast lane's, else the snapshot's.
       const at = noaaNow?.xrayAt ?? prop?.spaceWx?.xrayAt ?? null
-      return xrayEff != null && at != null
-        ? t('map.hover.sun', { cls: flareClass(xrayEff), time: wxStampLabel(at) })
-        : t('map.hover.sun.none')
+      const xline =
+        xrayEff != null && at != null
+          ? t('map.hover.sun', { cls: flareClass(xrayEff), time: wxStampLabel(at) })
+          : t('map.hover.sun.none')
+      // NOAA's active regions, with the day they are from — only while the list is held.
+      const shown = regionsShown(solarRegions, nowMs)
+      if (shown == null || solarRegions?.observedDay == null) return xline
+      const day = regionsDayLabel(solarRegions.observedDay)
+      return `${xline}\n${
+        shown.length > 0
+          ? t('map.hover.sunRegions', { day, list: shown.map(regionWithLimb).join(', ') })
+          : t('map.sun.regions.empty', { day })
+      }`
     }
     if (hit.kind === 'aprs') {
       const a = aprs?.find((x) => x.call === hit.name)
@@ -4085,6 +4273,7 @@ export function MapView({
               something on a 2 m packet map (APRS_LAYER_CHOICES). */}
           {embedded?.aprs && (
             <MapLayersPanel className="map-layers" title={t('map.layers.head')} narrow={size.w > 0 && size.w < OVERLAYS_SIDE_BY_SIDE_PX}>
+              <MapStylePick pick={mapStyle} onPick={setMapStyle} />
               {APRS_LAYER_CHOICES.map((k) => (
                 <div
                   className={`map-layer${streetScale && WORLD_SCALE_LAYERS.includes(k) ? ' street-dim' : ''}`}
@@ -4117,6 +4306,7 @@ export function MapView({
               title={t('map.layers.head')}
               narrow={prop != null && size.w > 0 && size.w < OVERLAYS_SIDE_BY_SIDE_PX}
             >
+              <MapStylePick pick={mapStyle} onPick={setMapStyle} />
               {(Object.keys(layers) as LayerKey[]).map((k) => (
                 // At street scale the world-scale fields show no detail: dimmed, saying why. Their
                 // state is the operator's and is never touched here.
@@ -4128,26 +4318,74 @@ export function MapView({
                   <label>
                     <input
                       type="checkbox"
-                      checked={layers[k].visible}
-                      onChange={(e) => setLayers((L) => ({ ...L, [k]: { ...L[k], visible: e.target.checked } }))}
+                      checked={k === 'aurora' ? auroraOn : layers[k].visible}
+                      onChange={(e) => {
+                        // Unticking the aurora during a storm is the operator's off, in one click
+                        // whoever had it on: it sticks until the storm is over. Their own choice is
+                        // written too, unless the storm alone had it on (then it was already off).
+                        if (k === 'aurora' && storm && !e.target.checked) setAuroraDismissal(true)
+                        if (!(k === 'aurora' && auroraAuto)) {
+                          setLayers((L) => ({ ...L, [k]: { ...L[k], visible: e.target.checked } }))
+                        }
+                      }}
                     />
                     {layerLabel(k)}
                   </label>
-                  {k === 'aurora' && auroraTimes?.forecastAt != null && (
+                  {k === 'aurora' && auroraAuto && <span className="map-layer-note">{t('map.layer.aurora.auto')}</span>}
+                  {k === 'aurora' && auroraPic?.mode === 'ovation' && auroraTimes?.forecastAt != null && (
                     <AuroraForecastNote forecastAt={auroraTimes.forecastAt} observedAt={auroraTimes.observedAt} />
+                  )}
+                  {k === 'pca' && capPic?.source === 'none' && (
+                    // A proton reading that is not held draws nothing (capsNow `capPicture`); the row says why.
+                    <span className="map-layer-note" data-stale="">
+                      {capPic.why === 'quiet'
+                        ? t('map.layer.pca.quiet')
+                        : capPic.why === 'stale' && capPic.protonsAt != null
+                          ? t('map.layer.pca.stale', { time: wxStampLabel(capPic.protonsAt) })
+                          : capPic.why === 'ahead' && capPic.protonsAt != null
+                            ? t('map.layer.pca.ahead', { time: wxStampLabel(capPic.protonsAt) })
+                            : capPic.why === 'undated'
+                              ? t('map.layer.pca.undated')
+                              : t('map.layer.pca.unknown')}
+                    </span>
+                  )}
+                  {k === 'aurora' && auroraPic?.mode === 'none' && auroraOval != null && (
+                    // Nothing is drawn, and the row says why: out of date (for when), undated, or no forecast held.
+                    <span className="map-layer-note" data-stale="">
+                      {auroraPic.why === 'stale'
+                        ? t('map.layer.aurora.stale', { time: wxStampLabel(auroraPic.forecastAt) })
+                        : auroraPic.why === 'undated'
+                          ? t('map.layer.aurora.undated')
+                          : t('map.layer.aurora.none')}
+                    </span>
                   )}
                   {k === 'flare' && (
                     // The layer is event-driven (nothing draws below an M1 flare), so
                     // give the operator a way to SEE it on a quiet sun: a 60 s
                     // simulated X2, map visuals only, chip labeled PREVIEW.
-                    <button
-                      type="button"
-                      className={`flare-preview${flarePreview ? ' active' : ''}`}
-                      onClick={() => setFlarePreview((p) => !p)}
-                      title={t('map.flare.preview.title')}
-                    >
-                      {flarePreview ? t('map.flare.preview.stop') : t('map.flare.preview.start')}
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        className={`flare-preview${flarePreview ? ' active' : ''}`}
+                        onClick={() => {
+                          setReplayMs(null)
+                          setFlarePreview((p) => !p)
+                        }}
+                        title={t('map.flare.preview.title')}
+                      >
+                        {flarePreview ? t('map.flare.preview.stop') : t('map.flare.preview.start')}
+                      </button>
+                      <ReplayButton
+                        on={replayAt != null}
+                        win={replayWin}
+                        startMs={replayStart(flareNoaa?.series, nowMs)}
+                        onStart={(ms) => {
+                          setFlarePreview(false)
+                          setReplayMs(ms)
+                        }}
+                        onStop={() => setReplayMs(null)}
+                      />
+                    </>
                   )}
                   {k === 'sats' && layers.sats.visible && (
                     // The ★/All chip, ON the surface it filters. The Passes pane
@@ -4201,26 +4439,53 @@ export function MapView({
           {/* THE SPACE-WEATHER CHIP STACK — one column beside the Layers panel, so a chip can grow
               (the flare chip unfolds) without covering the next. Later overlays add their chip here.
               Always rendered: the storm-watch chip decides for itself whether it shows, and an empty
-              stack lets the pointer through and takes no room. */}
-          <div className="wx-chip-stack">
-            {flareShown && flareFoot && xrayEff != null && (
-              <FlareChip
-                xrayLong={xrayEff}
-                foot={flareFoot}
-                noaa={noaaNow}
-                qth={myQth ?? me}
-                nowMs={nowMs}
-                snapAt={prop?.spaceWx?.xrayAt ?? null}
-                preview={flarePreview}
-              />
-            )}
-            {pcaChip && pca && (
-              <div className="flare-chip pca-chip" role="status">
-                {t('map.pca.chip', { scale: sScaleOf(pca.j10), db: pca.a30Day.toFixed(1) })}
-              </div>
-            )}
-            <ArrivalChip compact={size.w > 0 && size.w < OVERLAYS_SIDE_BY_SIDE_PX} />
-          </div>
+              stack lets the pointer through and takes no room. On a narrow map it shows two chips
+              and one "+N more" for the rest (WxChipStack). */}
+          <WxChipStack
+            compact={size.w > 0 && size.w < OVERLAYS_SIDE_BY_SIDE_PX}
+            chips={[
+              replayAt != null && {
+                key: 'replay',
+                node: (
+                  <ReplayBar
+                    atMs={replayAt}
+                    win={replayWin}
+                    nowMs={nowMs}
+                    series={flareNoaa?.series ?? []}
+                    flux={replayX}
+                    footDrawn={flareShown}
+                    onScrub={setReplayMs}
+                    onBack={() => setReplayMs(null)}
+                  />
+                ),
+              },
+              replayAt == null &&
+                flareShown &&
+                flareFoot &&
+                xrayEff != null && {
+                  key: 'flare',
+                  node: (
+                    <FlareChip
+                      xrayLong={xrayEff}
+                      foot={flareFoot}
+                      noaa={noaaNow}
+                      qth={myQth ?? me}
+                      nowMs={nowMs}
+                      snapAt={prop?.spaceWx?.xrayAt ?? null}
+                      preview={flarePreview}
+                      regions={solarRegions}
+                    />
+                  ),
+                },
+              pcaChip && pca && capPic && { key: 'pca', node: <PcaChip pca={pca} pic={capPic} nowMs={nowMs} /> },
+              auroraPic &&
+                auroraOval != null &&
+                (storm || auroraPic.mode !== 'ovation') && {
+                  key: 'aurora',
+                  node: <AuroraChip pic={auroraPic} stormWhy={storm ? auroraStormWhy(kn, arrival) : null} />,
+                },
+            ]}
+          />
           {prop && (
             <MapInsightRail
               prop={prop}
@@ -4229,22 +4494,14 @@ export function MapView({
               activeBand={focusBand}
             />
           )}
+          {/* The dark palette's scope, never shown: a Dark map reads its marker inks here (`inkWellRef`). */}
+          <span ref={inkWellRef} className="well" hidden />
         </div>
       </div>
     </div>
   )
 }
 
-
-/** NOAA S-scale from J(≥10 MeV): S1=10 pfu, S2=100, S3=1e3, S4=1e4, S5=1e5. */
-function sScaleOf(j10: number): number {
-  if (j10 >= 1e5) return 5
-  if (j10 >= 1e4) return 4
-  if (j10 >= 1e3) return 3
-  if (j10 >= 100) return 2
-  if (j10 >= 10) return 1
-  return 0
-}
 
 /** How long past its forecast time an OVATION oval may be before the row says how old it is: the
  *  oval is normally a forecast for 30–90 min ahead, refreshed every few minutes, so a forecast

@@ -10,12 +10,14 @@
 // reading, split offset, filter and scope width, reference level, percentage, band and mode
 // name and the rig's own group plates (DSP, NR, AGC, BW, REC, SPLIT) are invariant tokens
 // and stay in the code.
+import { localizeRefusal } from '../radioRefusal'
 import { Fragment, useEffect, useMemo, useState, useRef } from 'react'
+import { dismissTuneNote, useTuneNote } from '../features/yaesuTuneNote'
 import { BOX_IDS, PHONE_PANEL_IDS, PHONE_PANELS, boxEntries, isBoxId, type BoxId, type PhonePanelId, type PanelLayoutApi } from '../features/panelState'
 import { isStockPlacement, regionGroups, type PaneDrop } from '../features/panelPlace'
 import { panelHost } from '../features/panelHost'
 import { composingText } from '../features/contestExchange'
-import type { AppSnapshot, FieldDayStatus, NeedTag, SpotRow } from '../types'
+import type { AppSnapshot, FieldDayStatus, NeedTag, Settings, SpotRow } from '../types'
 import { PhoneScope } from './PhoneScope'
 import { TxMeters, TX_METERS_WHEN } from './TxMeters'
 import { BandStrip } from './BandStrip'
@@ -27,6 +29,7 @@ import { TuningStrip } from './TuningStrip'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitTxStrip } from './CockpitTxStrip'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
+import { FreedvPane } from './FreedvPane'
 import { RegionColumnSeams } from './panes/RegionColumnSeams'
 import { LeftSide } from './panes/LeftSide'
 import { CockpitBox, boxLabels, foldedRailBoxes, pickForBox, useBoxSelection, type BoxSource } from './panes/CockpitBox'
@@ -35,6 +38,8 @@ import { PaneSeam } from './PaneSeam'
 import { SCOPE_SPLIT_MAX, SCOPE_SPLIT_MIN } from '../features/paneSeam'
 import { LEFT_SIDE_MIN_VW, regionColsStyle } from '../features/paneColumns'
 import { useEffectiveWidthAtLeast } from '../useViewport'
+import { useCompactChrome } from '../features/compactChrome'
+import { HeaderOverflow } from './HeaderOverflow'
 import { SpotsPanel, type SpotsPanelProps } from './SpotsPanel'
 import { NeededPanel, type NeededPanelProps } from './NeededPanel'
 import type { ModeClass } from '../neededFilters'
@@ -116,22 +121,32 @@ import type { Memory } from '../features/memories'
 import { surfaceGet, surfaceSet } from '../features/windowScope'
 import { setFrequency, openPanelWindow, getSettings } from '../api'
 import { bandLabelForMhz, sidebandForMhz, sidebandForQsy } from '../band'
-import { isRfScopeSource, NO_NATIVE_SCOPE_REASON } from '../waterfall'
+import { isRfScopeSource, NO_NATIVE_SCOPE_REASON, WF_F_MAX } from '../waterfall'
 import { useWheelTune } from '../useWheelTune'
 import { useScopePassband, useScopeTune } from '../useScopeTune'
 import { PASSBAND_LIMITS } from '../spectrum/markers'
 import { scopeSpots } from '../spectrum/scopeSpots'
 import {
   bandWindow,
+  isRadioScopeSource,
   loadRfSpan,
+  loadScopeView,
   onlyPart,
+  PHONE_SCOPE_VIEWS,
   saveRfSpan,
+  saveScopeView,
   sweepFor,
   useSpanAsk,
+  type ScopeView,
   type TaggedSweep,
 } from '../spectrum/rfSpan'
+import { scopeIsSlow } from '../spectrum/sweepRate'
+import { ScopeViewChips } from './ScopeViewChips'
 import { useRegionCols } from '../useRegionCols'
 import { t } from '../i18n'
+import { T } from '../i18n/T'
+import { icomScopeCure } from '../rigFormChecks'
+import { catDetailText } from '../features/catDetail'
 import { SplitControl } from './SplitControl'
 import type { MessageKey } from '../i18n'
 
@@ -220,6 +235,9 @@ interface Props {
   /** Click-to-work handoff from the Needed board: the callsign to prefill the log with.
    * `ts` changes on each click so re-working the same call refires the prefill. */
   pendingWork?: { call: string; ts: number } | null
+  /** The host offers the FreeDV pane (receive only, `FreedvPane`): the desktop, where the station's
+   *  FreeDV listeners run. Absent, the pane never renders, whatever the ⊞ record says. */
+  freedvPane?: boolean
   /** Called once the prefill has been applied, so the parent can clear it. */
   onConsumeWork?: () => void
   /** Apply a fresh snapshot returned by a command (so the REC toggle updates instantly
@@ -273,6 +291,10 @@ interface Props {
   /** The active radio is a Flex on SmartSDR CAT or Hamlib (App, from Settings): the voice keyer
    *  notes once that SSB goes out only with DAX on for voice. Absent on the hosted page. */
   flexDaxNote?: boolean
+  /** The active radio is a Yaesu on Hamlib's newcat backend (App, from Settings; #441): a line beside
+   *  Tune says its tone goes over USB audio, so the radio's SSB modulation source must be REAR (USB).
+   *  Text only. Absent on the hosted page. */
+  yaesuTuneNote?: boolean
   /** Contest mode is on but this station is out of the contest (App's: the switch on, the session not):
    *  the log line says so, with Resume, which re-enters the contest in S&P. Absent otherwise. */
   onResumeContest?: () => void
@@ -313,6 +335,7 @@ const phonePanelLabels = (): Record<Exclude<PhonePanelId, BoxId>, string> => ({
   needed: t('phone.panel.needed'),
   recent: t('recentQsos.pane.title'),
   stats: t('callStats.pane.title'),
+  freedv: t('phone.panel.freedv'),
 })
 
 /** THE SPOTS PANE'S OWN VIEW OF THE BOARD (#345, the operator's pick: "Phone spots, this band —
@@ -492,6 +515,9 @@ function TruthMark({ kind, title, word }: { kind: 'rig' | 'cmd' | 'off'; title: 
   )
 }
 
+/** The Phone audio scope's Full width, Hz: the whole audio row (`WF_F_MAX`, 0–5000 Hz). */
+const PHONE_FULL_HZ = WF_F_MAX
+
 /** Bandscope span presets — the width of OCCUPIED SIDEBAND to show, because the scope's axis
  *  is the rig's: RF offset from the dial, dial at the 1/9 mark and the sideband filling the
  *  rest (PhoneScope's `carrierCentered`). The engine is asked for exactly 0..width — receiver
@@ -501,7 +527,15 @@ function TruthMark({ kind, title, word }: { kind: 'rig' | 'cmd' | 'off'; title: 
  *  These were briefly labelled ±4k/±2.7k/±1.5k/±800, from the fortnight the axis was
  *  symmetric. The Hz never changed meaning; the ± did, and the labels came off with it.
  *
- *  FROM THE OLD SLICES: 'Full' (0–4000) and 'Voice' (300–2700) are unchanged in meaning.
+ *  FROM THE OLD SLICES: 'Full' (0–4000, now 0–5000 with the wider audio row) and 'Voice'
+ *  (300–2700) are unchanged in meaning.
+ *
+ *  ⭐ FULL IS THE DEFAULT (operator decision, 2026-11-03; Auto was the default before). Every audio
+ *  view opens on the mode's useful audio range, never on the radio's filter: the filter is drawn
+ *  as its passband box on that range, the note under the chips names it when it is what limits the
+ *  picture, and the Auto chip stays for framing exactly the filter. A stored chip is kept: it is
+ *  written only when the operator presses one, so a stored 'auto' is a choice, honoured like any
+ *  other. Only a window that never pressed a chip opens at Full.
  *  'Low' (200–1500) is now the plain 1.5k zoom. 'High' (1500–2900) has no carrier-referenced
  *  equivalent — a window that excludes the dial cannot be drawn from it — so its slot became
  *  the tighter 800 Hz zoom.
@@ -515,7 +549,7 @@ const SPANS = [
   // ⭐ 'Auto' tracks the rig's reported filter width (operator, 2026-08-16: a fixed span
   // wider than the filter shows a dead stopband — on the audio feed those pixels can never
   // light). widthHz 0 is the sentinel; the render resolves it from filterWidthHz, clamped
-  // 800..4000, falling back to the full 4 kHz when the rig doesn't report one.
+  // 800..PHONE_FULL_HZ, falling back to Full when the rig doesn't report one.
   {
     id: 'auto',
     widthHz: 0,
@@ -524,9 +558,9 @@ const SPANS = [
   },
   {
     id: 'full',
-    widthHz: 4000,
+    widthHz: PHONE_FULL_HZ,
     label: () => t('phone.span.full.label'),
-    title: () => t('phone.span.full.title', { khz: 4 }),
+    title: () => t('phone.span.full.title', { khz: PHONE_FULL_HZ / 1000 }),
   },
   {
     id: 'voice',
@@ -548,6 +582,9 @@ const SPANS = [
   },
 ] as const
 
+/** The span a window that never pressed a chip opens on: Full (see `SPANS`). */
+const PHONE_DEFAULT_SPAN = SPANS.find((sp) => sp.id === 'full') ?? SPANS[0]
+
 /** RF panadapter zoom presets (used only when a native RF scope is streaming). 'Band' is the band
  *  the dial is in, edge to edge with a small margin (`spectrum/rfSpan.ts` `bandWindow`), drawn as an
  *  absolute window; it is the default, and a stored choice wins over it. The rest are symmetric ±Hz
@@ -557,7 +594,11 @@ const SPANS = [
  *  it is drawn at the source's own resolution rather than cropped out of a wider sweep.
  *
  *  The ± faces are measurements and stay written here; 'Full' and 'Band' are words. Keyed and
- *  compared on `id` for the same reason SPANS is. */
+ *  compared on `id` for the same reason SPANS is.
+ *
+ *  THESE CHIPS ARE THE ONE CONTROL THAT SETS THE RADIO'S SPAN (CW's RF_SPANS says why): the Rig
+ *  scope pane's own span row, which could leave the radio on a span no chip named, is gone, and every
+ *  span it offered is here (±2.5k to ±250k; a Flex pan's 1M and 2M as ±500k and ±1M, `only: 'flex'`). */
 const RF_SPANS = [
   {
     id: 'band',
@@ -572,6 +613,43 @@ const RF_SPANS = [
     hi: 1e9,
     label: () => t('phone.rfZoom.full.label'),
     title: () => t('phone.rfZoom.full.title'),
+  },
+  {
+    id: '±1M',
+    lo: -1_000_000,
+    hi: 1_000_000,
+    label: () => '±1M',
+    title: () => t('phone.rfZoom.span.title', { khz: 1000 }),
+    only: 'flex',
+  },
+  {
+    id: '±500k',
+    lo: -500_000,
+    hi: 500_000,
+    label: () => '±500k',
+    title: () => t('phone.rfZoom.span.title', { khz: 500 }),
+    only: 'flex',
+  },
+  {
+    id: '±250k',
+    lo: -250_000,
+    hi: 250_000,
+    label: () => '±250k',
+    title: () => t('phone.rfZoom.span.title', { khz: 250 }),
+  },
+  {
+    id: '±100k',
+    lo: -100_000,
+    hi: 100_000,
+    label: () => '±100k',
+    title: () => t('phone.rfZoom.span.title', { khz: 100 }),
+  },
+  {
+    id: '±50k',
+    lo: -50_000,
+    hi: 50_000,
+    label: () => '±50k',
+    title: () => t('phone.rfZoom.span.title', { khz: 50 }),
   },
   {
     id: '±25k',
@@ -593,6 +671,13 @@ const RF_SPANS = [
     hi: 5_000,
     label: () => '±5k',
     title: () => t('phone.rfZoom.span.title', { khz: 5 }),
+  },
+  {
+    id: '±2.5k',
+    lo: -2_500,
+    hi: 2_500,
+    label: () => '±2.5k',
+    title: () => t('phone.rfZoom.span.title', { khz: 2.5 }),
   },
 ] as const
 
@@ -621,30 +706,6 @@ const YAESU_SPANS = [
   { label: '1M', halfHz: 500_000 },
 ] as const
 
-/** RIG scope-span presets (native Icom CI-V only) — these change the RADIO's real panadapter
- *  sweep width via CI-V 27 15 (± half-width in Hz), from the rig's own span table. Unlike the
- *  client-side RF zoom above, this commands the hardware. */
-const RIG_SPANS = [
-  { label: '±2.5k', hz: 2_500 },
-  { label: '±5k', hz: 5_000 },
-  { label: '±10k', hz: 10_000 },
-  { label: '±25k', hz: 25_000 },
-  { label: '±50k', hz: 50_000 },
-  { label: '±100k', hz: 100_000 },
-  { label: '±250k', hz: 250_000 },
-] as const
-
-/** FlexRadio pan BANDWIDTH presets (full span, not ± half-width) — command the SmartSDR
- *  panadapter's real width via `display pan set … bw=`. */
-const FLEX_SPANS = [
-  { label: '50k', hz: 50_000 },
-  { label: '100k', hz: 100_000 },
-  { label: '200k', hz: 200_000 },
-  { label: '500k', hz: 500_000 },
-  { label: '1M', hz: 1_000_000 },
-  { label: '2M', hz: 2_000_000 },
-] as const
-
 /** #384: how far one wheel notch moves a Phone slider (`WheelRange`). 2 % on a 0–100 % level:
  *  fifty notches end to end, about two turns of an ordinary wheel, fine enough to ride AF gain and
  *  quick enough to cross the range. RF power moves 1 %, its own step and the finest it has: an
@@ -652,7 +713,13 @@ const FLEX_SPANS = [
  *  notch, the scope references and the scope's G and Z move one of their own steps. */
 const LEVEL_WHEEL_STEP = 2
 
-export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active = true, snap, theme, pendingWork, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, tciSpots, onTciSpot, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, onEntryCall, panels, spotsBoard, neededBoard, boxes }: Props) {
+export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeContest, active = true, snap, theme, pendingWork, freedvPane, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, tciSpots, onTciSpot, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, onEntryCall, panels, spotsBoard, neededBoard, boxes }: Props) {
+  // The compact chrome (features/compactChrome): md and up, the meters stand in the TX strip and the
+  // dock is one row.
+  const chrome = useCompactChrome()
+  // A call picked in the FreeDV pane, for the log strip — the Needed board's hand-off shape, held
+  // here because it never leaves this cockpit.
+  const [freedvWork, setFreedvWork] = useState<{ call: string; ts: number } | null>(null)
   // Live S-meter (shared 100 ms poll, lock-free backend) — used to arrive via the 300 ms
   // snapshot on top of the backend's own sampling, which read as a laggy needle. smeterDb-only
   // subscription: the cockpit re-renders when the S-meter changes, never on RX-level churn.
@@ -840,9 +907,9 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
   // soundcard audio, not RF IQ, so "span" means which slice of the passband
   // fills the scope).
   const [span, setSpan] = useState<(typeof SPANS)[number]>(
-    () => SPANS.find((sp) => sp.id === surfaceGet(PHONE_SCOPE_SPAN_KEY)) ?? SPANS[0],
+    () => SPANS.find((sp) => sp.id === surfaceGet(PHONE_SCOPE_SPAN_KEY)) ?? PHONE_DEFAULT_SPAN,
   )
-  const [rfSpan, setRfSpanState] = useState<(typeof RF_SPANS)[number]>(() => {
+  const [rfSpanPick, setRfSpanState] = useState<(typeof RF_SPANS)[number]>(() => {
     const id = loadRfSpan('phone', RF_SPANS.map((sp) => sp.id), 'band')
     return RF_SPANS.find((sp) => sp.id === id) ?? RF_SPANS[0]
   })
@@ -863,9 +930,34 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
   // framing (the "RX audio" label and the audio-Hz span chips) so the operator sees ONE unambiguous
   // display — the panadapter — instead of RF spectrum wrapped in audio-passband chrome.
   const nativeRf = scopeFeed != null && isRfScopeSource(scopeFeed.source)
+  // THE RADIO'S OWN SCOPE, ONCE SEEN, for this radio (CW's twin says why): only then does the view
+  // chip show, RF (the default) or Audio, kept per window and validated on load (`loadScopeView`).
+  const [rigScopeOf, setRigScopeOf] = useState<{ radio: number | undefined } | null>(null)
+  const rigScope = rigScopeOf != null && rigScopeOf.radio === snap.activeRadioId
+  const [scopeView, setScopeViewState] = useState<ScopeView>(() => loadScopeView('phone'))
+  // How fast the radio's scope is sweeping, as measured where it is drawn (PhoneScope `onSweepRate`).
+  const [sweepRate, setSweepRate] = useState<number | null>(null)
+  const setScopeView = (v: ScopeView) => {
+    setScopeViewState(v)
+    saveScopeView('phone', v)
+    setScopeFeed(null)
+    setSweepRate(null)
+  }
+  // AUDIO: the sound-card view alone, which never gives way to the radio's scope (`feed='audio'`).
+  const audioOnlyView = rigScope && scopeView === 'audio'
+  const noteFeed = (source: string, loHz: number, hiHz: number) => {
+    setScopeFeed({ source, loHz, hiHz })
+    if (isRadioScopeSource(source) && !rigScope) setRigScopeOf({ radio: snap.activeRadioId })
+  }
   // The RF window the chosen span draws, absolute Hz: the band's for Band (null off every band, which
   // then draws as Full), the dial's ± for the ± chips, none for Full.
   const dialHzNow = snap.radio.dialMhz > 0 ? Math.round(snap.radio.dialMhz * 1e6) : null
+  // The spans this source offers: every rung the old rig-span buttons had, and for a Flex pan its 1M and 2M
+  // too. A stored pick the source does not offer (±1M kept from a Flex, then an Icom) is drawn as the
+  // default, and stays stored for the radio that offers it.
+  const rfOffered = RF_SPANS.filter((sp) => !('only' in sp) || sp.only === scopeFeed?.source)
+  const rfSpan =
+    rfOffered.find((sp) => sp.id === rfSpanPick.id) ?? rfOffered.find((sp) => sp.id === 'band') ?? rfOffered[0]
   const bandFit = rfSpan.id === 'band' ? bandWindow(dialHzNow) : null
   const rfWant =
     rfSpan.id === 'band'
@@ -893,8 +985,8 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
     [spots, snap.radio.band, needByCall, typeByCall],
   )
   // The FT-710 is the one native scope whose SPAN this app can command over plain CAT, so its
-  // control row is the rig's own ladder rather than a client-side crop. Icom/Flex keep the crop:
-  // their hardware span already has its own row (RIG_SPANS / FLEX_SPANS) further down.
+  // control row is the rig's own ladder. Icom/Flex take the RF span chips, which ask the radio for
+  // the sweep that holds the chosen window (`useSpanAsk`).
   // TWO DIFFERENT QUESTIONS, and conflating them cost the operator the only way out of FIX.
   //
   // `yaesuScope` — does this radio have a scope Nexus is talking to? True as soon as the mode code
@@ -934,6 +1026,9 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
   const civScope = scopeFeed?.source === 'civ'
   // FlexRadio SmartSDR panadapter — its own span/ref command path (display pan set …).
   const flexScope = scopeFeed?.source === 'flex'
+  // A quiet hint while the radio's scope is slow: its SPEED read back where the station reports it,
+  // else the rate measured here (`scopeIsSlow`, the one rule). SPEED is never sent to the radio.
+  const slowScope = scopeIsSlow(snap.radio.scopeRate, scopeFeed?.source, sweepRate)
   const [flexRefDbm, setFlexRefDbm] = useState(-80)
   const changeFlexRef = (dbm: number) => {
     setFlexRefDbm(dbm)
@@ -1022,9 +1117,43 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
     onSnap,
   })
 
+  // The settings the scope's Icom hint reads (`icomScopeCure`): the ACTIVE radio's model,
+  // connection, baud and CI-V switch, so it is read again on a radio switch. Display only.
+  const [scopeSettings, setScopeSettings] = useState<Settings | null>(null)
+  useEffect(() => {
+    if (!active) return
+    let alive = true
+    void getSettings()
+      .then((s) => {
+        if (alive && s) setScopeSettings(s)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [active, snap.activeRadioId])
+
   // RX filter / passband width — the rig's read-back (null = unknown/default). The ± stepper
   // nudges it 100 Hz within a sane SSB/CW span, seeded from the current value or a 2.4 kHz default.
   const filterHz = snap.radio.filterWidthHz ?? null
+  // The audio scope's width: the chip's own, or Auto's — the filter, clamped 800..Full, and Full
+  // when the radio reports none.
+  const phoneAudioWidth = span.widthHz || Math.min(PHONE_FULL_HZ, Math.max(800, filterHz ?? PHONE_FULL_HZ))
+  // The audio is what came through the RADIO's filter, so where the window is wider than that
+  // filter the rest of it is the stopband and can never show a signal. Say so (the CW scope's note),
+  // or a 2.4 kHz filter in Full reads as a scope cut short. Never in Auto, which frames the filter.
+  const filterLimits =
+    !nativeRf && span.id !== 'auto' && filterHz != null && filterHz > 0 && filterHz < phoneAudioWidth
+  // An Icom whose own wide scope is one setting away (`icomScopeCure`, the CW scope's hint): the
+  // audio view is all an operator on Hamlib ever sees, with nothing saying the radio's panadapter
+  // can be drawn here.
+  const scopeCure = !nativeRf && scopeSettings ? icomScopeCure(scopeSettings) : null
+  const settingsLink = (where: string) =>
+    onOpenSettings ? (
+      <button type="button" className="settings-linkbtn" onClick={() => onOpenSettings(where)} />
+    ) : (
+      <strong />
+    )
   const bumpFilter = (deltaHz: number) => {
     const base = filterHz ?? 2400
     const next = Math.min(PASSBAND_LIMITS.phone.maxHz, Math.max(PASSBAND_LIMITS.phone.minHz, base + deltaHz))
@@ -1600,6 +1729,9 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
   const hasStatsPane = host != null && shown('stats')
   // THE RECENT CONTACTS PANE, the same way (RecentQsosPane): inside the log pane, under the form.
   const hasRecentPane = host != null && shown('recent')
+  // FreeDV's pane (receive only): hidden until added, like the two feeds, and like them offered only
+  // where the host wires it (`freedvPane`: the desktop, whose station runs the FreeDV listeners).
+  const hasFreedvPane = freedvPane === true && shown('freedv')
   // Everything the LEADING column can hold below the 3-col tier. The keyer used to make
   // this unconditionally true; now that it has a ⊞ entry, a rig with no DSP and no native
   // scope can have the operator untick its way to an empty leading track — a `minmax(0,1fr)`
@@ -1627,6 +1759,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
           voiceKeyer: hasKeyerPane,
           spots: hasSpotsPane,
           needed: hasNeededPane,
+          freedv: hasFreedvPane,
           rigscope: hasRigScopePane,
           receiver: hasReceiverPane,
           transmitter: hasTransmitterPane,
@@ -1657,7 +1790,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
   const folded = boxes?.rail?.folded?.boxes ?? []
   const boxInA = placed3[0].ids.some(isBoxId) || folded.length > 0
   const boxInB = placed3[1].ids.some(isBoxId)
-  const leadPresent = inRegion('bandActivity') || hasKeyerPane || auxPresent || inRegion('spots') || inRegion('needed') || boxInA || boxInB
+  const leadPresent = inRegion('bandActivity') || hasKeyerPane || auxPresent || inRegion('spots') || inRegion('needed') || inRegion('freedv') || boxInA || boxInB
   // An arranged region offers a track per column that holds something; the stock one keeps its own
   // rule above (a keyer alone does not earn the leading track its own column).
   const { ref: panesRef, cols, flow } = useRegionCols<HTMLDivElement>(
@@ -1667,7 +1800,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
         : placed3[0].ids.length + folded.length + placed3[1].ids.length > 0
           ? 2
           : 1
-      : (auxPresent || inRegion('needed') || boxInB) && (inRegion('bandActivity') || inRegion('spots') || boxInA)
+      : (auxPresent || inRegion('needed') || boxInB) && (inRegion('bandActivity') || inRegion('spots') || inRegion('freedv') || boxInA)
         ? 3
         : leadPresent
           ? 2
@@ -2137,6 +2270,18 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
       />
     ) : null
 
+  // FreeDV's pane: a fill pane like the feeds, receive only. A click on a heard call fills the log
+  // strip's call field through the same hand-off the Needed board's click uses, and nothing else.
+  // It renders only where the host offers it (`freedvPane`, the station's own window), which may
+  // change the station's settings, so its one settings action is always offered there.
+  const freedvPaneEl = hasFreedvPane ? (
+    <CockpitPaneFrame title={t('phone.pane.freedv.title')} paneId="freedv" {...closeProps('freedv')}>
+      <div className={feedWrap('freedv')}>
+        <FreedvPane freedv={snap.freedv} control onPickCall={(call) => setFreedvWork({ call, ts: Date.now() })} />
+      </div>
+    </CockpitPaneFrame>
+  ) : null
+
   /* Aux panes — rig-scope / DSP / RX-DSP-levels control strips. In the 3-column tier
      they share the middle column with the voice keyer; below that they append to the
      main column. civScope and flexScope are mutually exclusive (one scope feed), so at
@@ -2144,33 +2289,15 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
   // One element per strip (layout L3): ⊞ Arrange places each where the operator put it.
   const rigscopePane = (
     <>
-      {/* Rig scope controls (native Icom CI-V only) — drive the RADIO's real panadapter: span
-          changes the hardware sweep width, ref sets weak-signal visibility. Distinct from the
-          view-zoom chips on the scope itself, which only zoom what's already streamed. */}
+      {/* Rig scope controls (native Icom CI-V only) — drive the RADIO's real panadapter: ref sets
+          weak-signal visibility. The radio's span is the scope's own span chips (RF_SPANS), the one
+          control that sets it, so it is not offered a second time here. */}
       {hasRigScopePane && civScope && (
         <CockpitPaneFrame title={t('phone.pane.rigscope.title')} paneId="rigscope" fit="content" {...closeProps('rigscope')}>
           <div className="ph-rigscope" role="group" aria-label={t('phone.rigScope.aria')}>
             <span className="ph-rigscope-lbl" title={t('phone.rigScope.title')}>
               {t('phone.rigScope.label')}
             </span>
-            <div className="ph-span">
-              {RIG_SPANS.map((sp) => (
-                <button
-                  key={sp.label}
-                  type="button"
-                  className="theme-chip"
-                  title={t('phone.rigScope.span.title', { span: sp.label })}
-                  /* #275: a failure here was swallowed, matching the backend's own swallow —
-                     between them a span button on an IC-7300 in Fixed mode did nothing with no
-                     explanation anywhere. The rig's OWN refusal arrives a tick later in
-                     `radio.scopeSpanRefused` (the status lane); this catch is the nearer half,
-                     the command itself failing. */
-                  onClick={() => void setScopeSpan(sp.hz).then((s) => onSnap?.(s)).catch(showWhenDriving)}
-                >
-                  {sp.label}
-                </button>
-              ))}
-            </div>
             <label className="ph-rigscope-ref" title={t('phone.rigScope.ref.title')}>
               <span>{t('phone.scope.ref.label')}</span>
               <WheelRange wheelStep={5}
@@ -2188,26 +2315,14 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
         </CockpitPaneFrame>
       )}
 
-      {/* FlexRadio SmartSDR panadapter controls — command the Flex pan's real bandwidth + ref. */}
+      {/* FlexRadio SmartSDR panadapter controls — the Flex pan's reference level. Its bandwidth is
+          the scope's own span chips, as for an Icom. */}
       {hasRigScopePane && flexScope && (
         <CockpitPaneFrame title={t('phone.pane.rigscope.title')} paneId="rigscope" fit="content" {...closeProps('rigscope')}>
           <div className="ph-rigscope" role="group" aria-label={t('phone.flexPan.aria')}>
             <span className="ph-rigscope-lbl" title={t('phone.flexPan.title')}>
               {t('phone.flexPan.label')}
             </span>
-            <div className="ph-span">
-              {FLEX_SPANS.map((sp) => (
-                <button
-                  key={sp.label}
-                  type="button"
-                  className="theme-chip"
-                  title={t('phone.flexPan.span.title', { span: sp.label })}
-                  onClick={() => void setFlexPanSpan(sp.hz).then((s) => onSnap?.(s)).catch(showWhenDriving)}
-                >
-                  {sp.label}
-                </button>
-              ))}
-            </div>
             <label className="ph-rigscope-ref" title={t('phone.flexPan.ref.title')}>
               <span>{t('phone.scope.ref.label')}</span>
               <WheelRange wheelStep={5}
@@ -2306,7 +2421,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
               unit: false,
             })}
 
-            {/* RF GAIN — receive front-end gain. Not the header's Pwr slider, which is
+            {/* RF GAIN — receive front-end gain. Not the header's RF power slider, which is
                 transmit power; they are `RF` and `RFPOWER` to Hamlib for that reason. */}
             {show('RF') && (
             <div className="ph-chain-item" data-chain="RF">
@@ -2622,8 +2737,8 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
           setSpotOpen(true)
         }}
         onCallChange={setWorkedCall}
-        pendingWork={pendingWork}
-        onConsumeWork={onConsumeWork}
+        pendingWork={freedvWork ?? pendingWork}
+        onConsumeWork={freedvWork ? () => setFreedvWork(null) : onConsumeWork}
         onSnap={onSnap}
         fieldDay={fieldDay}
         scoreChip={false}
@@ -2632,6 +2747,8 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
         esm={esm.host}
         // App unmounts this cockpit on a page switch; the contact in its strip waits for it.
         draft="phone"
+        // #438: a long contact whose call went in early restarts its start time here.
+        startButton
         onResumeContest={onResumeContest}
       />
       {/* Inside the log pane, under the form: it takes only the room the form leaves (RecentQsosPane). */}
@@ -2647,6 +2764,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
     voiceKeyer: keyerPane,
     spots: spotsPane,
     needed: neededPane,
+    freedv: freedvPaneEl,
     rigscope: rigscopePane,
     receiver: receiverPane,
     transmitter: transmitterPane,
@@ -2667,6 +2785,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
     paneEls[b] = (
       <CockpitBox
         box={b}
+        cockpit="phone"
         entry={entry}
         source={boxes}
         selection={boxSel}
@@ -2693,6 +2812,10 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
   // scope, or after the contact in the hosted Quick presentation (below). Space as PTT is a WINDOW
   // listener and stays one: with focus on a strip button, Space still goes to the PTT handler,
   // which calls preventDefault, so the focused button does not click.
+  // #441: on a Yaesu whose own USB audio carries Tune's tone, the note comes up once a Tune reads about no
+  // power (features/yaesuTuneNote.ts), or an ⓘ holds it where the radio reports no power. Text only.
+  const tuneNote = useTuneNote(!!yaesuTuneNote, snap.radio)
+  const [tuneNoteOpen, setTuneNoteOpen] = useState(false)
   const txStrip = (
     <CockpitTxStrip
       radio={snap.radio}
@@ -2723,8 +2846,223 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
         void haltTx()
         esm.noteStop()
       }}
+      // THE COMPACT DOCK (md and up): the read-only meters stand in the strip's empty right side, as
+      // in Operate's QSO strip, and the dock loses their row. They keep their ⊞ id — a readout.
+      meters={chrome.wide && shown('txmeters') ? <TxMeters radio={snap.radio} strip controls={txMeterControls} /> : undefined}
+      // #441: Phone keys plain USB/LSB, so these Yaesus take their audio from the SSB MOD SOURCE menu;
+      // on MIC, Tune's USB-audio tone keys the radio with no RF. Nexus changes no menu.
+      tuneHint={
+        tuneNote === 'icon' ? (
+          <button
+            type="button"
+            className="tune-note-info"
+            aria-expanded={tuneNoteOpen}
+            aria-label={t('phone.tune.usbAudioNote.aria')}
+            title={t('phone.tune.usbAudioNote')}
+            onClick={() => setTuneNoteOpen((o) => !o)}
+          >
+            ⓘ
+          </button>
+        ) : undefined
+      }
+      tuneNote={
+        tuneNote === 'line' || (tuneNote === 'icon' && tuneNoteOpen) ? (
+          <span className="radio-tune-note" role="note">
+            {t('phone.tune.usbAudioNote')}
+            <button type="button" className="settings-linkbtn" onClick={dismissTuneNote}>
+              {t('common.dismiss')}
+            </button>
+          </span>
+        ) : undefined
+      }
     />
   )
+  // The header's occasional controls, each drawn once: inline, or behind its ⋯ (see the header).
+  const splitEl = (
+    <>
+      {/* ⭐ SPLIT IS NO LONGER GATED ON `catOk` (2026-09-20 ruling). It used to vanish with
+          the link, which told the operator nothing about whether this cockpit HAS a split
+          control — and split is the one thing a DX chaser looks for first. It stays and
+          says why it is dead; the reason rides INTO the control rather than sitting beside
+          it, so its three buttons are disabled by the same fact that prints the mark. */}
+      <SplitControl
+        snap={snap}
+        onSnap={onSnap}
+        onError={(m) => pushToast(m, 'error')}
+        unavailable={
+          catOk
+            ? undefined
+            : { mark: t('phone.unavail.mark'), title: t('phone.unavail.noCat', { plate: SPLIT }) }
+        }
+      />
+    </>
+  )
+  const memoryEl = (
+    <>
+      {onRecallMemory && (
+        // The ★-favorites quick-recall strip (bounded + wrapping — the old
+        // MemoryBank list grew the header unbounded). Recall is App-owned
+        // (recallMemory): settings patch + retune + cockpit auto-switch.
+        <MemoryStrip
+          dialMhz={snap.radio.dialMhz}
+          mode={commandedMode}
+          onRecall={onRecallMemory}
+          onManage={onOpenMemories}
+        />
+      )}
+    </>
+  )
+  const rotorEl = (
+    <>
+      {/* ⭐ THE BEAM BUTTON WAS NEVER MISSING FROM THE STRIP — it was missing from THIS HOST.
+          `RotorStrip` has rendered a one-click "→ CALL" slew since it was written, and CwCockpit
+          and OperateCockpit both pass `targetCall`/`onPointAt`. Phone did not, so the control
+          rendered as nothing (`{targetCall && onPointAt && …}`) and two testers reported the
+          feature as absent — one of them naming this tab specifically. Phone was the only
+          cockpit with no live worked-call to pass; `workedCall` above is that source. */}
+      <RotorStrip
+        onOpenSettings={onOpenSettings}
+        targetCall={workedCall || null}
+        onPointAt={rotorPointAt()}
+      />
+    </>
+  )
+  const recEl = (
+    <>
+      {/* Glyph only (density pass 2026-08-04, the same move the FT cockpit's header made):
+          '● Record QSO' spent ~95px of a header region that WRAPS, and the word said what
+          the glyph and the tooltip already say. The accessible name is explicit here rather
+          than left to the glyph — a screen reader must not be handed a bare bullet. */}
+      <button
+        type="button"
+        className={`ph-rec${recording ? ' on' : ''}`}
+        onClick={toggleRecord}
+        disabled={recBusy}
+        aria-label={recording ? t('phone.record.stop.aria') : t('phone.record.start.aria')}
+        title={recording ? t('phone.record.on.title') : t('phone.record.off.title')}
+      >
+        <span className="ph-rec-dot" aria-hidden="true">
+          {recording ? '■' : '●'}
+        </span>
+        {REC}
+      </button>
+    </>
+  )
+  // VOX on the transmit contract — see the cell's own note where it stands. One element, drawn first in
+  // the PTT row (md and up) and in its old place, after power, on the contract's own line below md.
+  const voxCell = (
+    <>
+      {snap.radio.vox === true && (
+        <span className="ph-txc-cell ph-txc-warn" data-txc="vox" title={t('phone.tx.voxWarn')}>
+          {VOX_ON}
+        </span>
+      )}
+    </>
+  )
+  // ⭐ THE TRANSMIT CONTRACT — "what goes out when I key?", in one line that is always there and
+  // never moves (operator, 2026-09-20). Drawn in one of two places, decided by the window's size
+  // class (features/compactChrome): its own line at the top of the dock below md, and inside the
+  // PTT row, after PTT and Lock, from md up (the one-row dock). See the dock below for why it is
+  // never BELOW the PTT row.
+  const txContract = (
+    <div className={`ph-txcontract${chrome.wide ? ' dock-status-inrow' : ''}`} role="group" aria-label={t('phone.txContract.aria')}>
+      {/* IN THE PTT ROW (md and up) VOX COMES FIRST. The row's contract takes only the room left and clips
+          at its end (`.dock-status-inrow`), so whatever is last is what a narrow window or a long busy
+          reason cuts first — and VOX is a safety line, not a status one (below). First, it is the one cell
+          that is never cut; the busy cell, the elastic one, shrinks before anything is clipped. */}
+      {chrome.wide && voxCell}
+      <span className="ph-txc-cell" data-txc="freq" title={t('phone.txContract.freq.title')}>
+        <span className="ph-txc-lbl">{TX}<span aria-hidden="true">▸</span></span>
+        {txEmission == null || repeaterUnknown ? (
+          <>
+            <span className="ph-txc-val mono">—</span>
+            <TruthMark
+              kind="off"
+              word={repeaterUnknown ? t('phone.tx.repeaterMark') : undefined}
+              title={repeaterUnknown ? t('phone.txContract.repeaterShift.title') : t('phone.txContract.noEmission.title')}
+            />
+          </>
+        ) : (
+          <>
+            {/* The header's OWN formatter, so the dock and the readout can never print one
+                frequency two different ways. */}
+            <span className="ph-txc-val mono">{formatDialMhz(txEmission)}</span>
+            <TruthMark
+              kind={emissionRead ? 'rig' : 'cmd'}
+              title={emissionRead ? t('phone.prov.rig') : t('phone.txContract.freq.commanded.title')}
+            />
+          </>
+        )}
+      </span>
+      <span className="ph-txc-cell" data-txc="mode" title={t('phone.txContract.mode.title')}>
+        <span className="ph-txc-val">{observedMode}</span>
+        {/* The SAME read-back gate the log writes through (`rigReadPhoneMode`): catOk, a
+            non-empty rig mode, and a mode this cockpit can name. What the operator is told
+            here and what Nexus writes into the record cannot disagree. */}
+        <TruthMark
+          kind={rigReadPhoneMode != null ? 'rig' : 'cmd'}
+          title={rigReadPhoneMode != null ? t('phone.prov.rig') : t('phone.prov.cmd', { plate: observedMode })}
+        />
+      </span>
+      <span className="ph-txc-cell" data-txc="split" title={t('phone.txContract.split.title')}>
+        <span className="ph-txc-lbl">{SPLIT}</span>
+        {splitOffsetKhz == null ? (
+          <span className="ph-txc-val">{SIMPLEX}</span>
+        ) : (
+          <>
+            <span className="ph-txc-val mono">
+              {splitOffsetKhz >= 0 ? `+${splitOffsetKhz.toFixed(1)}` : splitOffsetKhz.toFixed(1)}
+            </span>
+            {/* ⚠️ ALWAYS `cmd`, AND THAT IS A GAP IN THE DTO rather than a judgement about
+                the radio. `Engine::tx_freq_verdict` DOES distinguish a split we commanded
+                and the rig acknowledged from one the rig merely reported, and refuses
+                outright when it cannot say where — but none of that reaches the snapshot:
+                `txEmissionMhz` collapses SplitUnverified onto the dial and the verdict
+                itself is not a field. Until it is, "Nexus commanded this" is the most this
+                strip may claim, and claiming more is the one thing it must never do. */}
+            <TruthMark kind="cmd" title={t('phone.txContract.split.commanded.title')} />
+          </>
+        )}
+      </span>
+      {/* No cell on a radio with no XIT (the IC-9700): its "+0 ⌁cmd" would stand for an
+          offset dialled on an XIT knob the radio does not have. */}
+      {!snap.radio.xitUnsupported && (
+        <span className="ph-txc-cell" data-txc="xit" title={t('phone.txContract.xit.title')}>
+          <span className="ph-txc-lbl">{XIT}</span>
+          <span className="ph-txc-val mono">{xitHz >= 0 ? `+${xitHz}` : String(xitHz)}</span>
+          {/* `cmd` EVEN AT ZERO. Write-only means Nexus cannot see an offset dialled at the
+              radio, so "+0" states what Nexus commanded and not where the transmitter is. */}
+          <TruthMark kind="cmd" title={t('phone.txContract.xit.commanded.title')} />
+        </span>
+      )}
+      <span className="ph-txc-cell" data-txc="power" title={t('phone.txContract.power.title')}>
+        <span className="ph-txc-val mono">{powerPct == null ? '—' : `${powerPct}%`}</span>
+        {/* NO MARK ON POWER, deliberately: `rfPower` is documented as the rig read-back
+            WHEN CAT REPORTS ONE and the last commanded value otherwise, and the snapshot
+            does not say which it is — so neither mark would be supportable. The measured
+            watts beside it are evidence of their own and need none. */}
+        {lastPoW.current != null && (
+          <span className="ph-txc-sub">{t('phone.tx.lastOver', { watts: Math.round(lastPoW.current) })}</span>
+        )}
+      </span>
+      {/* ⚠️ VOX IS A SAFETY LINE, not a status one, and it belongs on the contract because
+          it changes the answer to "what happens when I key": with VOX on the operator does
+          not key at all — the radio does, from the microphone. Stop TX halts what NEXUS is
+          doing and cannot unkey a transmitter the operator's own voice is holding up.
+          A KEYING-SOURCE fact, never a stop control: it is a readout here and the VOX
+          toggle itself lives in the transmit chain (THE STOP LINE, features/panelState.ts). */}
+      {!chrome.wide && voxCell}
+      {/* WHO HOLDS THE TRANSMITTER, in the arbiter's own words — `tx_owner()` covers all
+          seven owners, and a second wording here could disagree with the one that really
+          holds the rig. Absent when nobody does: an idle transmitter is not news. */}
+      {snap.radio.txBusyReason && (
+        <span className="ph-txc-cell ph-txc-busy" data-txc="busy" title={snap.radio.txBusyReason}>
+          {snap.radio.txBusyReason}
+        </span>
+      )}
+    </div>
+  )
+
   return (
     <main className="layout single phone-cockpit" ref={cockpitRef} data-pane-drag={dropPane ? '' : undefined}>
       <CockpitHeader
@@ -2854,51 +3192,17 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
             {t('phone.rigMismatch.chip', { mode: modeMismatch })}
           </span>
         )}
-        {/* ⭐ SPLIT IS NO LONGER GATED ON `catOk` (2026-09-20 ruling). It used to vanish with
-            the link, which told the operator nothing about whether this cockpit HAS a split
-            control — and split is the one thing a DX chaser looks for first. It stays and
-            says why it is dead; the reason rides INTO the control rather than sitting beside
-            it, so its three buttons are disabled by the same fact that prints the mark. */}
-        <SplitControl
-          snap={snap}
-          onSnap={onSnap}
-          onError={(m) => pushToast(m, 'error')}
-          unavailable={
-            catOk
-              ? undefined
-              : { mark: t('phone.unavail.mark'), title: t('phone.unavail.noCat', { plate: SPLIT }) }
-          }
-        />
+        {!chrome.fold && splitEl}
         {!catOk && (
           <span
             className="ph-nocat"
-            title={snap.radio.catDetail || t('phone.noCat.title')}
+            title={(snap.radio.catDetail && catDetailText(localizeRefusal(snap.radio.catDetail))) || t('phone.noCat.title')}
           >
             {t('phone.noCat.label')}
           </span>
         )}
-        {onRecallMemory && (
-          // The ★-favorites quick-recall strip (bounded + wrapping — the old
-          // MemoryBank list grew the header unbounded). Recall is App-owned
-          // (recallMemory): settings patch + retune + cockpit auto-switch.
-          <MemoryStrip
-            dialMhz={snap.radio.dialMhz}
-            mode={commandedMode}
-            onRecall={onRecallMemory}
-            onManage={onOpenMemories}
-          />
-        )}
-        {/* ⭐ THE BEAM BUTTON WAS NEVER MISSING FROM THE STRIP — it was missing from THIS HOST.
-            `RotorStrip` has rendered a one-click "→ CALL" slew since it was written, and CwCockpit
-            and OperateCockpit both pass `targetCall`/`onPointAt`. Phone did not, so the control
-            rendered as nothing (`{targetCall && onPointAt && …}`) and two testers reported the
-            feature as absent — one of them naming this tab specifically. Phone was the only
-            cockpit with no live worked-call to pass; `workedCall` above is that source. */}
-        <RotorStrip
-          onOpenSettings={onOpenSettings}
-          targetCall={workedCall || null}
-          onPointAt={rotorPointAt()}
-        />
+        {!chrome.fold && memoryEl}
+        {!chrome.fold && rotorEl}
         {/* The Spot button, as Operate's header has had it (OperateCockpit 📢): one click opens
             the reviewable cluster-spot popup (SpotDialog), seeded with the call being logged —
             empty when none is typed, exactly as Operate seeds from its worked/selected call.
@@ -2917,23 +3221,28 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
         >
           📢
         </button>
-        {/* Glyph only (density pass 2026-08-04, the same move the FT cockpit's header made):
-            '● Record QSO' spent ~95px of a header region that WRAPS, and the word said what
-            the glyph and the tooltip already say. The accessible name is explicit here rather
-            than left to the glyph — a screen reader must not be handed a bare bullet. */}
-        <button
-          type="button"
-          className={`ph-rec${recording ? ' on' : ''}`}
-          onClick={toggleRecord}
-          disabled={recBusy}
-          aria-label={recording ? t('phone.record.stop.aria') : t('phone.record.start.aria')}
-          title={recording ? t('phone.record.on.title') : t('phone.record.off.title')}
-        >
-          <span className="ph-rec-dot" aria-hidden="true">
-            {recording ? '■' : '●'}
-          </span>
-          {REC}
-        </button>
+        {!chrome.fold && recEl}
+        {/* THE OCCASIONAL CONTROLS — split, memories, the rotator and REC: inline at xl and below md,
+            behind the header's ⋯ at md and lg (components/HeaderOverflow, features/compactChrome),
+            so the header is one row on a 1080p window. None of them keys or stops a transmission;
+            PTT and Lock are in the dock, Stop TX and Tune in the TX strip. */}
+        {chrome.fold && (
+          <HeaderOverflow
+            label={t('cockpit.header.more.label')}
+            title={t('cockpit.header.more.title')}
+            badges={
+              <>
+                {snap.radio.splitTxMhz != null && <span className="ch-overflow-badge">{SPLIT}</span>}
+                {recording && <span className="ch-overflow-badge">● {REC}</span>}
+              </>
+            }
+          >
+            {splitEl}
+            {memoryEl}
+            {rotorEl}
+            {recEl}
+          </HeaderOverflow>
+        )}
         {/* No visible 'RX': the meter is a role="meter" already named "RX audio level", and
             the label element keeps the same string as its tooltip. */}
         <label className="ph-rxmeter" title={t('phone.rxMeter.label')}>
@@ -2982,6 +3291,9 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
               </span>
             )
           })()}
+          {/* THE VIEW CHIP: the radio's scope or the audio view, on a radio whose own scope has been
+              seen here. A display choice; it sends the radio nothing. */}
+          {rigScope && <ScopeViewChips views={PHONE_SCOPE_VIEWS} value={scopeView} onChange={setScopeView} />}
           {/* No 'Colors' label: PalettePicker is a <select> that already carries
               aria-label="Waterfall color palette (applies to all modes)" and the matching
               tooltip, so the word was the third statement of the same thing on one row. */}
@@ -3034,7 +3346,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
 
             // Native RF panadapter: RF-width zoom around the dial (not audio-passband slices).
             <div className="ph-span" role="group" aria-label={t('phone.rfZoom.aria')}>
-              {RF_SPANS.map((sp) => (
+              {rfOffered.map((sp) => (
                 <button
                   key={sp.id}
                   type="button"
@@ -3051,6 +3363,11 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
               {bandFit && onlyPart(scopeFeed, bandFit) && (
                 <span className="ph-scope-sub" role="status">
                   {t('phone.rfZoom.band.partial')}
+                </span>
+              )}
+              {slowScope && (
+                <span className="ph-scope-sub" role="status">
+                  {t('scope.slow.hint')}
                 </span>
               )}
             </div>
@@ -3071,9 +3388,27 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
                   {sp.label()}
                 </button>
               ))}
+              {filterLimits && (
+                <span className="ph-scope-sub" role="status">
+                  {t('phone.scope.filterLimit', { hz: filterHz })}
+                </span>
+              )}
+              {scopeCure && (
+                <span className="ph-scope-sub">
+                  {scopeCure === 'native-off' ? (
+                    <T k="phone.scope.nativeHint.civOff" tags={{ link: settingsLink('rig-advanced') }} />
+                  ) : (
+                    <T k="phone.scope.nativeHint.baud" tags={{ link: settingsLink('rig-control') }} />
+                  )}
+                </span>
+              )}
             </div>
           )}
           <PhoneScope
+            // The Audio view reads the audio only, so the radio's scope never replaces it; the feed
+            // is fixed for a scope's life, so the key remounts it when the view changes.
+            key={audioOnlyView ? 'audio' : 'scope'}
+            feed={audioOnlyView ? 'audio' : 'scope'}
             hideSmeter
             wheelSliders
             active={active}
@@ -3081,13 +3416,14 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
             theme={theme}
             smeterDb={smeterDb}
             viewLoHz={yaesuRf ? -1e9 : nativeRf ? rfSpan.lo : 0}
-            viewHiHz={yaesuRf ? 1e9 : nativeRf ? rfSpan.hi : (span.widthHz || Math.min(4000, Math.max(800, filterHz ?? 4000)))}
+            viewHiHz={yaesuRf ? 1e9 : nativeRf ? rfSpan.hi : phoneAudioWidth}
             carrierCentered={!nativeRf}
             sideband={commandedMode}
             dialHz={snap.radio.dialMhz > 0 ? Math.round(snap.radio.dialMhz * 1e6) : null}
-            onFeed={(source, loHz, hiHz) => setScopeFeed({ source, loHz, hiHz })}
+            onFeed={noteFeed}
             rfViewHz={nativeRf && !yaesuRf ? bandFit : null}
             onSweep={(source, loHz, hiHz) => setScopeSweep({ loHz, hiHz, radio: snap.activeRadioId, source })}
+            onSweepRate={audioOnlyView ? undefined : setSweepRate}
             onTune={onScopeTune}
             filterWidthHz={filterHz ?? 2400}
             passbandHz={filterHz}
@@ -3257,103 +3593,9 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
           ⚠️ NO ⊞ ID AND NO CONTROLS. It is a readout, so it is not in the vocabulary (nothing
           can hide it) and it holds nothing that could be mistaken for a way to stop or start
           a transmission — THE STOP LINE is untouched by it in both directions. */}
-      <div className="ph-txcontract" role="group" aria-label={t('phone.txContract.aria')}>
-        <span className="ph-txc-cell" data-txc="freq" title={t('phone.txContract.freq.title')}>
-          <span className="ph-txc-lbl">{TX}<span aria-hidden="true">▸</span></span>
-          {txEmission == null || repeaterUnknown ? (
-            <>
-              <span className="ph-txc-val mono">—</span>
-              <TruthMark
-                kind="off"
-                word={repeaterUnknown ? t('phone.tx.repeaterMark') : undefined}
-                title={repeaterUnknown ? t('phone.txContract.repeaterShift.title') : t('phone.txContract.noEmission.title')}
-              />
-            </>
-          ) : (
-            <>
-              {/* The header's OWN formatter, so the dock and the readout can never print one
-                  frequency two different ways. */}
-              <span className="ph-txc-val mono">{formatDialMhz(txEmission)}</span>
-              <TruthMark
-                kind={emissionRead ? 'rig' : 'cmd'}
-                title={emissionRead ? t('phone.prov.rig') : t('phone.txContract.freq.commanded.title')}
-              />
-            </>
-          )}
-        </span>
-        <span className="ph-txc-cell" data-txc="mode" title={t('phone.txContract.mode.title')}>
-          <span className="ph-txc-val">{observedMode}</span>
-          {/* The SAME read-back gate the log writes through (`rigReadPhoneMode`): catOk, a
-              non-empty rig mode, and a mode this cockpit can name. What the operator is told
-              here and what Nexus writes into the record cannot disagree. */}
-          <TruthMark
-            kind={rigReadPhoneMode != null ? 'rig' : 'cmd'}
-            title={rigReadPhoneMode != null ? t('phone.prov.rig') : t('phone.prov.cmd', { plate: observedMode })}
-          />
-        </span>
-        <span className="ph-txc-cell" data-txc="split" title={t('phone.txContract.split.title')}>
-          <span className="ph-txc-lbl">{SPLIT}</span>
-          {splitOffsetKhz == null ? (
-            <span className="ph-txc-val">{SIMPLEX}</span>
-          ) : (
-            <>
-              <span className="ph-txc-val mono">
-                {splitOffsetKhz >= 0 ? `+${splitOffsetKhz.toFixed(1)}` : splitOffsetKhz.toFixed(1)}
-              </span>
-              {/* ⚠️ ALWAYS `cmd`, AND THAT IS A GAP IN THE DTO rather than a judgement about
-                  the radio. `Engine::tx_freq_verdict` DOES distinguish a split we commanded
-                  and the rig acknowledged from one the rig merely reported, and refuses
-                  outright when it cannot say where — but none of that reaches the snapshot:
-                  `txEmissionMhz` collapses SplitUnverified onto the dial and the verdict
-                  itself is not a field. Until it is, "Nexus commanded this" is the most this
-                  strip may claim, and claiming more is the one thing it must never do. */}
-              <TruthMark kind="cmd" title={t('phone.txContract.split.commanded.title')} />
-            </>
-          )}
-        </span>
-        {/* No cell on a radio with no XIT (the IC-9700): its "+0 ⌁cmd" would stand for an
-            offset dialled on an XIT knob the radio does not have. */}
-        {!snap.radio.xitUnsupported && (
-          <span className="ph-txc-cell" data-txc="xit" title={t('phone.txContract.xit.title')}>
-            <span className="ph-txc-lbl">{XIT}</span>
-            <span className="ph-txc-val mono">{xitHz >= 0 ? `+${xitHz}` : String(xitHz)}</span>
-            {/* `cmd` EVEN AT ZERO. Write-only means Nexus cannot see an offset dialled at the
-                radio, so "+0" states what Nexus commanded and not where the transmitter is. */}
-            <TruthMark kind="cmd" title={t('phone.txContract.xit.commanded.title')} />
-          </span>
-        )}
-        <span className="ph-txc-cell" data-txc="power" title={t('phone.txContract.power.title')}>
-          <span className="ph-txc-val mono">{powerPct == null ? '—' : `${powerPct}%`}</span>
-          {/* NO MARK ON POWER, deliberately: `rfPower` is documented as the rig read-back
-              WHEN CAT REPORTS ONE and the last commanded value otherwise, and the snapshot
-              does not say which it is — so neither mark would be supportable. The measured
-              watts beside it are evidence of their own and need none. */}
-          {lastPoW.current != null && (
-            <span className="ph-txc-sub">{t('phone.tx.lastOver', { watts: Math.round(lastPoW.current) })}</span>
-          )}
-        </span>
-        {/* ⚠️ VOX IS A SAFETY LINE, not a status one, and it belongs on the contract because
-            it changes the answer to "what happens when I key": with VOX on the operator does
-            not key at all — the radio does, from the microphone. Stop TX halts what NEXUS is
-            doing and cannot unkey a transmitter the operator's own voice is holding up.
-            A KEYING-SOURCE fact, never a stop control: it is a readout here and the VOX
-            toggle itself lives in the transmit chain (THE STOP LINE, features/panelState.ts). */}
-        {snap.radio.vox === true && (
-          <span className="ph-txc-cell ph-txc-warn" data-txc="vox" title={t('phone.tx.voxWarn')}>
-            {VOX_ON}
-          </span>
-        )}
-        {/* WHO HOLDS THE TRANSMITTER, in the arbiter's own words — `tx_owner()` covers all
-            seven owners, and a second wording here could disagree with the one that really
-            holds the rig. Absent when nobody does: an idle transmitter is not news. */}
-        {snap.radio.txBusyReason && (
-          <span className="ph-txc-cell ph-txc-busy" data-txc="busy" title={snap.radio.txBusyReason}>
-            {snap.radio.txBusyReason}
-          </span>
-        )}
-      </div>
+      {!chrome.wide && txContract}
 
-      {shown('txmeters') && <TxMeters radio={snap.radio} pinned controls={txMeterControls} />}
+      {!chrome.wide && shown('txmeters') && <TxMeters radio={snap.radio} pinned controls={txMeterControls} />}
 
       {/* ⚠️ NOTHING IN THIS ROW IS MIGRATED, and that is the whole of why this file is on the
           i18n PARTIAL list. PTT is Phone's stop-line census (features/panelState.ts) and
@@ -3364,7 +3606,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
           the Field Day chip shares the row. All of it moves in the transmit-path batch, with
           the stop-line sweeps re-run. The TOASTS this row's handler raises did move (see
           `key` above): a toast is not a control, and no sweep can see one. */}
-      <div className="ph-ptt-row">
+      <div className="ph-ptt-row cockpit-txdock-keep">
         {fdExchange && (
           <span
             className="ph-fd-give"
@@ -3436,6 +3678,10 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, onResumeContest, active 
           <input type="checkbox" checked={lock} onChange={(e) => setLock(e.target.checked)} />
           <span>Lock</span>
         </label>
+        {/* THE ONE-ROW DOCK (md and up): the transmit contract rides here, AFTER PTT and Lock, with a
+            zero basis (`.dock-status-inrow`), so it takes only the room left and can never wrap the
+            row or move PTT under a held pointer when the busy cell arrives on key-down. */}
+        {chrome.wide && txContract}
         {/* "STILL TALKING?" for a Lock from afar, after PTT and Lock so it never moves them under a
             pointer. Unanswered, the Lock ends at its cap. */}
         {driving && lock && keyed && !pressEnded && stillAsk !== null && (

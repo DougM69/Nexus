@@ -131,8 +131,10 @@ pub struct QsoRecord {
     /// frequency, and writing a second field equal to the first is not extra information, it
     /// is a false claim of split operation that every logger the export reaches will believe.
     ///
-    /// ⚠️ Populated for TERRESTRIAL split only — see `Engine::log_frequencies`, which owns the
-    /// rule and the reason satellites are excluded.
+    /// Populated for a same-band split (`Engine::log_frequencies`) and for a satellite contact,
+    /// whose downlink it holds while FREQ holds the uplink (`Engine::stamp_satellite`). On a
+    /// cross-band record [`band`](Self::band) stays the RECEIVE leg; the ADIF writer sends BAND
+    /// from FREQ and BAND_RX from the band ([`cross_band_tx_band`]).
     pub freq_rx_mhz: Option<f64>,
     /// Mode / tier label ("TempoFast" | "TempoDeep" | "FT8" | "CW" | "SSB" | "FM" …). A phone
     /// contact's sideband is not a mode here: it is held as `SSB` with the sideband as its
@@ -421,7 +423,8 @@ pub fn fill_extra(r: &mut QsoRecord, name: &str, value: String) -> bool {
 }
 
 /// ⭐ **Which of the record's own-station fields Nexus filled in itself from Settings** at log
-/// time — `MY_GRIDSQUARE`, `MY_STATE` — as a comma-separated list of their ADIF names.
+/// time — `MY_GRIDSQUARE`, `MY_STATE`, and a station profile's county, zones and IOTA — as a
+/// comma-separated list of their ADIF names.
 ///
 /// It exists for the LoTW upload alone ([`without_self_filled`]). An operator who signs with a
 /// named TQSL Station Location has TQSL (`-a compliant`) check every `MY_*` field a record
@@ -436,10 +439,24 @@ pub fn fill_extra(r: &mut QsoRecord, name: &str, value: String) -> bool {
 /// list ([`edited`]): the operator has said what it is.
 pub const SELF_FILLED_FIELD: &str = "APP_NEXUS_SELF_FILLED";
 
+/// The program a contact came in from, when another program logged it into Nexus (the contact
+/// port, `tempo_app::log_intake`). Nexus's own bookkeeping: kept in the operator's own log and
+/// files, and withheld from everything Nexus sends off the machine ([`Audience::Outbound`]).
+pub const VIA_FIELD: &str = "APP_NEXUS_VIA";
+
 /// The fields Nexus fills in itself and marks ([`mark_self_filled`]): the only names in a
 /// [`SELF_FILLED_FIELD`] list the LoTW upload honours. The list rides files the operator imports,
 /// so a name outside these strips nothing.
-const SELF_FILLED_TAGS: [&str; 2] = ["MY_GRIDSQUARE", "MY_STATE"];
+/// The four after the state are a "My station" profile's location: TQSL checks them against a
+/// Station Location as it does the grid.
+const SELF_FILLED_TAGS: [&str; 6] = [
+    "MY_GRIDSQUARE",
+    "MY_STATE",
+    "MY_CNTY",
+    "MY_CQ_ZONE",
+    "MY_ITU_ZONE",
+    "MY_IOTA",
+];
 
 /// The fields [`SELF_FILLED_FIELD`] names on this record.
 pub fn self_filled(r: &QsoRecord) -> Vec<&str> {
@@ -510,12 +527,25 @@ pub fn settle_popup_my_grid(held: &mut QsoRecord, filled: &QsoRecord) {
 }
 
 /// The record as the LoTW upload sends it: without the own-station fields Nexus filled in itself
-/// ([`SELF_FILLED_FIELD`]), so TQSL signs it from the Station Location (or, in ADIF-location mode,
-/// from the live setting) exactly as it did before Nexus filled them.
+/// ([`SELF_FILLED_FIELD`]), so TQSL signs it from the named Station Location exactly as it did
+/// before Nexus filled them. Signing from the ADIF, see [`without_self_filled_grid`].
 pub fn without_self_filled(r: &QsoRecord) -> QsoRecord {
+    without_self_filled_of(r, &SELF_FILLED_TAGS)
+}
+
+/// The record as the LoTW upload sends it when TQSL signs from the location in the ADIF: only a
+/// grid Nexus filled is taken out (the upload stamps the contact's own grid where it stamps the
+/// live one), and every other own-station field Nexus filled (state, county, zones, IOTA) goes as
+/// stored on the contact, as one the operator typed would.
+pub fn without_self_filled_grid(r: &QsoRecord) -> QsoRecord {
+    without_self_filled_of(r, &["MY_GRIDSQUARE"])
+}
+
+/// `r` without those of `tags` Nexus filled itself, and without the [`SELF_FILLED_FIELD`] list.
+fn without_self_filled_of(r: &QsoRecord, tags: &[&str]) -> QsoRecord {
     let mut out = r.clone();
     for tag in self_filled(r) {
-        if !SELF_FILLED_TAGS.contains(&tag) {
+        if !tags.contains(&tag) {
             continue;
         }
         if tag == "MY_GRIDSQUARE" {
@@ -940,11 +970,15 @@ pub enum UploadDetail {
     /// Nickname is missing (two of the call's accounts cover the contact's date) or matches none
     /// of them. The fix is the nickname in Settings, spelled as eQSL's My Profile page spells it.
     QthNickname,
+    /// Not a failure (#163): a satellite contact the one-click LoTW fix corrected — its uplink
+    /// filled in — and has not sent yet. Owed to LoTW, so Upload to LoTW sends it; the Logbook
+    /// shows it as its own state, and "why isn't this confirmed?" says so, never "bounced".
+    Resend,
 }
 
 impl UploadDetail {
     /// Every class, for exhaustive walks (the round-trip and allow-list tests).
-    pub const ALL: [UploadDetail; 9] = [
+    pub const ALL: [UploadDetail; 10] = [
         UploadDetail::Credentials,
         UploadDetail::CallsignCertificate,
         UploadDetail::StationLocation,
@@ -954,6 +988,7 @@ impl UploadDetail {
         UploadDetail::OperatorDeclared,
         UploadDetail::AccountDates,
         UploadDetail::QthNickname,
+        UploadDetail::Resend,
     ];
 
     /// The token written to ADIF. Short and stable — the sentences may be re-worded, the
@@ -969,6 +1004,7 @@ impl UploadDetail {
             UploadDetail::OperatorDeclared => "declared",
             UploadDetail::AccountDates => "account-dates",
             UploadDetail::QthNickname => "qth-nickname",
+            UploadDetail::Resend => "resend",
         }
     }
 
@@ -1019,6 +1055,10 @@ impl UploadDetail {
                 "The QTH Nickname is missing or matches none of your eQSL accounts, so eQSL \
                  could not tell where this contact belongs. Enter it in Settings exactly as My \
                  Profile at eqsl.cc spells it, capitals included, then upload again."
+            }
+            UploadDetail::Resend => {
+                "Corrected for LoTW (its satellite uplink filled in) and not sent yet — Upload \
+                 to LoTW sends it."
             }
         }
     }
@@ -1456,6 +1496,14 @@ impl Logbook {
         for (i, r) in self.records.iter().enumerate() {
             held.entry(dedup_key(r)).or_insert(i);
         }
+        // …then under the other bands a row is known by ([`known_bands`], #163): the BAND of a
+        // row whose BAND_RX is parked, the transmit band of a mapped cross-band one. In a pass of
+        // their own, so a row's own key always wins over another row's twin.
+        for (i, r) in self.records.iter().enumerate() {
+            for k in twin_keys(r) {
+                held.entry(k).or_insert(i);
+            }
+        }
         let mut held_ids: std::collections::HashSet<RecordId> =
             self.records.iter().filter_map(|r| r.id).collect();
         let mut added = Vec::new();
@@ -1482,9 +1530,13 @@ impl Logbook {
                 k
             });
             let key = dedup_key(&rec);
+            let twins = twin_keys(&rec);
             let hit = legacy_twin
                 .and_then(|t| held.get(&t).copied())
-                .or_else(|| held.get(&key).copied());
+                .or_else(|| held.get(&key).copied())
+                // The incoming row by every other band it is known by too: the same contact
+                // whichever side carries the parked BAND_RX, or the mapped cross-band pair.
+                .or_else(|| twins.iter().find_map(|t| held.get(t).copied()));
             match hit {
                 Some(_) if !upgrade => skipped += 1,
                 Some(i) => {
@@ -1516,6 +1568,9 @@ impl Logbook {
                     held_ids.insert(id);
                     rec.id = Some(id);
                     prepare(&mut rec);
+                    for k in twins {
+                        held.entry(k).or_insert(self.records.len());
+                    }
                     held.insert(key, self.records.len());
                     added.push(rec.clone());
                     self.records.push(rec);
@@ -3165,9 +3220,12 @@ pub(crate) fn edited(old: &QsoRecord, mut rec: QsoRecord) -> QsoRecord {
     if grid_of(&rec.my_grid) != grid_of(&old.my_grid) {
         unmark_self_filled(&mut rec, "MY_GRIDSQUARE");
     }
-    let state_of = |r: &QsoRecord| extra_value(r, "MY_STATE").map(str::to_ascii_uppercase);
-    if state_of(&rec) != state_of(old) {
-        unmark_self_filled(&mut rec, "MY_STATE");
+    // …and the same for the state and a station profile's location, kept as written.
+    for tag in SELF_FILLED_TAGS.iter().filter(|t| **t != "MY_GRIDSQUARE") {
+        let of = |r: &QsoRecord| extra_value(r, tag).map(str::to_ascii_uppercase);
+        if of(&rec) != of(old) {
+            unmark_self_filled(&mut rec, tag);
+        }
     }
     // The same for a field a callbook lookup filled at log time ([`callbook::CALLBOOK_FILLED_FIELD`]),
     // and for an IOTA reference taken from a log-time offer ([`offer::OFFER_HELD_FIELD`]).
@@ -3184,14 +3242,18 @@ pub(crate) fn edited(old: &QsoRecord, mut rec: QsoRecord) -> QsoRecord {
         rec.extra.retain(|(k, _)| {
             !matches!(
                 k.as_str(),
-                "MY_SIG" | "MY_SIG_INFO" | "MY_SOTA_REF" | "MY_POTA_REF"
+                "MY_SIG" | "MY_SIG_INFO" | "MY_SOTA_REF" | "MY_POTA_REF" | "MY_WWFF_REF"
             )
         });
     }
     if (&rec.ota.their_program, &rec.ota.their_ref) != (&old.ota.their_program, &old.ota.their_ref)
     {
-        rec.extra
-            .retain(|(k, _)| !matches!(k.as_str(), "SIG" | "SIG_INFO" | "SOTA_REF" | "POTA_REF"));
+        rec.extra.retain(|(k, _)| {
+            !matches!(
+                k.as_str(),
+                "SIG" | "SIG_INFO" | "SOTA_REF" | "POTA_REF" | "WWFF_REF"
+            )
+        });
     }
     // The same, for a mode. A SUBMODE the reader does not promote rides in `extra` (fldigi's PSK31
     // under MODE=PSK, Log4OM's USB under SSB, a VARA variant under DYNAMIC) and describes the mode
@@ -3317,7 +3379,7 @@ const CARD_RCVD_DATE: &str = "QSLRDATE";
 /// and refuses a blank name rather than leaving `PROP_MODE=SAT` standing on its own.
 ///
 /// ⚠️ It does NOT vet the name against LoTW's accepted list — that table lives with the
-/// catalog that feeds it (`Engine::LOTW_SAT_NAMES`), and this crate has no business
+/// catalog that feeds it (`Engine::LOTW_ACCEPTED_SATS`), and this crate has no business
 /// holding a second copy of it. The caller gates the name; this stores what it is given.
 ///
 /// Returns false, leaving `rec` untouched, when the name is blank.
@@ -3348,6 +3410,8 @@ pub(crate) fn sat_tagged(rec: &mut QsoRecord, sat_name: Option<&str>) -> bool {
                 .is_some_and(|p| p.trim().eq_ignore_ascii_case("SAT"))
             {
                 rec.prop_mode = None;
+                // …and the bird's uplink goes with the bird (#163).
+                unsplit_satellite_legs(rec);
             }
         }
     }
@@ -3541,6 +3605,33 @@ pub fn adif_record(r: &QsoRecord) -> String {
     adif_record_for(r, Audience::Outbound)
 }
 
+/// #163: the BAND a record goes out under when it is a CROSS-BAND split — a satellite contact,
+/// whose uplink and downlink are on different bands — or `None` for every other record, which
+/// writes its own band as BAND as it always has.
+///
+/// ADIF pairs BAND with FREQ (the logging station's TRANSMIT frequency) and BAND_RX with FREQ_RX
+/// (its receive frequency); TQSL checks each pair, and LoTW matches a satellite contact on its
+/// uplink band. Inside Nexus the record's [`band`](QsoRecord::band) is the RECEIVE leg, the band
+/// awards, Needed, B4 and dupes count it on, and nothing there changes: the writer takes BAND
+/// from FREQ and writes the record's band as BAND_RX, and [`parse_adif`] maps BAND_RX back.
+///
+/// Only when that is provably what the record holds: a receive leg on the record's own band, and
+/// a transmit leg on another band of the table. A row an older build imported with the uplink as
+/// its band (BAND_RX parked in `extra`), a same-band split, an off-table uplink — `None`, written
+/// exactly as before.
+fn cross_band_tx_band(r: &QsoRecord) -> Option<&'static str> {
+    let rx = r.freq_rx_mhz.filter(|v| v.is_finite() && *v > 0.0)?;
+    if !(r.freq_mhz.is_finite() && r.freq_mhz > 0.0) || r.band.is_empty() {
+        return None;
+    }
+    let tx_band = query::ui_band_for_mhz(r.freq_mhz);
+    let rx_band = query::ui_band_for_mhz(rx);
+    (!tx_band.is_empty()
+        && !tx_band.eq_ignore_ascii_case(&r.band)
+        && rx_band.eq_ignore_ascii_case(&r.band))
+    .then_some(tx_band)
+}
+
 /// The shared body of the two public serializers. PRIVATE on purpose: a third public name
 /// taking the audience as an argument is a third thing for the next person to pick wrong.
 fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
@@ -3582,7 +3673,15 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
     // transverter shot, a satellite leg above the table) carries band = "", and
     // `<BAND:0>` with an empty value is exactly the malformed field LoTW/TQSL reject —
     // FREQ below still identifies the RF. Same absent-not-guessed rule as FREQ.
-    if !r.band.is_empty() {
+    //
+    // #163: A CROSS-BAND SPLIT — a satellite contact — goes out as TQSL and LoTW read one: BAND
+    // the band of FREQ (the uplink, what we transmitted on) and BAND_RX the record's own band (the
+    // downlink, which is the band Nexus counts the contact on). See [`cross_band_tx_band`].
+    let tx_band = cross_band_tx_band(r);
+    if let Some(tx) = tx_band {
+        out.push_str(&field("BAND", tx));
+        out.push_str(&field("BAND_RX", &r.band));
+    } else if !r.band.is_empty() {
         out.push_str(&field("BAND", &r.band));
     }
     // FREQ only when we actually have one. Imported QSOs (QRZ/LoTW give BAND, not frequency)
@@ -3621,7 +3720,7 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
     // re-exported as `<MODE:0>`: a present-but-zero-length ENUMERATION field, which is
     // exactly the malformed shape the two guards above exist to avoid. Omitting it is both
     // honest and safer; a reader that needs a mode can see there is none.
-    match adif_submode(&r.mode) {
+    match adif_submode(&r.mode).filter(|_| freedv_parent(r).is_none()) {
         Some((parent, sub)) => {
             out.push_str(&field("MODE", parent));
             out.push_str(&field("SUBMODE", sub));
@@ -3774,20 +3873,11 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
     out.push_str(&upload_field("APP_TEMPO_UL_QRZ", &r.upload.qrz));
     out.push_str(&upload_field("APP_TEMPO_UL_CLUBLOG", &r.upload.clublog));
     // Parks/Summits On The Air — standard ADIF so pota.app / the SOTA DB accept the
-    // export. POTA (and WWFF) → SIG/SIG_INFO; SOTA → its dedicated *_SOTA_REF fields.
+    // export. POTA (and WWFF) → SIG/SIG_INFO, each beside its dedicated field (*_POTA_REF,
+    // *_WWFF_REF); SOTA → its dedicated *_SOTA_REF fields.
+    out.push_str(&ota_fields(OTA_MY_TAGS, &r.ota.my_program, &r.ota.my_ref));
     out.push_str(&ota_fields(
-        "MY_SIG",
-        "MY_SIG_INFO",
-        "MY_SOTA_REF",
-        "MY_POTA_REF",
-        &r.ota.my_program,
-        &r.ota.my_ref,
-    ));
-    out.push_str(&ota_fields(
-        "SIG",
-        "SIG_INFO",
-        "SOTA_REF",
-        "POTA_REF",
+        OTA_THEIR_TAGS,
         &r.ota.their_program,
         &r.ota.their_ref,
     ));
@@ -3827,16 +3917,22 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
         if sideband_written && k == "SUBMODE" {
             continue;
         }
+        // Written beside BAND above; a passthrough copy would be a second one.
+        if tx_band.is_some() && k == "BAND_RX" {
+            continue;
+        }
         // Which own-station fields Nexus filled itself is for its own LoTW upload, never a
         // service's business ([`SELF_FILLED_FIELD`]); nor is which fields a callbook filled
         // ([`callbook::CALLBOOK_FILLED_FIELD`], [`callbook::MAP_ONLY_GRID_FIELD`]).
         // Nor the path Nexus graded for a new contact ([`path_stamp`]): the model's opinion,
-        // not the operator's antenna data, and no service's business.
+        // not the operator's antenna data, and no service's business. Nor which program a
+        // contact came in from ([`VIA_FIELD`]): Nexus's own bookkeeping.
         if audience == Audience::Outbound
             && (k == SELF_FILLED_FIELD
                 || k == callbook::CALLBOOK_FILLED_FIELD
                 || k == offer::OFFER_HELD_FIELD
                 || k == callbook::MAP_ONLY_GRID_FIELD
+                || k == VIA_FIELD
                 || path_stamp::is_path_field(k))
         {
             continue;
@@ -3857,6 +3953,13 @@ fn adif_record_for(r: &QsoRecord, audience: Audience) -> String {
         // A card still to go and a sent mark cannot both be written: ADIF holds one `QSL_SENT`,
         // and a sent mark is the later truth ([`qsl_card_queued`]).
         if r.qsl_sent.sent && k == QSL_QUEUE_FIELD {
+            continue;
+        }
+        // Nor a `WWFF_REF` / `MY_WWFF_REF` a WWFF side already wrote ([`ota_fields`]): a row
+        // imported before Nexus knew the field holds the logger's copy here beside its side, and
+        // one that disagrees with the side ([`take_ota_side`] keeps it). The file carries one,
+        // the side's; the other stays in the store, as a contest tag the exchange wrote does.
+        if wwff_side_writes(r, k) {
             continue;
         }
         out.push_str(&field(k, v));
@@ -4037,9 +4140,77 @@ pub fn adif_record_with_station(r: &QsoRecord, station_call: &str, my_grid: &str
     }
 }
 
+/// Whether [`ota_fields`] writes `tag` (`WWFF_REF` or `MY_WWFF_REF`) for its side itself: the
+/// side is WWFF and names a reference.
+fn wwff_side_writes(r: &QsoRecord, tag: &str) -> bool {
+    let (program, reference) = match tag {
+        "WWFF_REF" => (&r.ota.their_program, &r.ota.their_ref),
+        "MY_WWFF_REF" => (&r.ota.my_program, &r.ota.my_ref),
+        _ => return false,
+    };
+    program
+        .as_deref()
+        .is_some_and(|p| p.eq_ignore_ascii_case("WWFF"))
+        && reference.as_deref().is_some_and(|r| !r.is_empty())
+}
+
+/// A `WWFF_REF` / `MY_WWFF_REF` in the passthrough that only repeats its WWFF side's reference
+/// is taken out: a row imported before Nexus knew the field kept the logger's copy there, and the
+/// store hands it back as it was. A value that differs from the side stays (see
+/// [`take_ota_side`]); the writer skips it either way ([`wwff_side_writes`]).
+pub(crate) fn heal_wwff_twin(r: &mut QsoRecord) {
+    let their = r
+        .ota
+        .their_ref
+        .clone()
+        .filter(|_| wwff_side_writes(r, "WWFF_REF"));
+    let mine = r
+        .ota
+        .my_ref
+        .clone()
+        .filter(|_| wwff_side_writes(r, "MY_WWFF_REF"));
+    let twin = |side: &Option<String>, v: &str| {
+        side.as_deref()
+            .is_some_and(|s| s.trim().eq_ignore_ascii_case(v.trim()))
+    };
+    r.extra.retain(|(k, v)| match k.as_str() {
+        "WWFF_REF" => !twin(&their, v),
+        "MY_WWFF_REF" => !twin(&mine, v),
+        _ => true,
+    });
+}
+
+/// One OTA side's ADIF tags: `SIG`, `SIG_INFO`, the dedicated `SOTA_REF`, `POTA_REF` and
+/// `WWFF_REF`, or the `MY_` five.
+pub(crate) struct OtaTags {
+    pub sig: &'static str,
+    pub sig_info: &'static str,
+    pub sota: &'static str,
+    pub pota: &'static str,
+    pub wwff: &'static str,
+}
+
+/// The operator's side.
+pub(crate) const OTA_MY_TAGS: OtaTags = OtaTags {
+    sig: "MY_SIG",
+    sig_info: "MY_SIG_INFO",
+    sota: "MY_SOTA_REF",
+    pota: "MY_POTA_REF",
+    wwff: "MY_WWFF_REF",
+};
+
+/// The worked station's side.
+pub(crate) const OTA_THEIR_TAGS: OtaTags = OtaTags {
+    sig: "SIG",
+    sig_info: "SIG_INFO",
+    sota: "SOTA_REF",
+    pota: "POTA_REF",
+    wwff: "WWFF_REF",
+};
+
 /// Emit the ADIF fields for one OTA side. SOTA uses its dedicated `*_SOTA_REF` field;
-/// every other program (POTA, WWFF) uses the generic `SIG`/`SIG_INFO` pair. Empty
-/// when not activating/hunting that side.
+/// every other program (POTA, WWFF) uses the generic `SIG`/`SIG_INFO` pair, POTA and WWFF
+/// each with their dedicated field beside it. Empty when not activating/hunting that side.
 /// The ADIF `(MODE, SUBMODE)` pair for a mode whose OWN spelling is not in the ADIF Mode
 /// enumeration, or `None` for anything already in it (FT8, CW, SSB, RTTY, ...), which is
 /// emitted verbatim.
@@ -4283,11 +4454,25 @@ fn psk_parent(r: &QsoRecord) -> Option<&'static str> {
 /// passthrough SUBMODE asks for, or the stored mode itself — or `None` when the row has no mode
 /// (an empty MODE is omitted, never written as `<MODE:0>`).
 pub(crate) fn adif_mode(r: &QsoRecord) -> Option<&str> {
-    match adif_submode(&r.mode) {
+    match adif_submode(&r.mode).filter(|_| freedv_parent(r).is_none()) {
         Some((parent, _)) => Some(parent),
         None if r.mode.trim().is_empty() => None,
-        None => Some(psk_parent(r).unwrap_or(&r.mode)),
+        None => Some(
+            psk_parent(r)
+                .or_else(|| freedv_parent(r))
+                .unwrap_or(&r.mode),
+        ),
     }
+}
+
+/// `DIGITALVOICE` for a FreeDV row read as `MODE=DIGITALVOICE SUBMODE=FREEDV` from another
+/// logger: stored as FREEDV with that SUBMODE kept, and written back under its parent as it came,
+/// the SUBMODE among the passthrough fields where it always was. A FreeDV row of Nexus's own (no
+/// SUBMODE kept) takes the ordinary pair and its APP_TEMPO_MODE.
+fn freedv_parent(r: &QsoRecord) -> Option<&'static str> {
+    let (_, sub) = r.extra.iter().find(|(k, _)| k == "SUBMODE")?;
+    (r.mode.trim().eq_ignore_ascii_case("FREEDV") && sub.trim().eq_ignore_ascii_case("FREEDV"))
+        .then_some("DIGITALVOICE")
 }
 
 /// The sideband of an SSB contact — the `USB` or `LSB` the log holds as its SUBMODE
@@ -4327,14 +4512,14 @@ fn submode_for_new_mode(rec: &mut QsoRecord) {
     }
 }
 
-fn ota_fields(
-    sig: &str,
-    sig_info: &str,
-    sota: &str,
-    pota: &str,
-    program: &Option<String>,
-    reference: &Option<String>,
-) -> String {
+fn ota_fields(tags: OtaTags, program: &Option<String>, reference: &Option<String>) -> String {
+    let OtaTags {
+        sig,
+        sig_info,
+        sota,
+        pota,
+        wwff,
+    } = tags;
     match (program.as_deref(), reference.as_deref()) {
         (Some(p), Some(r)) if p.eq_ignore_ascii_case("SOTA") => field(sota, r),
         // POTA emits BOTH conventions. SIG/SIG_INFO is what pota.app's own exports use and
@@ -4361,6 +4546,11 @@ fn ota_fields(
                 .find(|s| !s.is_empty())
                 .unwrap_or("");
             field(sig, p) + &field(sig_info, first) + &field(pota, r)
+        }
+        // WWFF the same way: `SIG`/`SIG_INFO`, which every logger reads, and the dedicated
+        // `WWFF_REF` ADIF has carried since 3.1.3, which a WWFF-aware logger keys on.
+        (Some(p), Some(r)) if p.eq_ignore_ascii_case("WWFF") => {
+            field(sig, p) + &field(sig_info, r) + &field(wwff, r)
         }
         (Some(p), Some(r)) => field(sig, p) + &field(sig_info, r),
         _ => String::new(),
@@ -4391,10 +4581,28 @@ type DedupKey = (String, String, String, u64);
 fn dedup_key(r: &QsoRecord) -> DedupKey {
     (
         r.call.to_ascii_uppercase(),
-        r.band.to_ascii_lowercase(),
+        // The band the contact is COUNTED on ([`counted_band`]): a satellite contact an older
+        // build imported (uplink as its band, BAND_RX parked) and the same row read now (mapped
+        // onto its downlink) are one contact, so a re-import or a restore finds it.
+        counted_band(r).to_ascii_lowercase(),
         dedup_mode(&r.mode),
         r.when_unix,
     )
+}
+
+/// [`dedup_key`] under each band in [`known_bands`] other than the one it is counted on — the
+/// other keys a row is found by, and looks for its twin by.
+fn twin_keys(r: &QsoRecord) -> Vec<DedupKey> {
+    let own = dedup_key(r);
+    known_bands(r)
+        .into_iter()
+        .filter(|b| *b != own.1)
+        .map(|b| {
+            let mut k = own.clone();
+            k.1 = b;
+            k
+        })
+        .collect()
 }
 
 /// Canonical mode SPELLING for [`dedup_key`] — the sideband names USB and LSB are
@@ -4984,7 +5192,12 @@ fn take_upload(f: &mut std::collections::HashMap<String, String>, k: &str) -> Op
 /// Consume one OTA side (my_* or their_*): a SOTA ref (dedicated field) takes
 /// precedence; else, on a POTA side, the ADIF 3.1.4 dedicated POTA_REF when SIG_INFO
 /// agrees with it; else a SIG=POTA/WWFF pair; else a lone POTA_REF (what pota.app's
-/// exports carry — may hold a comma list, verbatim).
+/// exports carry — may hold a comma list, verbatim); else a lone WWFF_REF.
+///
+/// On a WWFF side a `WWFF_REF` that agrees with it is consumed ([`ota_fields`] writes it back);
+/// one that disagrees, and one beside any other programme, is left in the map like the other
+/// programmes' tags below (a parked one beside a WWFF side is kept, never written: see
+/// [`wwff_side_writes`]).
 ///
 /// ⛔ **A TWO-FER'S LIST IS IN `POTA_REF`, SO THAT IS WHERE IT IS READ** (the read half of
 /// operator-review finding A2). [`ota_fields`] names ONE park in `SIG_INFO` and keeps the whole
@@ -5002,14 +5215,19 @@ fn take_upload(f: &mut std::collections::HashMap<String, String>, k: &str) -> Op
 /// [`ota_fields`] writes them back.
 fn take_ota_side(
     f: &mut std::collections::HashMap<String, String>,
-    sig: &str,
-    sig_info: &str,
-    sota: &str,
-    pota: &str,
+    tags: OtaTags,
 ) -> (Option<String>, Option<String>) {
+    let OtaTags {
+        sig,
+        sig_info,
+        sota,
+        pota,
+        wwff,
+    } = tags;
     let sota_v = f.remove(sota).filter(|s| !s.is_empty());
     let (sig_v, sig_info_v) = (f.remove(sig), f.remove(sig_info));
     let pota_v = f.remove(pota).filter(|s| !s.is_empty());
+    let wwff_v = f.remove(wwff).filter(|s| !s.trim().is_empty());
     let parks = |s: &str| -> Vec<String> {
         s.split([',', ';'])
             .map(|p| p.trim().to_ascii_uppercase())
@@ -5036,8 +5254,10 @@ fn take_ota_side(
         park(sig, sig_v);
         park(sig_info, sig_info_v);
         park(pota, pota_v);
+        park(wwff, wwff_v);
         (Some("SOTA".to_string()), Some(r.to_ascii_uppercase()))
     } else if list_wins {
+        park(wwff, wwff_v);
         (
             Some("POTA".to_string()),
             pota_v.map(|r| r.to_ascii_uppercase()),
@@ -5046,9 +5266,26 @@ fn take_ota_side(
         if !pota_side {
             park(pota, pota_v);
         }
+        // On a WWFF side the dedicated field is the side's own and is consumed when it agrees.
+        // `SIG_INFO` wins a disagreement, as it does over `POTA_REF` on a POTA side, and the
+        // other value is KEPT, parked, never dropped: the writer skips a parked one beside a WWFF
+        // side ([`wwff_side_writes`]), so the file still carries one. Beside any other programme
+        // it rides along.
+        let agrees = wwff_v
+            .as_deref()
+            .is_some_and(|w| w.trim().eq_ignore_ascii_case(r.trim()));
+        if !(p.trim().eq_ignore_ascii_case("WWFF") && agrees) {
+            park(wwff, wwff_v);
+        }
         (Some(p.to_ascii_uppercase()), Some(r.to_ascii_uppercase()))
     } else if let Some(r) = pota_v {
+        park(wwff, wwff_v);
         (Some("POTA".to_string()), Some(r.to_ascii_uppercase()))
+    } else if let Some(r) = wwff_v {
+        (
+            Some("WWFF".to_string()),
+            Some(r.trim().to_ascii_uppercase()),
+        )
     } else {
         (None, None)
     }
@@ -5157,9 +5394,8 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
         qrz: take_upload(f, "APP_TEMPO_UL_QRZ"),
         clublog: take_upload(f, "APP_TEMPO_UL_CLUBLOG"),
     };
-    let (my_program, my_ref) =
-        take_ota_side(f, "MY_SIG", "MY_SIG_INFO", "MY_SOTA_REF", "MY_POTA_REF");
-    let (their_program, their_ref) = take_ota_side(f, "SIG", "SIG_INFO", "SOTA_REF", "POTA_REF");
+    let (my_program, my_ref) = take_ota_side(f, OTA_MY_TAGS);
+    let (their_program, their_ref) = take_ota_side(f, OTA_THEIR_TAGS);
     let ota = Ota {
         my_program,
         my_ref,
@@ -5197,6 +5433,16 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
     let app_mode = f.remove("APP_TEMPO_MODE");
     let submode = f.remove("SUBMODE");
     let mode_field = f.remove("MODE");
+    // FreeDV as other loggers write it: `MODE=DIGITALVOICE SUBMODE=FREEDV`, with no
+    // APP_TEMPO_MODE of ours. Stored as FREEDV, the mode it is, with the SUBMODE kept so the
+    // row is written back exactly as it came ([`freedv_parent`]) — fldigi's PSK precedent.
+    let freedv_import = app_mode.is_none()
+        && mode_field
+            .as_deref()
+            .is_some_and(|m| m.trim().eq_ignore_ascii_case("DIGITALVOICE"))
+        && submode
+            .as_deref()
+            .is_some_and(|s| s.trim().eq_ignore_ascii_case("FREEDV"));
     let mode = app_mode
         .map(|m| m.trim().to_string())
         .filter(|m| !m.is_empty())
@@ -5217,6 +5463,7 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
                 .and_then(psk_submode)
                 .map(str::to_string)
         })
+        .or_else(|| freedv_import.then(|| "FREEDV".to_string()))
         .or_else(|| mode_field.clone())
         .unwrap_or_default();
     // #68 (rogerloxton): "the writer re-derives them" is only true for a submode the
@@ -5227,8 +5474,9 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
     // resolved mode; a foreign one (Log4OM's SSB+USB, an imported VarAC row whose MODE
     // we keep as DYNAMIC) is untouched and still round-trips verbatim.
     if let Some(sub) = submode.filter(|s| {
-        promoted_submode(s).is_none()
-            && !adif_submode(&mode).is_some_and(|(_, w)| w.eq_ignore_ascii_case(s.trim()))
+        freedv_import
+            || (promoted_submode(s).is_none()
+                && !adif_submode(&mode).is_some_and(|(_, w)| w.eq_ignore_ascii_case(s.trim())))
     }) {
         f.insert("SUBMODE".to_string(), sub);
     }
@@ -5246,7 +5494,7 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
             .remove("STATE")
             .map(|s| s.trim().to_ascii_uppercase())
             .filter(|s| !s.is_empty()),
-        band: f.remove("BAND").unwrap_or_default(),
+        band: receive_band(f),
         freq_mhz: f.remove("FREQ").and_then(|s| s.parse().ok()).unwrap_or(0.0),
         // Absent (every log written before this existed, and every simplex contact) ⇒ `None`,
         // never a zero: a 0.0 here would read as "worked split on 0 MHz". A zero or negative
@@ -5354,6 +5602,94 @@ fn record_from(mut f: std::collections::HashMap<String, String>) -> Option<QsoRe
     // sideband in MODE included ([`canonical`]).
     canonical::contact(&mut rec);
     Some(rec)
+}
+
+/// #163: the band a contact is COUNTED on — its receive leg. The record's band, except on a row
+/// an older build imported from another logger before the reader mapped BAND_RX: that one holds
+/// the uplink as its band with BAND_RX parked in the passthrough, and the parked BAND_RX is the
+/// band it is the same contact on. The one rule dedup, reconcile and Log Check share, so a legacy
+/// row and the same row read now are never two contacts.
+pub fn counted_band(r: &QsoRecord) -> &str {
+    r.extra
+        .iter()
+        .find(|(k, v)| k == "BAND_RX" && !v.trim().is_empty())
+        .map_or(r.band.as_str(), |(_, v)| v.trim())
+}
+
+/// #163: every band a contact is the same contact on, lower-cased, the band it is counted on
+/// ([`counted_band`]) first: also its own BAND when a parked BAND_RX makes the two differ, and the
+/// transmit band of a cross-band record ([`cross_band_tx_band`]: a satellite contact, or another
+/// logger's TQSL-shaped row mapped onto its downlink) — the band a source that writes BAND alone
+/// gives it. Dedup and reconcile both find a contact by any of these, in either direction, as they
+/// found it by its one BAND before BAND_RX was read.
+pub fn known_bands(r: &QsoRecord) -> Vec<String> {
+    let mut bands = vec![counted_band(r).to_ascii_lowercase()];
+    let mut push = |b: String| {
+        if !bands.contains(&b) {
+            bands.push(b);
+        }
+    };
+    push(r.band.trim().to_ascii_lowercase());
+    if let Some(tx) = cross_band_tx_band(r) {
+        push(tx.to_ascii_lowercase());
+    }
+    bands
+}
+
+/// #163: undo a cross-band leg split on a contact that is no longer a satellite one — FREQ back
+/// to the downlink it was heard on (FREQ_RX), FREQ_RX gone — so it does not go out as a cross-band
+/// contact on an uplink the operator never used.
+///
+/// What it does and does not reach, exactly:
+/// - A CROSS-BAND split in this build's shape (the receive leg on the record's band, the transmit
+///   leg on another) is undone. That is the stamp's own split, and ALSO a satellite row this build
+///   imported from another logger (mapped onto its downlink), which on the record cannot be told
+///   from it: that logger's real uplink is dropped, and a re-import does not bring it back. That
+///   is the intended behaviour (operator decision, 2026-11-05): a contact that is no longer a
+///   satellite one has only the frequency it was heard on.
+/// - A row an older build imported (uplink as its band, BAND_RX parked) keeps its legs.
+/// - A SAME-BAND split is left as it is, the stamp's included (a U/U channel's made-up uplink
+///   stays in FREQ); the band does not move.
+pub fn unsplit_satellite_legs(rec: &mut QsoRecord) {
+    if cross_band_tx_band(rec).is_none() || rec.extra.iter().any(|(k, _)| k == "BAND_RX") {
+        return;
+    }
+    if let Some(rx) = rec.freq_rx_mhz.take() {
+        rec.freq_mhz = rx;
+    }
+}
+
+/// #163: the band a parsed contact is counted on — the RECEIVE leg. BAND as before, except for
+/// a cross-band split written as TQSL writes one (BAND/FREQ the uplink, BAND_RX/FREQ_RX the
+/// downlink): then BAND_RX, consumed, which is how Nexus holds its own satellite contacts and the
+/// exact inverse of the writer ([`cross_band_tx_band`]). Mapped only when each band is the band
+/// of its own frequency, so the writer rebuilds BAND from FREQ and the record goes back out as it
+/// came; otherwise BAND_RX stays in the passthrough, as it always has. Reads `f` before the
+/// fields are consumed.
+fn receive_band(f: &mut std::collections::HashMap<String, String>) -> String {
+    let band = f.remove("BAND").unwrap_or_default();
+    let mhz = |k: &str| {
+        f.get(k)
+            .and_then(|s| s.trim().parse::<f64>().ok())
+            .filter(|v| v.is_finite() && *v > 0.0)
+    };
+    let of = |v: Option<f64>| v.map(query::ui_band_for_mhz).unwrap_or("");
+    let (tx, rx) = (of(mhz("FREQ")), of(mhz("FREQ_RX")));
+    let band_rx = f
+        .get("BAND_RX")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    let mapped = !band_rx.is_empty()
+        && !band_rx.eq_ignore_ascii_case(band.trim())
+        && !tx.is_empty()
+        && tx.eq_ignore_ascii_case(band.trim())
+        && rx.eq_ignore_ascii_case(&band_rx);
+    if mapped {
+        f.remove("BAND_RX");
+        band_rx
+    } else {
+        band
+    }
 }
 
 /// Parse an ADIF credit list (`CREDIT_GRANTED`/`CREDIT_SUBMITTED`): comma-separated
@@ -5539,6 +5875,29 @@ impl LogAppendReceipt {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod via_field_tests {
+    use super::*;
+
+    /// ⛔ Which program a contact came in from (`APP_NEXUS_VIA`) is Nexus's own bookkeeping: it is
+    /// kept in the operator's own log and files, and goes to no service. CONTROL: the rest of the
+    /// record goes as it did.
+    #[test]
+    fn the_via_mark_stays_in_the_own_log_and_goes_to_no_service() {
+        let mut r = parse_adif(
+            "<CALL:5>W1ABC<QSO_DATE:8>20261014<TIME_ON:4>0102<BAND:3>20m<MODE:2>CW\
+             <APP_NEXUS_VIA:6>WSJT-X<EOR>",
+        )
+        .pop()
+        .unwrap();
+        r.id = None;
+        assert!(adif_record_own_log(&r).contains("<APP_NEXUS_VIA:6>WSJT-X"));
+        let out = adif_record(&r);
+        assert!(!out.contains("APP_NEXUS_VIA"), "{out}");
+        assert!(out.contains("<CALL:5>W1ABC"), "CONTROL: {out}");
     }
 }
 
@@ -6823,6 +7182,60 @@ mod tests {
         }
     }
 
+    /// ⭐ A FREEDV CONTACT ANOTHER LOGGER WROTE IS STORED AS FREEDV, AND WRITTEN BACK AS IT CAME.
+    /// The ADIF form is `<MODE:12>DIGITALVOICE <SUBMODE:6>FREEDV` (ADIF 3.1.4+). The reader kept
+    /// only the DIGITALVOICE, so a FreeDV station on the Needed board could never be cleared by a
+    /// FreeDV contact imported from another logger. Stored as FREEDV now (fldigi's PSK
+    /// precedent), the row leaves in exactly the bytes it left in while it was stored as
+    /// DIGITALVOICE: the same MODE and SUBMODE once each, and no APP_TEMPO_MODE it never had.
+    #[test]
+    fn an_imported_digitalvoice_freedv_contact_is_freedv_and_written_back_as_it_came() {
+        for (mode, sub) in [("DIGITALVOICE", "FREEDV"), ("digitalvoice", "FreeDV")] {
+            let src = format!(
+                "<CALL:5>W5FDV<QSO_DATE:8>20261014<TIME_ON:6>010203<BAND:3>20m\
+                 <MODE:{}>{mode}<SUBMODE:{}>{sub}<EOR>",
+                mode.len(),
+                sub.len()
+            );
+            let got = parse_adif(&(adif_header() + &src));
+            assert_eq!(got.len(), 1, "{src}");
+            assert_eq!(got[0].mode, "FREEDV", "stored as FreeDV: {src}");
+            // What the same row wrote while it was stored under its parent.
+            let mut before = got[0].clone();
+            before.mode = mode.to_string();
+            for (out, was) in [
+                (adif_record(&got[0]), adif_record(&before)),
+                (adif_record_own_log(&got[0]), adif_record_own_log(&before)),
+            ] {
+                // Byte-identical for the registered spelling. A lower-case source's MODE leaves in
+                // the registered spelling, as fldigi's lower-case `psk` does (`psk_parent`); every
+                // other byte is the same.
+                if mode == "DIGITALVOICE" {
+                    assert_eq!(out, was, "byte-identical to the DIGITALVOICE row");
+                } else {
+                    assert_eq!(out, was.replace(mode, "DIGITALVOICE"), "only MODE's case");
+                }
+                assert_eq!(out.matches("<MODE:").count(), 1, "{out}");
+                assert_eq!(out.matches("<SUBMODE:").count(), 1, "{out}");
+                assert!(!out.contains("APP_TEMPO_MODE"), "{out}");
+                let back = parse_adif(&(adif_header() + &out));
+                assert_eq!(back[0].mode, "FREEDV", "{out}");
+                assert_eq!(adif_record_own_log(&back[0]), out_own(&got[0]));
+            }
+        }
+        // Another DIGITALVOICE submode is not FreeDV, and stays as it was.
+        let dmr = parse_adif(
+            &(adif_header()
+                + "<CALL:5>W1DMR<QSO_DATE:8>20261014<TIME_ON:6>010203<BAND:2>2m\
+                   <MODE:12>DIGITALVOICE<SUBMODE:3>DMR<EOR>"),
+        );
+        assert_eq!(dmr[0].mode, "DIGITALVOICE");
+    }
+
+    fn out_own(r: &QsoRecord) -> String {
+        adif_record_own_log(r)
+    }
+
     /// ⭐ THE WSJT-X FAMILY ROUND-TRIPS, AND THE EXPORT IS THE HALF THAT WAS BROKEN.
     ///
     /// `promoted_submode` has listed FT4, Q65, FST4 and FST4W since it was written, so Nexus
@@ -7068,6 +7481,131 @@ mod tests {
             assert_eq!(again.ota, r.ota, "{out}");
             assert_eq!(again.extra, r.extra, "{out}");
         }
+    }
+
+    /// ⭐ WWFF GOES OUT IN ITS DEDICATED FIELD AS WELL, AND COMES IN FROM IT. ADIF (3.1.3 on, and
+    /// 3.1.8, the version this writer declares) has `WWFF_REF`/`MY_WWFF_REF`; a WWFF side is
+    /// written as `SIG`=WWFF/`SIG_INFO` (what every logger reads) AND the dedicated field, the
+    /// way a POTA side writes `POTA_REF` beside its pair. Read back, a lone `WWFF_REF` is the
+    /// side's WWFF reference, and one agreeing with `SIG_INFO` is consumed rather than parked, so
+    /// it is written once. One beside another programme's side (a POTA park that is also a WWFF
+    /// area) still rides in `extra`.
+    #[test]
+    fn wwff_is_written_to_and_read_from_its_dedicated_field() {
+        let mut r = rec("DL0XYZ", "20m", 1_790_000_000);
+        r.ota.their_program = Some("WWFF".into());
+        r.ota.their_ref = Some("DLFF-0001".into());
+        r.ota.my_program = Some("WWFF".into());
+        r.ota.my_ref = Some("KFF-1234".into());
+        let out = adif_record(&r);
+        for want in [
+            "<SIG:4>WWFF<SIG_INFO:9>DLFF-0001<WWFF_REF:9>DLFF-0001",
+            "<MY_SIG:4>WWFF<MY_SIG_INFO:8>KFF-1234<MY_WWFF_REF:8>KFF-1234",
+        ] {
+            assert!(out.contains(want), "{want} missing: {out}");
+        }
+        let back = &parse_adif(&out)[0];
+        assert_eq!(back.ota, r.ota, "{out}");
+        assert!(back.extra.is_empty(), "{:?}", back.extra);
+        assert_eq!(adif_record(back).matches("<WWFF_REF:").count(), 1);
+
+        // A file with the dedicated fields alone (another logger's, or a WWFF log search export).
+        let lone = "<CALL:6>DL0XYZ<QSO_DATE:8>20260909<TIME_ON:6>120000<BAND:3>20m<MODE:3>SSB\
+                    <WWFF_REF:9>dlff-0001<MY_WWFF_REF:8>KFF-1234<EOR>\n";
+        let rec = &parse_adif(lone)[0];
+        assert_eq!(
+            (
+                rec.ota.their_program.as_deref(),
+                rec.ota.their_ref.as_deref()
+            ),
+            (Some("WWFF"), Some("DLFF-0001"))
+        );
+        assert_eq!(
+            (rec.ota.my_program.as_deref(), rec.ota.my_ref.as_deref()),
+            (Some("WWFF"), Some("KFF-1234"))
+        );
+        assert!(rec.extra.is_empty(), "{:?}", rec.extra);
+
+        // CONTROL: beside a POTA park the WWFF area is not the side; it rides along, once.
+        let both = "<CALL:5>K1ABC<QSO_DATE:8>20260909<TIME_ON:6>120000<BAND:3>20m<MODE:3>SSB\
+                    <SIG:4>POTA<SIG_INFO:7>US-1234<WWFF_REF:8>KFF-1234<EOR>\n";
+        let rec = &parse_adif(both)[0];
+        assert_eq!(rec.ota.their_program.as_deref(), Some("POTA"));
+        assert_eq!(rec.ota.their_ref.as_deref(), Some("US-1234"));
+        assert_eq!(
+            rec.extra,
+            vec![("WWFF_REF".to_string(), "KFF-1234".to_string())]
+        );
+        assert_eq!(adif_record(rec).matches("<WWFF_REF:").count(), 1);
+    }
+
+    /// ⭐ A ROW IMPORTED BEFORE NEXUS KNEW `WWFF_REF` IS WRITTEN WITH ONE. Such an import stored the
+    /// side as WWFF and parked the logger's own `WWFF_REF` in `extra` beside it, and the store keeps
+    /// that row as it was. The side writes its own `WWFF_REF` now, so the parked copy is skipped:
+    /// the same value would be a duplicate, and a different one a second reference in the file. As
+    /// with a contest tag the exchange already wrote, the side's is the one written and the other
+    /// stays in the store, where the contact card shows it. The `MY_` side the same way. Beside a
+    /// POTA side the parked `WWFF_REF` is the only one, and is written (the control).
+    #[test]
+    fn a_parked_wwff_ref_beside_a_wwff_side_is_not_written_twice() {
+        let mut r = rec("DL0XYZ", "20m", 1_790_000_000);
+        r.ota.their_program = Some("WWFF".into());
+        r.ota.their_ref = Some("DLFF-0001".into());
+        r.ota.my_program = Some("WWFF".into());
+        r.ota.my_ref = Some("KFF-1234".into());
+        r.extra = vec![
+            ("MY_WWFF_REF".into(), "KFF-1234".into()),
+            ("WWFF_REF".into(), "DLFF-0001".into()),
+        ];
+        let out = adif_record(&r);
+        assert_eq!(out.matches("<WWFF_REF:").count(), 1, "{out}");
+        assert_eq!(out.matches("<MY_WWFF_REF:").count(), 1, "{out}");
+        // A parked value that disagrees with the side is not written either: the side's is.
+        r.extra = vec![("WWFF_REF".into(), "DLFF-0002".into())];
+        let out = adif_record(&r);
+        assert_eq!(out.matches("<WWFF_REF:").count(), 1, "{out}");
+        assert!(out.contains("<WWFF_REF:9>DLFF-0001"), "{out}");
+        // CONTROL: beside a POTA side it is the only WWFF_REF, and goes out.
+        r.ota.their_program = Some("POTA".into());
+        r.ota.their_ref = Some("US-1234".into());
+        assert!(adif_record(&r).contains("<WWFF_REF:9>DLFF-0002"));
+    }
+
+    /// A `WWFF_REF` that disagrees with the `SIG_INFO` of a WWFF side is KEPT, in `extra`, not
+    /// dropped: `SIG_INFO` names the side (as it wins over `POTA_REF` on a POTA side), and the
+    /// other value stays on the contact for the operator to see. It is written once, the side's.
+    #[test]
+    fn a_disagreeing_wwff_ref_on_a_wwff_side_is_kept_not_dropped() {
+        let text = "<CALL:6>DL0XYZ<QSO_DATE:8>20260909<TIME_ON:6>120000<BAND:3>20m<MODE:3>SSB\
+                    <SIG:4>WWFF<SIG_INFO:9>DLFF-0001<WWFF_REF:9>DLFF-0002<EOR>\n";
+        let r = &parse_adif(text)[0];
+        assert_eq!(r.ota.their_ref.as_deref(), Some("DLFF-0001"));
+        assert_eq!(
+            r.extra,
+            vec![("WWFF_REF".to_string(), "DLFF-0002".to_string())]
+        );
+        let out = adif_record(r);
+        assert_eq!(out.matches("<WWFF_REF:").count(), 1, "{out}");
+        assert!(out.contains("<WWFF_REF:9>DLFF-0001"), "{out}");
+    }
+
+    /// An edit that moves a side to WWFF takes along a `WWFF_REF` the side carried beside its old
+    /// park: left behind, the record would be written with two of them, and the first one, the
+    /// old area, is what a reader keeping the first copy takes.
+    #[test]
+    fn an_edit_to_a_wwff_side_writes_one_wwff_reference() {
+        let text = "<CALL:5>K1ABC<QSO_DATE:8>20260909<TIME_ON:6>120000<BAND:3>20m<MODE:3>SSB\
+                    <SIG:4>POTA<SIG_INFO:7>US-1234<WWFF_REF:8>KFF-1234<EOR>\n";
+        let mut lb = Logbook::new();
+        lb.import_adif(text);
+        let mut edited = lb.records()[0].as_ref().clone();
+        edited.extra = Vec::new(); // the edit payload always arrives without it
+        edited.ota.their_program = Some("WWFF".into());
+        edited.ota.their_ref = Some("KFF-9999".into());
+        assert!(lb.update_record(0, edited));
+        let out = lb.adif();
+        assert_eq!(out.matches("<WWFF_REF:").count(), 1, "{out}");
+        assert!(out.contains("<WWFF_REF:8>KFF-9999"), "{out}");
     }
 
     /// ⭐ AN EDIT THAT CHANGES THE MODE TAKES ALONG A SUBMODE THE NEW MODE DOES NOT HAVE. A SUBMODE
@@ -7787,11 +8325,17 @@ mod tests {
         set_extra(&mut want, "MY_STATE", None);
         set_extra(&mut want, SELF_FILLED_FIELD, None);
         assert_eq!(without_self_filled(&reborn), want);
+        // A station profile's county, filled and marked by Nexus, is left out the same way; one
+        // carried unmarked (above) goes as it always did.
+        mark_self_filled(&mut filled, "MY_CNTY");
+        let reborn = parse_adif(&adif_record_own_log(&filled)).remove(0);
+        set_extra(&mut want, "MY_CNTY", None);
+        assert_eq!(without_self_filled(&reborn), want);
 
         let imported = parse_adif(
             "<CALL:4>W1AW<QSO_DATE:8>20231114<TIME_ON:6>221320<BAND:3>20m<MODE:3>FT8\
-             <MY_GRIDSQUARE:4>EN52<MY_STATE:2>WI<MY_CNTY:7>WI,DANE<MY_SIG_INFO:6>K-1234\
-             <APP_NEXUS_SELF_FILLED:50>CALL,QSO_DATE,BAND,MODE,MY_CNTY,MY_SIG_INFO,MY_RIG<EOR>",
+             <MY_GRIDSQUARE:4>EN52<MY_STATE:2>WI<MY_ANTENNA:4>EFHW<MY_SIG_INFO:6>K-1234\
+             <APP_NEXUS_SELF_FILLED:53>CALL,QSO_DATE,BAND,MODE,MY_ANTENNA,MY_SIG_INFO,MY_RIG<EOR>",
         )
         .remove(0);
         let mut want = imported.clone();
@@ -8279,6 +8823,140 @@ mod tests {
         let old = parse_adif(legacy);
         assert_eq!(old[0].freq_rx_mhz, None);
         assert!((old[0].freq_mhz - 14.074).abs() < 1e-9, "FREQ still reads");
+    }
+
+    /// #163 — A CROSS-BAND SATELLITE CONTACT GOES OUT AS TQSL AND LOTW READ ONE: `FREQ` and `BAND`
+    /// the uplink (what we transmitted on), `FREQ_RX` and `BAND_RX` the downlink. Inside Nexus the
+    /// record's `band` stays the downlink, the band the contact is counted on for awards, Needed,
+    /// B4 and dupes, so the writer takes `BAND` from `FREQ` and writes the record's band as
+    /// `BAND_RX`, and the reader maps `BAND_RX` back. Round trip both ways, byte for byte.
+    fn so50() -> QsoRecord {
+        let mut r = rec("W1AW", "70cm", 1_700_000_000);
+        r.mode = "FM".into();
+        r.freq_mhz = 145.85;
+        r.freq_rx_mhz = Some(436.795);
+        r.prop_mode = Some("SAT".into());
+        r.sat_name = Some("SO-50".into());
+        r
+    }
+    fn tags<'a>(out: &'a str, name: &str) -> Vec<&'a str> {
+        let open = format!("<{name}:");
+        out.match_indices(&open)
+            .map(|(i, _)| {
+                let rest = &out[i + open.len()..];
+                let (len, tail) = rest.split_once('>').unwrap();
+                &tail[..len.parse::<usize>().unwrap()]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_cross_band_satellite_contact_exports_band_from_the_uplink_and_band_rx_from_the_downlink() {
+        let out = adif_record(&so50());
+        assert_eq!(tags(&out, "BAND"), ["2m"], "BAND is the uplink's: {out}");
+        assert_eq!(
+            tags(&out, "BAND_RX"),
+            ["70cm"],
+            "BAND_RX the downlink's: {out}"
+        );
+        assert_eq!(tags(&out, "FREQ"), ["145.850000"], "{out}");
+        assert_eq!(tags(&out, "FREQ_RX"), ["436.795000"], "{out}");
+
+        // …and it reads back as the contact Nexus holds: counted on the downlink band.
+        let back = &parse_adif(&(adif_header() + &out))[0];
+        assert_eq!(back.band, "70cm", "the internal band is the downlink");
+        assert!((back.freq_mhz - 145.85).abs() < 1e-9);
+        assert_eq!(back.freq_rx_mhz, Some(436.795));
+        assert!(
+            !back
+                .extra
+                .iter()
+                .any(|(k, _)| k == "BAND_RX" || k == "BAND"),
+            "BAND_RX is consumed, not parked: {:?}",
+            back.extra
+        );
+        assert_eq!(adif_record(back), out, "and it writes back byte for byte");
+    }
+
+    #[test]
+    fn another_loggers_satellite_contact_imports_on_its_downlink_band_and_exports_unchanged() {
+        // As TQSL, SatPC32-fed loggers and LoTW itself write one: BAND/FREQ up, BAND_RX/FREQ_RX down.
+        let foreign = "<EOH>\n<CALL:4>W1AW<QSO_DATE:8>20231114<TIME_ON:4>1200<MODE:2>FM\
+             <BAND:2>2m<BAND_RX:4>70cm<FREQ:7>145.850<FREQ_RX:7>436.795\
+             <PROP_MODE:3>SAT<SAT_NAME:5>SO-50<EOR>\n";
+        let r = &parse_adif(foreign)[0];
+        assert_eq!(
+            r.band, "70cm",
+            "counted where Nexus counts its own satellite contacts"
+        );
+        let out = adif_record(r);
+        assert_eq!(tags(&out, "BAND"), ["2m"], "{out}");
+        assert_eq!(tags(&out, "BAND_RX"), ["70cm"], "{out}");
+    }
+
+    /// #163 review: untagging a satellite contact in the Logbook takes the bird's uplink with it —
+    /// FREQ back to the downlink it was heard on, FREQ_RX gone — so it does not go out as a
+    /// terrestrial cross-band contact on a frequency the operator never used. A row an older build
+    /// imported with the uplink as its band (BAND_RX parked) is another logger's claim, and keeps
+    /// its frequencies.
+    #[test]
+    fn untagging_a_satellite_contact_puts_back_the_heard_frequency() {
+        let mut r = so50();
+        assert!(sat_tagged(&mut r, None));
+        assert_eq!(
+            (r.prop_mode.as_deref(), r.sat_name.as_deref()),
+            (None, None)
+        );
+        assert!((r.freq_mhz - 436.795).abs() < 1e-9, "{}", r.freq_mhz);
+        assert_eq!(r.freq_rx_mhz, None);
+        assert!(tags(&adif_record(&r), "BAND_RX").is_empty());
+
+        let mut legacy = so50();
+        legacy.band = "2m".into();
+        legacy.extra = vec![("BAND_RX".into(), "70cm".into())];
+        assert!(sat_tagged(&mut legacy, None));
+        assert!((legacy.freq_mhz - 145.85).abs() < 1e-9);
+        assert_eq!(legacy.freq_rx_mhz, Some(436.795));
+    }
+
+    #[test]
+    fn a_band_rx_the_writer_could_not_rebuild_is_left_as_it_came() {
+        // No FREQ to take BAND from: mapping BAND_RX in would lose the uplink band on the way out.
+        // The row stays as it was before this change, and goes out exactly as it came in.
+        let no_freq = "<EOH>\n<CALL:4>W1AW<QSO_DATE:8>20231114<MODE:2>FM\
+             <BAND:2>2m<BAND_RX:4>70cm<PROP_MODE:3>SAT<SAT_NAME:5>SO-50<EOR>\n";
+        let r = &parse_adif(no_freq)[0];
+        assert_eq!(r.band, "2m");
+        let out = adif_record(r);
+        assert_eq!(tags(&out, "BAND"), ["2m"], "{out}");
+        assert_eq!(
+            tags(&out, "BAND_RX"),
+            ["70cm"],
+            "once, from the passthrough: {out}"
+        );
+
+        // A row an older build imported is held that way too (BAND_RX parked in `extra`, the band
+        // the uplink's): it writes out exactly as before, BAND and BAND_RX once each.
+        let mut legacy = so50();
+        legacy.band = "2m".into();
+        legacy.extra = vec![("BAND_RX".into(), "70cm".into())];
+        let out = adif_record(&legacy);
+        assert_eq!(tags(&out, "BAND"), ["2m"], "{out}");
+        assert_eq!(tags(&out, "BAND_RX"), ["70cm"], "{out}");
+
+        // A same-band split (a pile-up UP 2) has one band: no BAND_RX, as before.
+        let mut split = rec("W1AW", "20m", 1_700_000_000);
+        split.freq_mhz = 14.027;
+        split.freq_rx_mhz = Some(14.025);
+        let out = adif_record(&split);
+        assert_eq!(tags(&out, "BAND"), ["20m"], "{out}");
+        assert!(tags(&out, "BAND_RX").is_empty(), "{out}");
+        // …and one whose uplink is off the band table keeps the record's band alone.
+        let mut far = so50();
+        far.freq_mhz = 47_088.0;
+        let out = adif_record(&far);
+        assert_eq!(tags(&out, "BAND"), ["70cm"], "{out}");
+        assert!(tags(&out, "BAND_RX").is_empty(), "{out}");
     }
 
     /// An ordinary field edit must not silently turn a SPLIT contact into a simplex one.

@@ -821,6 +821,7 @@ export const EN = {
 
   'settings.station.callsign.label': 'Callsign',
   'settings.station.callsign.hint': 'Your station callsign (required).',
+  'settings.station.callWaits': 'Your call stays as it is while a run, a contact or a JS8 message is under way. End it first to change the call.',
 
   'settings.station.grid.label': 'Grid',
   'settings.station.grid.hint':
@@ -850,9 +851,9 @@ export const EN = {
   'settings.station.licenseClass.general': 'General (US)',
   'settings.station.licenseClass.advanced': 'Advanced (US, grandfathered)',
   'settings.station.licenseClass.extra': 'Amateur Extra (US)',
-  'settings.station.licenseClass.open': 'Open — no transmit limits',
+  'settings.station.licenseClass.open': 'Open — outside the US, never blocks',
   'settings.station.licenseClass.hint':
-    'Sets your transmit privileges + the licensed-segment band dropdown. Open = no limits (outside the US).',
+    'Sets your transmit privileges + the licensed-segment band dropdown. Open (outside the US) never blocks a band; it warns when you’re outside the usual band plan, and your country’s rules are yours to follow.',
 
   'settings.station.frequency.label': 'Band & Frequency',
   'settings.station.frequency.hint':
@@ -1026,7 +1027,7 @@ export const EN = {
     'Setup wizard ▸ step 4 · everything starts on — this is the one question',
   'gettingStarted.license.shot.title': 'What’s your license?',
   'gettingStarted.license.shot.sub':
-    'Sets your transmit privileges — the app parks the dial in your licensed band segments and won’t let you transmit outside them. Pick “Outside the US” for no limits.',
+    'Sets your transmit privileges — the app parks the dial in your licensed band segments and won’t let you transmit outside them. Licensed in another country? Pick “Outside the US”.',
   'gettingStarted.license.shot.technician': 'Technician',
   'gettingStarted.license.shot.technicianBlurb': 'US — limited HF + full VHF/UHF',
   'gettingStarted.license.shot.general': 'General',
@@ -1034,7 +1035,8 @@ export const EN = {
   'gettingStarted.license.shot.extra': 'Amateur Extra',
   'gettingStarted.license.shot.extraBlurb': 'US — full privileges',
   'gettingStarted.license.shot.outside': 'Outside the US',
-  'gettingStarted.license.shot.outsideBlurb': 'No transmit limits',
+  'gettingStarted.license.shot.outsideBlurb':
+    'Nexus won’t block any band and warns when you’re outside the usual band plan. You’re responsible for your country’s rules.',
   // ⚠️ `{{freq}}` is a FREQUENCY — supplied invariant by the call site, never formatted here.
   // This is a PICTURE of the real toast, not a live transmit control.
   'gettingStarted.license.shot.toast':
@@ -1608,6 +1610,15 @@ export const EN = {
   'logbook.lotw.upload.label': 'Upload to LoTW',
   'logbook.lotw.upload.labelCount': 'Upload to LoTW ({{count}})',
   'logbook.lotw.upload.busy': 'Uploading…',
+  // #163: the one-click corrected re-upload of past satellite QSOs. LoTW, TQSL, QSO and the band
+  // names are invariant tokens.
+  'logbook.lotw.satFix.label': 'Fix satellite uploads ({{count}})',
+  'logbook.lotw.satFix.title':
+    'These satellite QSOs went to LoTW with the downlink band, from before Nexus logged the uplink, so LoTW cannot match them. Click to re-upload them corrected.',
+  'logbook.lotw.satFix.confirm.title': 'Re-upload satellite QSOs to LoTW?',
+  'logbook.lotw.satFix.confirm.body':
+    'Satellite QSOs to correct: {{count}}. They went to LoTW with the downlink band, and LoTW matches a satellite QSO on the uplink band, so they cannot confirm. Nexus fills in each satellite’s uplink and uploads a corrected copy through TQSL. LoTW keeps the old record, which matches nothing and does no harm.',
+  'logbook.lotw.satFix.confirm.label': 'Re-upload corrected',
   'logbook.lotw.upload.title':
     'Sign + upload your un-uploaded QSOs to LoTW via TQSL (set your Station Location in Settings)',
   // A second statement appended to the title above, with its own count — see the import
@@ -1660,6 +1671,44 @@ export const EN = {
     one: '{{count}} JTTY contact was not sent: TQSL does not know the JTTY mode yet and would drop it, so it was held back. It stays marked as not uploaded to LoTW.',
     other:
       '{{count}} JTTY contacts were not sent: TQSL does not know the JTTY mode yet and would drop them, so they were held back. They stay marked as not uploaded to LoTW.',
+  },
+  // Contacts a LoTW upload signed with the Station Location in Settings because no station profile
+  // told which TQSL Station Location signs them. TQSL and LoTW are names.
+  'logbook.lotw.location.tie': {
+    one: '{{count}} contact fits two of your station profiles, and they name different TQSL Station Locations, so it was signed with the Station Location in Settings ▸ Services ▸ Confirmations.',
+    other:
+      '{{count}} contacts fit two of your station profiles, and they name different TQSL Station Locations, so they were signed with the Station Location in Settings ▸ Services ▸ Confirmations.',
+  },
+  'logbook.lotw.location.unmatched': {
+    one: '{{count}} contact fits none of your station profiles by its call and grid, so it was signed with the Station Location in Settings ▸ Services ▸ Confirmations.',
+    other:
+      '{{count}} contacts fit none of your station profiles by their call and grid, so they were signed with the Station Location in Settings ▸ Services ▸ Confirmations.',
+  },
+  // The same two, when TQSL signs from the location in the ADIF (Settings ▸ Services ▸ Confirmations):
+  // no Station Location signs the contact; TQSL takes the call, grid and place fields it carries.
+  'logbook.lotw.location.tieAdif': {
+    one: "{{count}} contact fits two of your station profiles, and they name different TQSL Station Locations, so no profile's Station Location was used: it was signed from the call, grid, state, county, zones and IOTA it carries.",
+    other:
+      "{{count}} contacts fit two of your station profiles, and they name different TQSL Station Locations, so no profile's Station Location was used: they were signed from the call, grid, state, county, zones and IOTA they carry.",
+  },
+  'logbook.lotw.location.unmatchedAdif': {
+    one: "{{count}} contact fits none of your station profiles by its call and grid, so no profile's Station Location was used: it was signed from the call, grid, state, county, zones and IOTA it carries.",
+    other:
+      "{{count}} contacts fit none of your station profiles by their call and grid, so no profile's Station Location was used: they were signed from the call, grid, state, county, zones and IOTA they carry.",
+  },
+  // A LoTW upload signed in several TQSL runs (one per Station Location) where a later run could
+  // not run at all; the earlier runs' contacts went. `{{detail}}` is the error, in English.
+  'logbook.lotw.unsentAfterError': {
+    one: '{{count}} contact was not sent ({{detail}}). The contacts signed before that went to LoTW. It stays marked as not uploaded to LoTW and goes with the next upload.',
+    other:
+      '{{count}} contacts were not sent ({{detail}}). The contacts signed before that went to LoTW. They stay marked as not uploaded to LoTW and go with the next upload.',
+  },
+  // A later TQSL run of such an upload that TQSL signed and sent, whose upload mark could not be
+  // shown to be saved to disk. `{{detail}}` is why, in English.
+  'logbook.lotw.unconfirmedAfterError': {
+    one: '{{count}} contact went to LoTW, but Nexus could not confirm its upload mark was saved to disk ({{detail}}). If it was not, it goes again with the next upload; LoTW ignores a contact it already has.',
+    other:
+      '{{count}} contacts went to LoTW, but Nexus could not confirm their upload mark was saved to disk ({{detail}}). Any not saved go again with the next upload; LoTW ignores a contact it already has.',
   },
 
   // ⚠️ `{{formatted}}` is a QSO COUNT the call site has already grouped for display
@@ -1788,6 +1837,7 @@ export const EN = {
   'contactCard.field.remove': 'Remove {{tag}} on save',
   'contactCard.field.keep': 'Keep {{tag}}',
   'contactCard.freqRx': 'RX freq (MHz)',
+  'contactCard.via': "Logged via",
   'contactCard.recent': 'Recent contacts with this call',
   'contactCard.recent.qsl': 'QSL',
   'contactCard.recent.open': 'Open this contact on the card',
@@ -1901,6 +1951,9 @@ export const EN = {
   'logbook.column.ituz': 'ITU zone',
   'logbook.column.cont': 'Continent',
   'logbook.column.distance': 'Distance (km)',
+  'logbook.column.parkName': 'Park name',
+  'logbook.column.parkName.noList':
+    'No park list yet, so this column is empty. Download one, or import a CSV, on the POTA/SOTA screen.',
   // Your contacts' paths (features/pathGrade.ts, the Logbook's Path column and filter, the contact
   // card): which way round each logged contact most likely went. A grade stamped when the contact
   // was logged is the station's own (beam heading, receivers, decodes) over the model; one made
@@ -2008,6 +2061,8 @@ export const EN = {
   'logbook.upload.waiting': 'Sent, no answer yet',
   'logbook.upload.failed': 'Refused',
   'logbook.upload.none': 'Not uploaded',
+  // #163: a satellite contact the one-click LoTW fix corrected and has not sent yet.
+  'logbook.upload.resend': 'Corrected, not sent yet',
   'logbook.upload.title': '{{state}}, {{date}}',
   'logbook.field.iota.label': 'IOTA',
   'logbook.field.iota.title':
@@ -2602,6 +2657,10 @@ export const EN = {
   'logEntry.lookup.label': 'Lookup',
   'logEntry.lookup.title':
     'Look up name + QTH in the callbook — QRZ first, then HamQTH (grid/state need a QRZ subscription)',
+  'logEntry.start.label': 'Start',
+  'logEntry.start.title': 'Start this contact now: its start time (TIME_ON) becomes the current time. For a long contact whose call went in early. Log still stamps the end time.',
+  'logEntry.start.setLabel': 'Start {{time}}',
+  'logEntry.start.setTitle': 'This contact now starts at {{time}} UTC. Press again to restart it.',
   'logEntry.rstSent.label': 'Sent',
   'logEntry.rstSent.title': 'Signal report you SENT them',
   'logEntry.rstRcvd.label': 'Rcvd',
@@ -2630,6 +2689,7 @@ export const EN = {
   // localised. The prose around it is the part a translator owns.
   'logEntry.park.ref.placeholderPota': 'Park (reference or name)',
   'logEntry.park.ref.placeholderSota': 'Summit (reference)',
+  'logEntry.park.ref.placeholderWwff': 'Area (reference)',
   'logEntry.park.ref.title':
     'Park/summit reference of the station you worked — logged to ADIF (POTA→SIG_INFO, SOTA→SOTA_REF)',
   'logEntry.park.live.label': 'live',
@@ -3336,6 +3396,14 @@ export const EN = {
   // `{{mode}}` is a mode-class name — the tooltip is prose, the mode is not.
   'needed.filter.mode.show.title': 'Show {{mode}} needs',
   'needed.filter.mode.hide.title': 'Hide {{mode}} needs',
+  'needed.search.placeholder': 'Search call · entity · mode · band · freq…  (PA* works)',
+  'needed.search.label': 'Search needs',
+  'needed.filters.states.aria': 'US states shown',
+  'needed.filter.state.title': 'Show only {{state}} needs',
+  'needed.filter.privileges.title':
+    'Hide the needs you may not transmit to under your license class (Settings ▸ Station). Spotted and decoded needs are already limited to your privileges, so this mostly hides park and summit activations. Open class hides nothing.',
+  'needed.filter.local.title':
+    'Needed only lists spots heard on your continent, so this is not a switch here: a cluster or skimmer spot becomes a need only when someone on your continent heard it (on VHF, two receivers near you). Until your callsign is set in Settings ▸ Station, Nexus cannot tell your continent and lets those spots through. Reception reports count from receivers near you or where your own signal is heard, and your own decodes count as heard here. Park and summit activations show as their programmes post them. For the worldwide feed, use the Spots board.',
   'needed.popOut.label': '⧉ Pop out',
   'needed.popOut.title': 'Open this board in its own window (for a second monitor)',
   'needed.autoPop.label': 'open at launch',
@@ -3450,6 +3518,7 @@ export const EN = {
     'This entity/zone/grid is worked on this band but not yet confirmed — a LoTW match or a paper card would close it (eQSL and QRZ do not count toward awards, so they do not clear this). Not a claim about this callsign: B4 is the worked-this-call chip.',
   'need.badge.pota.title': 'Live POTA activator',
   'need.badge.sota.title': 'Live SOTA activator',
+  'need.badge.wwff.title': 'Live WWFF activator',
   'need.badge.wanted.title': 'On your watch list',
 
   // The board/roster chip. `short` is the dense-column form — a translation needs both, and
@@ -3495,6 +3564,7 @@ export const EN = {
   'need.chip.dxped.title': 'Active announced DXpedition — a limited-time window',
   'need.chip.pota.title': "Live POTA activator — the row's call is on a park right now",
   'need.chip.sota.title': "Live SOTA activator — the row's call is on a summit right now",
+  'need.chip.wwff.title': "Live WWFF activator — the row's call is in a flora & fauna area right now",
   'need.chip.wanted.title': 'On your watch list',
 
   // ── Status roles (the colour+glyph pairing table) ───────────────────────────────────
@@ -3825,8 +3895,36 @@ export const EN = {
   // The chip reads ★ when the filter is on and this word when it is off.
   'map.sats.filter.all': 'All',
 
-  'map.pca.chip':
-    '☢ Proton event · S{{scale}} · polar caps absorbing ~{{db}} dB @30 MHz (day) — high-lat paths degraded',
+  // ---- The polar-cap chip (map and globe). {{scale}} is NOAA's S level digit; {{db}} the strongest
+  // absorption drawn, dB at 30 MHz; {{protons}} one of the map.pca.protons* fragments; {{time}} UTC
+  // `HH:MMZ`; {{h}} whole hours. Two sources, never mixed: NOAA's D-RAP grid, or Nexus's model
+  // (NOAA's D-RAP method over GOES protons) whose cap edge is Nexus's own approximation.
+  'map.pca.head': '☢ S{{scale}} proton event · polar caps up to ~{{db}} dB at 30 MHz — polar paths degraded',
+  'map.pca.headWeak': '☢ S{{scale}} proton event · polar caps under 0.5 dB at 30 MHz',
+  'map.pca.protons': 'GOES protons {{time}}',
+  'map.pca.protonsOld': 'GOES protons {{time}} ({{ago}})',
+  'map.pca.protonsUndated': 'GOES protons',
+  'map.pca.src.noaa': 'NOAA D-RAP {{time}} · {{protons}}',
+  'map.pca.src.model': 'Modelled from {{protons}} · cap edge approx. ({{deg}}° geomagnetic)',
+  'map.pca.src.modelNoKp': 'Modelled from {{protons}} · cap edge unknown (no measured Kp)',
+  'map.pca.recovery': 'Lasts ~{{h}} h (NOAA’s rule of thumb from the proton level)',
+  'map.pca.title':
+    'Polar-cap absorption from a solar proton event. NOAA D-RAP: NOAA’s own map, with its real proton cutoff. Modelled: NOAA’s D-RAP method over the GOES proton flux; the dashed cap edge is Nexus’s approximation (66° − 1.2·Kp geomagnetic), not NOAA’s cutoff model.',
+  'map.pca.edge.label': 'cap edge (approx.)',
+
+  // ---- The aurora chip and edge lines (map and globe). {{time}} UTC `HH:MMZ`; {{kp}} one of the
+  // prop.kpNow.* phrases; {{why}} a prop.kpNow.* phrase or map.aurora.why.watch; {{g}} NOAA's G digit.
+  'map.aurora.chip.storm': '🌌 Aurora layer on for the storm ({{why}})',
+  'map.aurora.why.watch': 'NOAA G{{g}} watch',
+  'map.aurora.chip.ovation': 'NOAA OVATION, expected at {{time}} · edge where the chance reaches 10 %',
+  'map.aurora.chip.stale': 'No aurora oval drawn: NOAA OVATION is out of date (its forecast was for {{time}})',
+  'map.aurora.chip.undated': 'No aurora oval drawn: the NOAA OVATION forecast carries no time, so it cannot be shown as current',
+  'map.aurora.chip.none': 'No aurora oval drawn: no NOAA OVATION forecast',
+  'map.aurora.edge.label': 'aurora edge (NOAA OVATION)',
+  'map.layer.aurora.stale': 'out of date (forecast for {{time}}): nothing drawn',
+  'map.layer.aurora.undated': 'forecast time unknown: nothing drawn',
+  'map.layer.aurora.none': 'no NOAA OVATION forecast: nothing drawn',
+  'map.layer.aurora.auto': 'on for the storm',
 
   // ---- The "coming" chip (map): NOAA's geomagnetic watch, the WSA-Enlil model run and the solar
   // wind measured at L1, three sources kept apart — only the L1 line may say "arrived". {{g}} is
@@ -3852,6 +3950,11 @@ export const EN = {
   'map.arrival.title.l1Now': 'Solar wind at L1 now {{speed}} km/s (measured {{at}}, reaches Earth ~{{earth}}).',
   'map.arrival.title.why':
     'Solar wind takes one to three days from the sun. A flare is never "coming": its X-rays arrive at light speed, so it is here the instant it is seen.',
+  // The space-weather chip stack's overflow chip on a narrow map (components/prop/WxChipStack.tsx):
+  // {{n}} is how many chips it stands for; it opens them in a list titled map.wx.more.title.
+  'map.wx.more': '+{{n}} more',
+  'map.wx.more.aria': 'Show {{n}} more space-weather chips',
+  'map.wx.more.title': 'More space weather',
 
   // The flare chip and its tail. Each phase is its OWN statement appended to the chip — see
   // the `logbook.import.dupes` note — because where "recovering" belongs in the sentence is
@@ -3893,6 +3996,30 @@ export const EN = {
     'Simulate an X2 flare on the map for 60 s — visual preview only (no alerts). The layer otherwise draws nothing until a real M-class flare.',
   'map.flare.preview.stop': '■ stop',
   'map.flare.preview.start': '☀ preview',
+  // The six-hour replay (replay.ts) and NOAA's active regions on the sun disc (sunRegions.ts).
+  'map.hover.sunRegions': 'Active regions (NOAA, {{day}}): {{list}}',
+  'map.sun.regions.head': 'NOAA active regions · {{day}}',
+  'map.sun.regions.title': 'Where on the sun: NOAA’s numbered active regions from its daily region list for {{day}}, drawn where NOAA observed them that day (the sun turns about 13° a day, so they have moved west since). Solar north up, east on the left, as seen from Earth.',
+  'map.sun.regions.aria': 'NOAA active regions on the sun, {{day}}',
+  'map.sun.regions.empty': 'No numbered regions on the visible disc (NOAA, {{day}})',
+  'map.sun.regions.stale': 'No active regions drawn: NOAA’s region list is out of date ({{day}})',
+  'map.sun.regions.ahead': 'No active regions drawn: NOAA’s region list is dated ahead of the station’s clock ({{day}})',
+  'map.sun.regions.unknown': 'No active regions drawn: this station does not say whether its region list is current',
+  'map.sun.regions.none': 'No active regions drawn: no NOAA region list held',
+  'map.sun.regions.eastLimb': 'near the east limb',
+  'map.sun.regions.westLimb': 'near the west limb',
+  'map.replay.start': '⟲ replay 6 h',
+  'map.replay.start.title': 'Replay the last six hours of the sun, the night side and the flare, from the GOES X-ray readings this station already holds. Starts at the highest reading. Everything else on the map stays live.',
+  'map.replay.start.none': 'No X-ray history held yet: a replay needs the last hours of GOES readings.',
+  'map.replay.stop': '■ end replay',
+  'map.replay.stop.title': 'End the replay and go back to now',
+  'map.replay.head': '⟲ REPLAY · {{time}} · {{ago}} · not now',
+  'map.replay.flux': 'GOES X-ray {{cls}} (5-minute peak at {{time}})',
+  'map.replay.noFlux': 'No X-ray reading held for this time: no flare drawn',
+  'map.replay.est': 'Flare estimated from GOES (NOAA’s map is not kept for past times)',
+  'map.replay.slider.aria': 'Replay time (UTC)',
+  'map.replay.live': 'Only the sun, the moon, the night side and the flare are replayed. Stations, spots and every other layer are live.',
+  'map.replay.back': '■ back to now',
 
   // The layer panel. The layer IDS are code; only these names are read.
   'map.layers.head': 'Layers',
@@ -3916,6 +4043,15 @@ export const EN = {
   'map.layer.aurora.observed': 'from the solar wind observed {{time}}',
   'map.layer.flare.label': 'Flare blackout (D-RAP)',
   'map.layer.pca.label': 'Proton polar cap (PCA)',
+  // The polar-cap layer's row while no proton event is held, in the station's own reason (below S1,
+  // 30 min old or more, dated ahead of the station's clock (which the station judges, so it is the
+  // station's clock even when this window is remote), undated, or not said by an older station);
+  // {{time}} is a UTC stamp such as "31 Oct 23:35Z".
+  'map.layer.pca.quiet': 'no proton event (below S1): nothing drawn',
+  'map.layer.pca.stale': 'proton reading out of date ({{time}}): nothing drawn',
+  'map.layer.pca.ahead': 'proton reading dated ahead of the station’s clock ({{time}}): nothing drawn',
+  'map.layer.pca.unknown': 'this station does not say whether a proton event is on: nothing drawn',
+  'map.layer.pca.undated': 'proton reading has no time: nothing drawn',
   'map.layer.coast.label': 'Coastlines',
   'map.layer.states.label': 'US states',
   'map.layer.grid.label': 'Grid (20°×10°)',
@@ -3954,6 +4090,11 @@ export const EN = {
   'map.coverage.dim.title': 'What to color: your worked grid squares (VUCC) or CQ zones (WAZ)',
   'map.coverage.dim.grids': 'Grids',
   'map.coverage.dim.zones': 'CQ zones',
+  'map.style.label': 'Map style',
+  'map.style.title': 'How the Globe, Flat and Beam maps paint land and sea: Atlas is light, Dark is dark in either theme. A dark theme brings its own map until you pick one. The 3D globe keeps its photo of the Earth.',
+  'map.style.atlas': 'Atlas',
+  'map.style.dark': 'Dark',
+  'map.style.theme': "Theme's own",
 
   // Hover tooltips. The station line is pure measurement and is not here at all. Each of
   // these carries its own leading separator where it is an appended clause.
@@ -4106,6 +4247,11 @@ export const EN = {
   // stamp ("29 Oct 20:00Z"), {{day}} a date ("29 Oct"), {{ap}} a whole number.
   'prop.spaceWx.src.sfi': 'NOAA · Penticton 10.7 cm solar flux, measured {{time}}',
   'prop.spaceWx.src.kp': 'NOAA · estimated planetary Kp (1-minute), {{time}}',
+  // The Kp now, with what it is: NOAA's measured 3-hour Kp ({{from}}–{{to}}, `HHZ`) or its 1-minute
+  // estimate at {{time}} (`HH:MMZ`). {{kp}} keeps its decimal point.
+  'prop.kpNow.measured': 'Kp {{kp}} measured {{from}}–{{to}}',
+  'prop.kpNow.est': 'Kp {{kp}} est. {{time}}',
+  'prop.kpNow.estUndated': 'Kp {{kp}} est.',
   'prop.spaceWx.src.xray': 'NOAA · GOES X-ray flux, {{time}}',
   'prop.spaceWx.src.a': 'NOAA · daily planetary A for {{day}}',
   'prop.spaceWx.src.apNow': 'ap now ≈{{ap}} (estimated from Kp)',
@@ -4295,7 +4441,8 @@ export const EN = {
     "☀️ {{cls}} solar flare (R{{r}}) — dayside HF below ~{{mhz}} MHz degraded (NOAA D-RAP) · fade ~{{mins}} min (NOAA's rule of thumb from the X-ray level)",
   'prop.flareAlert.noaa.fadeOwn':
     "☀️ {{cls}} solar flare (R{{r}}) — dayside HF below ~{{mhz}} MHz degraded (NOAA D-RAP) · fade ~{{mins}} min (NOAA's own estimate)",
-  'prop.stormAlert.now': '🧲 Geomagnetic storm G{{g}} (Kp {{kp}}) — HF degraded, worst on polar paths; aurora possible on VHF',
+  // {{kp}} is a prop.kpNow.* phrase ("Kp 6.0 est. 22:36Z").
+  'prop.stormAlert.now': '🧲 Geomagnetic storm G{{g}} ({{kp}}) — HF degraded, worst on polar paths; aurora possible on VHF',
   'prop.stormAlert.forecast': '🧲 NOAA expects G{{g}} (Kp {{kp}}) from {{when}} — HF likely degraded then',
   // The watch heads-up, once per NOAA watch. {{days}} is a UT day or range ("31 Oct–1 Nov").
   'prop.arrivalAlert.watch': '🧲 NOAA storm watch: G{{g}} expected {{days}} — HF likely degraded then',
@@ -4661,6 +4808,15 @@ export const EN = {
   // #390 — an entry's own note, edited in place on its row. `{{value}}` as above.
   'watchlist.item.notes.aria': 'Notes for {{value}}',
   'watchlist.item.notes.placeholder': 'Add a note',
+  'watchlist.item.color.aria': 'Colour for {{value}}',
+  'watchlist.item.color.title': 'The colour this entry’s stations are marked in on the Call Roster, Band Activity, the Stations list and Spots',
+  'watchlist.color.default': 'Lime (default)',
+  'watchlist.color.pink': 'Pink',
+  'watchlist.color.red': 'Red',
+  'watchlist.color.orange': 'Orange',
+  'watchlist.color.yellow': 'Yellow',
+  'watchlist.color.cyan': 'Cyan',
+  'watchlist.color.violet': 'Violet',
   'watchlist.add.kind.aria': 'Watch kind',
   // The <option> VALUES ('call', 'dxcc', 'grid') are persisted tokens and stay in the code.
   'watchlist.add.kind.call': 'Call / prefix',
@@ -4699,6 +4855,22 @@ export const EN = {
   'hideCalls.head': 'Hide these callsigns',
   'hideCalls.note':
     'Space-separated. A trailing <code>*</code> is a prefix ("VP8*" hides every VP8). A view filter only — the stations you are working and those calling you always show. To stop your auto-CQ from answering a call, Alt-double-click it instead.',
+  'callMenu.aria': 'Actions for {{call}}',
+  'callMenu.watch.add': 'Add to watch list',
+  'callMenu.watch.remove': 'Remove from watch list',
+  'callMenu.hide.band': 'Hide on {{band}}',
+  'callMenu.hide.allBands': 'Hide on every band',
+  'callMenu.hide.hour': 'For 1 hour',
+  'callMenu.hide.twoHours': 'For 2 hours',
+  'callMenu.hide.today': 'Rest of today (UTC)',
+  'callMenu.hide.always': 'Until I bring it back',
+  'callMenu.hide.country': 'Hide every station in {{country}}',
+  'hideCalls.scoped.head': 'Hidden from a row’s menu',
+  'hideCalls.scoped.band': '{{call}} on {{band}}',
+  'hideCalls.scoped.allBands': '{{call}} on every band',
+  'hideCalls.scoped.until': 'until {{time}} UTC',
+  'hideCalls.scoped.always': 'until you bring it back',
+  'hideCalls.scoped.remove': 'Show {{call}} again',
 
   'hideCountries.chip.label': 'Countries',
   // What the chip says instead of the count while the ticks are kept but nothing is hidden.
@@ -4849,7 +5021,7 @@ export const EN = {
   'settings.alerts.legend': 'Alerts',
   'settings.alerts.popups.label': 'Pop-up notifications',
   'settings.alerts.popups.hint':
-    'The messages in the bottom-right corner. Turned off, confirmations such as Logged QSO and alerts such as a new DXCC, a station calling you, a band opening or space weather stop popping up. Sounds are not affected. Errors, notices about transmitting, the radio or the log, and any message with a button, such as Stop alarm, still pop up.',
+    'The messages in the corner of the window (Pop-up corner, below, picks which). Turned off, confirmations such as Logged QSO and alerts such as a new DXCC, a station calling you, a band opening or space weather stop popping up. Sounds are not affected. Errors, notices about transmitting, the radio or the log, and any message with a button, such as Stop alarm, still pop up.',
   // #321. The pop-up's own time is set where it is raised (4 s for most, longer for errors and
   // alerts); the choice can only make a pop-up stay longer, never shorter.
   'settings.alerts.popupDwell.label': 'Keep pop-ups up for at least',
@@ -4857,6 +5029,12 @@ export const EN = {
   'settings.alerts.popupDwell.secs': '{{secs}} seconds',
   'settings.alerts.popupDwell.hint':
     'Most pop-ups go after 4 seconds, errors after 12. Pick a longer time if you look away and miss them. A pop-up that stays until you close it still does.',
+  'settings.alerts.popupCorner.label': 'Pop-up corner',
+  'settings.alerts.popupCorner.bottomRight': 'Bottom right',
+  'settings.alerts.popupCorner.bottomLeft': 'Bottom left',
+  'settings.alerts.popupCorner.topRight': 'Top right',
+  'settings.alerts.popupCorner.topLeft': 'Top left',
+  'settings.alerts.popupCorner.hint': 'Which corner of the window the pop-ups appear in. Bottom right is where they have always been. They keep clear of the transmit controls, and use the room higher up when the bottom has none.',
   'settings.alerts.myCall.label': 'My call',
   'settings.alerts.myCall.hint': 'Beep + flash when someone directs a call at you.',
   'settings.alerts.confirmTier.label': 'Confirmation opportunities',
@@ -4915,13 +5093,16 @@ export const EN = {
   'ota.subtitle': 'Hunt activators on the air now',
   'ota.popOut.title': 'Open the POTA/SOTA board in its own window (a POTA board beside a SOTA board)',
   'ota.popOut.label': '⧉ Pop out',
-  // The programme picker. POTA and SOTA are names the operator reads on the programmes' own
-  // sites; "Both" is an English word and this is the only part of that row a translator sees.
+  // The programme picker. POTA, SOTA and WWFF are names the operator reads on the programmes' own
+  // sites; "Both" (an observed station's board: POTA and SOTA) and "All" (this station's board:
+  // POTA, SOTA and WWFF) are English words, and the only part of that row a translator sees.
   'ota.program.aria': 'Program',
   'ota.program.both': 'Both',
+  'ota.program.all': 'All',
   // Which programmes the empty state below is speaking about, as a CLAUSE — the sentence it
-  // sits in is one message, so the two names and the conjunction between them arrive whole.
+  // sits in is one message, so the names and the conjunction between them arrive whole.
   'ota.programs.both': 'POTA or SOTA',
+  'ota.programs.all': 'POTA, SOTA or WWFF',
 
   // The hunt target — the next QSO with this call gets the park stamped on it.
   'ota.hunt.banner':
@@ -4947,6 +5128,7 @@ export const EN = {
   'ota.activation.stop.label': 'Stop',
   'ota.activation.stop.title': 'End activation',
   'ota.activation.ended': 'Activation ended',
+  'ota.activation.profileStays': 'The station stays on this profile while a run, a contact or a queued message is under way. When it ends, pick {{profile}} ({{call}}) in the top bar to go back.',
   'ota.activation.stopFailed': 'Could not stop activation',
   'ota.activation.state.ask': 'On a state line. Which state are you in?',
   'ota.activation.state.mine': 'Your state: {{state}}',
@@ -5511,6 +5693,9 @@ export const EN = {
   'contestSetup.start.refusedRestoredUnknown': 'The station did not enter {{contest}}. Your answers were put back, and {{running}} is on again.',
   'contestSetup.start.restoreFailed': 'The station did not enter {{contest}}, and putting the earlier settings back failed: {{error}}. Contest mode may still be saved on: check Settings ▸ Contesting.',
   'settings.save.contestUncheckable': 'Not saved: picking {{contest}} would end the running contest, and the station could not check that {{contest}} can start.',
+  'settings.save.entryCall.title': 'Change the call anyway?',
+  'settings.save.entryCall.body': 'This entry is operated under {{call}}. Its rules allow one call per entry, and a radio used under one call may not then be used under another. Your log and Cabrillo stay under {{call}}.',
+  'settings.save.entryCall.action': 'Change the call',
   'contestSetup.nav.back': 'Back',
   'contestSetup.nav.next': 'Next',
   'contestSetup.nav.cancel': 'Cancel',
@@ -6912,6 +7097,12 @@ export const EN = {
   // invariant token and `bd` is read off the catalog the way MHz is: the same in every language.
   'sat.transponder.baud': '{{baud}} bd',
   'sat.transponder.auto': 'picked for you — change it here if this is not the one',
+  'sat.transponder.fav.aria': 'Favorite transponder: {{description}}',
+  'sat.transponder.fav.on.title': 'Your favorite on this bird: “Work this pass” picks it first. Click to clear the star.',
+  'sat.transponder.fav.off.title': 'Make this your favorite on this bird: “Work this pass” picks it first. Starring does not tune the radio.',
+  'sat.transponder.last': 'last used',
+  'sat.transponder.last.title': 'The one you picked last time on this bird. “Work this pass” picks it unless you star a favorite.',
+  'sat.transponder.pref.gone': '“{{label}}”, the transponder you saved for this bird, is not listed as working now. “Work this pass” picks the usual one.',
   'sat.transponder.showAll': 'show all {{count}} ▾',
   'sat.transponder.showAll.title': 'Show every workable transmitter SatNOGS lists for this bird',
   'sat.transponder.dead': 'reported dead (SatNOGS) — not workable',
@@ -7640,6 +7831,10 @@ export const EN = {
   // The lock when the phone MODE is the whole reason: LSB, AM or FM on 60 m, where USB would key.
   'bandPicker.txLock.usbOnlyTitle':
     '60 m allows only USB phone — transmit is blocked. Pick USB or AUTO.',
+  // The amber band-plan chip: advice, never a block. `{{band}}` is a band name ("30m").
+  'bandPicker.planAdvice.label': 'Outside band plan',
+  'bandPicker.planAdvice.title':
+    'Phone here on {{band}} is outside the usual band plan: every IARU region keeps this part of the band for CW and data. Nexus does not block it — your licence and your country’s band plan decide.',
 
   'freq.control.aria': 'Frequency control',
   'freq.channel.label': 'Band / Channel',
@@ -7658,6 +7853,8 @@ export const EN = {
   // X-ray, SW) and `UTC` are tokens, not catalog strings.
   'dash.bar.aria': 'Clock and space weather',
   'dash.index.sw.title': 'Solar wind speed, km/s',
+  // After the bar's Kp: NOAA's 1-minute estimate (a measured Kp shows its 3-hour period instead).
+  'dash.kp.est': 'est.',
   'dash.behind.label': 'Stay behind',
   'dash.behind.title': 'Keep this window behind your other windows, even when you click on it, so it can fill the screen behind Nexus',
   'dash.behind.failed': 'Could not change whether this window stays behind',
@@ -7736,6 +7933,10 @@ export const EN = {
   'radios.picker.inUse.tag': 'in use',
   'radios.picker.choose.title': 'Operate {{name}}',
   'radios.picker.single': 'Use one radio (follow bands on a single window)',
+  'radios.picker.auto.windows': 'Opening each radio in its own window, as last time, in {{seconds}} s. Click or press a key to choose yourself.',
+  'radios.picker.auto.one': 'Starting this window on one radio in {{seconds}} s. Click or press a key to choose yourself.',
+  'radios.picker.failed': 'Could not do that: {{reason}}',
+  'radios.openElsewhere': 'That radio is open in another Nexus window — switch to that window.',
 
   'radios.switcher.aria': 'Active radio',
   'radios.switcher.active.title': '{{name}} — active radio ({{band}} · {{freq}} MHz)',
@@ -7743,6 +7944,8 @@ export const EN = {
   // ⚠️ CAT is the rig-control protocol's own name, here and in the two entries below it.
   'radios.switcher.catDead.title':
     'Switch to {{name}} — ⚠ CAT not responding (check its rig, cable, and COM port)',
+  'radios.switcher.catRefused.title':
+    "{{name}} is not connected — RTS keys its transmitter on its port, so Serial handshake can't be Hardware. Set it to Auto or None.",
   'radios.switcher.catDead.aria': 'CAT not responding',
   'radios.switcher.catDead.band': 'no CAT',
   'radios.peg.on.label': '🔒 Pegged',
@@ -7860,10 +8063,12 @@ export const EN = {
   'settings.backup.reset.failed': 'Could not reset the configuration',
 
   'settings.audio.rxGain.failed': 'Could not apply RX gain',
-  'settings.audio.txPower.failed': 'Could not set TX power',
+  'settings.audio.txPower.failed': 'Could not set the drive',
   // What one sound-card option READS when the saved device is not among the ones we offer.
   // The device NAME is the OS's, and it is never translated — only the note after it is.
   'settings.audio.device.notInList': '{{device}} — saved, not in the list',
+  'settings.audio.device.useInstead': 'Use {{device}} instead',
+  'settings.audio.device.useInsteadHint': 'The saved device is not in the list, and this one differs from it only by the number Windows puts in front or by its spacing. Nexus never switches audio devices by itself: press to pick it, then Save.',
 
   'settings.betaUpdates.failed': 'Could not change the update channel',
   'settings.satellites.vfoMap.failed': 'Could not confirm the VFO mapping',
@@ -8399,6 +8604,8 @@ export const EN = {
   'settings.rigControl.serialHandshake.xonxoff': 'XON/XOFF (software)',
   'settings.rigControl.serialHandshake.hint':
     "Tells Nexus what your cable actually does, instead of letting it guess. Leave it on Auto unless you have a rig that keys at launch — Auto changes nothing about how your station works today. If you change it and CAT stops working, put it back on Auto: on some rigs Hamlib quietly refuses the setting and then answers without ever having opened the radio, so you get a CAT light and a rig that ignores you.",
+  'settings.rigControl.serialHandshake.rtsKeys':
+    "RTS keys your transmitter on this port, so Serial handshake can't be Hardware — set it to Auto or None.",
   'settings.rigControl.pttLineState.label': 'Keying line at startup',
   'settings.rigControl.pttLineState.auto': 'Auto (recommended)',
   'settings.rigControl.pttLineState.untouched': 'Never touch it',
@@ -8445,13 +8652,18 @@ export const EN = {
   'settings.rigControl.yaesuScope.title':
     "Read the FT-710's own spectrum over its internal USB-SPI bridge instead of the sound card",
   'settings.rigControl.yaesuScope.hint':
-    "Draws the radio's own band scope instead of the sound card's 4 kHz slice. Needs <b>SCU-LAN10 enabled in the radio's EX menu</b>, and a build that carries FTDI's LibFT4222 — which is not bundled, because it is closed source and Nexus is GPL-3.0-only. If either is missing the app says which, rather than leaving the panel empty.",
+    "Draws the radio's own band scope instead of the sound card's 5 kHz slice. Needs <b>SCU-LAN10 enabled in the radio's EX menu</b>, and a build that carries FTDI's LibFT4222 — which is not bundled, because it is closed source and Nexus is GPL-3.0-only. If either is missing the app says which, rather than leaving the panel empty.",
   'settings.rigControl.flexAudio.label': 'Flex native DAX audio (Beta)',
   'settings.rigControl.flexAudio.hint':
     'Carry this FlexRadio\'s audio over the network (VITA-49 DAX) instead of the "DAX Audio RX" / "DAX TX" sound devices, which are <b>invisible under Remote Desktop</b>. <b>Needs Flex native client (Beta) on.</b> With SmartSDR CAT this does nothing: audio stays on the sound devices, and the setting is kept for the client. On the client, the decoders read receive audio straight from the radio, and <b>digital modes</b> and the Remote stream\'s voice transmit over DAX. Phone at the shack keeps the radio\'s own mic, so the voice keyer can\'t play there. Turning this off or disconnecting puts your own DAX setting back, and Nexus never changes it while SmartSDR\'s DAX is connected. <b>Beta, unverified on hardware:</b> if decodes or transmit stop, turn it back off. Save to apply.',
   'settings.rigControl.flexClient.label': 'Flex native client (Beta)',
   'settings.rigControl.flexClient.hint':
     "Nexus connects to the radio itself, at the <b>Flex radio IP</b>, as one of its SmartSDR clients, and runs CAT and PTT on a slice of its own. Beta and <b>unverified on hardware</b>: try transmit into a dummy load first. If Nexus cannot connect, it falls back to SmartSDR CAT. Save to apply.",
+  // Under a Flex switch shown disabled because the radio is not on the network connection.
+  'settings.rigControl.flexNeedsNetwork': 'Needs Connection: Network.',
+  // Under the Flex native client, DAX audio and CW/Tune/ATU switches on a Flex whose Connection is
+  // OmniRig or TCI, where the client never starts.
+  'settings.rigControl.flexClientNotHere': "The Flex native client doesn't run on OmniRig or TCI.",
   'settings.rigControl.flexUnbenched.label':
     'Let Nexus send CW, Tune and ATU through the native Flex client (not yet bench-tested)',
   'settings.rigControl.flexUnbenched.hint':
@@ -8464,6 +8676,11 @@ export const EN = {
     "<b>Recording</b> to <code>{{path}}</code> — this keeps running while you're on other screens, so go to the FT8 or Phone cockpit and reproduce the issue (Tune or transmit) now. Come back and turn it off when done, then send that file. It shows exactly what's on the bus during the fault.",
   'settings.rigControl.civLog.idle':
     'Records every byte to/from the radio on the native CI-V path to a file in your Downloads — a support tool for hardware-only issues like the IC-9700 PTT flicker. Turn on, reproduce the problem, turn off, then send the file.',
+  'settings.rigControl.scopeRate.label': 'Radio scope stream',
+  'settings.rigControl.scopeRate.value': '{{rate}} sweeps a second · {{dropped}} not drawn · scope SPEED {{speed}} on the radio',
+  'settings.rigControl.scopeRate.speedUnknown': 'not read',
+  'settings.rigControl.scopeRate.idle':
+    "Measured while the radio's own scope streams to Nexus (the CW or Phone scope, or the RF scope pane). Nexus reads the radio's scope SPEED and never changes it.",
   'settings.rigControl.flexIp.label': 'Flex radio IP (native panadapter + DAX)',
   'settings.rigControl.flexIp.hint':
     "Your FlexRadio's LAN IP (SmartSDR API, port 4992) — turns on the native RF panadapter. This is the <em>radio's</em> address, not the SmartSDR-CAT port above.",
@@ -8506,10 +8723,10 @@ export const EN = {
   // ⚠️ TX POWER IS THE DRIVE-LEVEL SLIDER, NOT A TRANSMIT CONTROL. It sets how hard the sound
   // card feeds the rig; it cannot key, unkey or stop anything, and it is on no cockpit's
   // stop-line census. Same reading as PTT Method above — the words moved, the path did not.
-  'settings.audio.txPower.label': 'Tx Power',
+  'settings.audio.txPower.label': 'Drive',
   'settings.audio.txPower.aria': 'Transmit drive level',
   'settings.audio.txPower.hint':
-    "The audio <b>drive</b> into the rig — the SAME control as the cockpit <b>Pwr</b> slider (they always match now). Trim down until your rig's ALC is just zero. This is <em>not</em> the rig's RF watts — set those on the radio.",
+    "The audio <b>drive</b> into the rig — the SAME control as the cockpit <b>Drive</b> slider (they always match now). Trim down until your rig's ALC is just zero. This is <em>not</em> the rig's RF power — set that on the radio, or with the <b>RF power</b> slider on the Phone, RTTY, PSK and SSTV screens.",
   'settings.audio.rxLevel.label': 'RX Level',
   'settings.audio.rxLevel.meter': 'RX audio level',
   'settings.audio.rxLevel.hint':
@@ -8523,6 +8740,8 @@ export const EN = {
   'settings.audio.pcMic.label': 'Use this computer\'s microphone',
   'settings.audio.pcMic.hint':
     'On: while you hold PTT in Phone, Nexus sends this computer\'s microphone to this radio through its transmit audio (the output device above, or TCI audio on a TCI radio) and keys the radio for computer audio. Off (the default): PTT keys the radio\'s own microphone, as before. Phone only; the digital modes never use it. Stop TX or TX Off cuts it at once; releasing PTT lets the end of your last word finish (at most 0.2 s), then unkeys.',
+  'settings.audio.pcMic.radioInput':
+    'On radios like the Yaesu FTDX10, this microphone goes out only if the radio\'s SSB MOD SOURCE menu is set to REAR (USB). PTT keys the radio in USB or LSB, and with SSB MOD SOURCE on MIC, the factory setting, the radio transmits its own microphone instead of this one. Nexus does not change the radio\'s menus.',
   'settings.audio.pcMic.device.label': 'Microphone',
   'settings.audio.pcMic.device.none': 'Choose a microphone…',
   'settings.audio.pcMic.device.hint':
@@ -8533,7 +8752,7 @@ export const EN = {
     'Set it so your voice drives the radio without ALC on the peaks. Your voice is not played back to you.',
   // Under BOTH sliders above, in place of their own hints, while the form edits a radio that is not
   // the one in use: the sliders then set that radio's stored levels and act on nothing live, so
-  // "the SAME control as the cockpit Pwr" and "the meter responds" are not true there. `{{radio}}`
+  // "the SAME control as the cockpit Drive" and "the meter responds" are not true there. `{{radio}}`
   // is that radio's name, as in the multi-radio banner.
   'settings.audio.multiRadio.levelHint':
     '<b>Save</b> stores this for <b>{{radio}}</b>, and it takes effect when that radio is in use; the radio in use now does not change.',
@@ -8852,6 +9071,34 @@ export const EN = {
   'firstContact.step.tx': 'TX starts off each time Nexus opens ({{txOff}}). {{stop}} ends a transmission at once; {{txOn}} turns TX off once the current period ends.',
   'firstContact.close': 'Got it',
   'settings.station.experience.label': 'Your experience',
+  'settings.stationProfiles.title': 'My station profiles',
+  'settings.stationProfiles.hint': 'Named setups of your station: Home, a portable kit, a club call. Each holds a call, grid and location, and what you log with. Pick one from the top bar; starting a POTA activation of a profile\'s park picks it by itself, and Stop goes back. New contacts carry the profile\'s details where they are blank; contacts already in your log never change. Saved as you save each one, not with Save.',
+  'settings.stationProfiles.home': 'Home',
+  'settings.stationProfiles.active': 'in use',
+  'settings.stationProfiles.add': 'Add a profile…',
+  'settings.stationProfiles.edit': 'Edit',
+  'settings.stationProfiles.remove': 'Remove',
+  'settings.stationProfiles.save': 'Save profile',
+  'settings.stationProfiles.cancel': 'Cancel',
+  'settings.stationProfiles.failed': 'Could not save the station profile',
+  'settings.stationProfiles.atStation': 'Set at the station.',
+  'settings.stationProfiles.name': 'Name',
+  'settings.stationProfiles.call': 'Callsign',
+  'settings.stationProfiles.call.hint': 'Your own call, or a portable form of it (/P). Another licensee\'s call, such as a club call, will not transmit while a licence class is set: Nexus does not guess its privileges.',
+  'settings.stationProfiles.grid': 'Grid',
+  'settings.stationProfiles.state': 'State',
+  'settings.stationProfiles.county': 'County',
+  'settings.stationProfiles.county.hint': 'A US county, such as Dane; your state is added when you leave it out.',
+  'settings.stationProfiles.cqZone': 'CQ zone',
+  'settings.stationProfiles.ituZone': 'ITU zone',
+  'settings.stationProfiles.iota': 'IOTA',
+  'settings.stationProfiles.park': 'POTA park',
+  'settings.stationProfiles.park.hint': 'The park this setup is for, such as US-1234. Starting its activation picks this profile.',
+  'settings.stationProfiles.power': 'Power (W)',
+  'settings.stationProfiles.rig': 'Rig',
+  'settings.stationProfiles.antenna': 'Antenna',
+  'settings.stationProfiles.lotwLocation': 'TQSL Station Location',
+  'settings.stationProfiles.lotwLocation.hint': 'The Station Location in TQSL that signs this profile\'s contacts for LoTW. Leave blank to use the one in Settings ▸ Services ▸ Confirmations.',
   'settings.station.experience.notSet': 'Not set',
   'settings.station.experience.hint': 'Picks which screens are on and how much of Settings opens at first. Changing it replaces the set in Settings ▸ App ▸ Features. Every setting stays reachable by search.',
   'settings.station.experience.failed': 'Could not save your experience',
@@ -8994,7 +9241,7 @@ export const EN = {
     'Every mode and every section starts ON — FT8/FT4, Phone, CW, RTTY, SSTV, APRS, satellites, the maps, the lot. Nexus is one program instead of six; there’s nothing to unlock. If you ever want a leaner app, trim sections in Settings.',
   'setup.finish.license.title': 'What’s your license?',
   'setup.finish.license.sub':
-    'Sets your transmit privileges — the app parks the dial in your licensed band segments and won’t let you transmit outside them. Pick “Outside the US” for no limits.',
+    'Sets your transmit privileges — the app parks the dial in your licensed band segments and won’t let you transmit outside them. Licensed in another country? Pick “Outside the US”.',
   'setup.finish.license.novice': 'Novice',
   'setup.finish.license.novice.blurb': 'US, grandfathered — CW on 80/40/15 m, 10 m, 222 MHz, 23 cm',
   'setup.finish.license.technician': 'Technician',
@@ -9006,7 +9253,8 @@ export const EN = {
   'setup.finish.license.extra': 'Amateur Extra',
   'setup.finish.license.extra.blurb': 'US — full privileges',
   'setup.finish.license.open': 'Outside the US',
-  'setup.finish.license.open.blurb': 'No transmit limits',
+  'setup.finish.license.open.blurb':
+    'Nexus won’t block any band and warns when you’re outside the usual band plan. You’re responsible for your country’s rules.',
   'setup.finish.packs.title': 'Start with some channels?',
   'setup.finish.packs.sub':
     'Optional — a ready-made set of common frequencies and nets, added to your Memories. Change or remove any of them later in the Memories section.',
@@ -9136,6 +9384,19 @@ export const EN = {
   'settings.transmit.foreignPtt.label': 'Other programs may key transmit',
   'settings.transmit.foreignPtt.hint':
     'On: a shared program (WSJT-X, VarAC) can key the rig, exactly as it could when it owned the CAT cable — every Nexus transmit safeguard still applies. Off: shared programs tune and read but never transmit.',
+  'settings.transmit.freedv.log.label': "Accept contacts other programs log",
+  'settings.transmit.freedv.log.hint':
+    "Other programs can hand each contact they log to Nexus at the address shown here: FreeDV (turn on its QSO Logging), WSJT-X, JTDX or MSHV (their secondary UDP server), N1MM (its contact broadcast), or anything that sends ADIF over UDP. Each lands in your log only under your own station call: one logged under another call is refused, and the reason shows here. Receive only: nothing sent here can key or tune the radio.",
+  'settings.transmit.freedv.logPort.label': "Contact port",
+  'settings.transmit.freedv.logPort.off': "Not listening: port 0 turns it off.",
+  'settings.transmit.freedv.lan.label': "Accept from devices on my network",
+  'settings.transmit.freedv.lan.hint': "For a device or another computer on your own network, such as the S.A.T. satellite tracker: on the S.A.T., set QSO LOG TYPE to Log4OM or HRD, QSO LOG IP to this computer's address, and the port to the contact port above. Only private network addresses are taken, never one from the internet. Windows may ask once whether Nexus may use the network. Anything on your network that can send to this port can log contacts, and they go to your logging services: turn this on only on a network you trust.",
+  'settings.transmit.freedv.peer.label': "Only from this address",
+  'settings.transmit.freedv.peer.hint': "Optional: the one network address allowed to send contacts (the S.A.T.'s, for example). Leave it empty to take any device on your network. This computer is always allowed.",
+  'settings.transmit.freedv.last': "Last contact: {{call}} from {{program}} at {{time}}",
+  'settings.transmit.freedv.heard.label': "Calls FreeDV hears",
+  'settings.transmit.freedv.heard.hint':
+    "Lists the calls FreeDV decodes (FreeDV 2.4 and later) in the Phone screen's FreeDV pane. Only the FreeDV on this computer is listened to. Windows may ask once whether Nexus may use the network.",
 
   // "Share by TCI": Nexus as a TCI server for programs on this computer (TciServerSettings.tsx).
   // The programs' own names (WSJT-X, JTDX, MSHV, Log4OM, 5MContest), WSJT-X's rig name
@@ -9261,7 +9522,7 @@ export const EN = {
 
   // Station Housekeeping. ⚠️ The beacon toggle is a CONFIGURATION control, not a transmit
   // control — it chooses whether the station announces itself, and it can neither key nor
-  // unkey anything. Same reading as Tx Power's drive slider; nothing here is on
+  // unkey anything. Same reading as the Drive slider; nothing here is on
   // any cockpit's stop-line census. The watts placeholder ("e.g. 100") is a power value and
   // stays in the component, as the example addresses in Rig & CAT do.
   'settings.digital.housekeeping.title': 'Station Housekeeping',
@@ -9466,7 +9727,7 @@ export const EN = {
   'settings.cw.keyer.hint':
     "How Nexus sends CW. <b>CAT</b> uses the rig's internal keyer, but older rigs (e.g. IC-756PRO III) don't support it. <b>Serial keyline</b> toggles DTR/RTS into the rig's KEY jack (rig in CW, rig shapes the signal — a clean method that needs only a keying cable). <b>WinKeyer</b> drives a K1EL.<b>Soundcard</b> keys an audio tone — a workaround; set drive so ALC reads zero. <b>It takes your radio out of CW</b> into a data mode (DATA-U/DATA-L, so the tone reaches the transmitter instead of the mic jack); pick any other keyer and CW mode comes straight back. Also switchable live from the CW cockpit.",
   'settings.cw.keyer.unproven':
-    "CAT CW keying is <b>unproven on this radio</b>. Its Hamlib backend sends a different keying command from the one other radios use, and it reports success either way — so if nothing is transmitted, Nexus cannot tell you. If CW doesn't go out, use the Serial keyline, WinKeyer, or Soundcard keyer.",
+    "CAT CW keying is <b>unproven on this radio</b>. Its Hamlib backend may send a keying command this radio doesn't accept, and it reports success either way — so if nothing is transmitted, Nexus cannot tell you. If CW doesn't go out, use the Serial keyline, WinKeyer, or Soundcard keyer.",
   'settings.cw.keyer.flexCatStop':
     "On a Flex over <b>SmartSDR CAT</b>, Esc stops Nexus at once, but the radio may finish the word it is sending: SmartSDR CAT has no documented CW stop, so Nexus hands the radio one word at a time. For a stop that cuts mid-word, choose the <b>WinKeyer</b> keyer on SmartSDR CAT's WinKeyer port, or use the <b>Flex native client</b>.",
   'settings.cw.pitch.label': 'Sidetone pitch (Hz)',
@@ -9513,6 +9774,19 @@ export const EN = {
   'settings.cw.macros.tokens.hint':
     "Tokens: {MYCALL} {NAME} {MYGRID} {MYSTATE} {RST} · ! = the worked call · {HISNAME} {HISSTATE} = the worked station's QRZ name/state (fill in Settings ▸ Station for {MYSTATE}; the rest auto-fill from the copilot / roster click + QRZ lookup). Each key KEEPS its role — the Guided copilot's next-step highlight follows the role, so customized text still rolls through F1→F2→F3→F4 exactly as before. Keep the ! token wherever you want the other station's call inserted. Save to apply.",
   'settings.cw.macros.reset': 'Reset to defaults',
+  // HOW MANY MACRO KEYS a keyboard mode's screen shows (CW, RTTY and PSK, each its own setting).
+  'settings.macroCount.label': 'Macro keys',
+  'settings.macroCount.option': {
+    one: '{{count}} key',
+    other: '{{count}} keys',
+  },
+  'settings.macroCount.hint':
+    'How many macro keys this mode’s screen shows. F1–F12 send the first twelve; keys 13–16 send with a click. Fewer keys hides the rest and keeps what they hold.',
+  // Macro keys 13–16, which no keyboard key sends: their name where an F-key's would go, their
+  // editor's tooltip without the Ctrl+Shift shortcut, and the line their tooltip ends with.
+  'macroSlot.name': '#{{n}}',
+  'macroSlot.edit.title': 'Edit the {{key}} macro. You can also right-click the key.',
+  'macroSlot.click.hint': 'Click to send — no keyboard key sends this one.',
   'settings.cw.macros.role.answer': 'Answer a station',
   'settings.cw.macros.role.report': 'Send report',
   'settings.cw.macros.role.signOff': 'Sign off (73)',
@@ -9549,12 +9823,16 @@ export const EN = {
   'settings.rtty.signal.title': 'Signal',
   'settings.rtty.baud.label': 'Baud rate',
   'settings.rtty.baud.hf': '45.45 — the HF standard',
+  'settings.rtty.baud.eu': '50 — used in parts of Europe',
   'settings.rtty.baud.vhf': '75 — VHF / some nets',
   'settings.rtty.baud.hint':
     'Drives the TX bit clock and the RX demodulator (true 45.45, never rounded to 45).',
   'settings.rtty.shift.label': 'Shift (Hz)',
   'settings.rtty.shift.hf': '170 — the HF standard',
   'settings.rtty.shift.hint': 'Mark/space spacing — the TX tone pair and the RX demodulator both.',
+  'settings.rtty.lowTone.label': 'Low tone (Hz)',
+  'settings.rtty.lowTone.hint':
+    'Where the decoder and the AFSK transmitter sit until you click the waterfall: this tone, and this plus the shift. 2125 gives the standard 2125/2295; 1275 gives 1275/1445. A waterfall click still moves both for the session; changing this moves them back here.',
   'settings.rtty.reverse.label': 'Reverse (swap mark/space)',
   'settings.rtty.reverse.hint':
     'Swaps mark and space on TX and in the RX decoder, to work a station sending upside down. Not for running USB: pick the AFSK sideband instead, which keeps the sense right on its own.',
@@ -9847,6 +10125,9 @@ export const EN = {
   'settings.sstv.rxAutoArm.label': 'Start receiving when SSTV opens',
   'settings.sstv.rxAutoArm.hint':
     'The SSTV screen starts the decoder as soon as you open it, so a picture on the band decodes without arming anything. Turn this off to arm the receiver by hand (the Arm button in the SSTV header). Stopping the receiver yourself is already remembered for the rest of the session.',
+  'settings.sstv.tuneOnOpen.label': 'Tune to the band’s SSTV frequency when SSTV opens',
+  'settings.sstv.tuneOnOpen.hint':
+    'Opening the SSTV screen tunes the radio to the SSTV calling frequency of the band you are on, or to {{freq}} on {{band}} from an HF band that has none. The dial stays where it is when it is already on an SSTV frequency, while you transmit, and on a VHF or UHF band that has none. With this off, the screen leaves the dial alone, and the band picker in its header tunes to any SSTV frequency.',
   'settings.sstv.issAutoArm.label': 'ISS SSTV auto-arm',
   'settings.sstv.issAutoArm.hint':
     "Auto-arm SSTV for ISS passes — tunes {{freq}} FM and arms the decoder when the ISS is overhead while the SSTV or Satellites screen is open, restores your dial at LOS. On any other screen it only tells you the ISS is up and leaves your radio alone. If your radio can't receive {{freq}} MHz, it tells you once a session and does nothing else. Off by default. A pass arm is an explicit act, so it works whether or not the switch above is on.",
@@ -9855,14 +10136,14 @@ export const EN = {
   'settings.sstv.txMode.auto': 'Automatic — Scottie 1 on HF, PD-120 on 2 m (ARISS)',
   'settings.sstv.txMode.hint':
     'This is the mode the SSTV screen starts on; you can still change it there for one picture. <b>Automatic</b> follows the band: HF gets Scottie 1 (the NA calling-frequency convention — Martin 1 is the EU one), 2 m gets PD-120, which is what ARISS transmits.',
-  'settings.sstv.txPower.label': 'Transmit power',
-  'settings.sstv.txPower.aria': 'SSTV transmit power percent',
+  'settings.sstv.txPower.label': 'RF power',
+  'settings.sstv.txPower.aria': 'SSTV RF power percent',
   'settings.sstv.fskId.label':
     'Send my callsign after each picture',
   'settings.sstv.fskId.hint':
     'Adds the FSK callsign burst other SSTV software reads and shows under the received picture — the same one Nexus shows you under yours. Off by default: it adds about {{seconds}} seconds of key-down to every transmission. Your callsign is still drawn into the picture either way.',
   'settings.sstv.txPower.hint':
-    'The drive the SSTV screen starts on, and the level an image is sent at. Leave it blank and Nexus never touches your power. SSTV is up to 290 seconds of continuous key-down at full duty, so most operators run it well below their SSB drive. Your Phone power cap still applies on top of this.',
+    'The RF power the SSTV screen starts on, and the power an image is sent at. Leave it blank and Nexus never touches your power. SSTV is up to 290 seconds of continuous key-down at full duty, so most operators run it well below their SSB power. Your Phone power cap still applies on top of this.',
   'settings.sstv.callsignNote':
     'Your callsign is burned into the top-left of every picture you transmit, and there is no switch for it: an SSTV over is one long carrier of picture-only audio, so the picture is the identification ({{rule}}). Send is refused until you have set a callsign in Settings ▸ Station. If a picture already shows your call — a pre-made QSO card — tick “My picture already shows my callsign” in the SSTV screen: that is per-picture on purpose and resets with every new image.',
 
@@ -10040,6 +10321,9 @@ export const EN = {
     'for JTAlert / GridTracker / loggers — and FT8 contest scorers. Several at once: separate addresses with a comma.',
   'settings.integrations.udpAddr.label': 'UDP Address',
   'settings.integrations.udpAddr.hint': 'host:port for the UDP feed',
+  'settings.integrations.wsjtxUdpAccept.label': 'Accept requests from other computers',
+  'settings.integrations.wsjtxUdpAccept.hint':
+    "Off: a program can answer a station, send or fill in free text, or change your grid only if it sends from this computer's 127.0.0.1. Any other program can still stop TX. That includes a program on this computer reached through a multicast address: to keep it without this switch, list one 127.0.0.1 address per program, with commas (127.0.0.1:2237, 127.0.0.1:2238). On: anyone who can reach this computer over the network can turn TX on and send under your call, because a UDP sender's address can be faked. Stop TX and a tripped watchdog still refuse them, but each accepted answer restarts the watchdog's clock, as in WSJT-X.",
   'settings.integrations.hrdLogging.label': 'Ham Radio Deluxe logging',
   'settings.integrations.hrdLogging.hint':
     "push each QSO to HRD Logbook over its QSO-Forwarding UDP port (HRD must be running; don't also run JTAlert/QSO Relay into HRD or you'll double-log)",
@@ -10099,6 +10383,9 @@ export const EN = {
     'We connect to ALL listed nodes and union their human SSB/phone spots — more nodes = wider phone coverage (RBN CW + digital connect automatically; RBN endpoints are ignored here). Nexus never changes this list for you. An added node connects, and a removed one disconnects, on the next Save.',
   'settings.integrations.clusterNodes.mode.auto': 'Pick working nodes automatically (recommended)',
   'settings.integrations.clusterNodes.mode.manual': 'Use my list',
+  // Spot Sources in a window that gets its spots through another window's cluster logins.
+  'settings.integrations.clusterNodes.viaOtherWindow':
+    "Another Nexus window on this computer holds the cluster logins for this callsign, and this window gets its spots through it. While it does, its node list and Cluster login SSID are the ones in use: what you set here takes effect when this window holds the logins.",
   'settings.integrations.clusterNodes.autoHint':
     'Nexus keeps two of these nodes connected for SSB/phone spots and spreads operators across them. A node that stops answering for five minutes, while your other spot feeds are working, is skipped for a day and another takes its place. A quiet band never counts against a node. RBN CW + digital connect automatically either way. Takes effect on the next Save.',
   // How one node is doing. `{{reason}}` is one of the clusterNodes.reason.* phrases below, and
@@ -10619,6 +10906,21 @@ export const EN = {
     'Fits the whole interface to the window so nothing is cut off (currently {{scale}}%). The waterfall stays sharp. Raise the max for big monitors.',
   'settings.workspace.scale.manual.hint':
     'Fixed scale. Switch to Auto to fit the interface to the window automatically.',
+  // The one-time prompt on a Windows display scaled to 125% or 150% (useScaleFitNotice.ts). Auto
+  // fit has already chosen {{scaled}}; {{classic}} is the size it gave this screen before. Both are
+  // percent numbers.
+  'settings.workspace.scale.fit.notice':
+    'Your display is scaled up, so Nexus now fits this screen at {{scaled}}%, where everything shows without crowding. Keep it?',
+  'settings.workspace.scale.fit.keep': 'Keep {{scaled}}%',
+  'settings.workspace.scale.fit.classic': 'Use {{classic}}%',
+  // The answer to that prompt, shown and changed later under UI scale ▸ Auto (SettingsPanel.tsx).
+  // Auto = the smaller fit on a scaled display; Off = the size Nexus used before.
+  'settings.workspace.scale.fit.label': 'On a scaled display',
+  'settings.workspace.scale.fit.aria': 'Auto-zoom on a scaled display',
+  'settings.workspace.scale.fit.auto': 'Auto',
+  'settings.workspace.scale.fit.off': 'Off',
+  'settings.workspace.scale.fit.hint':
+    'When Windows display scaling is 125% to 175%, Auto makes Nexus smaller so everything fits without crowding (80% at 125%, 70% at 150%). Off keeps the size Nexus used before.',
   // #215 text size: the ids are the persisted tokens (useTextSize.ts); the words are prose.
   'settings.workspace.textSize.label': 'Text size',
   'settings.workspace.textSize.normal': 'Normal',
@@ -10679,6 +10981,10 @@ export const EN = {
   // ── Settings ▸ Appearance: the other Display sections ─────────────────────────────
   // Theme holds the theme cards and the High contrast, Night and Field mode rows, whose keys keep
   // their `settings.workspace.*` ids: an id is an invariant token, and the rows only moved.
+  'settings.workspace.txMeters.label': 'TX meters',
+  'settings.workspace.txMeters.bars': 'Bars',
+  'settings.workspace.txMeters.needle': 'Needle',
+  'settings.workspace.txMeters.hint': 'How the TX meters show power, ALC and SWR, on every screen that has them. Needle draws an analog meter with a peak mark that holds the highest reading for a second; between overs it shows the last over\'s peak.',
   'settings.theme.legend': 'Theme',
   'settings.waterfallScopes.legend': 'Waterfall & scopes',
   'settings.waterfallScopes.note':
@@ -11060,6 +11366,37 @@ export const EN = {
   'pathWhy.kpSource.forecast': 'forecast',
   'pathWhy.kpSource.current': 'latest reading, no forecast for this hour',
   'pathWhy.kpSource.unknown': 'unknown (no Kp reading)',
+  // The flare / proton overlay on a path and the outlook's "now" line (features/pathNow.ts). Every
+  // figure is an estimate from NOAA's inputs and says so; only a recovery time from NOAA's grid is
+  // "NOAA's own estimate". {{time}} is a UTC clock time.
+  'pathNow.flare': '~{{db}} dB of flare absorption on {{band}} ({{source}})',
+  'pathNow.flareOut': 'more than {{db}} dB of flare absorption on {{band}}, out ({{source}})',
+  'pathNow.pca': '~{{db}} dB of polar-cap absorption on {{band}} (S{{s}} proton event, {{source}})',
+  'pathNow.pcaOut': 'more than {{db}} dB of polar-cap absorption on {{band}}, out (S{{s}} proton event, {{source}})',
+  'pathNow.src.noaa': "estimated from NOAA's D-RAP grid {{time}}",
+  'pathNow.src.goes': 'estimated from GOES {{time}}',
+  'pathNow.src.noaaGoes': "estimated from NOAA's D-RAP grid {{time}} and GOES {{xtime}}",
+  'pathNow.src.protons': 'estimated from GOES protons {{time}}',
+  'pathNow.recovery.noaa': "recovery ~{{time}} (NOAA's own estimate)",
+  'pathNow.recovery.fit': "recovery ~{{time}} (NOAA's rule of thumb from the X-ray level)",
+  'pathNow.detail.hops': "D-region crossings: {{crossings}} (hops: {{hops}}, the model's mode this hour)",
+  'pathNow.detail.hopsAssumed': 'D-region crossings: {{crossings}} (hops: {{hops}}, assumed at 4000 km each; the model gives no mode this hour)',
+  'pathNow.detail.note': "Flare and proton figures are estimates laid over the model, which includes neither; the model's numbers are unchanged.",
+  'pathNow.detail.capSplit': "Poleward of {{lat}}° geomagnetic the flare figure takes no more than the GOES X-ray estimate where NOAA's grid is higher: the grid folds proton absorption into the same figure. That proton part is counted once, as polar-cap absorption.",
+  'pathNow.detail.capSplitUncounted': "Poleward of {{lat}}° geomagnetic the flare figure takes no more than the GOES X-ray estimate where NOAA's grid is higher: during the proton event the grid folds proton absorption into the same figure. That proton part is not counted here: with no Kp reading the polar-cap edge is unknown, so no polar-cap figure is given.",
+  'pathNow.cell': 'Now: {{text}}',
+  'pathNow.legend': 'Hatched: hit now by a flare or a proton event (estimated)',
+  'spaceNow.flare.out': 'Flare {{cls}} (R{{r}}): {{band}} and below out on the dayside {{until}} · {{source}}',
+  'spaceNow.flare.weak': 'Flare {{cls}} (R{{r}}): {{band}} and below weakened on the dayside {{until}} · {{source}}',
+  'spaceNow.until.noaa': "until ~{{time}} (NOAA's own estimate)",
+  'spaceNow.until.fit': "until ~{{time}} (NOAA's rule of thumb from the X-ray level)",
+  'spaceNow.src.noaa': 'NOAA D-RAP {{time}} · GOES {{xtime}}',
+  'spaceNow.src.goes': 'estimated from GOES {{time}}',
+  'spaceNow.protons': 'S{{s}} proton event: paths over the polar caps absorbed (GOES {{time}})',
+  'spaceNow.watch.ahead': 'G{{g}} watch (NOAA, issued {{issued}}) from {{time}}',
+  'spaceNow.watch.now': 'G{{g}} watch (NOAA, issued {{issued}}) in force until {{time}}',
+  'spaceNow.aria': 'Happening now',
+  'spaceNow.title': 'Happening now, which the modelled outlook does not include. Each part names its source and time.',
   // Short path or long path (features/pathRoute.ts): the heading hint on the Path card and the
   // selected station card, the polar chip, and the map's long-path button. The route call is the
   // P.533 model's opinion (a monthly median), so the confidence words are "likely" / "possible",
@@ -11168,6 +11505,11 @@ export const EN = {
   'connect.getout.showAll': 'Show all',
   'connect.getout.showAll.title': 'Count every reception report again',
   'connect.getout.none.since': 'No reception reports since {{time}} yet — call CQ, then watch who hears you.',
+  'connect.getout.sort.aria': 'Sort the stations hearing you',
+  'connect.getout.sort.distance': 'Distance',
+  'connect.getout.sort.call': 'Call A–Z',
+  'connect.getout.sort.newest': 'Newest',
+  'connect.getout.sort.snr': 'SNR',
 
   // ── The Basic projections — one whole sentence per pane, per state ──────────────────
   // Every one of these was assembled from fragments. They are whole sentences now, with
@@ -11653,8 +11995,8 @@ export const EN = {
 
   // A CONFIGURATION control on the transmit path is not a transmit control — the batch-13
   // ruling, where the drive slider moved and Prove TX did not.
-  'operate.header.power.label': 'Pwr',
-  'operate.header.power.title': "TX drive (Pwr) — trim down until your rig's ALC is just zero",
+  'operate.header.power.label': 'Drive',
+  'operate.header.power.title': "TX audio drive — trim down until your rig's ALC is just zero",
 
   // The DXpedition Hound toggle. `Hound` is WSJT-X's role name and stays in the code (it is
   // the button's whole label); only its explanation is words. One title serves both states —
@@ -11791,7 +12133,13 @@ export const EN = {
     "The radio's transmit timeout is off. If Nexus or the network fails during a tune, nothing will end the carrier. Set a transmit timeout in SmartSDR.",
   'operate.strip.tune.radioRefused':
     "Tune keys nothing here: the radio's own carrier would be outside your CW privileges on this frequency.",
+  'operate.strip.tune.overRefused':
+    "Tune keys nothing while a transmit period is on the air with Split Operation on: the radio may be transmitting from a moved frequency. Press Tune again after it.",
+  'operate.strip.tune.toneRefused':
+    "Tune keys nothing here: its 1500 Hz tone would be outside your license privileges on this frequency.",
   'operate.strip.atu.radioStatus': 'Radio ATU: {{status}}',
+  'operate.strip.atu.carrierRefused':
+    "ATU keys nothing here: the radio's own carrier at your dial, {{mhz}} MHz, would be outside your license privileges.",
   'operate.strip.atu.radioRefused':
     "ATU keys nothing here: the radio's own carrier would be outside your CW privileges on this frequency.",
 
@@ -11958,6 +12306,12 @@ export const EN = {
   // A received row's time is its period's start, as WSJT-X and ALL.TXT show it; {{time}} is when
   // the line reached the list (UTC, hhmmss), seconds later for a full-pass decode.
   'operate.decodes.utc.period.title': 'Start of the period it was heard in (UTC). Arrived at {{time}}.',
+  // #452: a row filled in from the station's decode history after this pane missed its period.
+  'operate.decodes.utc.refilled.title': 'Start of the period it was heard in (UTC). Filled in afterwards from the station history: this pane was not showing when it was decoded.',
+  // #452: a dim marker between two rows for periods this pane missed and could not fill in;
+  // {{n}} is how many. A label with a number after it, so no plural form is needed.
+  'operate.decodes.gap': 'Periods not received: {{n}}',
+  'operate.decodes.gap.title': 'This pane was not taking decodes in for these periods, and the station no longer holds them. ALL.TXT has every decode.',
   'operate.decodes.dt.title': 'DT — time offset (s); large = clock/sync skew',
   'operate.decodes.dt.title.msk144': 'T — when in the period the ping landed (s)',
   'operate.decodes.marker.lowConf.title': 'Low-confidence decode',
@@ -11999,6 +12353,10 @@ export const EN = {
   'operate.roster.col.calling.title':
     'Sort by who each station is calling (CQ = calling nobody)',
   'operate.roster.col.need': 'Need',
+  'operate.roster.col.park': 'Park',
+  'operate.roster.col.park.title': 'Sort by the park or summit each station is activating (from a POTA or SOTA spot, or its CQ POTA). The parks stay on top either way.',
+  'operate.roster.park.title.spot': 'Activating {{park}} (from a spot)',
+  'operate.roster.park.title.cq': 'Calling CQ {{program}}. No spot names the park yet.',
   'operate.roster.col.country': 'Country',
   'operate.roster.col.state': 'State',
   'operate.roster.col.state.title':
@@ -12009,11 +12367,12 @@ export const EN = {
   'operate.roster.col.age': 'Age',
 
   'operate.roster.empty': 'No stations heard yet — decoded stations appear here as they arrive.',
-  // The row, read aloud — five optional clauses, each interpolated whole with its own
+  // The row, read aloud — six optional clauses, each interpolated whole with its own
   // separator. `{{need}}` is a need TAG (NewMode, Confirm…), a token like a band name; the
   // watch clause's `{{what}}` is the watch-list entry that matched, as on the WATCH tile.
-  'operate.roster.row.aria': '{{call}}{{grid}}{{need}}{{watch}}{{worked}}{{working}}',
+  'operate.roster.row.aria': '{{call}}{{grid}}{{park}}{{need}}{{watch}}{{worked}}{{working}}',
   'operate.roster.row.aria.grid': ', grid {{grid}}',
+  'operate.roster.row.aria.park': ', at {{park}}',
   'operate.roster.row.aria.need': ', needed {{need}}',
   'operate.roster.row.aria.watch': ', on your watch list: {{what}}',
   'operate.roster.row.aria.worked': ', worked',
@@ -12105,7 +12464,7 @@ export const EN = {
     'True FSK — data bits on the serial keyline, rig in RTTY mode (its narrow RTTY filters work). Change the backend in Settings → RTTY.',
   'rtty.header.backend.afsk.title':
     'AFSK — soundcard tones through the rig in LSB (soundcard-clocked, the robust default). Change the backend in Settings → RTTY.',
-  'rtty.header.power.label': 'Power',
+  'rtty.header.power.label': 'RF power',
   'rtty.header.power.title':
     'RF output power — RTTY keys the carrier for the whole over, so most rigs want well under their SSB rating',
   'rtty.header.band.title': "Showing the rig's current band",
@@ -12263,7 +12622,7 @@ export const EN = {
   'psk.panel.waterfall': 'Waterfall',
   'psk.panel.stream': 'Decoded Text',
   'psk.header.mode.aria': 'PSK sub-mode',
-  'psk.header.power.label': 'Power',
+  'psk.header.power.label': 'RF power',
   'psk.header.power.title':
     'RF output power — key Tune and wind it back until the ALC stops moving; overdriven PSK splatters',
   'psk.mode.failed': 'PSK mode switch refused',
@@ -12473,6 +12832,8 @@ export const EN = {
   'js8.header.power.label': 'Drive',
   'js8.header.power.title':
     'TX audio drive — set it so the rig’s ALC barely moves; JS8 is a constant-envelope mode, but an overdriven sound card still splatters',
+  'js8.header.txOffset.held':
+    'The TX offset stays put while a message waits to go or goes out, as in JS8Call. To move it while sending, turn on Settings ▸ Digital ▸ JS8 ▸ Allow TX offset changes while sending.',
   'js8.header.speed.title': 'JS8 — JS8Call-compatible keyboard mode on FT8’s waveform',
   'js8.header.speed.aria': 'Transmit speed',
   'js8.header.speed.chip.title':
@@ -12956,7 +13317,7 @@ export const EN = {
   'sstv.manualRx.failed': 'Could not start the receiver in that mode',
   // A CONFIGURATION control on the transmit path is not a transmit control (the batch-13
   // ruling): the drive slider moved, Stop did not.
-  'sstv.header.power.label': 'Power',
+  'sstv.header.power.label': 'RF power',
   'sstv.header.power.title': 'RF output power — set it against a Tune carrier, below ALC',
   'sstv.header.mode.title':
     'Detected SSTV mode — fills in (Martin / Scottie / Robot / PD) when the receiver hears a VIS header',
@@ -13279,6 +13640,13 @@ export const EN = {
   'cw.rfZoom.band.label': 'Band',
   'cw.rfZoom.band.title': "The band you're tuned to, edge to edge with a little margin, at the finest resolution your scope can give it",
   'cw.rfZoom.band.partial': 'Your scope sweeps only part of this band',
+  // The CW audio scope's toolbar notes. `{{hz}}` is the radio's filter width. The <link> runs open
+  // Settings at the place they name.
+  'cw.scope.filterLimit': "Showing your radio's {{hz}} Hz filter — widen it on the radio to see more.",
+  'cw.scope.nativeHint.civOff':
+    'Your Icom can show its own wide scope here: turn on <link>Native Icom CI-V in Settings ▸ Radio ▸ Rig & CAT ▸ Advanced</link>.',
+  'cw.scope.nativeHint.baud':
+    "Your Icom's own wide scope needs 115,200 baud: set it in <link>Settings ▸ Radio ▸ Rig & CAT</link>, and the radio's CI-V USB Baud Rate to match.",
 
   // ── CW ▸ the rig-control strip (scope controls, DSP toggles, RX DSP levels) ──────────
   // ⚠️ `Rig\u00a0scope` and `Flex\u00a0pan` carry a NON-BREAKING SPACE, written as an
@@ -13288,14 +13656,12 @@ export const EN = {
   'cw.rigScope.aria': 'Rig scope control',
   'cw.rigScope.label': 'Rig\u00a0scope',
   'cw.rigScope.title': "These command the radio's own scope, not just the on-screen zoom",
-  'cw.rigScope.span.title': "Set the radio's scope span to {{span}}",
   'cw.rigScope.ref.title': 'Scope reference level — lower to lift weak signals out of the noise',
   'cw.rigScope.ref.aria': 'Scope reference level (dB)',
   'cw.flexPan.aria': 'Flex panadapter control',
   'cw.flexPan.label': 'Flex\u00a0pan',
   'cw.flexPan.title':
     "These command the FlexRadio's real SmartSDR panadapter, not just the on-screen zoom",
-  'cw.flexPan.span.title': 'Set the Flex panadapter bandwidth to {{span}}',
   'cw.flexPan.ref.title':
     'Panadapter reference level (dBm) — lower to lift weak signals out of the noise',
   'cw.flexPan.ref.aria': 'Flex panadapter reference level (dBm)',
@@ -13468,6 +13834,20 @@ export const EN = {
   'phone.pane.voiceKeyer.title': 'Voice keyer',
   'phone.pane.spots.title': 'Spots',
   'phone.pane.needed.title': 'Needed',
+  'phone.panel.freedv': "FreeDV",
+  'phone.pane.freedv.title': "FreeDV",
+  'phone.freedv.off':
+    "Nexus is not listening for FreeDV. Turn it on in Settings ▸ Radio ▸ Transmit limits & sharing.",
+  'phone.freedv.logOff':
+    "Contacts from FreeDV are off (Settings ▸ Radio ▸ Transmit limits & sharing).",
+  'phone.freedv.connected': "FreeDV connected",
+  'phone.freedv.waiting': "Waiting for FreeDV: point its QSO Logging at {{address}}.",
+  'phone.freedv.lastContact': "Last contact: {{contact}}",
+  'phone.freedv.heard.off': "Heard calls are off.",
+  'phone.freedv.heard.listen': "Listen for them",
+  'phone.freedv.heard.empty': "No calls heard yet.",
+  'phone.freedv.heard.label': "Calls FreeDV heard",
+  'phone.freedv.heard.pick': "Put {{call}} in the log",
   // The divider between those two panes (its accessible name, and the resize tooltip's).
   'phone.seam.spotsNeeded.label': 'Spots / Needed',
   'phone.seam.columns.label': 'Band activity column / Receiver column',
@@ -13483,6 +13863,8 @@ export const EN = {
   //
   // `absent` has no per-control wording on purpose: it collapses into `phone.chain.absent`
   // at the pane's foot, so an IC-7300 does not open to four grey rows.
+  'phone.tune.usbAudioNote': 'Tune sends its tone over USB audio. If the radio keys with no power, set its SSB MOD SOURCE menu to REAR (USB).',
+  'phone.tune.usbAudioNote.aria': 'About Tune on this radio',
   'phone.unavail.mark': 'not reported',
   'phone.unavail.noCat':
     '{{plate}} needs CAT control — this radio is set up for VOX or serial PTT only. Add rig ' +
@@ -13601,7 +13983,7 @@ export const EN = {
   // sideband only. "USB" is a mode name.
   'phone.mode.usbOnly': '60 m allows only USB phone',
   'phone.mode.failed': 'Could not set mode',
-  'phone.header.power.label': 'Power',
+  'phone.header.power.label': 'RF power',
   'phone.header.power.title': 'RF output power',
   // The mic-is-dead warning: native Flex DAX transmit audio is a RADIO-WIDE setting, so this
   // screen is the only one that can say the physical microphone is disconnected.
@@ -13711,6 +14093,13 @@ export const EN = {
   'phone.scope.audio.title':
     'Receiver AUDIO spectrum on your rig’s axis: the centre line is your dial, and the passband sits on the side your sideband is on (USB above, LSB below) — the other half is quiet because an SSB receiver only hears one side. Not a band-wide RF panadapter, so a voice fills the passband rather than sliding across it as you tune.',
   'phone.scope.audio.sub': 'RX audio',
+  // The Phone audio scope's notes under its span chips, the CW scope's own: `{{hz}}` is the radio's
+  // filter width; the <link> runs open Settings at the place they name.
+  'phone.scope.filterLimit': "Showing your radio's {{hz}} Hz filter — widen it on the radio to see more.",
+  'phone.scope.nativeHint.civOff':
+    'Your Icom can show its own wide scope here: turn on <link>Native Icom CI-V in Settings ▸ Radio ▸ Rig & CAT ▸ Advanced</link>.',
+  'phone.scope.nativeHint.baud':
+    "Your Icom's own wide scope needs 115,200 baud: set it in <link>Settings ▸ Radio ▸ Rig & CAT</link>, and the radio's CI-V USB Baud Rate to match.",
   'phone.scope.splitter.label': 'scope height',
   'phone.scope.span.aria': 'Bandscope span',
   'phone.span.auto.label': 'Auto',
@@ -13737,7 +14126,6 @@ export const EN = {
   'phone.rigScope.aria': 'Rig scope control',
   'phone.rigScope.label': 'Rig\u00a0scope',
   'phone.rigScope.title': "These command the radio's own scope, not just the on-screen zoom",
-  'phone.rigScope.span.title': "Set the radio's scope span to {{span}}",
   'phone.rigScope.ref.title':
     'Scope reference level — lower to lift weak signals out of the noise',
   'phone.rigScope.ref.aria': 'Scope reference level (dB)',
@@ -13745,7 +14133,6 @@ export const EN = {
   'phone.flexPan.label': 'Flex\u00a0pan',
   'phone.flexPan.title':
     "These command the FlexRadio's real SmartSDR panadapter, not just the on-screen zoom",
-  'phone.flexPan.span.title': 'Set the Flex panadapter bandwidth to {{span}}',
   'phone.flexPan.ref.title':
     'Panadapter reference level (dBm) — lower to lift weak signals out of the noise',
   'phone.flexPan.ref.aria': 'Flex panadapter reference level (dBm)',
@@ -13894,7 +14281,7 @@ export const EN = {
   'shell.lane.radioConfig.message': 'RADIO CONFIG',
   'shell.lane.txPowerZero.message': 'NO RF POWER',
   'shell.lane.txPowerZero.detail':
-    'The radio reports 0% power and transmit is armed — it will key and put nothing on the air. Check the Pwr slider, and the rig\u2019s own power for THIS mode: Yaesu rigs keep a separate level for SSB, DATA, CW and AM.',
+    'The radio reports 0% power and transmit is armed — it will key and put nothing on the air. Check the rig\u2019s own power for THIS mode (Yaesu rigs keep a separate level for SSB, DATA, CW and AM), or the RF power slider on the Phone, RTTY, PSK or SSTV screen.',
   'shell.lane.recording.message': 'RECORDING',
   // Parsec presence mode stopped a transmission while the operator was away; the lane keeps it
   // until they transmit again. `{{what}}` is a list of the `.what.*` entries below.
@@ -13978,6 +14365,8 @@ export const EN = {
   'shell.lane.pcMic.deviceLost':
     'the microphone went away during the over, so Nexus unkeyed the radio.',
   'shell.lane.pcMic.noAudio': 'no audio came from the microphone, so Nexus unkeyed the radio.',
+  'shell.lane.pcMic.silent':
+    'no sound came from the microphone while you held PTT (only silence, or nothing at all), so the radio was not keyed. Check that the microphone is not muted, and on Windows that Settings ▸ Privacy & security ▸ Microphone lets desktop apps use it.',
   'shell.lane.pcMic.ceiling': 'the over reached its 10-minute limit, so Nexus unkeyed the radio.',
   'shell.lane.pcMic.watchdog':
     'the TX watchdog tripped, so Nexus unkeyed the radio and turned TX off.',
@@ -13995,6 +14384,8 @@ export const EN = {
     'the radio was unkeyed or taken over during the over (a radio switch, a CAT hold, or an unkey from elsewhere), so Nexus ended it. Press PTT again.',
   'shell.lane.pcMic.keyRefused':
     'the radio did not accept the key, so nothing was sent.',
+  'shell.lane.pcMic.txAudio':
+    'the radio\'s transmit audio output would not open, so the radio was not keyed: it would have gone on the air with no audio. Check that the radio is on with its USB audio connected, and that its TX audio device in Settings ▸ Radio ▸ Audio is the radio\'s.',
   'shell.lane.pcMic.unsure':
     'the chosen microphone cannot be told apart from an input that may carry the band (a sound server\'s default input such as default, pulse or pipewire, receive set to the system default, or an input named in a sound configuration file), so nothing was sent: that could put the band on the air. Pick the microphone by its own sound card, and give this radio\'s receive input its own card, in Settings ▸ Radio ▸ Audio.',
   // A voice-keyer message Nexus's own Flex client dropped without keying the radio (Phone at the
@@ -14100,6 +14491,9 @@ export const EN = {
     'Nexus could not read one of its files, so it kept that file, untouched, at {{path}}, and started a new one. Nothing was deleted.',
   'shell.keptFile.keptInPlace':
     'Nexus could not read {{path}} and could not move it aside, so it has left the file where it is and will not write over it. Nothing was deleted. Move or repair the file, then restart Nexus.',
+  'shell.intake.logged': "Logged {{call}} from {{program}}",
+  'shell.intake.device.network': "a device on your network",
+  'shell.intake.device.local': "this computer",
   'shell.keptFile.settingsKeptInPlace':
     'Nexus could not read your settings at {{path}} and could not move that file aside, so it started from the default settings and will not save any setting over that file. Nothing was deleted. Move or repair the file, then restart Nexus.',
   // Quitting while the logbook still has changes on their way to disk: Nexus keeps the main
@@ -14161,11 +14555,12 @@ export const EN = {
   'shell.aprs.tune.failed': 'Could not tune to APRS',
   'shell.tx.enable.failed': 'Could not enable transmit',
   'shell.tx.mute.failed': 'Could not mute transmit',
-  'shell.tx.level.failed': 'Could not set TX level',
+  'shell.tx.level.failed': 'Could not set the drive',
   'shell.tune.failed': 'Could not toggle tune',
   'shell.proveTx.failed': 'Could not key the transmitter',
   'shell.halt.failed': 'Could not stop transmit',
   'shell.radio.switch.failed': 'Could not switch radios',
+  'shell.stationProfile.failed': 'Could not switch station profile',
   'shell.pegLock.failed': 'Could not set peg-lock',
   'shell.overrideTx.failed': 'Could not queue TX to {{call}}',
   'shell.txPeriod.failed': 'Could not set transmit period',
@@ -14341,6 +14736,10 @@ export const EN = {
   // The optional host/detail a pill carries. One entry owns the parenthesis and the space, so
   // no caller ever glues them on.
   'nowbar.feed.title.detail': '{{title}} ({{detail}})',
+  // A window following another window's cluster logins says so on the Cluster and Phone pills.
+  'nowbar.feed.via.value': '{{value}} · other window',
+  'nowbar.feed.via.title':
+    "{{title}}. Through the other Nexus window, which holds this callsign's cluster logins; its cluster list and SSID apply here too.",
 
   // ── The Tempo cockpit header ────────────────────────────────────────────────────────
   // The tier NAMES (TempoFast/TempoDeep and their Fast/Deep slots) are the modes' own.
@@ -14348,9 +14747,9 @@ export const EN = {
   'tempo.header.tier.fast.title': 'TempoFast — fast conversational tier',
   'tempo.header.tier.deep.title': 'TempoDeep — robust weak-signal tier (15 s)',
   // TX drive: a CONFIGURATION control on the transmit path, not a transmit control (the
-  // batch-13 ruling — Tx Power moved, Prove TX did not).
-  'tempo.header.power.label': 'Pwr',
-  'tempo.header.power.title': "TX drive (Pwr) — trim down until your rig's ALC is just zero",
+  // batch-13 ruling — the drive slider moved, Prove TX did not).
+  'tempo.header.power.label': 'Drive',
+  'tempo.header.power.title': "TX audio drive — trim down until your rig's ALC is just zero",
   'tempo.header.cqRun.aria': 'CQ run',
   'tempo.header.cqRun.off': '📢 Call CQ',
   'tempo.header.cqRun.off.title':
@@ -14540,7 +14939,7 @@ export const EN = {
   'waterfall.hint': 'left = RX · right / Shift = TX · {{mod}} = both',
   'waterfall.zoom.aria': 'Waterfall zoom span',
   'waterfall.zoom.title':
-    'Waterfall view — Std (0–3 kHz, WSJT-X-like), Full (0–4 kHz), or zoom in around the RX marker',
+    'Waterfall view — Std (0–3 kHz, WSJT-X-like), Full (0–5 kHz), or zoom in around the RX marker',
   'waterfall.span.aria': 'Waterfall span',
   'waterfall.span.title': 'Show {{hz}} Hz of the passband',
   'waterfall.gain.title': 'Gain — contrast (how punchy strong signals look). Center = auto.',
@@ -14633,6 +15032,16 @@ export const EN = {
   // the chip it shows while the radio sends it no panadapter.
   'rfScope.title': 'RF scope',
   'scope.rf.none': 'No scope data from the radio',
+  // The CW and Phone scope head's view chip (components/ScopeViewChips): the radio's own scope, the
+  // sound-card audio, or (CW) both stacked. And the hint shown while the radio's scope sweeps slowly.
+  'scope.view.aria': 'What the scope shows',
+  'scope.view.rf.label': 'RF',
+  'scope.view.rf.title': "The radio's own scope: the band around your dial",
+  'scope.view.audio.label': 'Audio',
+  'scope.view.audio.title': "The sound-card audio: what came through the radio's filter, in fine detail",
+  'scope.view.both.label': 'Both',
+  'scope.view.both.title': "The radio's scope for the band, with the audio view under it for the detail inside the filter",
+  'scope.slow.hint': "Set the radio's scope SPEED to FAST for a smoother scope",
   // The scope's ⚙ strip (`spectrum/ScaleStrip.tsx`). The window widths (47/23/12 Hz) and the
   // averaging times (50 ms … 2 s) are measurements and stay in the component.
   'scope.strip.aria': 'Scope display settings',
@@ -14687,6 +15096,10 @@ export const EN = {
   // `{{when}}` is `TX_METERS_WHEN`, the one string the ⊞ Panels menu shows for this panel —
   // interpolated rather than repeated so the panel and the menu cannot drift. It is still
   // written in `TxMeters.tsx`; see the note there for why it has not moved yet.
+  'meters.tx.enlarge.aria': 'Show the transmit meters larger',
+  'meters.tx.enlarge.title': 'Transmit meters',
+  'meters.tx.enlarge.desc': 'The same live readings as the TX strip, larger. Escape stops transmitting, as everywhere on this screen; Close only closes this.',
+  'meters.tx.enlarge.close': 'Close',
   'meters.tx.idle': 'TX meters — {{when}}',
   // A meter the radio stayed silent about THROUGH an over — so it is one this radio does not
   // report, as against the blank rows before the first over, which the line above answers.
@@ -14702,6 +15115,7 @@ export const EN = {
     "Antenna match — this is the radio's own raw figure, and Nexus has no verified scale for this model, so it cannot tell you what counts as high here. Watch which way it moves as you tune; the absolute number may be well out, and nothing stops your transmission on it.",
   'meters.tx.alc.title': 'ALC — set mic gain so SSB peaks just tickle the zone, never peg it',
   'meters.tx.po.title': 'Actual output power',
+  'meters.tx.needle.peak.title': 'The bright mark is the peak: it holds the highest reading for a second, then falls back. Between overs it shows the last over\'s peak.',
   'meters.tx.comp.title': 'Speech compression',
   'meters.tx.comp.level.aria': 'Speech processor level',
   'meters.tx.comp.level.title': 'Speech compression — the bar is the meter, the line is the processor level ({{level}}%). Drag the bar or use the arrow keys to set the level.',
@@ -14808,6 +15222,12 @@ export const EN = {
   'amp.link.up': 'Linked',
   'amp.operate': 'Operate',
   'amp.standby': 'Standby',
+  // The Amplifier box's Operate/Standby button (prop/AmpPane): its second word, and the warning
+  // every one of its titles ends on.
+  'amp.op.active': 'Active',
+  'amp.op.notActive': 'Not active',
+  'amp.op.notStop': 'Standby does NOT stop a transmission — the exciter keeps keying and the drive passes straight through.',
+  'amp.op.waiting': 'Sent — waiting for the amplifier',
   'amp.k.power': 'Power out',
   'amp.k.temp': 'PA temp',
   'amp.k.current': 'Current',
@@ -14867,6 +15287,34 @@ export const EN = {
   // running (a tester read "Error 61" here). Shown as the hint and as the readout's tooltip.
   'rotor.pane.notAnswering':
     "The rotator controller isn't answering. Is it switched on and plugged in? Nexus keeps trying to reach it.",
+  'rotor.pane.stale':
+    'Last reading: the rotator did not answer the latest poll. Nexus keeps asking.',
+  'rotor.pane.moon.at':
+    'Moon {{az}}° · {{el}}°',
+  'rotor.pane.moon.at.title':
+    'Where the Moon is from your station: azimuth from true north and elevation, without refraction',
+  'rotor.pane.moon.follow':
+    'Follow the Moon',
+  'rotor.pane.moon.follow.title':
+    'Turn the rotator to the Moon and keep it there as the Moon moves (the elevation too, on a rotator that has one). It holds while the Moon is below the horizon, and stops when you press Stop following or ■ STOP, move the rotator yourself, or start a satellite pass.',
+  'rotor.pane.moon.stop':
+    'Stop following',
+  'rotor.pane.moon.following':
+    'Following the Moon',
+  'rotor.pane.moon.following.azOnly':
+    'Following the Moon (azimuth only: this rotator has no elevation axis)',
+  'rotor.pane.moon.below':
+    'The Moon is below the horizon: the antenna stays put until it rises',
+  'rotor.pane.moon.lost':
+    'The rotator stopped answering: Nexus keeps asking it and follows again when it answers',
+  'rotor.pane.moon.failed':
+    'Could not follow the Moon: {{error}}',
+  'rotor.pane.moon.window.now':
+    'EME window with {{call}}: open now, until {{end}}Z',
+  'rotor.pane.moon.window.next':
+    'Next EME window with {{call}}: {{start}}–{{end}}Z',
+  'rotor.pane.moon.window.none':
+    'No EME window with {{call}} in the next 48 hours',
   'rotor.pane.slew.failed': 'Rotator: {{error}}',
   // The elevation, on a rotator whose backend declares an elevation axis (the Yaesu G-5500 on a
   // GS-232B: 0–180°). `{{min}}` and `{{max}}` are the range that backend declares, in degrees.
@@ -14878,6 +15326,8 @@ export const EN = {
   'rotor.pane.aim.title': 'Bearing and distance to {{call}}, short path ({{to}})',
   'rotor.pane.aim.point.label': 'Point',
   'rotor.pane.aim.point.title': 'Point the antenna at {{call}}, short path',
+  'rotor.pane.aim.pointLong.title':
+    'Point the antenna at {{call}} the long way round (reciprocal heading)',
   'rotor.pane.aim.unknown': 'location unknown',
   'rotor.pane.aim.noGrid': 'set your grid in Settings for a bearing',
   // How far the antenna's live heading is from line 2's bearing, the short way round: `{{deg}}` is
@@ -14906,6 +15356,8 @@ export const EN = {
   // `{{label}}` is the slider's own name — `Power` below, or the cockpit's word for it.
   'cockpit.header.power.label': 'Power',
   'cockpit.header.power.title': "{{label}} — trim so your rig's ALC is just zero",
+  'cockpit.header.more.label': 'More controls',
+  'cockpit.header.more.title': 'Memories, the rotator, split and recording, folded behind this button so the header stays on one row',
   'cockpit.header.cat.ok.title': 'CAT link OK',
   'cockpit.header.cat.bad.title': 'No CAT link',
   // The transmitter alarm the CAT status cannot keep (TxAlarmBanner): {{radio}} is the station's
@@ -14975,6 +15427,11 @@ export const EN = {
 
   'topbar.help.label': 'Help',
   'topbar.field.label': 'Field',
+  'topbar.stationProfile.label': 'Station profile',
+  'topbar.stationProfile.title': 'My station profile: its call, grid and location go on new contacts. Set them up in Settings ▸ Station.',
+  'topbar.stationProfile.active': 'Profile: {{name}}',
+  'topbar.stationProfile.atStation': 'Switched at the station only.',
+  'topbar.stationProfile.busy': 'Waits for the run or contact to end: stop transmitting and press S&P, then switch.',
   'topbar.field.on.title': 'Field mode is on: larger type, maximum contrast. Click to turn off.',
   'topbar.field.off.title':
     'Field mode for operating outdoors: larger type, maximum contrast',
@@ -15085,6 +15542,8 @@ export const EN = {
   'radioSwitch.why': 'Why?',
   'radioSwitch.undo.onAir': 'Not while transmitting: press Undo again after the over',
   'radioSwitch.undo.unavailable': '{{radio}} is not available, so the radio did not change',
+  'radioSwitch.refused':
+    '{{radio}} is open in another Nexus window, so the radio did not change — switch to that window.',
 
   // ── The radio setup (RadioSetupWizard.tsx): Settings ▸ Radio ▸ Radios ▸ Set up radios…, and the
   // first-run setup once a second radio is added. `{{radio}}`, `{{band}}`, `{{bands}}`, `{{model}}`,

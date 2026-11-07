@@ -209,8 +209,12 @@ function bandForMhz(mhz: number): string {
  * TempoFast-style parent cascade. BPSK31 is not listed: it is the same waveform under a
  * logger's spelling, and both the importer and `modeKey` fold it to PSK31, so offering it
  * would let one mode be logged under two names.
+ * FREEDV is the one entry that is not an ADIF Mode: it is DIGITALVOICE's submode, and the logbook
+ * writes it `MODE=DIGITALVOICE SUBMODE=FREEDV` (`adif_submode`), the TempoFast cascade. Spelled as
+ * `modeKey` folds it, so the select opens on it, and as FreeDV contacts handed over by FreeDV's own
+ * app are stored.
  * The cockpits only ever pass SSB/FM/CW/PSK31/QPSK31 as the default, all present here. */
-const LOG_MODES = ['SSB', 'FM', 'AM', 'CW', 'RTTY', 'PSK31', 'QPSK31', 'FT8', 'FT4'] as const
+const LOG_MODES = ['SSB', 'FM', 'AM', 'CW', 'RTTY', 'PSK31', 'QPSK31', 'FT8', 'FT4', 'FREEDV'] as const
 
 /** The `LOG_MODES` entry that covers `m` — what the override's `<select>` opens on.
  *
@@ -248,7 +252,7 @@ const LOG_EXAMPLES = {
  * On-the-air programs for the park/summit picker. The ADIF SIG value and the label the operator
  * reads are the SAME token here, which is why this is one list and not a value/label pair.
  */
-const PARK_PROGRAMS = ['POTA', 'SOTA'] as const
+const PARK_PROGRAMS = ['POTA', 'SOTA', 'WWFF'] as const
 
 /** Now, split into a UTC date (YYYY-MM-DD) + time (HH:MM) for the override's inputs. */
 function utcNowParts(): { date: string; time: string } {
@@ -506,6 +510,14 @@ interface Props {
    * for edit is set aside as the edit closes. Absent (Satellites): nothing clears.
    */
   clearCallOnBandChange?: boolean
+  /**
+   * CW AND PHONE (#438): the rag-chew Start control beside the call, while a call is in the line.
+   * The contact's start (TIME_ON) is when its call was entered; a long contact whose call went in
+   * early — a rag-chew, a net check-in that turned into a QSO — is restarted at now by one press.
+   * The time it set is on the control. It changes nothing else: Log still stamps the end
+   * (TIME_OFF), and the other-radio override's typed time still wins (Start is not offered then).
+   */
+  startButton?: boolean
 }
 
 /**
@@ -551,6 +563,7 @@ export function LogEntry({
   draft,
   onResumeContest,
   clearCallOnBandChange = false,
+  startButton = false,
 }: Props) {
   const remoteMode = remote != null
   type DraftContext = { band: string; freqMhz: number; mode: string }
@@ -587,14 +600,32 @@ export function LogEntry({
       ? { call: kept.call.trim().toUpperCase(), unix: kept.enteredUnix }
       : null,
   )
+  // The start the rag-chew Start control set for the contact in the line (`startButton`), shown on
+  // the control; null until it is pressed, and again once another contact (or none) is in the line.
+  const [restartedUnix, setRestartedUnix] = useState<number | null>(null)
   useEffect(() => {
     const c = logCall.trim().toUpperCase()
     const prev = callEnteredRef.current
-    if (!c) callEnteredRef.current = null
-    else if (!prev || !(c.startsWith(prev.call) || prev.call.startsWith(c))) {
+    if (!c) {
+      callEnteredRef.current = null
+      setRestartedUnix(null)
+    } else if (!prev || !(c.startsWith(prev.call) || prev.call.startsWith(c))) {
       callEnteredRef.current = { call: c, unix: Math.floor(Date.now() / 1000) }
+      setRestartedUnix(null)
     } else if (prev.call !== c) callEnteredRef.current = { call: c, unix: prev.unix }
   }, [logCall])
+  /** Start (#438): the contact in the line starts now. The same record the first keystroke made,
+   *  so a draft keeps it and Log reads it exactly as it reads an entered call's. */
+  // The Start button's label as shown, and the timed one that sizes it (a placeholder time until a press).
+  const startTimed = t('logEntry.start.setLabel', { time: restartedUnix == null ? '00:00' : utcHhMm(restartedUnix) })
+  const startShown = restartedUnix == null ? t('logEntry.start.label') : startTimed
+  const restartContact = () => {
+    const c = logCall.trim().toUpperCase()
+    if (!c) return
+    const unix = Math.floor(Date.now() / 1000)
+    callEnteredRef.current = { call: c, unix }
+    setRestartedUnix(unix)
+  }
   // The two reports as set for THIS contact (typed, or the CW decoder's read of theirs), or null for
   // a box nobody has touched, which shows the report of the mode the strip logs under NOW, as a
   // contest strip's report box does (`fdValue`). One strip lives across a mode change (the Satellites
@@ -1589,6 +1620,9 @@ export function LogEntry({
     setLogCall(l.call)
     callEnteredRef.current =
       l.call.trim() && l.enteredUnix != null ? { call: l.call.trim().toUpperCase(), unix: l.enteredUnix } : null
+    // Set directly, so the call-change effect sees no new contact: the Start time shown belongs to the
+    // line that gave way, never to this one (#438).
+    setRestartedUnix(null)
     setLogRstSent(l.rstSent)
     setLogRstRcvd(l.rstRcvd)
     setLogName(l.name)
@@ -3559,6 +3593,34 @@ export function LogEntry({
         >
           {qrzBusy ? '…' : t('logEntry.lookup.label')}
         </button>
+        {/* Drawn with the call field, as Lookup and Card are, so typing the first letter of a call
+            moves nothing in the row; it works once a call is in the line. */}
+        {startButton && !fdActive && !overrideOpen && (
+          <button
+            type="button"
+            className="le-qrz le-lookup le-start"
+            onClick={restartContact}
+            disabled={!logCall.trim()}
+            title={
+              restartedUnix == null
+                ? t('logEntry.start.title')
+                : t('logEntry.start.setTitle', { time: utcHhMm(restartedUnix) })
+            }
+            aria-label={startShown}
+          >
+            {/* BOTH LABELS, IN ONE GRID CELL (styles.css .le-start-label): the wider one sizes the button
+                from the start, so the press that adds the time widens nothing and wraps nothing after
+                it (Card went to the next line in Russian at 1024 px). The one not shown keeps its room,
+                unseen and unread. */}
+            <span className="le-start-label">
+              {[t('logEntry.start.label'), startTimed].map((label) => (
+                <span key={label} {...(label === startShown ? {} : { 'data-off': '', 'aria-hidden': true })}>
+                  {label}
+                </span>
+              ))}
+            </span>
+          </button>
+        )}
         {/* The call's station card (CallCard.tsx). Never in the tab order and never takes focus on a
             press, so typing in the call field is never interrupted; this strip has no ESM, and the
             contest strip has no such button. Never an F-key: F1–F12 are the transmit macros. */}
@@ -3709,7 +3771,11 @@ export function LogEntry({
             onKeyDown={onEnter}
             onBlur={() => window.setTimeout(() => setParkHits([]), 150)}
             placeholder={
-              logParkProgram === 'SOTA' ? t('logEntry.park.ref.placeholderSota') : t('logEntry.park.ref.placeholderPota')
+              logParkProgram === 'SOTA'
+                ? t('logEntry.park.ref.placeholderSota')
+                : logParkProgram === 'WWFF'
+                  ? t('logEntry.park.ref.placeholderWwff')
+                  : t('logEntry.park.ref.placeholderPota')
             }
             title={t('logEntry.park.ref.title')}
             autoComplete="off"

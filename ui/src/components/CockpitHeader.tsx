@@ -6,11 +6,12 @@
 // Everything else in the header is migrated under `cockpit.header.*`: the wheel-tune tooltips,
 // the band-edge toast, the power slider (a CONFIGURATION control on the transmit path, which
 // moves exactly as PTT Method and the drive slider did) and the CAT pill's two states.
-import { useRef } from 'react'
+import { localizeRefusal } from '../radioRefusal'
+import { useEffect, useRef } from 'react'
 import { AmpStrip } from './AmpStrip'
 import { TxAlarmBanner } from './TxAlarmBanner'
 import { WheelRange } from './WheelRange'
-import type { ReactNode } from 'react'
+import type { ReactNode, RefObject } from 'react'
 import type { AppSnapshot } from '../types'
 import { isOnAir } from '../types'
 import { bandLabelForMhz, bandRangeForLabel } from '../band'
@@ -18,6 +19,7 @@ import { pushToast } from '../toast'
 import { FrequencyReadout } from './FrequencyReadout'
 import { useWheelTune } from '../useWheelTune'
 import { t } from '../i18n'
+import { catDetailText } from '../features/catDetail'
 
 /** The header's annunciator plates — state, not prose: the CAT link's ✓/✗ pill. */
 const CAT_OK = 'CAT ✓'
@@ -89,6 +91,12 @@ export interface CockpitHeaderProps {
   power?: CockpitHeaderPower
   /** Override the derived CAT ✓/✗ pill. */
   catStatus?: ReactNode
+  /** PINNED: the header parks at the top of its shell when the shell scrolls, so the mode, the
+   *  dial, the band, ⊞ Panels, power and CAT never leave the window (`.cockpit-header-pinned`,
+   *  cockpit-panes.css). The cockpit's TX strip then parks under it, not over it (CockpitTxStrip
+   *  measures it). SSTV, RTTY and PSK pin theirs. Where the header, the strip and the dock would not
+   *  all fit the window the strip unpins it again (`data-pin="off"`), so it never covers a stop control. */
+  pinned?: boolean
 }
 
 /** What to say when a wheel burst PARKS on a band edge, naming the edge it stopped at — the
@@ -117,6 +125,35 @@ function edgeMessage(dialMhz: number, targetMhz: number): string {
   return up ? t('cockpit.header.bandEdge.up', vals) : t('cockpit.header.bandEdge.down', vals)
 }
 
+/** The header's own popovers that render INSIDE it (not portaled): ⊞ Panels' menu. */
+const IN_HEADER_POPOVER = '.panels-menu-pop'
+
+/** A PINNED header is a stacking context at the TX strip's and the dock's level (z 4) and comes before
+ *  them, so they paint over it — which is right for the header and wrong for a menu it opens: ⊞ Panels'
+ *  menu (z 70 inside the header) hung down over the strip and the dock and half its items were under
+ *  them (RTTY at 1366×768 / 150 %, measured). While such a popover is open the header carries
+ *  `data-menu="open"` and stands one step higher (cockpit-panes.css); closed, it is back at 4, so
+ *  nothing of the header itself ever covers a stop control. An unpinned header is not lifted (the
+ *  `[data-pin='off']` rule after the lift resets it), and an unpinned header is never watched. */
+function usePopoverLift(ref: RefObject<HTMLDivElement | null>, pinned: boolean) {
+  useEffect(() => {
+    const head = ref.current
+    if (!pinned || !head || typeof MutationObserver === 'undefined') return
+    const sync = () => {
+      const open = head.querySelector(IN_HEADER_POPOVER) != null
+      if (open) head.setAttribute('data-menu', 'open')
+      else head.removeAttribute('data-menu')
+    }
+    sync()
+    const mo = new MutationObserver(sync)
+    mo.observe(head, { childList: true, subtree: true })
+    return () => {
+      mo.disconnect()
+      head.removeAttribute('data-menu')
+    }
+  }, [ref, pinned])
+}
+
 export function CockpitHeader({
   snap,
   onSnap,
@@ -132,12 +169,15 @@ export function CockpitHeader({
   actions,
   power,
   catStatus,
+  pinned = false,
 }: CockpitHeaderProps) {
   const powerValue = power?.value
   const radio = snap.radio
   const catOk = radio.catOk === true
   const dial = radio.dialMhz
   const readoutRef = useRef<HTMLDivElement>(null)
+  const headRef = useRef<HTMLDivElement>(null)
+  usePopoverLift(headRef, pinned)
 
   // Wheel tuning over the readout (Phone/CW hunting) AND per-digit tuning, on ONE listener.
   //
@@ -271,9 +311,10 @@ export function CockpitHeader({
           {catStatus ?? (
             <span
               className={`cockpit-cat ${catOk ? 'ok' : 'bad'}`}
-              // `catDetail` is the backend's own report and passes through verbatim.
+              // `catDetail` is the backend's own report and passes through verbatim, but for a
+              // launch Nexus refused itself (`catDetailText`).
               title={
-                radio.catDetail ||
+                (radio.catDetail && catDetailText(localizeRefusal(radio.catDetail))) ||
                 (catOk ? t('cockpit.header.cat.ok.title') : t('cockpit.header.cat.bad.title'))
               }
             >
@@ -284,7 +325,9 @@ export function CockpitHeader({
   )
 
   return (
-    <div className="cockpit-header">
+    // `data-pin`: the TX strip turns it "off" where the header, the strip and the dock do not all fit
+    // the window (CockpitTxStrip decidePin); it starts "on".
+    <div ref={headRef} className={pinned ? 'cockpit-header cockpit-header-pinned' : 'cockpit-header'} data-pin={pinned ? 'on' : undefined}>
       <div className="ch-identity">{modeIndicator}</div>
 
       <div className="ch-freq">

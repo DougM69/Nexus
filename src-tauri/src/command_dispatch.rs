@@ -195,6 +195,12 @@ pub(crate) const PRESENCE_BOUND: [&str; 7] = [
 /// switch, and no save moves them at all: `Engine::apply_settings`.)
 pub(crate) const SETTINGS_FROM_AFAR: [&str; 2] = ["set_settings", "update_radio_profile"];
 
+/// ⛔ The POTA Start and Stop, from afar. Each may move the station onto a "My station" profile and
+/// back (`Engine::set_activation_from`, `Engine::clear_activation_from`); from afar never onto
+/// another call, which, like the top bar's picker (`switch_station_profile`), is set at the shack
+/// only. The activation itself starts and ends as asked.
+pub(crate) const ACTIVATION_FROM_AFAR: [&str; 2] = ["clear_activation", "set_activation"];
+
 /// What a settings save from afar may not change ([`SETTINGS_FROM_AFAR`]): each is put back into
 /// `save` as the shack has it. From the shack's own screen (`None`) the save is taken as it came.
 pub(crate) fn keep_the_shacks_transmit_settings(
@@ -214,6 +220,7 @@ pub(crate) fn keep_the_shacks_transmit_settings(
     // PTT, JS8's API.
     save.wsjtx_udp = shack.wsjtx_udp;
     save.wsjtx_udp_addr = shack.wsjtx_udp_addr.clone();
+    save.wsjtx_udp_accept_other_computers = shack.wsjtx_udp_accept_other_computers;
     save.cat_broker = shack.cat_broker;
     save.cat_broker_ptt = shack.cat_broker_ptt;
     save.js8_api_tcp = shack.js8_api_tcp;
@@ -455,8 +462,9 @@ pub(crate) fn keep_the_shacks_secret_settings(
 /// Every keep a whole settings save from afar goes through ([`SETTINGS_FROM_AFAR`]): the transmit
 /// settings and guards ([`keep_the_shacks_transmit_settings`]), the addresses the shack sends a
 /// stored key or password to ([`keep_the_shacks_credential_addresses`]) and the stored keys
-/// themselves ([`keep_the_shacks_secret_settings`]). From the shack's own screen (`None`) the save
-/// is taken as it came.
+/// themselves ([`keep_the_shacks_secret_settings`]), and the contact port
+/// ([`keep_the_shacks_contact_port`]). From the shack's own screen (`None`) the save is taken as it
+/// came.
 pub(crate) fn keep_the_shacks_settings(
     shack: &tempo_app::settings::Settings,
     save: &mut tempo_app::settings::Settings,
@@ -465,7 +473,47 @@ pub(crate) fn keep_the_shacks_settings(
     keep_the_shacks_transmit_settings(shack, save, afar);
     keep_the_shacks_credential_addresses(shack, save, afar);
     keep_the_shacks_secret_settings(shack, save, afar);
+    keep_the_shacks_profile_call(shack, save, afar);
+    keep_the_shacks_contact_port(shack, save, afar);
 }
+
+/// ⛔ What a settings save from afar may not change of the contact port (`tempo_app::log_intake`):
+/// whether it takes the contacts other programs log, its port, "Accept from devices on my network"
+/// and the one network address allowed, each put back as the shack has it. A computer driving the
+/// station cannot open a network port at the station. From the shack's own screen (`None`) the save
+/// is taken as it came.
+pub(crate) fn keep_the_shacks_contact_port(
+    shack: &tempo_app::settings::Settings,
+    save: &mut tempo_app::settings::Settings,
+    afar: Option<&Afar>,
+) {
+    if afar.is_none() {
+        return;
+    }
+    save.freedv_log = shack.freedv_log;
+    save.freedv_log_port = shack.freedv_log_port;
+    save.log_intake_lan = shack.log_intake_lan;
+    save.log_intake_peer.clone_from(&shack.log_intake_peer);
+}
+
+/// ⛔ With "My station" profiles, the call is the one the shack's profile transmits under, and a
+/// whole save writes its call into that profile (`Settings::keep_station_form`). So while the shack
+/// has profiles, a save from afar keeps the shack's call ([`PROFILE_CALL_SETTING`]): the call is
+/// switched and edited at the shack only, as the profiles themselves are. With none, a save from
+/// afar takes the call as before.
+pub(crate) fn keep_the_shacks_profile_call(
+    shack: &tempo_app::settings::Settings,
+    save: &mut tempo_app::settings::Settings,
+    afar: Option<&Afar>,
+) {
+    if afar.is_some() && !shack.station_profiles.is_empty() {
+        save.mycall.clone_from(&shack.mycall);
+    }
+}
+
+/// The call's name on the wire, set at the station only while the shack has station profiles
+/// ([`keep_the_shacks_profile_call`]).
+pub(crate) const PROFILE_CALL_SETTING: &str = "mycall";
 
 /// ⛔ Every setting a whole save from afar keeps as the shack has it ([`keep_the_shacks_settings`]),
 /// by its name on the wire, the stored keys ([`SECRET_SETTINGS`]) aside: the transmit settings and
@@ -473,12 +521,13 @@ pub(crate) fn keep_the_shacks_settings(
 /// ([`keep_the_shacks_transmit_settings`]), then the addresses the shack sends a stored key or
 /// password to ([`keep_the_shacks_credential_addresses`]). A test changes each setting alone in a save from
 /// afar and holds this list to exactly the ones that come back.
-pub(crate) const STATION_ONLY_SETTINGS: [&str; 58] = [
+pub(crate) const STATION_ONLY_SETTINGS: [&str; 63] = [
     "js8AprsRelay",
     "beaconTxPercent",
     "cqPauseSecs",
     "wsjtxUdp",
     "wsjtxUdpAddr",
+    "wsjtxUdpAcceptOtherComputers",
     "catBroker",
     "catBrokerPtt",
     "js8ApiTcp",
@@ -532,6 +581,11 @@ pub(crate) const STATION_ONLY_SETTINGS: [&str; 58] = [
     "fdJoinAddr",
     "icomLanHost",
     "icomLanPort",
+    // The contact port ([`keep_the_shacks_contact_port`]).
+    "freedvLog",
+    "freedvLogPort",
+    "logIntakeLan",
+    "logIntakePeer",
 ];
 
 /// The name a settings read from afar carries, beside the settings, of every setting the save
@@ -542,12 +596,17 @@ pub(crate) const SET_AT_THE_STATION: &str = "stationOnlySettings";
 /// What a settings read from afar says is set at the station only: [`STATION_ONLY_SETTINGS`] and
 /// the stored keys ([`SECRET_SETTINGS`]), by name. From the shack's own screen (`None`) every
 /// setting is its own to set, and there is nothing to say.
-pub(crate) fn station_only_settings(afar: Option<&Afar>) -> Option<Vec<&'static str>> {
+pub(crate) fn station_only_settings(
+    afar: Option<&Afar>,
+    shack: &tempo_app::settings::Settings,
+) -> Option<Vec<&'static str>> {
     afar?;
     Some(
         STATION_ONLY_SETTINGS
             .into_iter()
             .chain(SECRET_SETTINGS.iter().map(|(name, _)| *name))
+            // …and the call, while the shack has station profiles ([`keep_the_shacks_profile_call`]).
+            .chain((!shack.station_profiles.is_empty()).then_some(PROFILE_CALL_SETTING))
             .collect(),
     )
 }
@@ -555,8 +614,9 @@ pub(crate) fn station_only_settings(afar: Option<&Afar>) -> Option<Vec<&'static 
 /// Whether the command lane writes [`Afar`] into an admitted call of `cmd`: each wired start but
 /// the held press and the Lock, which never run as commands, each section entry ([`ENTRIES`]), the work
 /// bound to presence ([`PRESENCE_BOUND`]), the settings save ([`SETTINGS_FROM_AFAR`]), the
-/// settings read ([`SECRETS_WITHHELD_FROM_AFAR`]) and the settings backup, which leaves out the
-/// station's paths from afar. A test holds this to the handlers that take it.
+/// settings read ([`SECRETS_WITHHELD_FROM_AFAR`]), the POTA Start and Stop
+/// ([`ACTIVATION_FROM_AFAR`]) and the settings backup, which leaves out the station's paths
+/// from afar. A test holds this to the handlers that take it.
 pub(crate) fn takes_afar(cmd: &str) -> bool {
     matches!(
         transmit_from_afar(cmd),
@@ -575,6 +635,7 @@ pub(crate) fn takes_afar(cmd: &str) -> bool {
         || PRESENCE_BOUND.contains(&cmd)
         || SETTINGS_FROM_AFAR.contains(&cmd)
         || SECRETS_WITHHELD_FROM_AFAR.contains(&cmd)
+        || ACTIVATION_FROM_AFAR.contains(&cmd)
         || cmd == "export_settings_bundle"
 }
 
@@ -1392,6 +1453,72 @@ impl Journal {
     }
 }
 
+/// ⛔ What a computer driving the station reads of the contact port (`tempo_app::freedv::FreedvDto`,
+/// in a snapshot): never a device's network address. A device that gives no name of its own (the
+/// S.A.T. tracker's raw ADIF) is named at the shack by where it sent from, and that address stays
+/// at the shack: the last contact's program reads as a network device or this computer
+/// (`tempo_app::log_intake::FROM_A_NETWORK_DEVICE`, `FROM_THIS_COMPUTER`, which the other
+/// computer's screen words), and each address quoted in the refusal shown beside it reads as words
+/// that say the same. A program's own name, and any other answer, go as they came. Applied to every
+/// call's answer ([`Ticket::finish`]) and to every pushed feed (`remote_service::lan::commands`).
+pub(crate) fn contact_port_from_afar(mut value: Value) -> Value {
+    use tempo_app::log_intake as intake;
+    let Some(freedv) = value.get_mut("freedv").and_then(Value::as_object_mut) else {
+        return value;
+    };
+    if let Some(program) = freedv.get_mut("intakeProgram") {
+        if let Some(ip) = program
+            .as_str()
+            .and_then(|p| p.trim().parse::<std::net::IpAddr>().ok())
+        {
+            *program = Value::from(if ip.is_loopback() || is_mapped_loopback(ip) {
+                intake::FROM_THIS_COMPUTER
+            } else {
+                intake::FROM_A_NETWORK_DEVICE
+            });
+        }
+    }
+    if let Some(Value::String(notice)) = freedv.get_mut("notice") {
+        *notice = without_addresses(
+            notice,
+            intake::NETWORK_DEVICE_WORDS,
+            intake::THIS_COMPUTER_WORDS,
+        );
+    }
+    value
+}
+
+/// `::ffff:127.0.0.1`, loopback carried in IPv6.
+fn is_mapped_loopback(ip: std::net::IpAddr) -> bool {
+    matches!(ip, std::net::IpAddr::V6(v6) if v6.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback()))
+}
+
+/// `text` with each word that is an IP address (punctuation around it aside) put as `network`, or
+/// `local` for a loopback address.
+fn without_addresses(text: &str, network: &str, local: &str) -> String {
+    text.split(' ')
+        .map(|word| {
+            let bare = word.trim_matches(|c: char| matches!(c, ',' | ';' | '(' | ')' | '"' | '.'));
+            let bare = [bare, bare.trim_end_matches(':')]
+                .into_iter()
+                .find_map(|b| b.parse::<std::net::IpAddr>().ok().map(|ip| (b, ip)));
+            match bare {
+                Some((b, ip)) => word.replacen(
+                    b,
+                    if ip.is_loopback() || is_mapped_loopback(ip) {
+                        local
+                    } else {
+                        network
+                    },
+                    1,
+                ),
+                None => word.to_string(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// What finishing a call does beyond recording it.
 enum After {
     Nothing,
@@ -1441,6 +1568,7 @@ impl<S: Stores> Ticket<S> {
             }
             (_, result) => (result, None),
         };
+        let result = result.map(contact_port_from_afar);
         self.close(match &result {
             Ok(_) => Outcome::Done,
             Err(error) => Outcome::Failed(bounded(error)),

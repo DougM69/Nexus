@@ -38,6 +38,10 @@ export interface Profile {
  * current value. */
 const NEVER_IMPORT: readonly string[] = [
   'mycall',
+  // The "My station" profiles and the one the station is on: the station's own calls, each
+  // written by its own verb, never by a borrowed profile.
+  'stationProfiles',
+  'activeStationProfile',
   'licenseClass',
   'radios',
   'activeRadio',
@@ -100,6 +104,10 @@ const NEVER_IMPORT: readonly string[] = [
   // profile carries the club's master-log address), and so does the WSJT-X UDP API (`wsjtxUdp`),
   // a feed other programs listen to rather than a push to one logger.
   'dxkeeperHost',
+  // The leave for other computers to send the WSJT-X requests that can arm TX. A profile carries
+  // the feed (`wsjtxUdp`), but this is never loaded with one: a profile from a file must not be
+  // able to turn it on, and one saved before it was turned on must not quietly turn it off.
+  'wsjtxUdpAcceptOtherComputers',
   // What a read from a computer driving the station says about it, not a setting: a profile saved
   // there carries them, and loaded at the station they would mark its own form "Set at the station".
   'secretsSavedAtStation',

@@ -16,6 +16,7 @@ import {
   DECODE_FILTERS,
   DecodeHistory,
   fmtUtc,
+  missedBetween,
   orderEntries,
   passesFilter,
   periodStartMs,
@@ -26,9 +27,10 @@ import {
   type DecodeFilter,
   type DecodeSort,
 } from '../decodeHistory'
+import { getDecodeRefill } from '../api'
 import { DECODE_HIDE_B4_EVENT, DECODE_HIDE_B4_SCOPE_EVENT, type DecodeHideB4Scope, loadDecodeFilter, loadDecodeHideB4, loadDecodeHideB4Scope, loadDecodeHideBlocked, loadDecodeHideConfirmed, loadDecodeNewestTop, saveDecodeFilter, saveDecodeHideB4, saveDecodeHideB4Scope, saveDecodeHideBlocked, saveDecodeHideConfirmed, saveDecodeNewestTop } from '../operateFilters'
 import { isHiddenByCountry, useCountryExclude } from '../features/countryExclude'
-import { isCallHidden, useHideCalls } from '../features/hideCalls'
+import { isCallHidden, isCallHiddenScoped, useHideCalls } from '../features/hideCalls'
 import { CountryExcludePicker, CountryHiddenChip } from './CountryExclude'
 import { HideCallsPicker } from './HideCallsPicker'
 import { gridFromMessage, isIgnored } from '../txMessages'
@@ -38,6 +40,8 @@ import { RarityChip } from './RarityChip'
 import { azimuthLabel, azimuthTitle, azimuthTo, type LatLon } from '../grid'
 import { useEntityCentroids } from '../features/entityCentroids'
 import { callCardTrigger, qrzPageOf } from './CallCard'
+import { CallRowMenu, isMenuKey, useMenuFocusReturn } from './CallRowMenu'
+import { useWatchMatch, watchColorStyle, type WatchColor } from '../watchlist'
 
 /**
  * The pane's invariant vocabulary — never translated, never locale-formatted.
@@ -247,7 +251,12 @@ const MAX_NEED_ICONS = 3
  * narrowest rail, so every taller pane (Classic at 1024×768, any pane at 1920×1080) keeps its chips
  * on screen exactly as before. Measured in Chrome; em, so it follows the text size and the zoom.
  */
-const FOLD_CHIPS_BELOW_EM = 15
+const FOLD_CHIPS_BELOW_EM = 22
+// …22em since the 1080p pass (2026-11-01, was 15): FT8 Roster's rail at 1920×1040 gives Band Activity
+// about 18em once it takes the rail's larger share, and unfolded, the chips' two to three wrapped lines
+// took more of it than the share gave back (measured in Chrome: 8 rows before, 5 with the chips). Folded
+// there, every chip is one click away on the Filters button, which says when one is lit. Classic's Band
+// Activity at 1080p (~36em) and every taller pane keep their chips on screen.
 
 /**
  * Band Activity / Rx Frequency pane with stock WSJT-X flow: oldest at the top,
@@ -429,6 +438,9 @@ export function OperateDecodes({
   // only. See features/countryExclude.ts for why it is not a Rust setting.
   const countries = useCountryExclude()
   const hideCalls = useHideCalls()
+  // #299 — the watch list, live, for the colour an entry gives its station's row. Which rows are
+  // watched is still the station's call (the `Wanted` need); this only says in what colour.
+  const watchOf = useWatchMatch()
   // Entity centroids for the azimuth beside the country. Most decodes carry no grid
   // (only CQ/grid messages do), so without this the heading would appear on a
   // minority of rows and read as a glitch rather than a feature.
@@ -505,11 +517,13 @@ export function OperateDecodes({
                 (partnerCall == null || d.from !== partnerCall)
               ),
           )
-          // Wildcard call-hide (VP8* etc.) — display-only; own rows and the QSO partner stay.
+          // Wildcard call-hide (VP8* etc.) and the row menu's narrower hides (#346: on the band the
+          // row was heard on, for a while) — display-only; own rows and the QSO partner stay.
           .filter(
             (d) =>
               !(
-                isCallHidden(d.from, hideCalls.entries) &&
+                (isCallHidden(d.from, hideCalls.entries) ||
+                  isCallHiddenScoped(d.from, d.heard?.band ?? band, hideCalls.scoped, Date.now())) &&
                 !d.mine &&
                 (partnerCall == null || d.from !== partnerCall)
               ),
@@ -538,7 +552,7 @@ export function OperateDecodes({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       hist, histVersion, filter, rxOffsetHz, hideB4, hideB4Scope, hideBlocked, ignores,
-      partnerCall, hideConfirmed, hideCalls.entries, hiddenEntities, selectedCall, sort,
+      partnerCall, hideConfirmed, hideCalls.entries, hideCalls.scoped, band, hiddenEntities, selectedCall, sort,
     ],
   )
   // The search ANDs with all of the above and is applied last, so `kept` is exactly what the box
@@ -561,6 +575,8 @@ export function OperateDecodes({
   // Everything below counts `shown`, not `list`: the "N heard" readout means what is on screen,
   // and the roving-keyboard index must address the rows that exist.
   const shown = useMemo(() => renderWindow(list), [list])
+  // A new array only when the history changes one, which bumps its version (a re-render follows).
+  const gaps = hist.gaps()
   // The order rows are DRAWN in. Everything that addresses a row by position (the roving index,
   // the period separators) reads `drawn`; counts read `shown`, which is the same set.
   const drawn = useMemo(() => (newestTop ? [...shown].reverse() : shown), [shown, newestTop])
@@ -606,6 +622,21 @@ export function OperateDecodes({
     // DECODED period (see DecodeHistory.ingest).
     const clock = { periodMs: (periodS ?? TIER_PERIOD_SECS[tier]) * 1000, offsetMs: clockOffsetMs ?? 0 }
     histRef.current.ingest(decodes, slot, Date.now(), clock)
+    // #452: periods this pane missed (closed, or its window not painted) are filled in from the
+    // station's decode history, which only READS: the alerts, sounds and the sequencer all run off
+    // the live feed, which a refill never touches. A refused or failed read leaves the pane as it
+    // was. Answered after a wipe, the history drops it itself (its epoch).
+    const owner = histRef.current
+    const ask = owner.takeRefill()
+    if (ask) {
+      const atOf = (s: number) => periodStartMs(s, tier, periodS)
+      Promise.resolve()
+        .then(() => getDecodeRefill(ask.from, ask.to))
+        .then((refill) => {
+          if (owner.applyRefill(ask, refill, atOf)) setTick((t) => t + 1)
+        })
+        .catch(() => {})
+    }
     // Re-render only if the history moved past what this render drew. Not "did MY ingest change
     // it": a history the cockpit shares may already have been moved by another pane.
     if (histRef.current.version !== histVersion) setTick((t) => t + 1)
@@ -650,7 +681,7 @@ export function OperateDecodes({
     (hideBlocked ? 1 : 0) +
     (hideConfirmed ? 1 : 0) +
     (hideB4 && filter !== 'b4' ? 1 : 0) +
-    (hideCalls.entries.length > 0 ? 1 : 0)
+    (hideCalls.entries.length > 0 || hideCalls.scoped.length > 0 ? 1 : 0)
   const showChips = !chipsFolded || chipsOpen
 
   // Wipe this pane (WSJT-X "Erase") and re-pin to the bottom.
@@ -692,10 +723,19 @@ export function OperateDecodes({
     else onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
   })
 
+  // #346 — the row whose menu is open (by its entry id: one call can have many rows), and where the
+  // keyboard goes back to when it closes (`useMenuFocusReturn`).
+  const [menu, setMenu] = useState<{ id: string } | null>(null)
+  const menuFocus = useMenuFocusReturn('.decode-row')
+  const closeMenu = () => {
+    menuFocus.returnFocus()
+    setMenu(null)
+  }
+
   // The row handlers read the LATEST render's values through `live`, so `rowActions` can be one
   // object for the pane's lifetime and leave the memoised rows' props alone.
-  const live = useRef({ roving, handleDouble, onSelectDecode })
-  live.current = { roving, handleDouble, onSelectDecode }
+  const live = useRef({ roving, handleDouble, onSelectDecode, closeMenu, menuFocus })
+  live.current = { roving, handleDouble, onSelectDecode, closeMenu, menuFocus }
   const rowActions = useMemo<RowActions>(
     () => ({
       click: (index, d) => {
@@ -704,6 +744,16 @@ export function OperateDecodes({
           live.current.onSelectDecode?.(d.from, gridFromMessage(d.message), d.message, d.snr)
       },
       double: (e, d) => live.current.handleDouble(e, d),
+      // A right-click, or the Menu key / Shift+F10 on the focused row. A row with no caller (a
+      // free-text line) has nothing to act on.
+      menu: (e, d) => {
+        if ('key' in e && !isMenuKey(e)) return
+        if (!d.from) return
+        e.preventDefault()
+        live.current.menuFocus.remember(e.currentTarget as HTMLElement)
+        setMenu({ id: d.id })
+      },
+      closeMenu: () => live.current.closeMenu(),
       focus: (index) => live.current.roving.rowProps(index).onFocus(),
       setEl: (index, el) => live.current.roving.rowProps(index).ref(el),
     }),
@@ -902,6 +952,8 @@ export function OperateDecodes({
 
       <div
         className="od-scroll"
+        // Focusable from code only: where the keyboard lands when a row's menu hid the last row.
+        tabIndex={-1}
         role="listbox"
         aria-label={t('operate.decodes.list.aria')}
         ref={scrollRef}
@@ -944,8 +996,20 @@ export function OperateDecodes({
           // changes, not on every poll. Everything it draws arrives as a prop.
           const up = d.from ? d.from.toUpperCase() : null
           const selectedRow = !!up && !!selectedUp && up === selectedUp
+          // #452: periods this pane missed and could no longer fill in, between this row and
+          // the one drawn before it (time-sorted view only, like the separators).
+          const missed = sort === 'time' && i > 0 ? missedBetween(gaps, drawn[i - 1].slot, d.slot) : 0
           return (
             <Fragment key={d.id}>
+              {missed > 0 && (
+                <div
+                  className="od-period-sep od-gap"
+                  role="separator"
+                  title={t('operate.decodes.gap.title')}
+                >
+                  <span>{t('operate.decodes.gap', { n: missed })}</span>
+                </div>
+              )}
               {/* WSJT-X period separator: a dim bar with the period's UTC start +
                   band, whenever the T/R period changes (time-sorted view only).
                   A decode ingested at boundary slot s carries AUDIO from slot s-1 —
@@ -1012,6 +1076,8 @@ export function OperateDecodes({
                 centroids={centroids}
                 locale={locale}
                 actions={rowActions}
+                watchColor={watchOf({ call: d.from, entity: d.country, grid: d.grid })?.color}
+                menuOpen={menu?.id === d.id}
               />
             </Fragment>
           )
@@ -1026,6 +1092,8 @@ export function OperateDecodes({
 interface RowActions {
   click: (index: number, d: DecodeEntry) => void
   double: (e: React.MouseEvent, d: DecodeEntry) => void
+  menu: (e: React.MouseEvent | React.KeyboardEvent, d: DecodeEntry) => void
+  closeMenu: () => void
   focus: (index: number) => void
   setEl: (index: number, el: HTMLElement | null) => void
 }
@@ -1050,6 +1118,11 @@ interface DecodeRowViewProps {
   /** Not read: a locale switch must redraw rows whose data did not change. */
   locale: string
   actions: RowActions
+  /** #299 — the colour the operator gave the watch entry naming this station, if any: its watch
+   *  mark (row tint and WATCH chip) paints in it instead of the lime. A string, so the memo holds. */
+  watchColor?: WatchColor
+  /** #346 — this row's menu is open: the row draws its anchor. */
+  menuOpen?: boolean
 }
 
 /**
@@ -1072,6 +1145,8 @@ const DecodeRowView = memo(function DecodeRowView({
   myGrid,
   centroids,
   actions,
+  watchColor,
+  menuOpen,
 }: DecodeRowViewProps) {
   const hlStyle = hlEntry
     ? {
@@ -1079,6 +1154,10 @@ const DecodeRowView = memo(function DecodeRowView({
         color: hlEntry.fg ?? undefined,
       }
     : undefined
+  // #299 — re-points --need-watch on this row only; it repaints nothing unless the row carries a
+  // watch mark. Alongside the UDP highlight, which still wins the row's own colours.
+  const watchStyle = watchColorStyle(watchColor)
+  const rowStyle = hlStyle || watchStyle ? { ...watchStyle, ...hlStyle } : undefined
   // Tooltip suffix for highlighted rows so the operator knows why the color appeared.
   // An appended CLAUSE carrying its own separator, interpolated whole.
   const hlTip = hlEntry ? t('operate.decodes.row.highlighted') : ''
@@ -1092,7 +1171,7 @@ const DecodeRowView = memo(function DecodeRowView({
   const azText = azimuthLabel(az)
   return (
       <div
-        className={`decode-row ${rowClass(d, needs.rowNeed)}${selected ? ' selected' : ''}${ignored ? ' ignored' : ''}`}
+        className={`decode-row ${rowClass(d, needs.rowNeed)}${selected ? ' selected' : ''}${ignored ? ' ignored' : ''}${d.refilled ? ' refilled' : ''}`}
         role="option"
         data-pin-key={d.id}
         aria-selected={selected}
@@ -1119,9 +1198,12 @@ const DecodeRowView = memo(function DecodeRowView({
         tabIndex={tabIndex}
         ref={(el) => actions.setEl(index, el)}
         onFocus={() => actions.focus(index)}
-        style={hlStyle}
+        style={rowStyle}
+        aria-haspopup={d.from ? 'menu' : undefined}
         onClick={() => actions.click(index, d)}
         onDoubleClick={(e) => actions.double(e, d)}
+        onContextMenu={(e) => actions.menu(e, d)}
+        onKeyDown={(e) => actions.menu(e, d)}
         title={
           d.heard
             ? t('operate.decodes.row.heard.title', { band: d.heard.band, mode: d.heard.tier })
@@ -1145,7 +1227,9 @@ const DecodeRowView = memo(function DecodeRowView({
           title={
             d.mine
               ? t('operate.decodes.utc.title')
-              : t('operate.decodes.utc.period.title', { time: fmtUtc(d.at) })
+              : d.refilled
+                ? t('operate.decodes.utc.refilled.title')
+                : t('operate.decodes.utc.period.title', { time: fmtUtc(d.at) })
           }
         >
           {fmtUtc(rowTimeMs(d, tier, periodS))}
@@ -1166,6 +1250,9 @@ const DecodeRowView = memo(function DecodeRowView({
         </span>
         <span className="decode-freq">{Math.round(d.freqHz)}</span>
         <span className="decode-msg" title={d.country ? `${d.message} · ${d.country}` : d.message}>
+          {menuOpen && d.from && (
+            <CallRowMenu call={d.from} band={d.heard?.band ?? band} country={d.country} onClose={actions.closeMenu} />
+          )}
           {d.message}
           {/* WSJT-X AP / low-confidence markers: dim trailing annotations.
               Both can appear on the same decode (AP-assisted but uncertain). */}

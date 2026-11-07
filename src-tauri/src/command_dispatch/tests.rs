@@ -235,8 +235,10 @@ fn a_shack_only_command_is_refused_at_both_ends() {
     // The operator's rulings of 2026-10-07 by name: a settings restore and a factory reset, a
     // whole-log purge and the Connections log stay at the shack. The clock's repair waits on an
     // administrator prompt on the shack's own screen. A whole run's undo can delete as much of the
-    // log as a purge (an import's undo), so it stays at the shack with it.
+    // log as a purge (an import's undo), so it stays at the shack with it. Following the Moon turns
+    // the mast on its own for hours, with nobody from afar bound to it, so it starts at the shack.
     for name in [
+        "start_moon_track",
         "import_settings_bundle",
         "reset_settings",
         "purge_log",
@@ -759,6 +761,9 @@ const TRANSMITS_BY_ITSELF: &[Change] = &[
     ("wsjtx_udp_addr", |s| {
         s.wsjtx_udp_addr = "203.0.113.9:2237".into()
     }),
+    ("wsjtx_udp_accept_other_computers", |s| {
+        s.wsjtx_udp_accept_other_computers = !s.wsjtx_udp_accept_other_computers
+    }),
     ("cat_broker", |s| s.cat_broker = !s.cat_broker),
     ("cat_broker_ptt", |s| s.cat_broker_ptt = !s.cat_broker_ptt),
     ("js8_api_tcp", |s| s.js8_api_tcp = !s.js8_api_tcp),
@@ -830,6 +835,49 @@ const THE_TCI_SERVER: &[Change] = &[
         s.tci_server_spots = !s.tci_server_spots
     }),
 ];
+
+/// ⛔ The contact port (`tempo_app::log_intake`), set at the shack only: whether it takes contacts,
+/// its port, "Accept from devices on my network" and the one network address allowed. A computer
+/// driving the station must not open a network port at the station.
+const THE_CONTACT_PORT: &[Change] = &[
+    ("freedv_log", |s| s.freedv_log = !s.freedv_log),
+    ("freedv_log_port", |s| s.freedv_log_port = 2240),
+    ("log_intake_lan", |s| s.log_intake_lan = !s.log_intake_lan),
+    ("log_intake_peer", |s| {
+        s.log_intake_peer = "192.168.1.40".into()
+    }),
+];
+
+/// ⛔ A settings save from afar cannot switch the contact port, move it, let in the station's
+/// network or name the address allowed to send contacts: for each, the save from afar comes out as
+/// the shack's settings exactly, and the same save from the shack's own screen takes it.
+#[test]
+fn a_settings_save_from_afar_cannot_open_the_contact_port() {
+    let shack = tempo_app::settings::Settings::default();
+    let afar = Afar {
+        stand_down: 3,
+        starts_voided: 0,
+    };
+    for (name, change) in THE_CONTACT_PORT {
+        let mut asked = shack.clone();
+        change(&mut asked);
+        assert!(!moved(&asked, &shack).is_empty(), "premise: {name} moved");
+        let mut save = asked.clone();
+        keep_the_shacks_settings(&shack, &mut save, Some(&afar));
+        assert_eq!(
+            moved(&save, &shack),
+            Vec::<String>::new(),
+            "from afar, {name} changed"
+        );
+        let mut save = asked.clone();
+        keep_the_shacks_settings(&shack, &mut save, None);
+        assert_eq!(
+            moved(&save, &asked),
+            Vec::<String>::new(),
+            "CONTROL: at the shack, {name}"
+        );
+    }
+}
 
 /// What neither starts a transmission nor guards one, among them the fields beside the guards that
 /// read most like one: a save from afar takes each.
@@ -1272,7 +1320,7 @@ fn a_save_from_afar_keeps_the_shacks_computer_microphone() {
     let mut patch = asked.clone();
     keep_the_shacks_radio_ptt(&shack, 0, &mut patch, None);
     assert_eq!(patch.pc_mic, Some(true), "CONTROL: the shack's own edit");
-    let flagged = station_only_settings(Some(&afar)).unwrap();
+    let flagged = station_only_settings(Some(&afar), &shack).unwrap();
     for key in ["pcMic", "pcMicDevice", "pcMicGainDb"] {
         assert!(
             flagged.contains(&key),
@@ -1360,7 +1408,7 @@ fn a_save_from_afar_never_lets_programs_on_tci_transmit() {
         "a radio's edit from afar, naming them"
     );
 
-    let flagged = station_only_settings(Some(&afar)).unwrap();
+    let flagged = station_only_settings(Some(&afar), &shack).unwrap();
     assert!(
         flagged.contains(&"tciServerTx") && flagged.contains(&"tciServer"),
         "the read from afar does not say they are set at the station: {flagged:?}"
@@ -4100,12 +4148,18 @@ fn a_save_from_afar_keeps_a_profile_list_its_read_left_out() {
 /// setting the shack's file carries is changed alone in a save from afar, and it is kept when it
 /// comes back as the shack's. Also what could not be changed alone (a list or a table).
 fn what_a_save_from_afar_keeps() -> (std::collections::BTreeSet<String>, Vec<String>) {
-    use tempo_app::settings::Settings;
     // The pending Cloudlog key is written only while it holds one.
-    let shack = Settings {
+    what_a_save_from_afar_keeps_of(tempo_app::settings::Settings {
         cloudlog_key: "FAKE-PENDING-KEY-0001".into(),
         ..Default::default()
-    };
+    })
+}
+
+/// [`what_a_save_from_afar_keeps`] of the shack `shack`.
+fn what_a_save_from_afar_keeps_of(
+    shack: tempo_app::settings::Settings,
+) -> (std::collections::BTreeSet<String>, Vec<String>) {
+    use tempo_app::settings::Settings;
     let file = serde_json::to_value(&shack).unwrap();
     let mut kept = std::collections::BTreeSet::new();
     let mut untried = Vec::new();
@@ -4131,7 +4185,7 @@ fn what_a_save_from_afar_keeps() -> (std::collections::BTreeSet<String>, Vec<Str
                 // A choice of a few names says which, when it refuses another.
                 let mut asked = file.clone();
                 asked[name] = json!("probe");
-                let others = match serde_json::from_value::<Settings>(asked) {
+                let others: Vec<Value> = match serde_json::from_value::<Settings>(asked) {
                     Err(e) => e
                         .to_string()
                         .split('`')
@@ -4140,7 +4194,19 @@ fn what_a_save_from_afar_keeps() -> (std::collections::BTreeSet<String>, Vec<Str
                         .filter(|v| v != s)
                         .map(|v| json!(v))
                         .collect(),
-                    Ok(_) => Vec::new(),
+                    // A LENIENT choice loads the unknown value as its default and says nothing:
+                    // its values come from the setting's own list (`lenient_string_choices`).
+                    Ok(_) => tempo_app::settings::lenient_string_choices()
+                        .into_iter()
+                        .find(|(n, _)| n == name)
+                        .map(|(_, values)| {
+                            values
+                                .into_iter()
+                                .filter(|v| v != s)
+                                .map(|v| json!(v))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
                 };
                 [json!(format!("{s}probe"))]
                     .into_iter()
@@ -4187,10 +4253,13 @@ fn what_a_save_from_afar_keeps() -> (std::collections::BTreeSet<String>, Vec<Str
 #[test]
 fn every_setting_a_save_from_afar_keeps_is_set_at_the_station() {
     let (kept, untried) = what_a_save_from_afar_keeps();
-    let flagged: std::collections::BTreeSet<String> = station_only_settings(Some(&Afar {
-        stand_down: 1,
-        starts_voided: 0,
-    }))
+    let flagged: std::collections::BTreeSet<String> = station_only_settings(
+        Some(&Afar {
+            stand_down: 1,
+            starts_voided: 0,
+        }),
+        &tempo_app::settings::Settings::default(),
+    )
     .unwrap()
     .into_iter()
     .map(String::from)
@@ -4221,9 +4290,109 @@ fn every_setting_a_save_from_afar_keeps_is_set_at_the_station() {
         assert!(!flagged.contains(name), "{name} is flagged but untried");
     }
     assert_eq!(
-        station_only_settings(None),
+        station_only_settings(None, &tempo_app::settings::Settings::default()),
         None,
         "at the shack nothing is set elsewhere"
+    );
+}
+
+/// ⛔ While the shack has "My station" profiles, its call is set at the station: a whole save from
+/// afar keeps the shack's call, and the read from afar says so, beside every other setting it keeps.
+/// The call it would have written is no edit of the profile the shack is on. CONTROL: a shack with
+/// no profiles takes the call from afar as before (`every_setting_a_save_from_afar_keeps_is_set_at_the_station`).
+#[test]
+fn with_station_profiles_the_call_is_set_at_the_station() {
+    // The pending Cloudlog key is written only while it holds one (`what_a_save_from_afar_keeps`).
+    let mut shack = tempo_app::settings::Settings {
+        mycall: "KD9TAW".into(),
+        cloudlog_key: "FAKE-PENDING-KEY-0001".into(),
+        ..Default::default()
+    };
+    shack.ensure_station_profiles();
+    assert!(
+        !shack.station_profiles.is_empty(),
+        "premise: Home is written"
+    );
+    let (kept, _) = what_a_save_from_afar_keeps_of(shack.clone());
+    let afar = Afar {
+        stand_down: 1,
+        starts_voided: 0,
+    };
+    let flagged: std::collections::BTreeSet<String> = station_only_settings(Some(&afar), &shack)
+        .unwrap()
+        .into_iter()
+        .map(String::from)
+        .collect();
+    assert!(kept.contains("mycall"), "the save from afar keeps the call");
+    assert_eq!(
+        kept.symmetric_difference(&flagged).collect::<Vec<_>>(),
+        Vec::<&String>::new(),
+        "kept and flagged are the same"
+    );
+    let mut save = shack.clone();
+    save.mycall = "W9ABC".into();
+    save.mygrid = "EN53".into();
+    keep_the_shacks_settings(&shack, &mut save, Some(&afar));
+    let mut e = tempo_app::engine::Engine::with_settings(shack.clone());
+    e.apply_settings(save);
+    assert_eq!(
+        (
+            e.settings().mycall.as_str(),
+            e.settings().station_profiles[0].call.as_str(),
+            e.settings().mygrid.as_str(),
+        ),
+        ("KD9TAW", "KD9TAW", "EN53"),
+        "the call stays the shack's; CONTROL: the grid is the save's"
+    );
+}
+
+/// ⛔ The reviewer's sequence from afar. The far computer opens Settings with the shack on Home;
+/// at the shack the operator picks the club profile (W9ABC, refused under a General licence); the
+/// far computer saves an unrelated change. Its form still names Home, and the save from afar takes
+/// the shack's call (W9ABC). Home's call stays KD9TAW, so the club call's licence refusal stands;
+/// the far computer's change is saved.
+#[test]
+fn a_save_from_afar_on_a_stale_profile_never_gives_home_the_club_call() {
+    let mut shack = tempo_app::settings::Settings {
+        mycall: "KD9TAW".into(),
+        mygrid: "EN52".into(),
+        ..Default::default()
+    };
+    let mut e = tempo_app::engine::Engine::with_settings(shack.clone());
+    e.set_frequency(14.074, "20m", "USB");
+    assert!(e.set_license_class("general"));
+    let club = e
+        .save_station_profile(tempo_app::settings::StationProfile {
+            name: "Club".into(),
+            call: "W9ABC".into(),
+            grid: "EN43".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    let mut far_form = e.settings().clone();
+    e.switch_station_profile(&club).unwrap();
+    shack.clone_from(e.settings());
+    far_form.op_name = "Far op".into();
+    let afar = Afar {
+        stand_down: 1,
+        starts_voided: 0,
+    };
+    keep_the_shacks_settings(&shack, &mut far_form, Some(&afar));
+    e.apply_settings(far_form);
+    let home = e
+        .settings()
+        .station_profiles
+        .iter()
+        .find(|p| p.id == tempo_app::settings::HOME_STATION_PROFILE)
+        .map(|p| p.call.clone());
+    assert_eq!(
+        (
+            home.as_deref(),
+            e.settings().mycall.as_str(),
+            e.connection_tx_refusal().is_some(),
+            e.settings().op_name.as_str(),
+        ),
+        (Some("KD9TAW"), "W9ABC", true, "Far op")
     );
 }
 
@@ -4234,10 +4403,13 @@ fn the_ui_fixture_carries_the_station_only_list() {
         "../../../ui/src/components/__fixtures__/stationOnlySettings.json"
     ))
     .unwrap();
-    let sent: Vec<String> = station_only_settings(Some(&Afar {
-        stand_down: 1,
-        starts_voided: 0,
-    }))
+    let sent: Vec<String> = station_only_settings(
+        Some(&Afar {
+            stand_down: 1,
+            starts_voided: 0,
+        }),
+        &tempo_app::settings::Settings::default(),
+    )
     .unwrap()
     .into_iter()
     .map(String::from)
@@ -4299,4 +4471,85 @@ fn allow_to_transmit_is_refused_from_afar_so_a_held_device_never_allows_itself()
     // refusal above is the class's, not a caller the dispatcher turns away anyway.
     let control = shack.admit(&controller(), call(2, "get_snapshot", json!({})));
     assert_eq!(kind(&control), "run");
+}
+
+/// The snapshot a computer driving the station reads, as the dispatcher finishes it, for a
+/// FreeDV block holding `freedv`.
+fn snapshot_from_afar(shack: &Dispatcher<Fake>, id: u64, freedv: Value) -> Value {
+    let Admission::Run { ticket, .. } =
+        shack.admit(&controller(), call(id, "get_snapshot", json!({})))
+    else {
+        panic!("admitted")
+    };
+    ticket
+        .finish(Ok(json!({ "n": 1, "freedv": freedv })))
+        .result
+        .unwrap()
+}
+
+/// ⛔ From afar, the contact port's "last contact from" never names a network address: a contact
+/// from a device that gave no name of its own (named at the shack by where it sent from) shows
+/// as a device on the network, or this computer for loopback, in the other computer's own words
+/// (`tempo_app::log_intake::FROM_A_NETWORK_DEVICE` / `FROM_THIS_COMPUTER`, which its screen
+/// words). CONTROL: a program's own name goes as it is, and so does the rest of the snapshot.
+#[test]
+fn a_snapshot_read_from_afar_names_no_network_address_for_the_last_contact() {
+    let shack = shack();
+    for (id, address, shown) in [
+        (
+            1,
+            "192.168.1.40",
+            tempo_app::log_intake::FROM_A_NETWORK_DEVICE,
+        ),
+        (2, "fd00::9", tempo_app::log_intake::FROM_A_NETWORK_DEVICE),
+        (3, "127.0.0.1", tempo_app::log_intake::FROM_THIS_COMPUTER),
+    ] {
+        let got = snapshot_from_afar(
+            &shack,
+            id,
+            json!({ "intakeProgram": address, "intakeCall": "K1ABC", "logPort": 2239 }),
+        );
+        assert_eq!(got["freedv"]["intakeProgram"], shown, "{address}");
+        assert_eq!(got["freedv"]["intakeCall"], "K1ABC", "the rest goes");
+        assert_eq!(got["n"], 1);
+    }
+    let got = snapshot_from_afar(&shack, 9, json!({ "intakeProgram": "WSJT-X" }));
+    assert_eq!(
+        got["freedv"]["intakeProgram"], "WSJT-X",
+        "CONTROL: a name goes"
+    );
+}
+
+/// ⛔ From afar, a refusal the contact port shows never quotes a device's address either: each
+/// address in it reads as a device on the network, or this computer. CONTROL: the rest of the
+/// sentence, and a sentence quoting none, go as they are.
+#[test]
+fn a_refusal_read_from_afar_quotes_no_network_address() {
+    let shack = shack();
+    let lan = tempo_app::log_intake::NETWORK_DEVICE_WORDS;
+    let local = tempo_app::log_intake::THIS_COMPUTER_WORDS;
+    for (id, notice, shown) in [
+        (
+            1,
+            "192.168.1.40 logged W1ABC · 145.850 MHz, not imported: the log is busy",
+            format!("{lan} logged W1ABC · 145.850 MHz, not imported: the log is busy"),
+        ),
+        (
+            2,
+            "fd00::9 logged W1ABC as W1AW, not imported: this station is K2DEF",
+            format!("{lan} logged W1ABC as W1AW, not imported: this station is K2DEF"),
+        ),
+        (
+            3,
+            "127.0.0.1 logged a contact with no valid call (\"X\"), not imported",
+            format!("{local} logged a contact with no valid call (\"X\"), not imported"),
+        ),
+    ] {
+        let got = snapshot_from_afar(&shack, id, json!({ "notice": notice }));
+        assert_eq!(got["freedv"]["notice"], json!(shown), "{notice}");
+        assert!(!got.to_string().contains("192.168") && !got.to_string().contains("fd00"));
+    }
+    let plain = "WSJT-X logged K1ABC as W1AW, not imported: this station is K2DEF";
+    let got = snapshot_from_afar(&shack, 9, json!({ "notice": plain }));
+    assert_eq!(got["freedv"]["notice"], plain, "CONTROL");
 }
