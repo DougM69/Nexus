@@ -175,6 +175,8 @@ describe('the row shows two buttons, and the rest is in its ⋯ menu', () => {
     const qrzSent = t('logbook.upload.title', { state: t('logbook.upload.done'), date: fmtUtc(SENT_AT) })
     const clublogRefused = t('logbook.upload.title', { state: t('logbook.upload.failed'), date: fmtUtc(SENT_AT) })
     expect(texts).toEqual([
+      // Best times leads every call menu (BestTimesCard); the row's own items follow.
+      t('callMenu.bestTimes'),
       t('logbook.row.menu.spot'),
       t('logbook.row.menu.qrz') + qrzSent,
       t('logbook.row.menu.qrzCorrect'),
@@ -305,6 +307,10 @@ describe('Spot from the ⋯ menu', () => {
     const more = rowMore('K0ABC')
     more.focus()
     const menu = await openRowMenu('K0ABC')
+    // The keyboard lands on the first item, Best times; Spot is the next one down.
+    const first = menuItem(menu, t('callMenu.bestTimes'))
+    await waitFor(() => expect(document.activeElement).toBe(first))
+    fireEvent.keyDown(first, { key: 'ArrowDown' })
     const spot = menuItem(menu, t('logbook.row.menu.spot'))
     await waitFor(() => expect(document.activeElement).toBe(spot))
     fireEvent.keyDown(spot, { key: 'Enter' })
@@ -409,5 +415,31 @@ describe('the contact card’s per-field ✕ / ↺', () => {
     const px = (v: string | null) => Number(/^(\d+(?:\.\d+)?)px$/.exec(v ?? '')?.[1] ?? 0)
     expect(px(resolved(remove, 'min-width')), 'WCAG 2.5.8: at least 24 px wide').toBeGreaterThanOrEqual(24)
     expect(px(resolved(remove, 'height')), 'and 24 px tall').toBeGreaterThanOrEqual(24)
+  })
+})
+
+describe('the contact card says what eQSL said of the card that confirms it', () => {
+  const fact = (card: HTMLElement, label: string) =>
+    [...card.querySelectorAll('dt')].find((dt) => dt.textContent === label)?.nextElementSibling?.textContent ?? null
+
+  it('its Authenticity-Guaranteed mark and the sender’s message, beside eQSL’s confirmation', async () => {
+    const row = await renderLog({
+      id: 'id-1',
+      confirmed: true,
+      qslRcvd: { card: false, lotw: false, eqsl: true, qrz: false },
+      extra: [['APP_EQSL_AG', 'Y'], ['APP_NEXUS_EQSL_QSLMSG', 'TNX QSO 73']],
+    })
+    fireEvent.doubleClick(row)
+    const card = await waitFor(() => document.querySelector<HTMLElement>('.contact-card-dialog')!)
+    expect(fact(card, t('contactCard.eqslAg'))).toBe(t('qso.detail.qsl.yes'))
+    expect(fact(card, t('contactCard.eqslMessage'))).toBe('TNX QSO 73')
+  })
+
+  it('nothing of a card the contact does not hold', async () => {
+    const row = await renderLog({ id: 'id-1', extra: [['APP_EQSL_AG', 'Y'], ['APP_NEXUS_EQSL_QSLMSG', 'TNX QSO 73']] })
+    fireEvent.doubleClick(row)
+    const card = await waitFor(() => document.querySelector<HTMLElement>('.contact-card-dialog')!)
+    expect(fact(card, t('contactCard.eqslAg'))).toBeNull()
+    expect(fact(card, t('contactCard.eqslMessage'))).toBeNull()
   })
 })

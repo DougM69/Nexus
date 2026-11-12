@@ -123,6 +123,10 @@ impl FieldEdit {
 
     /// Whether `stored` still holds the value the change was made against, exactly.
     pub fn is_fresh(&self, stored: &QsoRecord) -> bool {
+        // The one modelled field a card can change: see [`Self::check`].
+        if self.tag == "IOTA" {
+            return stored.ota.iota.as_deref() == self.old.as_deref();
+        }
         let held = stored
             .extra
             .iter()
@@ -146,9 +150,14 @@ impl FieldEdit {
                 "'{tag}' is not an ADIF field name — use capitals, digits and _ only, such as CNTY."
             ));
         }
-        // The one mark the operator takes off by hand: confirming a reference taken from an offer
+        // The one mark the operator takes off by hand: owning a reference Nexus filled at log time
         // (`offer::OFFER_HELD_FIELD`) — removal only, never a value.
         if tag == super::offer::OFFER_HELD_FIELD && self.value().is_none() {
+            return Ok(());
+        }
+        // And clearing such a reference instead (`super::fields_set`): removal only, and
+        // [`Self::check_on`] refuses it on a reference Nexus did not fill. Any other is changed in its box.
+        if tag == "IOTA" && self.value().is_none() {
             return Ok(());
         }
         if tag.starts_with("APP_NEXUS_")
@@ -176,6 +185,12 @@ impl FieldEdit {
     /// change would be saved and shown, and reach none of them. A column holding only blanks holds
     /// the field as well: the writer writes every non-empty column, in place of a field beside it.
     pub fn check_on(&self, stored: &QsoRecord) -> Result<(), String> {
+        if self.tag == "IOTA" && !super::offer::is_offer_held(stored, "IOTA") {
+            return Err(
+                "This contact's IOTA reference was not filled in by Nexus — change it in its box."
+                    .to_string(),
+            );
+        }
         let held = stored.contest.as_deref().is_some_and(|c| {
             c.adif
                 .iter()

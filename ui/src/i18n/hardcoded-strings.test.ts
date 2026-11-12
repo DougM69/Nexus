@@ -53,6 +53,8 @@ import { EN, type MessageKey } from './index'
  * proven on a real shipped sentence rather than on a fixture.
  */
 const MIGRATED = [
+  'components/RttyBaudPicker.tsx',
+  'components/ListenLevel.tsx',
   'remote-web/AudioListen.tsx',
   'remote-web/RemoteApp.tsx',
   'remote-web/StreamView.tsx',
@@ -118,6 +120,7 @@ const MIGRATED = [
   'components/SettingsClusterNodes.tsx',
   'components/SettingsSearch.tsx',
   'components/OnboardingBanner.tsx',
+  'components/prop/ModelBasis.tsx',
   'components/RevealNudge.tsx',
   // Client mode (2026-10-07) — born migrated: the banner of a computer driving another station,
   // and the words for a call it refused or could not make.
@@ -303,6 +306,12 @@ const MIGRATED = [
   'features/pathRibbon.ts',
   'components/prop/PathDayStrip.tsx',
   'features/pathDay.ts',
+  // Best times to work a call: the answer, its chart, the box (Conditions).
+  'features/bestTimes.ts',
+  'components/prop/BestTimesAnswer.tsx',
+  'components/prop/BestTimesChart.tsx',
+  'components/prop/BestTimesPane.tsx',
+  'components/BestTimesCard.tsx',
   // The flare / proton overlay on a path and the outlook's "now" line (solar paths and outlook).
   'features/pathNow.ts',
   'components/prop/SpaceNowLine.tsx',
@@ -334,6 +343,8 @@ const MIGRATED = [
   // Check confirmations (2026-10-07) — born migrated: LoTW, calls, bands, modes and credit codes
   // are tokens, held as data or a named constant.
   'components/ConfirmationReview.tsx',
+  // Check eQSL sent marks — born migrated: calls, bands and modes are data.
+  'components/EqslSentMarkReview.tsx',
   // Cards to send (2026-10-27) — born migrated: calls, bands, modes and the label stocks' product
   // names are tokens.
   'components/QslCardsToSend.tsx',
@@ -757,6 +768,8 @@ const MIGRATED = [
   'features/clockRepairHold.ts',
   // …and of a TX On the sign-in hold refused — migrated from birth.
   'features/txOnHeld.ts',
+  // …and of an ATU press that came to nothing after the button accepted it — migrated from birth.
+  'features/atuFailed.ts',
   // …and the headline for the station's audio-error line, by the kind the station names —
   // migrated from birth. The sentence passes through as data.
   'features/audioError.ts',
@@ -959,7 +972,8 @@ const MIGRATED = [
  *     must never read as different controls.
  *   · The top bar keeps its TX CLUSTER: TX On/Off, whose two tooltip arms state the abort
  *     semantics ("an FT over already in flight finishes" — the batch-18 ruling), TUNE, STOP TX,
- *     and the TX WATCHDOG chip, which is what the watchdog says once it has halted an over.
+ *     and the TX WATCHDOG chip, which is what the watchdog says once it has halted an over (since
+ *     2026-11-07 a status-lane item App raises in catalog words, no longer a chip of the bar).
  *
  * Everything around them moved — the wheel-tune tooltips and the band-edge toast, the power
  * slider (batch 13: a configuration control on the transmit path is not a transmit control),

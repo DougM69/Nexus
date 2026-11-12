@@ -5,8 +5,7 @@
 !
 ! WSJT-X is free software: you can redistribute it and/or modify
 ! it under the terms of the GNU General Public License as published by
-! the Free Software Foundation, either version 3 of the License, or
-! (at your option) any later version.
+! the Free Software Foundation, version 3 of the License.
 !
 ! WSJT-X is distributed in the hope that it will be useful,
 ! but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -138,7 +137,7 @@ subroutine ft1_demod_bcjr(cd, npts, snr_est, rv, llr_out)
   sigma2 = 1.0 / max(1.0 + snr_linear, 1.0e-6)
 
 ! Per-segment phase estimation using three Costas arrays
-  nsps_down_real = 3000.0 / (7.0 * 54.0)
+  nsps_down_real = 8.0
   chan_start = (/0, 47, 95/)
 
 ! Group 1: known start state (state 1, theta=0)
@@ -440,7 +439,7 @@ subroutine ft1_bm_prep(cd, npts, snr_est, rv, bm_out, is_data, data_idx)
   snr_linear = 10.0**(snr_est / 10.0) * (2500.0 / 180.0)
   sigma2 = 1.0 / max(1.0 + snr_linear, 1.0e-6)
 
-  nsps_down_real = 3000.0 / (7.0 * 54.0)
+  nsps_down_real = 8.0
   chan_start = (/0, 47, 95/)
 
 ! Group 1: known start state (state 1, theta=0)

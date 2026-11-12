@@ -14,6 +14,9 @@
 // window (the two mirrors drifting apart is what put the guard here). The club-sync-off copy
 // is the router's because it is about a panel that ISN'T mounted: it names the Settings route
 // that would fill the board, and the board component never renders in that state.
+import { BestTimesCardHost } from './components/BestTimesCard'
+import { listenForHandoff, noteRadioMode } from './features/bestTimesAsk'
+import { radioModeOf } from './features/bestTimes'
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react'
 import { t } from './i18n'
 import { useEscStop } from './useEscStop'
@@ -83,6 +86,7 @@ import {
   type FreqMarker,
 } from './api'
 import { markRecalled, memoriesStore, planRecall, type Memory } from './features/memories'
+import { askMainWindowToOpen, ridesPhone, tuneForRecall } from './features/memoryRecall'
 import { useTciSpots } from './features/tciSpots'
 import { failureToShow, useLatestLogAnswer, useLogStatus } from './features/logSource'
 import { bandLabelForMhz } from './band'
@@ -111,7 +115,7 @@ import { StationList } from './components/StationList'
 import { visibleNeeds, boardNeeds, modeClassOf, workTarget, alertsByCall, activityTypeByCall, topNeedByCall, ownScreen, workTier, pskSubmode, WORK_SECTION, spotNeed, type OwnScreen } from './features/needs'
 import { OPERATE_PANELS, usePanelLayout } from './features/panelState'
 import { surfaceGet, surfaceSet } from './features/windowScope'
-import { readEnabledModes } from './useFeatures'
+import { readEnabledModes, readFeatureOn } from './useFeatures'
 import { useTheme } from './useTheme'
 import { useContrastPrefs } from './useFieldMode'
 import { usePaletteRoles } from './usePaletteRoles'
@@ -219,10 +223,19 @@ export function DetachedPanel({ panel }: { panel: string }) {
 
 /** The root of every pop-out branch: the zoomed `.app` tree plus this window's toast host.
  *  Use this, never a bare `<div className="app detached">` — see the warning above. */
+/** The Conditions window takes See full day's call from any other window (features/bestTimesAsk). */
+function ConditionsHandoff() {
+  useEffect(() => listenForHandoff(), [])
+  return null
+}
+
 function DetachedShell({ className, children }: { className?: string; children?: ReactNode }) {
   return (
     <div className={className ? `app detached ${className}` : 'app detached'}>
       {children}
+      {/* A call menu's Best times card shows in a torn-off window too, never over its transmit
+          controls (BestTimesCard.tsx). */}
+      <BestTimesCardHost />
       <Toasts />
     </div>
   )
@@ -252,6 +265,9 @@ function DetachedPanelBody({ panel }: { panel: string }) {
   useTextSize()
   useMotion()
   const [snap, setSnap] = useState<AppSnapshot | null>(null)
+  // A call menu's Best times card starts on the mode the radio is in (features/bestTimesAsk).
+  const radioModeForBestTimes = radioModeOf(snap)
+  useEffect(() => noteRadioMode(radioModeForBestTimes), [radioModeForBestTimes])
   // Night follows the station into a pop-out: this document's own writer of data-night, going by
   // the same grid square and the same sun as the main window.
   useNight(snap?.mygrid ?? '')
@@ -780,9 +796,8 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     // atomic workSpot tunes the shared engine, and the MAIN window follows to the
     // right cockpit via the same snapshot nav-hint the Needed pop-out uses.
     const recall = (m: Memory) => {
-      const plan = planRecall(m)
+      const plan = planRecall(m, readFeatureOn)
       const target = plan.view
-      const opMode: 'digital' | 'phone' | 'cw' = target === 'operate' ? 'digital' : target
       const modes = readEnabledModes()
       if ((target === 'cw' && !modes.cw) || (target === 'phone' && !modes.phone)) {
         return // cockpit disabled — the main window's Settings gate applies
@@ -798,14 +813,19 @@ function DetachedPanelBody({ panel }: { panel: string }) {
             await persistSettings({ ...cur, ...patch })
           }
         }
-        const s2 = await workSpot(opMode, plan.freqMhz, band)
+        const s2 = await tuneForRecall(plan, band)
         if (!s2) return
         apply(Promise.resolve(s2))
-        if (target === 'phone' && (mode === 'USB' || mode === 'LSB')) {
+        if (ridesPhone(target) && (mode === 'USB' || mode === 'LSB')) {
           await setSidebandOverride(mode as 'USB' | 'LSB')
         }
+        // SSTV's and APRS's tunes tick no nav hint, so the main window has to be asked.
+        if (target === 'sstv' || target === 'aprs') askMainWindowToOpen(target)
         memoriesStore.update((b) => markRecalled(b, m.id, Math.floor(Date.now() / 1000)))
-      })()
+      })().catch((e) =>
+        // `aprs_tune` refuses a radio that cannot reach the channel, and says so.
+        pushToast(t('shell.recall.error', { error: `${e instanceof Error ? e.message : e}` }), 'error', 4000),
+      )
     }
     return (
       <DetachedShell>
@@ -823,9 +843,11 @@ function DetachedPanelBody({ panel }: { panel: string }) {
     // THE DASHBOARD WINDOW: the clock and space-weather bar across the top, the
     // station from the shared snapshot and the indices from this window's own propagation poll
     // above. Its toggle keeps the window behind the others where the shell offers that; the
-    // window's size, place and that choice are the shell's (`window_state` in src-tauri).
+    // window's size, place and that choice are the shell's (`window_state` in src-tauri). It is also
+    // where a Best times card's See full day lands: the call goes to its Best times box.
     return (
       <DetachedShell>
+        <ConditionsHandoff />
         <DashboardBar call={snap?.mycall ?? ''} grid={snap?.mygrid ?? ''} prop={prop}>
           <StayBehindToggle />
         </DashboardBar>

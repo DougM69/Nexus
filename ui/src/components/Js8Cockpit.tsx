@@ -10,6 +10,7 @@ import { useEscStop } from '../useEscStop'
 import type { AppSnapshot, BandChannel, Js8InboxEntry, Js8InboxState, Js8Origin, Js8Speed, Js8State, Js8Switch, Js8Unarmed, Settings } from '../types'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitTxStrip } from './CockpitTxStrip'
+import { TxAlarmBanner } from './TxAlarmBanner'
 import { TxMeters } from './TxMeters'
 import { useCompactChrome } from '../features/compactChrome'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
@@ -137,6 +138,7 @@ import { JS8_COMPOSE_DEFAULTS, js8InsertText, js8MacroSelected, type Js8ComposeC
 import { JS8_DEFAULT_SAVED, JS8_DEFAULT_STATUS, js8FormatSnr, js8MacroValues, replaceJs8Macros } from '../js8Macros'
 import { patchSettings } from '../settings/patch'
 import { upperTyped } from '../typedInput'
+import { openBestTimesCard } from './BestTimesCard'
 
 interface Props {
   /** Open the Logbook filtered to a callsign — handed to the log strip's recall card. */
@@ -1294,6 +1296,9 @@ export function Js8Cockpit({
       canBlock: lists.setRxBlocklist != null,
       onBlock: () => block(call, !blocked),
       clears: clears('call'),
+      // Beside the row's menu button (the open menu's trigger), else the list.
+      onBestTimes: () =>
+        openBestTimesCard(call, document.querySelector<HTMLElement>('.js8-row-menu[aria-expanded="true"], .js8-row-menu[data-state="open"]') ?? document.body),
     })
   }
   const bandRowMenu = (r: Js8BandRow) =>
@@ -1809,6 +1814,7 @@ export function Js8Cockpit({
           is on this cockpit's stop-line census and its sweep. */}
       {snap && (
         <CockpitTxStrip
+          alarm={<TxAlarmBanner alarms={snap.txAlarms} onSnap={onSnap} />}
           radio={snap.radio}
           onStopTx={stop}
           onSetTxEnabled={onSetTxEnabled}

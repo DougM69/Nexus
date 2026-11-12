@@ -120,7 +120,8 @@ describe('the default table is the one the Logbook had', () => {
     document.documentElement.setAttribute('data-viewport', 'sm')
     const { container } = await renderLog()
     expect(headers()).toEqual(['Call', 'Country', 'Band', 'QSL', 'Notes', 'Edit / delete'])
-    expect(template(container)).toBe('minmax(96px, 1fr) 1.3fr 0.7fr 0.7fr 1fr minmax(80px, 80px)')
+    // The QSL track holds an 88px floor, so every mark fits (logColumns.ts).
+    expect(template(container)).toBe('minmax(96px, 1fr) 1.3fr 0.7fr minmax(88px, 0.7fr) 1fr minmax(80px, 80px)')
     expect(row(container).querySelectorAll(':scope > .log-cell')).toHaveLength(6)
   })
 })
@@ -506,10 +507,19 @@ describe('the editor shows the added fields and edits IOTA', () => {
   it('refuses a value that is not an IOTA reference, and sends nothing', async () => {
     const { container } = await renderLog()
     const form = await openEdit(container)
-    fireEvent.change(within(form).getByLabelText('IOTA'), { target: { value: 'EU5' } })
+    fireEvent.change(within(form).getByLabelText('IOTA'), { target: { value: 'XX5' } })
     fireEvent.click(within(form).getByRole('button', { name: /save/i }))
     expect(await within(form).findByRole('alert')).toBeTruthy()
     expect(api.editQsoById).not.toHaveBeenCalled()
+  })
+
+  it('takes an obvious spelling ("eu 115") as the reference it is, EU-115', async () => {
+    const { container } = await renderLog()
+    const form = await openEdit(container)
+    fireEvent.change(within(form).getByLabelText('IOTA'), { target: { value: 'eu 115' } })
+    fireEvent.click(within(form).getByRole('button', { name: /save/i }))
+    await waitFor(() => expect(api.editQsoById).toHaveBeenCalled())
+    expect(vi.mocked(api.editQsoById).mock.calls[0][1].ota.iota).toBe('EU-115')
   })
 
   it('lists what the contact carries that no box edits', async () => {

@@ -51,7 +51,14 @@ export const PER_SURFACE = [
   // bar on, every other layout and Reset layout off). A pop-out inherits the main window's until it
   // picks a layout of its own, like the placement it is read back with.
   'nexus.connect.bar',
+  // Whether THIS window's stored layout has had the Best times box put in once (connectConfig's
+  // migrateBestTimes): the dashboard window keeps a layout of its own, and gets the box in it too.
+  'nexus.connect.bestTimes.v1',
   'nexus.connect.config',
+  // The Best times box's last call and mode (features/bestTimesAsk, BestTimesPane): what THIS window's
+  // box was last asked, a convenience, like a box's sort.
+  'nexus.bestTimes.call',
+  'nexus.bestTimes.mode',
   // The Getting Out box's Start fresh time (features/getoutSince): an antenna test in THIS window. A
   // pop-out starts on the main window's and diverges at its first press; a restart keeps it.
   'nexus.connect.getout.since',
@@ -74,6 +81,7 @@ export const PER_SURFACE = [
   'nexus.connect.ota.bandFilter',
   'nexus.connect.ota.hideWorked',
   'nexus.connect.ota.modeFilter',
+  'nexus.connect.ota.onlyNew',
   'nexus.connect.ota.program',
   'nexus.connect.ota.sortAsc',
   'nexus.connect.ota.sortKey',
@@ -137,6 +145,8 @@ export const PER_SURFACE = [
   // POTA board and a SOTA board in two windows may answer it differently.
   'nexus.ota.hideWorked',
   'nexus.ota.modeFilter',
+  // Only new: what THIS board shows, like Hide worked today beside it.
+  'nexus.ota.onlyNew',
   'nexus.ota.program',
   'nexus.ota.sortAsc',
   'nexus.ota.sortKey',
@@ -154,6 +164,11 @@ export const PER_SURFACE = [
   'nexus.sats.columns',
   'nexus.sats.favOnly',
   'nexus.spotlegend',
+  // The Spots view's hidden modes and picked bands (useRememberedList): what THIS window's board shows,
+  // kept across restarts, so the Pop out has its own. A pane of the board keeps `<key>.<scope>` in
+  // the session instead (SESSION_SCOPED below), and never reads or writes these.
+  'nexus.spots.bands',
+  'nexus.spots.hiddenModes',
   // Connect's bottom strip height (layout L7): a % of THIS window's grid, like the strips below.
   'nexus.split.connect.strip',
   // The Contest screen's log height and the last contacts' over it: a % of THIS window's screen, like
@@ -256,6 +271,9 @@ const SHARED = [
   // How the TX meters are drawn, Bars or Needle (#343, txMeterStyle.ts): a display preference about
   // this screen, so a popped-out cockpit draws its meters as the main window does.
   'nexus-txmeter-style',
+  // The high-SWR cutoff, mirrored for the TX meters' tooltip (#476, swrCutoff.ts): a copy of a
+  // station setting, so a popped-out cockpit's meters name the same number as the main window's.
+  'nexus-swr-cutoff',
   // The colour roles (Settings ▸ Appearance ▸ Colours), one key per role: a preference about this
   // screen and the eyes in front of it, the same class as the theme, so every window agrees. The
   // role table is their one source (`classifies every colour-role key`, below).
@@ -273,6 +291,9 @@ const SHARED = [
   // and the eyes in front of it, like the cap; only the main window ever asks or reads it.
   'nexus-ui-scale-fit-rule',
   'nexus.connect.chaseDefault.v1',
+  // See full day's hand-off to the Conditions window (features/bestTimesAsk): written by one window for
+  // ANOTHER to read, so it cannot be scoped to either.
+  'nexus.bestTimes.handoff',
   'nexus.connect.mode',
   'nexus.cw.sensitivity',
   // The FT country-exclusion list. SHARED, and the one key here where that is a RULING
@@ -289,6 +310,10 @@ const SHARED = [
   // operator is running the event, not about one window — a torn-off board showing a different
   // goal than the cockpit would be two surfaces disagreeing about the same target.
   'nexus.fd.rateGoal',
+  // The unmerged-contacts offers the operator dismissed (ContestView). SHARED: the offer is about
+  // this computer's contest journal, not one window, so a pop-out must not offer what the main
+  // window put away. Not durable: dismissing deletes nothing, and a lost record only offers again.
+  'nexus.contest.unmergedDismissed',
   'nexus.dxped.alarms',
   'nexus.dxped.chasing',
   'nexus.features.v1',
@@ -362,6 +387,9 @@ const SHARED = [
   // buttons, dismissed once for this computer whichever window showed it.
   'nexus.contest.workIn',
   'nexus.contest.workInHint',
+  // A recall from the Memories pop-out asking the main window to open SSTV or APRS
+  // (features/memoryRecall): heard as a `storage` event, the whole mechanism between the two.
+  'nexus.memory.openScreen',
   // The Flex DAX note in the voice keyer (features/flexDaxNote), dismissed once for this computer like
   // the work-in hint above.
   'nexus.phone.flexDaxNote',
@@ -417,8 +445,9 @@ const DEDUPE = [
  * filters, the Needed board's search). sessionStorage is
  * already per-webview by the platform, so these need no scope suffix — the same guarantee
  * PER_SURFACE buys, by a different mechanism (windowScope.test.ts leans on it for seenSet).
- * Their lifetime is deliberately shorter: the Spots filters are meant to survive a view
- * switch and die on app exit, unlike the roster/board filters, which persist across restarts.
+ * Their lifetime is deliberately shorter: these Spots filters are meant to survive a view
+ * switch and die on app exit, unlike the roster/board filters and the Spots view's own modes and
+ * bands, which persist across restarts (SpotsPanel's REMEMBERED_FILTERS says why each is which).
  *
  * Listed AND scanned for (see `classifies every useSessionState key`), because the raw-storage
  * scan below structurally cannot see them: the helper takes the key as a PARAMETER, so no
@@ -428,17 +457,17 @@ const DEDUPE = [
  * existed and none on four that did.
  */
 const SESSION_SCOPED = [
-  'nexus.spots.bands',
   'nexus.spots.filtersOpen',
   // The band a PANE of the board follows, and the modes it opens on as an allow-list (#345: the
   // Phone cockpit's Spots pane). Each is kept only by that pane; the view keeps `hiddenModes`
   // instead and no follow switch at all. A pane keeps EVERY key here as its own copy,
-  // `<key>.<scope>` (`nexus.spots.bands.phone`): same store, same lifetime, same verdict. Connect's
-  // Spots box is a pane that names no modes and follows no band, so it keeps `hiddenModes` in
-  // its copy (`nexus.spots.hiddenModes.connect`), the view's rule, and no follow switch.
+  // `<key>.<scope>` (`nexus.spots.sort.phone`): same store, same lifetime, same verdict, and its
+  // bands and hidden modes the same way (`nexus.spots.bands.phone`), though the view's own are
+  // remembered (PER_SURFACE). Connect's Spots box is a pane that names no modes and follows no band,
+  // so it keeps `hiddenModes` in its copy (`nexus.spots.hiddenModes.connect`), the view's rule, and
+  // no follow switch.
   'nexus.spots.followBand',
   'nexus.spots.shownModes',
-  'nexus.spots.hiddenModes',
   // Hide worked and the window it reaches back over. Session-lived like the filters around them:
   // on again next launch, which is the default the operator chose.
   'nexus.spots.hideWorked',
@@ -525,6 +554,10 @@ function sources(dir: string, out: string[] = []): string[] {
 const INDIRECT: Record<string, string[]> = {
   'usePaneWidths.ts:key': ['tempo-right-rail-w', 'tempo-left-rail-w'],
   'components/ConnectView.tsx:key': ['nexus.connect.intent'],
+  // The Spots view's remembered modes and bands: the hook that keeps them, and the Pop out's hand-off
+  // (SpotsPanel's REMEMBERED_FILTERS), which reads the view's copy and writes the window's.
+  'useRememberedList.ts:key': ['nexus.spots.hiddenModes', 'nexus.spots.bands'],
+  'components/SpotsPanel.tsx:key': ['nexus.spots.hiddenModes', 'nexus.spots.bands'],
   // Reserved generic pane-grid persistence. Carries NO key today: no `PaneLayoutSpec`
   // literal exists in the tree (Connect composes the pure helpers and persists through its
   // own scoped `nexus.connect.config`). Routed through the scope helper anyway so the next
@@ -568,7 +601,7 @@ const INDIRECT: Record<string, string[]> = {
     'nexus.connect.neededFilters',
   ],
   // The POTA/SOTA board's filters, read and written through its key table (OTA_KEYS): the view's
-  // own six, or the Connect box's six.
+  // own seven, or the Connect box's seven.
   'components/PotaSotaView.tsx:keys': [
     'nexus.ota.program',
     'nexus.ota.bandFilter',
@@ -576,12 +609,14 @@ const INDIRECT: Record<string, string[]> = {
     'nexus.ota.sortKey',
     'nexus.ota.sortAsc',
     'nexus.ota.hideWorked',
+    'nexus.ota.onlyNew',
     'nexus.connect.ota.program',
     'nexus.connect.ota.bandFilter',
     'nexus.connect.ota.modeFilter',
     'nexus.connect.ota.sortKey',
     'nexus.connect.ota.sortAsc',
     'nexus.connect.ota.hideWorked',
+    'nexus.connect.ota.onlyNew',
   ],
 }
 
@@ -786,6 +821,12 @@ describe('call sites agree with the classification', () => {
     ]) {
       expect(readFileSync(join(SRC, file), 'utf8')).toContain(`storageKey="${key}"`)
     }
+    // The Spots view's remembered lists: each key is passed to the hook, and named in the hand-off's list.
+    const spotsBoard = readFileSync(join(SRC, 'components/SpotsPanel.tsx'), 'utf8')
+    for (const k of INDIRECT['useRememberedList.ts:key']) {
+      expect(spotsBoard).toContain(`useRememberedList('${k}'`)
+    }
+    expect(spotsBoard).toContain("REMEMBERED_FILTERS: readonly string[] = ['nexus.spots.hiddenModes', 'nexus.spots.bands']")
     // The Needed board's `key`: its own when nobody passes one, the Phone pane's when it does.
     const needed = readFileSync(join(SRC, 'components/NeededPanel.tsx'), 'utf8')
     expect(needed).toContain("const FILTER_KEY = 'neededFilters'")

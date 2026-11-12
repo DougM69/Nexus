@@ -13,6 +13,8 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import type { Activation, ImportStats, LogExport, LoggedActivation, LoggedQso, UploadReport, UploadStatus } from '../types'
 import { ContactCard, type CardContact } from './ContactCard'
 import { Menu, type MenuEntry } from './ui/Menu'
+import { useCallMenu } from './useCallMenu'
+import { openBestTimesCard } from './BestTimesCard'
 import { RecentlyDeleted } from './RecentlyDeleted'
 import { LogTools, type LogTool } from './LogTools'
 import { useCallbookUpdateEnd } from './LogCallbookUpdate'
@@ -36,6 +38,7 @@ import { ImportPreview } from './ImportPreview'
 import { importTooLarge } from '../features/logImport'
 import { ParkStateReview } from './ParkStateReview'
 import { ConfirmationReview } from './ConfirmationReview'
+import { EqslSentMarkReview } from './EqslSentMarkReview'
 import { LogCountryPicker } from './LogCountryPicker'
 import { LogColumnsMenu } from './LogColumnsMenu'
 import { announce } from '../announce'
@@ -49,9 +52,12 @@ import { activationFilter } from '../features/potaActivation'
 import { useViewportClass, useViewportSize } from '../useViewport'
 import {
   addedColumnText,
+  adifDate,
   clampLogColumns,
   columnName,
   DEFAULT_LOG_COLUMNS,
+  eqslAg,
+  extraTag,
   forgetLegacyMoreColumns,
   loadLegacyMoreColumns,
   legacyLogColumns,
@@ -69,7 +75,14 @@ import {
   type LogColumnsSaved,
   type UploadMark,
 } from '../features/logColumns'
-import { POTA_MIN_QSOS, activationKeyOf, exportActivation } from '../features/activationExport'
+import {
+  POTA_MIN_QSOS,
+  activationFilename,
+  activationKeyOf,
+  exportActivation,
+  isPotaActivation,
+  openPotaUpload,
+} from '../features/activationExport'
 
 // The 3-D QSO globe band. Lazy so three.js/react-globe.gl only download when the
 // Logbook actually shows it (same pattern as ConnectView's Globe3D) — a weak-GPU
@@ -95,6 +108,8 @@ import {
   setSatTagById,
   setDxccById,
   lotwSatNames,
+  eqslSentMarkReview,
+  type EqslSentMark,
   purgeLog,
   qrzLookup,
   saveTextToDownloads,
@@ -110,7 +125,8 @@ import { failureText, pushToast, withErrorToast } from '../toast'
 import { qrzPushQso, clublogPushQso, hrdlogPushQso, wrlPushQso, syncQrz, downloadLotwReport, importPotaLog } from '../api'
 import { qrzCorrectPreview, qrzCorrectApply, qrzCorrectUndoMiss } from '../api'
 import { callCardTrigger, qrzPageOf } from './CallCard'
-import { IotaOfferChip, IotaReferenceNote, useIotaOffer } from './Iota'
+import { IotaCell, IotaPrefillSource, IotaReferenceNote, useIotaPrefill } from './Iota'
+import { normalizeIota } from '../features/iotaGroups'
 import type { FieldEdit, QrzCorrectResult, QsoEdit, RowAnswer, RowRef } from '../api'
 
 interface Props {
@@ -262,6 +278,13 @@ function fmtQslSent(sent: { sent: boolean; via: string | null; dateUnix: number 
   return t('logbook.qsl.sent')
 }
 
+/** The QSL tooltip's word on the day an eQSL card arrived (`EQSL_QSLRDATE`, which an eQSL merge
+ *  keeps), for a contact eQSL confirmed; null when it holds no such day. */
+function eqslDateNote(q: LoggedQso): string | null {
+  const day = q.qslRcvd?.eqsl ? adifDate(extraTag(q, 'EQSL_QSLRDATE')) : null
+  return day ? t('logbook.row.qsl.eqslDate', { date: day }) : null
+}
+
 // RST is a free string now (CW "599" / phone "59" / digital "-12"); just trim.
 /** The entities whose contacts take a US state or Canadian province, as cty.dat (and the
  *  callbook) name them. */
@@ -386,6 +409,8 @@ export function Logbook({
   // appear when the log grows.
   const [activations, setActivations] = useState<LoggedActivation[]>([])
   const [activationKey, setActivationKey] = useState('')
+  // The POTA file Export activation last wrote, and which activation it holds.
+  const [potaFile, setPotaFile] = useState<{ key: string; filename: string; path: string } | null>(null)
   useEffect(() => {
     if (logSize === 0) {
       setActivations((prev) => (prev.length === 0 ? prev : []))
@@ -487,6 +512,25 @@ export function Logbook({
   // own records give another contact (ConfirmationReview). Opened only by its button; it downloads
   // nothing until Check, and changes nothing until Apply.
   const [showConfirmations, setShowConfirmations] = useState(false)
+  // "Check eQSL sent marks": the contacts holding the "QSL sent, electronic" mark an eQSL card
+  // copied onto them in earlier versions (EqslSentMarkReview). The list is read when the Logbook
+  // opens and after each change it makes, so the button shows only while one is left and names how
+  // many; the newest read wins.
+  const [sentMarks, setSentMarks] = useState<EqslSentMark[]>([])
+  const [showSentMarks, setShowSentMarks] = useState(false)
+  const sentMarksRead = useRef(0)
+  const readSentMarks = useCallback(() => {
+    const mine = ++sentMarksRead.current
+    // Through a promise, so a bridge without the command (an older core) only leaves the button
+    // unoffered.
+    void Promise.resolve()
+      .then(() => eqslSentMarkReview())
+      .then((rows) => {
+        if (sentMarksRead.current === mine) setSentMarks(rows)
+      })
+      .catch(() => {})
+  }, [])
+  useEffect(readSentMarks, [readSentMarks])
   // Purge-the-whole-log confirmation modal. `purgeText` must equal PURGE_WORD to
   // arm the danger button — a deliberate, typed gate for a wipe of the whole log.
   const [showPurge, setShowPurge] = useState(false)
@@ -537,11 +581,17 @@ export function Logbook({
   const syncRef = useRef<HTMLInputElement>(null)
   const potaRef = useRef<HTMLInputElement>(null)
 
-  // The IOTA reference the station offers a contact being ADDED here (a spot comment's, or the
-  // callbook's), taken with the chip, never stamped by itself (operator decision, 2026-10-27). None
-  // while the IOTA box holds one, and none for a contact being edited: its log entry is unchanged.
+  // The IOTA reference the station names for a contact being ADDED here (a spot comment's, or the
+  // callbook's) fills the empty IOTA box, to change or clear before saving (operator ruling,
+  // 2026-11-10). None for a contact being edited: its log entry is unchanged.
   const [lookupTick, setLookupTick] = useState(0)
-  const iotaOffer = useIotaOffer(draft.call, draft.iota, lookupTick, !showForm || editing != null)
+  const iotaPrefill = useIotaPrefill(
+    draft.call,
+    draft.iota,
+    (v) => setDraft((prev) => ({ ...prev, iota: v })),
+    lookupTick,
+    !showForm || editing != null,
+  )
 
   // QRZ lookup for the QSO being logged: fills grid (subscriber-only) + shows the
   // operator name. On-demand (QRZ free tier is ~100/day), one lookup per click.
@@ -564,10 +614,12 @@ export function Logbook({
     }
   }
 
-  // After this view's own write: bring the list up to date now, not on the next tick.
+  // After this view's own write: bring the list up to date now, not on the next tick, and the eQSL
+  // sent marks it may have changed.
   const load = useCallback(() => {
     logSource().refresh()
-  }, [])
+    readSentMarks()
+  }, [readSentMarks])
   // An update from the callbook reports its end here, whether its dialog is still open or not.
   const followCallbookUpdate = useCallbookUpdateEnd(load)
 
@@ -594,9 +646,13 @@ export function Logbook({
     // for two counts at once, so each carries its own (see the catalog's note).
     const dupes = stats.skipped ? t('logbook.import.dupes', { count: stats.skipped }) : ''
     const upgraded = stats.updated ? t('logbook.import.updated', { count: stats.updated }) : ''
+    // A LoTW report's confirmations that match no contact: reported, and added only when the
+    // operator presses the preview's Add. The words are the POTA stamp's, which says the same of
+    // its rows.
+    const unmatched = stats.unmatched ? t('logbook.pota.unmatched', { count: stats.unmatched }) : ''
     const run = stats.run
     pushToast(
-      `${t('logbook.import.imported', { count: stats.added })}${dupes}${upgraded}`,
+      `${t('logbook.import.imported', { count: stats.added })}${dupes}${upgraded}${unmatched}`,
       'success',
       10_000,
       stats.added + stats.updated > 0 && run
@@ -1883,8 +1939,9 @@ export function Logbook({
     const existing = editing?.row
     const parkTheirRef = draft.parkTheirRef.trim().toUpperCase() || null
     const parkMyRef = draft.parkMyRef.trim().toUpperCase() || null
-    // The IOTA reference: refused unless it is one, rather than stored as junk no award counts.
-    const iota = draft.iota.trim().toUpperCase() || null
+    // The IOTA reference, in its one spelling from any obvious one ("eu-5" is EU-005); refused
+    // unless it is one, rather than stored as junk no award counts.
+    const iota = draft.iota.trim() ? (normalizeIota(draft.iota) ?? draft.iota.trim().toUpperCase()) : null
     if (iota && !IOTA_RE.test(iota)) {
       setErr(t('logbook.form.iotaInvalid'))
       return
@@ -2009,10 +2066,10 @@ export function Logbook({
       setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenDate: '', whenTime: '', endTime: '', state: '', txPower: '', parkTheirRef: '', parkMyRef: '', iota: '', myGrid: '', myRig: '', qslSentVia: '', qslCard: '' }))
       return
     }
-    const snap = await withErrorToast(() => logQso(record, undefined, iotaOffer.taken), t('logbook.form.logFailed'))
+    const snap = await withErrorToast(() => logQso(record, undefined, iotaPrefill.taken), t('logbook.form.logFailed'))
     if (snap) {
       load()
-      iotaOffer.reset()
+      iotaPrefill.reset()
       setShowForm(false)
       setDraft((prev) => ({ ...prev, call: '', grid: '', rstSent: '', rstRcvd: '', name: '', qth: '', comment: '', notes: '', whenDate: '', whenTime: '', endTime: '', state: '', txPower: '', iota: '', myGrid: '', myRig: '' }))
       // QRZ/ClubLog/eQSL auto-upload happens in the BACKEND log funnel now
@@ -2196,9 +2253,21 @@ export function Logbook({
   // The row's ⋯ menu. Each item does exactly what the row's own button or menu entry did, with the
   // same handler; only the way to it changed. HRDLog and World Radio League keep no per-contact
   // state in the log, so their items say none.
+  // A right-click (or the menu key) on a row: the call menu every list shares, Best times first.
+  const callMenu = useCallMenu()
   const rowMenu = (q: LoggedQso, key: string, ref: RowRef | null): MenuEntry[] => [
     {
+      // Best times first, as on every call menu: a card beside the row's ⋯, and nothing else.
+      label: t('callMenu.bestTimes'),
+      onSelect: () =>
+        openBestTimesCard(
+          q.call,
+          document.querySelector<HTMLElement>('.log-rowmore[data-state="open"], .log-rowmore[aria-expanded="true"]') ?? document.body,
+        ),
+    },
+    {
       label: t('logbook.row.menu.spot'),
+      separatorBefore: true,
       title: t('logbook.row.spot.title', { call: q.call }),
       onSelect: () => setSpotSeed({ call: q.call, freq: q.freqMhz, mode: q.mode }),
     },
@@ -2319,6 +2388,7 @@ export function Logbook({
     }
     if (c.id === 'path') return <PathGradeCell key={c.id} q={q} />
     if (c.id === 'parkName') return <ParkNameCell key={c.id} q={q} />
+    if (c.id === 'iota') return <IotaCell key={c.id} reference={q.ota?.iota} />
     const v = addedColumnText(q, c.id)
     return (
       <span className="log-cell mono" title={v ?? ''}>
@@ -2437,6 +2507,16 @@ export function Logbook({
           >
             {t('logbook.confirmations.button')}
           </button>
+          {sentMarks.length > 0 && (
+            <button
+              type="button"
+              className="export-btn"
+              onClick={() => setShowSentMarks(true)}
+              title={t('logbook.eqslSentMarks.buttonTitle')}
+            >
+              {t('logbook.eqslSentMarks.button', { count: sentMarks.length })}
+            </button>
+          )}
           <button
             type="button"
             className="export-btn"
@@ -2636,13 +2716,30 @@ export function Logbook({
                   withErrorToast(async () => {
                     const a = activations.find((x) => activationKeyOf(x) === activationKey)
                     if (!a) return
-                    await exportActivation(a)
+                    const { path } = await exportActivation(a)
+                    setPotaFile(
+                      isPotaActivation(a)
+                        ? { key: activationKeyOf(a), filename: activationFilename(a), path }
+                        : null,
+                    )
                   }, t('logbook.export.failed'))
                 }
                 title={t('logbook.export.activation.buttonTitle')}
               >
                 {t('logbook.export.activation.button')}
               </button>
+              {/* Only once this activation's file exists, and only for the one the picker names:
+                  shown beside another park it would take the operator to the wrong file. */}
+              {potaFile?.key === activationKey && (
+                <button
+                  type="button"
+                  className="export-btn"
+                  onClick={() => void openPotaUpload(potaFile)}
+                  title={t('logbook.export.potaUpload.title')}
+                >
+                  {t('logbook.export.potaUpload.button')}
+                </button>
+              )}
             </>
           )}
           {/* Per-operator export (#25). Shown only when the log actually HAS more than one
@@ -2936,15 +3033,18 @@ export function Logbook({
               <input
                 className="settings-input"
                 value={draft.iota}
-                onChange={(e) => setField('iota', e.target.value)}
+                onChange={(e) => {
+                  setErr(null)
+                  iotaPrefill.edit(e.target.value)
+                }}
                 autoComplete="off"
                 spellCheck={false}
                 maxLength={6}
-                aria-invalid={!!draft.iota.trim() && !IOTA_RE.test(draft.iota.trim().toUpperCase())}
+                aria-invalid={!!draft.iota.trim() && normalizeIota(draft.iota) === null}
                 title={t('logbook.field.iota.title')}
               />
               <IotaReferenceNote reference={draft.iota} />
-              <IotaOfferChip state={iotaOffer} />
+              <IotaPrefillSource state={iotaPrefill} />
             </label>
             <label className="logbook-field">
               <span>{t('logbook.field.name.label')}</span>
@@ -3398,12 +3498,19 @@ export function Logbook({
                             (q.qslRcvd.card || q.qslRcvd.lotw || q.qslRcvd.eqsl || q.qslRcvd.qrz) ? (
                               // Per-source detail: which channel(s) actually confirmed. QRZ has its own
                               // letter: a QRZ-only confirmation fell through to the yellow eQSL word below.
+                              // An eQSL that eQSL marks Authenticity Guaranteed reads AG in place of E,
+                              // and the day the card arrived rides in the tooltip.
                               <span
                                 className={`log-qsl ${q.awardConfirmed ? 'ok' : 'eqsl'}`}
                                 title={[
                                   q.qslRcvd.lotw ? t('logbook.row.qsl.lotw') : null,
                                   q.qslRcvd.card ? t('logbook.row.qsl.card') : null,
-                                  q.qslRcvd.eqsl ? t('logbook.row.qsl.eqsl') : null,
+                                  q.qslRcvd.eqsl
+                                    ? eqslAg(q)
+                                      ? t('logbook.row.qsl.eqslAg')
+                                      : t('logbook.row.qsl.eqsl')
+                                    : null,
+                                  eqslDateNote(q),
                                   q.qslRcvd.qrz ? t('logbook.row.qsl.qrz') : null,
                                 ]
                                   .filter(Boolean)
@@ -3412,7 +3519,7 @@ export function Logbook({
                                 {[
                                   q.qslRcvd.lotw ? 'L' : null,
                                   q.qslRcvd.card ? 'C' : null,
-                                  q.qslRcvd.eqsl ? 'E' : null,
+                                  q.qslRcvd.eqsl ? (eqslAg(q) ? 'AG' : 'E') : null,
                                   q.qslRcvd.qrz ? 'Q' : null,
                                 ]
                                   .filter(Boolean)
@@ -3635,6 +3742,7 @@ export function Logbook({
                     aria-rowindex={vrow.index + 2}
                     tabIndex={key === tabStop ? 0 : -1}
                     onFocus={() => setFocusKey(key)}
+                    {...callMenu.on(key, q.call, { band: q.band })}
                     ref={rowVirtualizer.measureElement}
                     style={{
                       ...placed,
@@ -3647,6 +3755,7 @@ export function Logbook({
                           : 'transparent',
                     }}
                   >
+                {callMenu.at(key)}
                 {cols.map((c) => (
                   <Fragment key={c.id}>{rowCell(c)}</Fragment>
                 ))}
@@ -3866,6 +3975,12 @@ export function Logbook({
       />
       <ParkStateReview open={showParkStates} onClose={() => setShowParkStates(false)} onApplied={load} />
       <ConfirmationReview open={showConfirmations} onClose={() => setShowConfirmations(false)} onApplied={load} />
+      <EqslSentMarkReview
+        open={showSentMarks}
+        rows={sentMarks}
+        onClose={() => setShowSentMarks(false)}
+        onChanged={load}
+      />
     </section>
   )
 }

@@ -50,7 +50,8 @@ Double-clicking a decode jumps to exactly the Tx step stock would choose given w
 sent you.
 
 **The decode cadence is WSJT-X's cadence.** An early decode pass fires at ~11.8 s into the 15 s
-FT8 period (~5.5 s for FT4) so most decodes land before the period boundary; the boundary pass
+FT8 period (FT4 decodes its whole frame at ~6.05 s, once its tones have ended; FT2 at 2.6 s) so
+most decodes land before the period boundary; the boundary pass
 ingests only stragglers, with no duplicate rows and no double sequencer advance. A just-armed
 reply can late-start into the current period within a 2-second window, time-aligned to the period
 grid. F6 re-decodes the retained last period and adds only what the first pass missed. Decode
@@ -249,9 +250,9 @@ plain-language reasoning ("12 EU stations hear you on 20m"), and the persistent 
 answers "is the band open / am I getting out / what do I need" from every section of the app,
 with feed-health pills that distinguish "connected but quiet" from "down."
 
-*Honest labels:* the prediction engine is selectable — a physics-lite in-house heuristic (MUF +
-D-layer) or a native port of ITU-R P.533 (the VOACAP-class link-budget standard) with P.1240
-operational MUF; both labeled "modelled" in the UI. VOACAP itself is not integrated. PSKR MQTT
+*Honest labels:* the prediction engine is selectable — a native port of ITU-R P.533 (the VOACAP-class
+link-budget standard) with P.1240 operational MUF, the default, or a physics-lite in-house
+heuristic (MUF + D-layer); both labeled "modelled" in the UI. VOACAP itself is not integrated. PSKR MQTT
 band topics carry no SNR, so SNR-derived features degrade gracefully where absent.
 
 ## Zero-config setup and rig control

@@ -40,7 +40,16 @@ import { useLogAnswer } from '../features/logSource'
 import { emptyAnswer } from '../features/logAnswers'
 import { fmtUtc } from '../features/logQuery'
 import { UTC_DATE_FORMAT, UTC_TIME_FORMATS } from '../features/utcLog'
-import { addedColumnText, columnName, logColumn, uploadMark, uploadOf, uploadWord } from '../features/logColumns'
+import {
+  addedColumnText,
+  columnName,
+  eqslAg,
+  extraTag,
+  logColumn,
+  uploadMark,
+  uploadOf,
+  uploadWord,
+} from '../features/logColumns'
 import { ContactPath } from './prop/ContactPath'
 import {
   PROGRAMS,
@@ -60,11 +69,11 @@ import {
   type Unclearable,
 } from '../features/contactCard'
 
-/** The mark on a contact whose IOTA reference was taken from a log-time offer, a spot comment's or a
- *  callbook's (`offer::OFFER_HELD_FIELD`). */
+/** The mark on a contact whose IOTA reference Nexus filled at log time from a spot comment or a
+ *  callbook answer, untouched since (`offer::OFFER_HELD_FIELD`). */
 const OFFER_HELD_FIELD = 'APP_NEXUS_OFFER_HELD'
-/** The callbook's mark (`callbook::CALLBOOK_FILLED_FIELD`): naming IOTA beside the held mark, the
- *  offer taken was the callbook's. */
+/** The callbook's mark (`callbook::CALLBOOK_FILLED_FIELD`): naming IOTA beside the fill mark, the
+ *  reference was the callbook's. */
 const CALLBOOK_FILLED_FIELD = 'APP_NEXUS_CALLBOOK_FILLED'
 
 /** Service names and the QRZ button: proper nouns, not words. */
@@ -259,20 +268,20 @@ function CardBody({
     }
   }
 
-  // An IOTA reference taken from a log-time offer (a spot comment's or the callbook's) is kept in the
-  // log and sent to no service until the operator confirms it (`tempo_core::logbook::offer`).
-  // Confirm takes the mark off: the one Nexus-kept field a card may change, and only by removing it.
+  // An IOTA reference Nexus filled at log time (a spot comment's or the callbook's) is logged and
+  // sent like a typed one (`tempo_core::logbook::offer`); the card says where it came from, and Clear
+  // takes it out with its marks, for a spot that named the wrong island (an IOTA box cannot be
+  // emptied by itself).
   const names = (field: string, tag: string) =>
     !!q.extra?.find(([k]) => k === field)?.[1]?.split(',').some((t) => t.trim() === tag)
-  const spotMark = q.extra?.find(([k]) => k === OFFER_HELD_FIELD)?.[1] ?? null
-  const spotHeld = names(OFFER_HELD_FIELD, 'IOTA')
-  const heldFromCallbook = spotHeld && names(CALLBOOK_FILLED_FIELD, 'IOTA')
-  const confirmIota = async () => {
-    if (!contact.ref || busy || !spotMark) return
+  const filled = names(OFFER_HELD_FIELD, 'IOTA')
+  const filledFromCallbook = filled && names(CALLBOOK_FILLED_FIELD, 'IOTA')
+  const clearFilledIota = async (change: FieldEdit) => {
+    if (!contact.ref || busy || !filled) return
     const made = cardSave(q, start, start, fieldsOf(q))
     if (!made.ok) return
     setBusy(true)
-    const answer = await save(contact.ref, made.edit, [...made.fields, { tag: OFFER_HELD_FIELD, old: spotMark, new: null }], q.call)
+    const answer = await save(contact.ref, made.edit, [...made.fields, change], q.call)
     setBusy(false)
     if (answer?.kind === 'applied' || answer?.kind === 'changed') {
       onChanged()
@@ -362,6 +371,11 @@ function CardBody({
     col('qslRcvdDate'),
     col('lotwRcvdDate'),
     col('eqslRcvdDate'),
+    // What eQSL said of the card that confirms it: its Authenticity-Guaranteed mark and the
+    // sender's message (eQSL's own field, never the operator's QSLMSG nor a card's QSLMSG_RCVD). Only beside eQSL's
+    // confirmation, since they describe that card.
+    fact(t('contactCard.eqslAg'), rcvd?.eqsl && eqslAg(q) ? yes : null),
+    fact(t('contactCard.eqslMessage'), rcvd?.eqsl ? extraTag(q, 'APP_NEXUS_EQSL_QSLMSG') : null),
     fact(t('qso.detail.credit.granted'), q.creditGranted),
     fact(t('qso.detail.credit.submitted'), q.creditSubmitted),
     // Where the station was, under the names the Logbook's columns give these ADIF fields (each is
@@ -445,14 +459,14 @@ function CardBody({
             {program('theirProgram', t('contactCard.program.theirs'))}
             {box('theirRef', t('logbook.field.parkTheirs.label'))}
             {box('iota', t('logbook.field.iota.label'), { maxLength: 6 })}
-            {(draft.iota.trim() !== '' || spotHeld) && (
+            {(draft.iota.trim() !== '' || filled) && (
               <div className="logbook-field logbook-field-wide iota-card-note">
                 <IotaReferenceNote reference={draft.iota.trim().toUpperCase()} />
-                {spotHeld && (
+                {filled && (
                   <span className="iota-card-held">
-                    <span className="settings-hint">{heldFromCallbook ? t('iota.card.callbookHeld') : t('iota.card.spotHeld')}</span>
-                    <button type="button" className="settings-test-btn" onClick={() => void confirmIota()} disabled={!canSave || busy || dirty}>
-                      {t('iota.card.confirm')}
+                    <span className="settings-hint">{filledFromCallbook ? t('iota.card.fromCallbook') : t('iota.card.fromSpot')}</span>
+                    <button type="button" className="settings-test-btn" onClick={() => void clearFilledIota({ tag: 'IOTA', old: q.ota?.iota ?? null, new: null })} disabled={!canSave || busy || dirty}>
+                      {t('iota.card.clear')}
                     </button>
                   </span>
                 )}

@@ -97,4 +97,10 @@ describe('Awards: IOTA', () => {
       note: EN['awards.iota.note.worked'].replace('{{worked}}', '150').replace('{{cards}}', '40'),
     })
   })
+
+  it('counts a reference Nexus filled like any other: no "waiting to confirm" note', async () => {
+    await renderWith({ worked: 3, confirmed: 1, cardConfirmed: 0 })
+    expect(card().value).toContain('1')
+    expect(document.body.textContent).not.toMatch(/waiting for you to confirm/i)
+  })
 })

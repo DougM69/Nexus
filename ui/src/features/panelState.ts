@@ -1058,6 +1058,20 @@ const SHARED_IDS: ReadonlySet<string> = new Set(SHARED_PANES.map((e) => e.id))
 const STATS_PANEL_ID = 'stats'
 
 /**
+ * THE LARGE TX METERS PANE'S ID, on Operate, Phone, CW and SSTV (components/TxMeters `TxMetersPane`). The read-only
+ * twin of the meters in the strip, for an operator who wants them big: PO, ALC and SWR needle faces that
+ * scale with the pane. It SHIPS HIDDEN, so nobody's layout shifts on the update.
+ *
+ * `txmeters` IS A DIFFERENT ENTRY, and stays: that tick shows or hides the strip's own meters, with COMP.
+ *
+ * Under THE STOP LINE it is the plainest kind of entry: display only, it starts nothing and stops nothing,
+ * and hiding it ends nothing, so it needs no stop note. PTT, Stop TX, send, abort and the macros stay in
+ * the strip and the dock, COMP and PROC beside the strip's meters, none of them in any pane. The sweeps
+ * in components/stop-line.test.tsx hide it with every other id, because they are driven off these arrays.
+ */
+const TX_METERS_PANE_ID = 'txMetersPane'
+
+/**
  * THE RECENT CONTACTS PANE (components/RecentQsosPane): the last few contacts in the log, newest
  * first, each a click into the Logbook's editor. One id across every cockpit with a log entry form,
  * directly under that form INSIDE the log pane (Phone's, CW's and JS8's log pane, RTTY's and PSK's
@@ -1097,6 +1111,7 @@ export const OPERATE_PANEL_IDS = [
   'txmsgs',
   'stations',
   'txmeters',
+  TX_METERS_PANE_ID,
   // #204 (KR4FQG): the callsign card, a panel of its own. It neither starts nor stops a
   // transmission — it shows who a station is — so it is hideable under THE STOP LINE with no note.
   'recall',
@@ -1138,24 +1153,24 @@ export type OperateLayout = 'classic' | 'roster'
  */
 export const OPERATE_ARRANGE: Readonly<Record<OperateLayout, ArrangeSpec<OperatePanelId>>> = {
   classic: {
-    columns: { a: ['bandActivity', 'callRoster'], b: ['rxfreq', 'txmsgs'], log: ['recall', STATS_PANEL_ID, 'stations', RECENT_PANEL_ID, ...BOX_IDS] },
+    columns: { a: ['bandActivity', 'callRoster'], b: ['rxfreq', 'txmsgs'], log: ['recall', STATS_PANEL_ID, TX_METERS_PANE_ID, 'stations', RECENT_PANEL_ID, ...BOX_IDS] },
     pinned: [],
     boxes: BOX_IDS,
-    extra: ['callRoster'],
+    extra: ['callRoster', TX_METERS_PANE_ID],
   },
   roster: {
-    columns: { a: ['callRoster'], b: [], log: ['recall', STATS_PANEL_ID, 'bandActivity', 'rxfreq', 'txmsgs', 'stations', RECENT_PANEL_ID, ...BOX_IDS] },
+    columns: { a: ['callRoster'], b: [], log: ['recall', STATS_PANEL_ID, TX_METERS_PANE_ID, 'bandActivity', 'rxfreq', 'txmsgs', 'stations', RECENT_PANEL_ID, ...BOX_IDS] },
     pinned: [],
     boxes: BOX_IDS,
     cols: ['a', 'log'],
-    extra: ['txmsgs', 'stations'],
+    extra: ['txmsgs', 'stations', TX_METERS_PANE_ID],
   },
 }
 
 export const OPERATE_PANELS: PanelVocabulary<OperatePanelId> = {
   view: 'operate',
   panelIds: OPERATE_PANEL_IDS,
-  defaultRemoved: ['rfScope', RECENT_PANEL_ID, STATS_PANEL_ID, ...BOX_IDS],
+  defaultRemoved: ['rfScope', RECENT_PANEL_ID, STATS_PANEL_ID, TX_METERS_PANE_ID, ...BOX_IDS],
   arrangeBy: OPERATE_ARRANGE,
 }
 
@@ -1221,18 +1236,24 @@ const RF_SCOPE_PANEL_ID = 'rfScope'
  *  ⊞-removable pane, which is THE STOP LINE. `txcompose` is the image chooser only; Send
  *  does not live in it.
  *
+ *  THE LARGE TX METERS PANE (TX_METERS_PANE_ID) joined with the composer re-flow, as FT, Phone and
+ *  CW have it: a readout, shipped hidden, under the RF scope pane and over the gallery. An SSTV
+ *  record saved before it has no entry for it, and an absent entry reads as hidden here, so no
+ *  stored layout changes and nothing is written. The column's order (the meters, the gallery, the
+ *  composer last, over the Send/Stop bar) is SstvView's: SSTV stores no placement.
+ *
  *  `scope` here is THE BAND WATERFALL ONLY, and the distinction is structural rather than
  *  cosmetic: SSTV has one RX stage that is the band until a VIS lands and the PICTURE after
  *  it (SstvView's `inFlight` branch). The tick hides the band half; an arriving picture
  *  still takes the stage whatever the box says, because that is the decode itself and not a
  *  panel. See the gate at the render site. */
-export const SSTV_PANEL_IDS = [SCOPE_PANEL_ID, RF_SCOPE_PANEL_ID, 'txcompose', 'gallery'] as const
+export const SSTV_PANEL_IDS = [SCOPE_PANEL_ID, RF_SCOPE_PANEL_ID, TX_METERS_PANE_ID, 'txcompose', 'gallery'] as const
 export type SstvPanelId = (typeof SSTV_PANEL_IDS)[number]
 
 export const SSTV_PANELS: PanelVocabulary<SstvPanelId> = {
   view: 'sstv',
   panelIds: SSTV_PANEL_IDS,
-  defaultRemoved: [RF_SCOPE_PANEL_ID],
+  defaultRemoved: [RF_SCOPE_PANEL_ID, TX_METERS_PANE_ID],
 }
 
 /** Phone cockpit's removable panels (Phase 3) — the scope strip plus the panes under it.
@@ -1301,6 +1322,7 @@ export const PHONE_PANEL_IDS = [
   SCOPE_PANEL_ID,
   'rigscope',
   'txmeters',
+  TX_METERS_PANE_ID,
   'receiver',
   'transmitter',
   'bandActivity',
@@ -1317,7 +1339,7 @@ export type PhonePanelId = (typeof PHONE_PANEL_IDS)[number]
 export const PHONE_PANELS: PanelVocabulary<PhonePanelId> = {
   view: 'phone',
   panelIds: PHONE_PANEL_IDS,
-  defaultRemoved: ['spots', 'needed', RECENT_PANEL_ID, STATS_PANEL_ID, 'freedv', ...BOX_IDS],
+  defaultRemoved: ['spots', 'needed', RECENT_PANEL_ID, STATS_PANEL_ID, 'freedv', TX_METERS_PANE_ID, ...BOX_IDS],
   // ⊞ Arrange (layout L3): the pane region's stock grouping, as PhoneCockpit renders it — Band
   // Activity, the voice keyer and Spots lead; the rig strips and Needed in the middle; the log form
   // (no id) heading the last column, the Stats pane under it. The scope above the region and the
@@ -1334,12 +1356,12 @@ export const PHONE_PANELS: PanelVocabulary<PhonePanelId> = {
   arrange: {
     columns: {
       a: ['bandActivity', 'voiceKeyer', 'spots', 'freedv', ...BOX_IDS],
-      b: ['rigscope', 'receiver', 'transmitter', 'needed'],
+      b: ['rigscope', 'receiver', 'transmitter', TX_METERS_PANE_ID, 'needed'],
       // The Stats pane: under the log form, which heads this column (PhoneCockpit).
       log: [STATS_PANEL_ID],
     },
     pinned: ['voiceKeyer'],
-    stockMerged: ['bandActivity', 'voiceKeyer', 'rigscope', 'receiver', 'transmitter', 'spots', 'needed', 'freedv'],
+    stockMerged: ['bandActivity', 'voiceKeyer', 'rigscope', 'receiver', 'transmitter', TX_METERS_PANE_ID, 'spots', 'needed', 'freedv'],
     leftSide: ['bandActivity', 'spots', 'needed', ...BOX_IDS],
     boxes: BOX_IDS,
   },
@@ -1367,6 +1389,7 @@ export const CW_PANEL_IDS = [
   'scopeCtl',
   'dsp',
   'txmeters',
+  TX_METERS_PANE_ID,
   // THE TURN CUE: the lamp at the head of the dock's send row and the F-key glow it brings. A
   // READOUT like the TX meters above it: it lights a key and never sends, so a tick may hide it for
   // good; the macros and the send bar beside it keep no id. Shown as it ships.
@@ -1387,7 +1410,7 @@ export type CwPanelId = (typeof CW_PANEL_IDS)[number]
 export const CW_PANELS: PanelVocabulary<CwPanelId> = {
   view: 'cw',
   panelIds: CW_PANEL_IDS,
-  defaultRemoved: ['spots', 'needed', RECENT_PANEL_ID, STATS_PANEL_ID, ...BOX_IDS],
+  defaultRemoved: ['spots', 'needed', RECENT_PANEL_ID, STATS_PANEL_ID, TX_METERS_PANE_ID, ...BOX_IDS],
   // ⊞ Arrange (layout L3): the pane region's stock grouping, as CwCockpit renders it — the decode
   // and the sent echo lead; Band Activity and the copilot in the middle, under the Rig controls
   // frame; the log form (no id) heading the last column, the Stats pane under it. The three
@@ -1403,12 +1426,12 @@ export const CW_PANELS: PanelVocabulary<CwPanelId> = {
   arrange: {
     columns: {
       a: ['decode', 'sent', 'spots', ...BOX_IDS],
-      b: ['bandActivity', 'copilot', 'needed'],
+      b: ['bandActivity', 'copilot', TX_METERS_PANE_ID, 'needed'],
       // Phone's: the Stats pane under the log form, which heads this column.
       log: [STATS_PANEL_ID],
     },
     pinned: [],
-    stockMerged: ['decode', 'sent', 'bandActivity', 'copilot', 'spots', 'needed'],
+    stockMerged: ['decode', 'sent', 'bandActivity', 'copilot', TX_METERS_PANE_ID, 'spots', 'needed'],
     boxes: BOX_IDS,
   },
   // Phone's: its Spots and Needed panes are the shared list's boards.

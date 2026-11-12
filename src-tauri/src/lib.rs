@@ -45,6 +45,8 @@ mod arrival_outlook;
 /// that blocks its command link or its Stop road, one at a time, so each road can be tried alone.
 #[cfg(feature = "bench-road-switch")]
 mod bench_road_switch;
+/// Best times to work one station: where it is, then the path prediction folded into an answer.
+mod best_times;
 /// WebView2's browser keys (F5 and Ctrl+R reload, Ctrl+P print, Ctrl+F find…) off in every Nexus
 /// window, set on each webview as Tauri makes it.
 mod browser_keys;
@@ -7686,7 +7688,8 @@ fn pending_qso_path() -> PathBuf {
 }
 
 /// `<config dir>/contest_held_uploads.json` — the contacts logged while contest mode is on, whose
-/// upload waits for it to go off (`Engine::restore_contest_held_uploads`).
+/// upload waits for it to go off (`Engine::restore_contest_held_uploads`), and those waiting for
+/// DXKeeper (`Engine::dxkeeper_hold`).
 fn contest_held_uploads_path() -> PathBuf {
     settings_path()
         .parent()
@@ -9997,20 +10000,11 @@ async fn get_path_outlook(
     aurora: State<'_, AuroraCache>,
     protons: State<'_, ProtonCache>,
 ) -> Result<propagation::PathPrediction, String> {
-    let (mygrid, prop_engine, station_power_w, ant_gain_dbi) = {
-        let eng = engine_lock(&state);
-        let st = eng.settings();
-        (
-            st.mygrid.clone(),
-            st.prop_engine.clone(),
-            st.station_power_w,
-            st.ant_tx_gain_dbi + st.ant_rx_gain_dbi,
-        )
-    };
-    let me = propagation::geo::maidenhead_to_latlon(&mygrid);
+    let station = PathStation::read(&engine_lock(&state));
+    let me = propagation::geo::maidenhead_to_latlon(&station.mygrid);
     let Some(dx) = propagation::geo::maidenhead_to_latlon(grid.trim()) else {
         return Ok(propagation::PathPrediction {
-            engine: "heuristic".to_string(),
+            engine: station.prop_engine,
             bands: Vec::new(),
             muf_now: 0.0,
             muf_hourly: Vec::new(),
@@ -10020,113 +10014,206 @@ async fn get_path_outlook(
             day: None,
             overlay: None,
             space_now: None,
+            engine_fallback: false,
+            storm: None,
+            power: None,
         });
     };
-    // Current space weather from the propagation cache's last snapshot (the same
-    // SWPC-fed values get_propagation uses); benign defaults if the cache is cold. Its stamps go
-    // with the card to `path_grades::keep_outlook`, which keeps it for a contact's grade only
-    // when they say the flux and Kp were measured and current.
-    let (wx, stamps) = {
-        let guard = cache.lock().map_err(|e| e.to_string())?;
-        let view = guard.as_ref().map(|(_, s)| &s.space_wx);
-        let wx = view
-            .map(|v| outlook_wx(v, held_ssn(now_unix()), now_unix()))
-            .unwrap_or_default();
-        (wx, view.map(|v| v.stamps))
-    };
-    // The configured engine: "p533" (native ITU-R P.533, ~100 ms/prediction) or
-    // the heuristic fallback. p533 is compute-heavy → keep it off the async core.
-    let eng = propagation::make_predictor(&prop_engine, me, station_power_w, ant_gain_dbi);
-    let t = now_unix();
-    let forecast = kp_cache
-        .lock()
-        .ok()
-        .and_then(|g| g.as_ref().map(|(_, f)| f.clone()));
-    // The oval is a ~30-minute nowcast: an older one says nothing about now.
-    const OVAL_FRESH_SECS: u64 = 1800;
-    let oval: Option<Vec<(f32, f32)>> = aurora.lock().ok().and_then(|g| {
-        g.as_ref()
-            .filter(|(when, _)| when.elapsed().as_secs() < OVAL_FRESH_SECS)
-            .map(|(_, oval)| oval.points.iter().map(|p| (p.lat, p.lon)).collect())
-    });
-    // The geometry's Kp is only ever one SWPC reported: `wx.kp` above may be the cold-cache
-    // default or a failed fetch's stand-in, which the engine may use but no label may call a
-    // reading.
-    let (kp_now, now_inputs) = {
-        let guard = cache.lock().map_err(|e| e.to_string())?;
-        let view = guard.as_ref().map(|(_, s)| &s.space_wx);
-        (swpc_kp(view, t), NowInputs::read(view, &protons, t))
-    };
-    // P.533 pairs are kept (`path_outlook`): the client asks again every 60 s, and only the
-    // serving hour's scalars and the geometry are recomputed then.
-    let keep = prop_engine == "p533";
-    let key = path_outlook::key(
-        t,
-        &mygrid,
-        &grid,
-        &prop_engine,
-        station_power_w,
-        ant_gain_dbi,
-        &wx,
-    );
-    tauri::async_runtime::spawn_blocking(move || {
-        let (mut pred, long) = match keep.then(|| path_outlook::get(&key)).flatten() {
-            Some((mut sp, mut lp)) => {
-                path_outlook::refresh_now(&mut sp, t);
-                if let Some(lp) = lp.as_mut() {
-                    path_outlook::refresh_now(lp, t);
-                }
-                (sp, lp)
-            }
-            None => {
-                // Both routes at once on their own threads: the long path costs the same chain
-                // again, so this keeps the card's wait at one prediction's. Neither holds a lock.
-                let (sp, lp) = std::thread::scope(|s| {
-                    let lp = s.spawn(|| eng.predict_route(dx, propagation::Route::Long, t, &wx));
-                    let sp = eng.predict(dx, t, &wx);
-                    (sp, lp.join().ok().flatten())
-                });
-                if keep {
-                    path_outlook::put(key, sp.clone(), lp.clone());
-                }
-                (sp, lp)
-            }
-        };
-        if let Some(me) = me {
-            let geom = |route| {
-                propagation::path_geometry_route(
-                    me,
-                    dx,
-                    route,
-                    t,
-                    kp_now,
-                    forecast.as_ref(),
-                    oval.as_deref(),
-                )
-            };
-            pred.geometry = Some(geom(propagation::Route::Short));
-            let long = long.map(|mut lp| {
-                lp.geometry = Some(geom(propagation::Route::Long));
-                lp
-            });
-            // The day as the path-over-the-day strip draws it (both routes, every hour).
-            pred.day = propagation::path_day(&pred, long.as_ref());
-            if let Some(lp) = long {
-                pred.routes = Some(propagation::compare_routes(&pred, &lp));
-                pred.long_path = Some(Box::new(lp));
-            }
-        }
+    let inputs = PathInputs::read(&cache, &kp_cache, &aurora, &protons)?;
+    below_normal(move || {
+        let t = inputs.t;
+        let mut pred = predict_path(&station, &inputs, dx, &grid);
         // Kept for the grade of a contact logged with this station (`path_grades::at_log`), when
         // it was computed from measured space weather (`keep_outlook` decides).
-        path_grades::keep_outlook(&mygrid, &grid, t, &pred, stamps.as_ref());
+        path_grades::keep_outlook(&station.mygrid, &grid, t, &pred, inputs.stamps.as_ref());
         // Then the display-only "now" overlay, which the kept card never carries.
         if let Some(me) = me {
-            attach_now(&mut pred, me, dx, &now_inputs, t);
+            attach_now(&mut pred, me, dx, &inputs.now_inputs, t);
         }
+        pred.power = Some(station.power);
         pred
     })
     .await
-    .map_err(|e| e.to_string())
+}
+
+/// The station settings a per-path prediction is computed from, read under the Engine lock once.
+struct PathStation {
+    mygrid: String,
+    prop_engine: String,
+    power: propagation::AssumedPower,
+    ant_gain_dbi: f64,
+}
+
+impl PathStation {
+    fn read(eng: &tempo_app::engine::Engine) -> PathStation {
+        let st = eng.settings();
+        PathStation {
+            mygrid: st.mygrid.clone(),
+            prop_engine: st.prop_engine.clone(),
+            power: assumed_power(eng),
+            ant_gain_dbi: st.ant_tx_gain_dbi + st.ant_rx_gain_dbi,
+        }
+    }
+}
+
+/// What a per-path prediction reads from the caches the feeds keep, once per ask, never fetched
+/// here: a cold cache simply means "latest Kp only" / "oval unknown", and with no SWPC reading at
+/// all, "Kp unknown".
+struct PathInputs {
+    t: i64,
+    /// Current space weather from the propagation cache's last snapshot (the same SWPC-fed values
+    /// get_propagation uses); benign defaults if the cache is cold.
+    wx: propagation::SpaceWx,
+    /// Its stamps, which `path_grades::keep_outlook` reads to keep a card for a contact's grade
+    /// only when they say the flux and Kp were measured and current.
+    stamps: Option<propagation::model::SpaceWxStamps>,
+    forecast: Option<propagation::KpForecast>,
+    oval: Option<Vec<(f32, f32)>>,
+    /// The geometry's Kp is only ever one SWPC reported: `wx.kp` may be the cold-cache default or
+    /// a failed fetch's stand-in, which the engine may use but no label may call a reading.
+    kp_now: Option<f32>,
+    now_inputs: NowInputs,
+}
+
+impl PathInputs {
+    fn read(
+        cache: &PropCache,
+        kp_cache: &KpForecastCache,
+        aurora: &AuroraCache,
+        protons: &ProtonCache,
+    ) -> Result<PathInputs, String> {
+        let t = now_unix();
+        let (wx, stamps, kp_now, now_inputs) = {
+            let guard = cache.lock().map_err(|e| e.to_string())?;
+            let view = guard.as_ref().map(|(_, s)| &s.space_wx);
+            let wx = view
+                .map(|v| outlook_wx(v, held_ssn(t), t))
+                .unwrap_or_default();
+            (
+                wx,
+                view.map(|v| v.stamps),
+                swpc_kp(view, t),
+                NowInputs::read(view, protons, t),
+            )
+        };
+        let forecast = kp_cache
+            .lock()
+            .ok()
+            .and_then(|g| g.as_ref().map(|(_, f)| f.clone()));
+        // The oval is a ~30-minute nowcast: an older one says nothing about now.
+        const OVAL_FRESH_SECS: u64 = 1800;
+        let oval = aurora.lock().ok().and_then(|g| {
+            g.as_ref()
+                .filter(|(when, _)| when.elapsed().as_secs() < OVAL_FRESH_SECS)
+                .map(|(_, oval)| oval.points.iter().map(|p| (p.lat, p.lon)).collect())
+        });
+        Ok(PathInputs {
+            t,
+            wx,
+            stamps,
+            forecast,
+            oval,
+            kp_now,
+            now_inputs,
+        })
+    }
+}
+
+/// The path to `dx` both ways round, as the configured engine predicts it (with the storm
+/// correction), with its geometry, its day and the route calls attached: what `get_path_outlook`
+/// and `get_best_times` both draw from. `dx_key` names the far end in the kept pair's key (a grid,
+/// or a rounded position). P.533 pairs are kept (`path_outlook`): the client asks again every
+/// 60 s, and only the serving hour's scalars and the geometry are recomputed then. Heavy: call it
+/// on a prediction thread ([`below_normal`]), with no lock held. It neither keeps a card for
+/// grading nor lays the "now" overlay: each caller does what it needs after.
+fn predict_path(
+    station: &PathStation,
+    inputs: &PathInputs,
+    dx: (f64, f64),
+    dx_key: &str,
+) -> propagation::PathPrediction {
+    let t = inputs.t;
+    let me = propagation::geo::maidenhead_to_latlon(&station.mygrid);
+    let station_power_w = Some(station.power.watts);
+    // The configured engine: "p533" (native ITU-R P.533, ~100 ms/prediction) or the heuristic.
+    let eng = propagation::make_predictor(
+        &station.prop_engine,
+        me,
+        station_power_w,
+        station.ant_gain_dbi,
+    );
+    let eng = storm_corrected(
+        eng,
+        &station.prop_engine,
+        me,
+        t,
+        inputs.kp_now,
+        inputs.forecast.clone(),
+    );
+    let keep = station.prop_engine == "p533";
+    let key = path_outlook::key(
+        t,
+        &station.mygrid,
+        dx_key,
+        &station.prop_engine,
+        station_power_w,
+        station.ant_gain_dbi,
+        &inputs.wx,
+    );
+    let key = with_storm_key(key, t, inputs.kp_now, inputs.forecast.as_ref());
+    let wx = &inputs.wx;
+    let (mut pred, long) = match keep.then(|| path_outlook::get(&key)).flatten() {
+        Some((mut sp, mut lp)) => {
+            path_outlook::refresh_now(&mut sp, t);
+            if let Some(lp) = lp.as_mut() {
+                path_outlook::refresh_now(lp, t);
+            }
+            (sp, lp)
+        }
+        None => {
+            // Both routes at once on their own threads: the long path costs the same chain
+            // again, so this keeps the card's wait at one prediction's. Neither holds a lock.
+            let (sp, lp) = std::thread::scope(|s| {
+                // Lowered too: a thread is born at normal priority on Windows, whatever its parent's.
+                let lp = s.spawn(|| {
+                    tempo_net::priority::lower_this_thread();
+                    eng.predict_route(dx, propagation::Route::Long, t, wx)
+                });
+                let sp = eng.predict(dx, t, wx);
+                (sp, lp.join().ok().flatten())
+            });
+            // A stand-in for an engine that could not run is not kept: the next ask tries again.
+            if keep && !eng.fell_back() {
+                path_outlook::put(key, sp.clone(), lp.clone());
+            }
+            (sp, lp)
+        }
+    };
+    if let Some(me) = me {
+        let geom = |route| {
+            propagation::path_geometry_route(
+                me,
+                dx,
+                route,
+                t,
+                inputs.kp_now,
+                inputs.forecast.as_ref(),
+                inputs.oval.as_deref(),
+            )
+        };
+        pred.geometry = Some(geom(propagation::Route::Short));
+        let long = long.map(|mut lp| {
+            lp.geometry = Some(geom(propagation::Route::Long));
+            lp
+        });
+        // The day as the path-over-the-day strip draws it (both routes, every hour).
+        pred.day = propagation::path_day(&pred, long.as_ref());
+        if let Some(lp) = long {
+            pred.routes = Some(propagation::compare_routes(&pred, &lp));
+            pred.long_path = Some(Box::new(lp));
+        }
+    }
+    pred
 }
 
 /// The path grade of each Logbook row asked about: its own stamp when it carries one made for its
@@ -10189,19 +10276,23 @@ async fn get_path_regions(
     cache: State<'_, PropCache>,
     kp_cache: State<'_, KpForecastCache>,
 ) -> Result<path_regions::PathRegionsView, String> {
-    let (mygrid, prop_engine, station_power_w, ant_gain_dbi) = {
+    let (mygrid, prop_engine, power, ant_gain_dbi) = {
         let eng = engine_lock(&state);
         let st = eng.settings();
         (
             st.mygrid.clone(),
             st.prop_engine.clone(),
-            st.station_power_w,
+            assumed_power(&eng),
             st.ant_tx_gain_dbi + st.ant_rx_gain_dbi,
         )
     };
+    let station_power_w = Some(power.watts);
     let Some(me) = propagation::geo::maidenhead_to_latlon(mygrid.trim()) else {
         return Ok(path_regions::PathRegionsView {
             engine: prop_engine,
+            engine_fallback: false,
+            storm: None,
+            power: None,
             computed_unix: 0,
             regions: Vec::new(),
         });
@@ -10227,18 +10318,31 @@ async fn get_path_regions(
     };
     let ask = path_regions::Ask {
         me,
-        key: path_regions::sweep_key(t, &mygrid, &prop_engine, station_power_w, ant_gain_dbi, &wx),
-        engine: propagation::make_predictor(&prop_engine, Some(me), station_power_w, ant_gain_dbi),
+        key: with_storm_key(
+            path_regions::sweep_key(t, &mygrid, &prop_engine, station_power_w, ant_gain_dbi, &wx),
+            t,
+            kp_now,
+            forecast.as_ref(),
+        ),
+        engine: storm_corrected(
+            propagation::make_predictor(&prop_engine, Some(me), station_power_w, ant_gain_dbi),
+            &prop_engine,
+            Some(me),
+            t,
+            kp_now,
+            forecast.clone(),
+        ),
         t,
         kp_now,
         wx,
         forecast,
     };
-    tauri::async_runtime::spawn_blocking(move || {
-        path_regions::serve(ask, &path_regions::file_path())
+    below_normal(move || {
+        let mut view = path_regions::serve(ask, &path_regions::file_path());
+        view.power = Some(power);
+        view
     })
     .await
-    .map_err(|e| e.to_string())
 }
 
 /// The band advice of a served snapshot (fresh, or cached at any age), made for `now`: the
@@ -10969,20 +11073,22 @@ async fn get_band_outlook(
     state: State<'_, SharedEngine>,
     cache: State<'_, PropCache>,
     protons: State<'_, ProtonCache>,
+    kp_cache: State<'_, KpForecastCache>,
 ) -> Result<propagation::PathPrediction, String> {
-    let (mygrid, prop_engine, station_power_w, ant_gain_dbi) = {
+    let (mygrid, prop_engine, power, ant_gain_dbi) = {
         let eng = engine_lock(&state);
         let st = eng.settings();
         (
             st.mygrid.clone(),
             st.prop_engine.clone(),
-            st.station_power_w,
+            assumed_power(&eng),
             st.ant_tx_gain_dbi + st.ant_rx_gain_dbi,
         )
     };
+    let station_power_w = Some(power.watts);
     let Some(me) = propagation::geo::maidenhead_to_latlon(mygrid.trim()) else {
         return Ok(propagation::PathPrediction {
-            engine: "heuristic".to_string(),
+            engine: prop_engine,
             bands: Vec::new(),
             muf_now: 0.0,
             muf_hourly: Vec::new(),
@@ -10992,6 +11098,9 @@ async fn get_band_outlook(
             day: None,
             overlay: None,
             space_now: None,
+            engine_fallback: false,
+            storm: None,
+            power: None,
         });
     };
     let p533 = prop_engine == "p533";
@@ -11008,20 +11117,31 @@ async fn get_band_outlook(
             .unwrap_or_default()
     };
     let t = now_unix();
-    let now_inputs = {
+    let (now_inputs, kp_now) = {
         let guard = cache.lock().map_err(|e| e.to_string())?;
-        NowInputs::read(guard.as_ref().map(|(_, s)| &s.space_wx), &protons, t)
+        let view = guard.as_ref().map(|(_, s)| &s.space_wx);
+        (NowInputs::read(view, &protons, t), swpc_kp(view, t))
     };
-    let mut out = ring_prediction(
-        mygrid,
-        prop_engine,
-        station_power_w,
-        ant_gain_dbi,
-        me,
-        wx,
+    let forecast = kp_cache
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|(_, f)| f.clone()));
+    let key = with_storm_key(
+        ring_key(t, &mygrid, ant_gain_dbi, station_power_w, &wx),
         t,
-    )
-    .await?;
+        kp_now,
+        forecast.as_ref(),
+    );
+    let eng = storm_corrected(
+        propagation::make_predictor(&prop_engine, Some(me), station_power_w, ant_gain_dbi),
+        &prop_engine,
+        Some(me),
+        t,
+        kp_now,
+        forecast,
+    );
+    let mut out = ring_prediction(prop_engine == "p533", key, eng, me, wx, t).await?;
+    out.power = Some(power);
     // The "now" line beside the climatology (never cached with it: it is re-read every ask).
     out.space_now = now_inputs.space_now(t);
     Ok(out)
@@ -11038,6 +11158,105 @@ pub(crate) fn ssn_key(wx: &propagation::SpaceWx) -> String {
 }
 
 /// The ring outlook's cache key: UTC day, grid, gain, power and the sunspot number the engine runs on.
+/// Run `f`, a path prediction, on a thread of its own below normal priority
+/// ([`tempo_net::priority`]), and hand back its answer. A burst of predictions (a cold region
+/// sweep, the DXpedition planner, a run of station clicks) then yields the CPU to the decoder and
+/// the radio loop. Its own thread rather than the blocking pool's, because a lowered thread cannot
+/// raise itself again, and a pool thread runs other work next. A prediction that panics past its
+/// own fallback ends its thread, and this says so rather than waiting.
+async fn below_normal<T: Send + 'static>(
+    f: impl FnOnce() -> T + Send + 'static,
+) -> Result<T, String> {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("prediction".into())
+        .spawn(move || {
+            tempo_net::priority::lower_this_thread();
+            let _ = tx.send(f());
+        })
+        .map_err(|e| e.to_string())?;
+    rx.await
+        .map_err(|_| "the prediction ended without an answer".to_string())
+}
+
+#[cfg(test)]
+mod below_normal_tests {
+    /// The answer comes back; a panic comes back as an error, never a wait.
+    #[test]
+    fn a_prediction_on_its_own_thread_answers_or_says_it_could_not() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        assert_eq!(rt.block_on(super::below_normal(|| 6 * 7)), Ok(42));
+        let failed: Result<u8, String> = rt.block_on(super::below_normal(|| panic!("on purpose")));
+        assert!(failed.is_err());
+        #[cfg(target_os = "linux")]
+        assert_eq!(
+            rt.block_on(super::below_normal(nice_of_this_thread)),
+            Ok(19)
+        );
+    }
+
+    /// The calling thread's nice: field 19 of `/proc/thread-self/stat`.
+    #[cfg(target_os = "linux")]
+    fn nice_of_this_thread() -> i32 {
+        let stat = std::fs::read_to_string("/proc/thread-self/stat").unwrap();
+        let after = &stat[stat.rfind(')').unwrap() + 2..];
+        after.split(' ').nth(16).unwrap().parse().unwrap()
+    }
+}
+
+/// The power a P.533 answer assumes ([`tempo_app::engine::Engine::prediction_power`]), as the
+/// answer carries it to the screen.
+fn assumed_power(eng: &tempo_app::engine::Engine) -> propagation::AssumedPower {
+    use propagation::PowerSource as To;
+    use tempo_app::engine::PredictionPowerSource as From;
+    let p = eng.prediction_power();
+    propagation::AssumedPower {
+        watts: p.watts,
+        source: match p.source {
+            From::Setting => To::Setting,
+            From::Rig => To::Rig,
+            From::Amplifier => To::Amplifier,
+            From::Default => To::Default,
+        },
+        amplifier: p.amplifier,
+    }
+}
+
+/// The P.533 engine with the storm correction for the Kp held now ([`propagation::storm`]); any
+/// other engine as it is, since the heuristic reads Kp itself.
+fn storm_corrected(
+    eng: Box<dyn propagation::PathPredictor>,
+    prop_engine: &str,
+    me: Option<(f64, f64)>,
+    t: i64,
+    kp_now: Option<f32>,
+    forecast: Option<propagation::KpForecast>,
+) -> Box<dyn propagation::PathPredictor> {
+    if prop_engine == "p533" {
+        propagation::storm::with_storm_correction(eng, me, t, kp_now, forecast)
+    } else {
+        eng
+    }
+}
+
+/// `key` with the Kp the storm correction depends on ([`propagation::storm::storm_key`]). On a
+/// quiet sky that is nothing, and the key is unchanged.
+fn with_storm_key(
+    key: String,
+    t: i64,
+    kp_now: Option<f32>,
+    forecast: Option<&propagation::KpForecast>,
+) -> String {
+    let storm = propagation::storm::storm_key(t, kp_now, forecast);
+    if storm.is_empty() {
+        key
+    } else {
+        format!("{key}|storm:{storm}")
+    }
+}
+
 fn ring_key(
     t: i64,
     mygrid: &str,
@@ -11053,23 +11272,29 @@ fn ring_key(
     )
 }
 
+/// The ring for `eng`, the configured engine as `get_band_outlook` built it (the storm
+/// correction included), kept under `key` when it is P.533's.
 async fn ring_prediction(
-    mygrid: String,
-    prop_engine: String,
-    station_power_w: Option<f64>,
-    ant_gain_dbi: f64,
+    p533: bool,
+    key: String,
+    eng: Box<dyn propagation::PathPredictor>,
     me: (f64, f64),
     wx: propagation::SpaceWx,
     t: i64,
 ) -> Result<propagation::PathPrediction, String> {
     const RING_TTL_SECS: u64 = 6 * 3600;
-    let p533 = prop_engine == "p533";
-    // 8 azimuths at ~9000 km — direction-agnostic "best band to ANY far DX now".
+    // 8 azimuths at ~9000 km — direction-agnostic "best band to ANY far DX now". The heuristic is
+    // microseconds and reads the current Kp, so it is never kept.
     if !p533 {
-        let eng = propagation::HeuristicEngine::new(Some(me));
-        return Ok(propagation::band_outlook_ring(&eng, me, 9000.0, 8, t, &wx));
+        return Ok(propagation::band_outlook_ring(
+            eng.as_ref(),
+            me,
+            9000.0,
+            8,
+            t,
+            &wx,
+        ));
     }
-    let key = ring_key(t, &mygrid, ant_gain_dbi, station_power_w, &wx);
     if let Ok(g) = RING_OUTLOOK.lock() {
         if let Some((when, k, v)) = g.as_ref() {
             if *k == key && when.elapsed().as_secs() < RING_TTL_SECS {
@@ -11091,14 +11316,14 @@ async fn ring_prediction(
             }
         }
     }
-    let eng = propagation::make_predictor(&prop_engine, Some(me), station_power_w, ant_gain_dbi);
-    let out = tauri::async_runtime::spawn_blocking(move || {
-        propagation::band_outlook_ring(eng.as_ref(), me, 9000.0, 8, t, &wx)
-    })
-    .await
-    .map_err(|e| e.to_string())?;
-    if let Ok(mut g) = RING_OUTLOOK.lock() {
-        *g = Some((std::time::Instant::now(), key, out.clone()));
+    let out =
+        below_normal(move || propagation::band_outlook_ring(eng.as_ref(), me, 9000.0, 8, t, &wx))
+            .await?;
+    // A stand-in for an engine that could not run is not kept: the next ask tries again.
+    if !out.engine_fallback {
+        if let Ok(mut g) = RING_OUTLOOK.lock() {
+            *g = Some((std::time::Instant::now(), key, out.clone()));
+        }
     }
     Ok(out)
 }
@@ -11111,6 +11336,13 @@ struct DxpedWindow {
     call: String,
     /// Which model produced it ("p533" → the UI badge shows P.533).
     engine: String,
+    /// The configured engine could not run and `engine` is the heuristic that answered
+    /// ([`propagation::with_fallback`]). Absent when false.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    engine_fallback: bool,
+    /// The storm correction laid over its P.533 answer ([`propagation::storm`]); absent when none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    storm: Option<propagation::storm::StormNote>,
     /// One-line headline, e.g. "17m Good 0230–0430Z" (CalendarEntry.best format).
     best: String,
     /// Top bands' 24 h outlooks, best first — feeds LikelihoodHeatmap directly.
@@ -11170,6 +11402,24 @@ fn dxped_windows_key(
 }
 
 #[cfg(test)]
+mod storm_key_tests {
+    use super::with_storm_key;
+
+    /// On a quiet sky every P.533 cache keeps the key it had; a storm Kp starts it afresh.
+    #[test]
+    fn a_quiet_sky_leaves_the_cache_keys_alone() {
+        let t = 1_794_074_400;
+        assert_eq!(with_storm_key("k".into(), t, Some(2.0), None), "k");
+        assert_eq!(with_storm_key("k".into(), t, None, None), "k");
+        assert_ne!(with_storm_key("k".into(), t, Some(5.0), None), "k");
+        assert_ne!(
+            with_storm_key("k".into(), t, Some(5.0), None),
+            with_storm_key("k".into(), t, Some(7.0), None)
+        );
+    }
+}
+
+#[cfg(test)]
 mod dxped_windows_key_tests {
     use super::dxped_windows_key;
     use propagation::SpaceWx;
@@ -11203,21 +11453,23 @@ mod dxped_windows_key_tests {
 async fn get_dxped_windows(
     state: State<'_, SharedEngine>,
     cache: State<'_, PropCache>,
+    kp_cache: State<'_, KpForecastCache>,
     days: Option<u32>,
 ) -> Result<Vec<DxpedWindow>, String> {
     // 1 = today only (Connect's default); the DXpeditions board asks for 7 (the
     // week planner). Clamped so a bad caller can't request an unbounded sweep.
     let days = days.unwrap_or(1).clamp(1, 10);
-    let (mygrid, prop_engine, station_power_w, ant_gain_dbi) = {
+    let (mygrid, prop_engine, power, ant_gain_dbi) = {
         let eng = engine_lock(&state);
         let st = eng.settings();
         (
             st.mygrid.clone(),
             st.prop_engine.clone(),
-            st.station_power_w,
+            assumed_power(&eng),
             st.ant_tx_gain_dbi + st.ant_rx_gain_dbi,
         )
     };
+    let station_power_w = Some(power.watts);
     let Some(me) = propagation::geo::maidenhead_to_latlon(mygrid.trim()) else {
         return Ok(Vec::new());
     };
@@ -11266,6 +11518,14 @@ async fn get_dxped_windows(
         return Ok(Vec::new());
     }
     let day = now_unix() / 86_400;
+    let kp_now = {
+        let guard = cache.lock().map_err(|e| e.to_string())?;
+        swpc_kp(guard.as_ref().map(|(_, s)| &s.space_wx), now_unix())
+    };
+    let forecast = kp_cache
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|(_, f)| f.clone()));
     let key = dxped_windows_key(
         day,
         days,
@@ -11286,10 +11546,18 @@ async fn get_dxped_windows(
     }
     // Build the engine ONCE and sweep every target inside one spawn_blocking —
     // the p533 CCIR-cell memo makes same-month targets amortize each other.
-    let eng = propagation::make_predictor(&prop_engine, Some(me), station_power_w, ant_gain_dbi);
     let t = now_unix();
-    let out = tauri::async_runtime::spawn_blocking(move || {
-        targets
+    let key = with_storm_key(key, t, kp_now, forecast.as_ref());
+    let eng = storm_corrected(
+        propagation::make_predictor(&prop_engine, Some(me), station_power_w, ant_gain_dbi),
+        &prop_engine,
+        Some(me),
+        t,
+        kp_now,
+        forecast,
+    );
+    let (out, fell_back) = below_normal(move || {
+        let windows = targets
             .into_iter()
             .map(|(call, dx, start_unix, end_unix)| {
                 let mut p = eng.predict(dx, t, &wx);
@@ -11361,6 +11629,8 @@ async fn get_dxped_windows(
                 DxpedWindow {
                     call,
                     engine: p.engine,
+                    engine_fallback: p.engine_fallback,
+                    storm: p.storm,
                     best,
                     outlook: p.bands,
                     days: days_out,
@@ -11368,14 +11638,17 @@ async fn get_dxped_windows(
                     end_unix,
                 }
             })
-            .collect::<Vec<_>>()
+            .collect::<Vec<_>>();
+        (windows, eng.fell_back())
     })
-    .await
-    .map_err(|e| e.to_string())?;
-    if let Ok(mut g) = DXPED_WINDOWS.lock() {
-        g.retain(|(when, _, _)| when.elapsed().as_secs() < DXPED_WINDOWS_TTL_SECS);
-        g.retain(|(_, k, _)| *k != key);
-        g.push((std::time::Instant::now(), key, out.clone()));
+    .await?;
+    // A stand-in for an engine that could not run is not kept: the next ask tries again.
+    if !fell_back {
+        if let Ok(mut g) = DXPED_WINDOWS.lock() {
+            g.retain(|(when, _, _)| when.elapsed().as_secs() < DXPED_WINDOWS_TTL_SECS);
+            g.retain(|(_, k, _)| *k != key);
+            g.push((std::time::Instant::now(), key, out.clone()));
+        }
     }
     Ok(out)
 }
@@ -15781,8 +16054,16 @@ fn send_rot_step(
             // error): rotctld answered, but only to say the CONTROLLER did not. This arm
             // used to take every answered non-zero `RPRT`, so on a G-5500 reached over the
             // internet one slow round trip dropped the elevation for a minute of the pass.
+            //
+            // ⚠️ And the azimuth goes alone through `point_keeping`, never `point`'s
+            // `P <az> 0`. A mount WITH an elevation axis refuses too: an elevation past its
+            // range, which Allow flip asks for on a high pass. `P <az> 0` then laid the antenna
+            // on the horizon on that tick and on every azimuth-only tick after it, while the
+            // driver believed the elevation had stayed put. `point_keeping` sends a mount with
+            // no elevation axis exactly the `P <az> 0` it always got, keeps the elevation an
+            // az/el mount reports, and sends nothing when neither can be told.
             Err(e) if tempo_audio::rotator::says_unsupported(&e) => {
-                if tempo_audio::rotator::point(addr, az).is_ok() {
+                if tempo_audio::rotator::point_keeping(addr, Some(az), None).is_ok() {
                     RotOutcome::AzOnly
                 } else {
                     RotOutcome::Failed
@@ -15790,8 +16071,10 @@ fn send_rot_step(
             }
             Err(_) => RotOutcome::Failed,
         },
+        // The azimuth-only ticks after two refusals: kept the same way, so they leave the
+        // elevation where it is, which is what the driver records (`TrackDriver::record`).
         RotStep::PointAz { az } => {
-            if tempo_audio::rotator::point(addr, az).is_ok() {
+            if tempo_audio::rotator::point_keeping(addr, Some(az), None).is_ok() {
                 RotOutcome::AzOk
             } else {
                 RotOutcome::Failed
@@ -16839,8 +17122,12 @@ fn run_sat_track(run: SatTrackRun, clock: &dyn Fn() -> i64, tick_wait: &dyn Fn()
                     // only form it accepts. We know which this is: the driver learned it during
                     // the pass. Anything else is a failed park, and the operator is told rather
                     // than having the antenna put somewhere they did not ask for.
+                    //
+                    // The azimuth goes alone through `point_keeping`: an az/el mount whose
+                    // elevation the pass found refused (a flip past its range) keeps the
+                    // elevation it reports rather than being parked on the horizon.
                     if !driver.azel_ok() {
-                        if let Err(e) = tempo_audio::rotator::point(addr, paz) {
+                        if let Err(e) = tempo_audio::rotator::point_keeping(addr, Some(paz), None) {
                             conn_log(
                                 "Rotator",
                                 "error",
@@ -22348,6 +22635,9 @@ fn settings_from_bundle(
     if predates_hb_networking {
         settings.choose_js8_hb_networking_for_old_settings();
     }
+    // A marker this backup does not carry reads as false, so the move is made here as it would be
+    // for an upgraded file, note included; otherwise the live marker would keep its "heuristic".
+    settings.move_prop_engine_in_memory();
     Ok(settings)
 }
 
@@ -23342,6 +23632,107 @@ fn save_text_to_downloads(
     let path = dir.join(name);
     std::fs::write(&path, text).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
     Ok(path.display().to_string())
+}
+
+/// `filename` in `dir` if it is a file there now. Reduced to its bare name first, as
+/// [`save_text_to_downloads`] reduces what it writes, so this can never look outside `dir`.
+/// `Ok(None)` is the file having been moved, renamed or deleted; an unusable name is an error.
+fn file_in_dir(dir: &Path, filename: &str) -> Result<Option<PathBuf>, String> {
+    let name = Path::new(filename).file_name().ok_or("Invalid file name")?;
+    let path = dir.join(name);
+    Ok(path.is_file().then_some(path))
+}
+
+#[cfg(test)]
+mod file_in_dir_tests {
+    use super::file_in_dir;
+
+    /// A folder of this test's own, with a file `name` in it, removed at the end of the test.
+    struct Folder(std::path::PathBuf);
+    impl Folder {
+        fn with_file(test: &str, name: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("nexus-{test}-{}", std::process::id()));
+            std::fs::create_dir_all(dir.join("inner")).unwrap();
+            std::fs::write(dir.join(name), "x").unwrap();
+            Folder(dir)
+        }
+    }
+    impl Drop for Folder {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn finds_the_file_written_under_pota_s_name() {
+        let f = Folder::with_file("found", "KD9TAW@US-1234-20260909.adi");
+        assert_eq!(
+            file_in_dir(&f.0, "KD9TAW@US-1234-20260909.adi"),
+            Ok(Some(f.0.join("KD9TAW@US-1234-20260909.adi")))
+        );
+    }
+
+    #[test]
+    fn a_file_moved_away_is_none_and_not_an_error() {
+        let f = Folder::with_file("moved", "other.adi");
+        assert_eq!(file_in_dir(&f.0, "KD9TAW@US-1234-20260909.adi"), Ok(None));
+    }
+
+    #[test]
+    fn a_folder_of_that_name_is_not_the_file() {
+        let f = Folder::with_file("folder", "other.adi");
+        assert_eq!(file_in_dir(&f.0, "inner"), Ok(None));
+    }
+
+    /// The webview names the file, so the name must not reach outside Downloads: a path is reduced
+    /// to its last part, and a file that exists only outside the folder is not found.
+    #[test]
+    fn a_path_cannot_reach_outside_the_folder() {
+        let f = Folder::with_file("escape", "inside.adi");
+        let inner = f.0.join("inner");
+        assert_eq!(file_in_dir(&inner, "../inside.adi"), Ok(None));
+        assert_eq!(
+            file_in_dir(&inner, &f.0.join("inside.adi").display().to_string()),
+            Ok(None)
+        );
+        assert_eq!(
+            file_in_dir(&f.0, "elsewhere/inside.adi"),
+            Ok(Some(f.0.join("inside.adi")))
+        );
+    }
+
+    #[test]
+    fn a_name_with_no_file_part_is_refused() {
+        let f = Folder::with_file("noname", "other.adi");
+        for bad in ["", "..", "/"] {
+            assert!(file_in_dir(&f.0, bad).is_err(), "{bad:?} must be refused");
+        }
+    }
+}
+
+/// Show a file [`save_text_to_downloads`] wrote in the file manager, for the Logbook's way on to
+/// POTA's upload page. Opens no browser and sends nothing. `Ok(false)` when the file is no longer
+/// in Downloads, so the UI can say so; if it cannot be selected in the file manager (a Linux
+/// desktop with no D-Bus file manager, say), its folder is opened instead, as `reveal_all_txt`
+/// does; `Err` only when neither would open.
+#[tauri::command]
+fn reveal_in_downloads(app: tauri::AppHandle, filename: String) -> Result<bool, String> {
+    use tauri::Manager;
+    use tauri_plugin_opener::OpenerExt;
+    let dir = app
+        .path()
+        .download_dir()
+        .or_else(|_| app.path().home_dir())
+        .map_err(|e| format!("Could not locate your Downloads folder: {e}"))?;
+    let Some(path) = file_in_dir(&dir, &filename)? else {
+        return Ok(false);
+    };
+    if app.opener().reveal_item_in_dir(&path).is_err() {
+        app.opener()
+            .open_path(dir.to_string_lossy().to_string(), None::<&str>)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(true)
 }
 
 /// Save As for the settings backup (#306): the OS save dialog, opening in Downloads (as
@@ -25907,26 +26298,77 @@ impl NoAim {
     }
 }
 
+/// Where one of [`labelled_station_fixes`] came from, for a screen that says what an answer rests on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+enum FixSource {
+    /// The log form's grid for this call.
+    LogForm,
+    /// A grid the station sent on the air this session.
+    Heard,
+    /// This session's callbook answer.
+    Callbook,
+    /// The grid on its newest logged contact.
+    Logged,
+}
+
 /// Every place Nexus already knows `call`'s station to be, MOST TRUSTED FIRST — the order
 /// [`propagation::geo::best_fix`] refines within: the log form's grid, the grids the station sent
 /// this session, the callbook's answer (its locator, then the position it vouched for), the grid
-/// on its newest logged contact. The engine keeps them ([`tempo_app::engine::StationGrids`]);
-/// none of them asks the network.
-fn station_fixes(eng: &tempo_app::engine::Engine, call: &str) -> Vec<propagation::geo::StationFix> {
+/// on its newest logged contact — each with where it came from. The engine keeps them
+/// ([`tempo_app::engine::StationGrids`]); none of them asks the network.
+fn labelled_station_fixes(
+    eng: &tempo_app::engine::Engine,
+    call: &str,
+) -> Vec<(FixSource, propagation::geo::StationFix)> {
     use propagation::geo::StationFix;
     let grids = eng.station_grids(call);
     let mut fixes = Vec::new();
-    fixes.extend(grids.log_form.map(StationFix::Grid));
-    fixes.extend(grids.heard.into_iter().map(StationFix::Grid));
+    fixes.extend(
+        grids
+            .log_form
+            .map(|g| (FixSource::LogForm, StationFix::Grid(g))),
+    );
+    fixes.extend(
+        grids
+            .heard
+            .into_iter()
+            .map(|g| (FixSource::Heard, StationFix::Grid(g))),
+    );
     if let Some(book) = grids.callbook {
-        fixes.extend(book.grid.map(StationFix::Grid));
+        fixes.extend(
+            book.grid
+                .map(|g| (FixSource::Callbook, StationFix::Grid(g))),
+        );
         fixes.extend(
             book.position
-                .map(|(lat, lon)| StationFix::Position(lat, lon)),
+                .map(|(lat, lon)| (FixSource::Callbook, StationFix::Position(lat, lon))),
         );
     }
-    fixes.extend(grids.logged.map(StationFix::Grid));
+    fixes.extend(
+        grids
+            .logged
+            .map(|g| (FixSource::Logged, StationFix::Grid(g))),
+    );
     fixes
+}
+
+/// [`labelled_station_fixes`] without the labels: what the rotator's point-at-call refines within.
+/// Derived from the labelled list so the two can never disagree.
+fn station_fixes(eng: &tempo_app::engine::Engine, call: &str) -> Vec<propagation::geo::StationFix> {
+    labelled_station_fixes(eng, call)
+        .into_iter()
+        .map(|(_, f)| f)
+        .collect()
+}
+
+/// [`propagation::geo::best_fix`] over labelled fixes: the same fix, with the label of the first
+/// (most trusted) source that gave it.
+fn best_labelled_fix(
+    fixes: &[(FixSource, propagation::geo::StationFix)],
+) -> Option<(FixSource, propagation::geo::StationFix)> {
+    let best = propagation::geo::best_fix(fixes.iter().map(|(_, f)| f.clone()))?;
+    fixes.iter().find(|(_, f)| *f == best).cloned()
 }
 
 /// The bearing from the operator's own grid, at its full precision, to `call`'s station: to the
@@ -29393,6 +29835,18 @@ fn mark_setup_wizard_seen(state: State<'_, SharedEngine>) -> Result<AppSnapshot,
     Ok(eng.snapshot())
 }
 
+/// The one-time note about the move to P.533 was dismissed. The ONE write path that clears
+/// `Settings::prop_engine_note_due`. Returns the snapshot.
+#[tauri::command(async)]
+fn dismiss_prop_engine_note(state: State<'_, SharedEngine>) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    let s = eng.dismiss_prop_engine_note();
+    persist_settings(s.clone(), |e| {
+        eprintln!("tempo: dismiss_prop_engine_note save failed: {e}")
+    });
+    Ok(eng.snapshot())
+}
+
 /// Where a `(band, mode class)` WOULD route right now, as the radio's id + name — the Settings rule
 /// editor's "test" affordance. Read-only: it never moves a rig.
 #[tauri::command(async)]
@@ -29793,6 +30247,15 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
                     // Let the OS finish tearing the just-dropped COM port down (Windows
                     // frees it asynchronously after the daemon exits).
                     std::thread::sleep(Duration::from_millis(300));
+                }
+                // A virtual port has no baud to find: say so instead of sweeping. Decided from
+                // the filesystem alone; the port is not opened to ask.
+                if released && tempo_audio::ports::has_no_modem_lines(&port) {
+                    detail = format!(
+                        "{detail} {}",
+                        tempo_audio::baud_ladder::SWEEP_SKIPPED_VIRTUAL_PORT
+                    );
+                } else if released {
                     // WHICH ladder is asked of Hamlib, never assumed from the model: a rig that
                     // publishes a `civaddr` speaks CI-V and gets the fast raw probe; every
                     // other serial rig gets the Hamlib ladder. Both run on the blocking pool —
@@ -29830,7 +30293,7 @@ async fn test_cat(state: State<'_, SharedEngine>) -> Result<CatTestResult, Strin
             detail: if detail.is_empty() {
                 "No CAT status yet — set your rig + PTT method, Save, then test.".to_string()
             } else {
-                detail
+                engine_lock(&state).cat_detail_with_tx_off(ok, detail)
             },
         })
     }
@@ -30147,6 +30610,10 @@ fn set_license_class(state: State<'_, SharedEngine>, class: String) -> Result<Ap
 /// home dial. Split out of [`get_licensed_band_plan`] so the list and the privilege filter
 /// that trims it can be driven directly by a test, with no engine and no Tauri state — the
 /// band that is MISSING from a list is invisible to every test that goes through the command.
+///
+/// The command itself reads `Engine::licensed_band_plan`, whose rows follow the radio each band
+/// routes to; this is the list for an unknown radio, the same rows wherever the rig is not 3 cm.
+#[cfg(test)]
 fn licensed_bands(
     class: tempo_app::settings::LicenseClass,
     mode: tempo_app::settings::OperatingMode,
@@ -30217,7 +30684,9 @@ fn get_licensed_band_plan(
         "cw" => OperatingMode::Cw,
         _ => OperatingMode::Digital,
     };
-    Ok(licensed_bands(class, mode))
+    // The rows the band pick lands on: each band's home is the one for the radio the routing
+    // hands that band to (`Engine::licensed_band_plan`).
+    Ok(eng.licensed_band_plan(mode))
 }
 
 /// Change band / dial frequency / mode live (does not reset the operating mode).
@@ -30253,6 +30722,45 @@ fn sstv_tune(
     eng.sstv_tune_with_arming(dial_mhz, &band, &mode, afar.is_none());
     persist_settings(eng.settings().clone(), |e| {
         eprintln!("tempo: failed to persist frequency: {e}")
+    });
+    Ok(eng.snapshot())
+}
+
+/// A saved memory recalled to the SSTV screen: [`sstv_tune`]'s claim of Phone and QSY, the
+/// operator's own dial as that is, but it never arms Phone's Enable-TX latch, so it takes no `afar`.
+/// Recalling a memory is listening on a frequency, and transmitting stays one press of Enable TX
+/// away. What was armed before stays armed. Persists like `sstv_tune`.
+#[tauri::command(async)]
+fn sstv_tune_recall(
+    state: State<'_, SharedEngine>,
+    dial_mhz: f64,
+    band: String,
+    mode: String,
+) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    eng.sstv_tune_with_arming(dial_mhz, &band, &mode, false);
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: failed to persist frequency: {e}")
+    });
+    Ok(eng.snapshot())
+}
+
+/// A saved memory recalled to RTTY, PSK or JTTY: [`work_spot`]'s atomic entry and QSY, and the nav
+/// hint its windows follow, but it never arms the section's Enable-TX latch, so it takes no `afar`.
+/// `Engine::work_spot_tiered_with_arming` with false, as a Work from afar: that also says, in
+/// `work_afar`, that a window following the hint must not re-assert the section and arm it there.
+/// What was armed before stays armed. Persists like `work_spot`.
+#[tauri::command(async)]
+fn work_spot_recall(
+    state: State<'_, SharedEngine>,
+    mode: String,
+    freq_mhz: f64,
+    band: String,
+) -> Result<AppSnapshot, String> {
+    let mut eng = engine_lock(&state);
+    eng.work_spot_tiered_with_arming(None, &mode, freq_mhz, &band, None, false);
+    persist_settings(eng.settings().clone(), |e| {
+        eprintln!("tempo: failed to persist worked spot: {e}")
     });
     Ok(eng.snapshot())
 }
@@ -31614,6 +32122,22 @@ fn set_psk_macros(
     Ok(eng.settings().macros.clone())
 }
 
+/// The CW cockpit's key editor: `macros.cwProfiles` + `macros.activeCwProfile` in one atomic write
+/// through `Engine::save_cw_macros`, NEVER the settings form, which advances the TX gate
+/// generation, revokes Remote actuation and clears the FT queues. Returns the saved `macros` for
+/// the UI's mirror. Settings ▸ CW ▸ Macros still saves the same profiles through its form.
+#[tauri::command(async)]
+fn set_cw_macros(
+    state: State<'_, SharedEngine>,
+    profiles: serde_json::Value,
+    active: serde_json::Value,
+) -> Result<tempo_app::settings::Macros, String> {
+    let mut eng = engine_lock(&state);
+    eng.save_cw_macros(profiles, active)
+        .map_err(|reason| format!("CW macros were not saved ({reason:?})"))?;
+    Ok(eng.settings().macros.clone())
+}
+
 /// The contest logger window's panel slug: the whole contest screen and the log line, for a
 /// second person logging at a second monitor and keyboard. Its strip shares the contact in
 /// progress with the main window's while it is open (`tempo_app::engine::contest_entry`).
@@ -32142,7 +32666,8 @@ const PENDING_LOG_MOVED_ON: &str = "pendingLogMovedOn";
 /// Confirm-and-log the contact the prompt-to-log popup is showing. `record` is the
 /// (possibly edited) contact and `expected_key` the snapshot's `pendingQsoLogKey` it was
 /// shown with. Returns the refreshed snapshot, whose `pendingLog` is the next held contact.
-/// `iota_offer` is the IOTA offer the operator took in the popup, if any ([`get_iota_offer`]).
+/// The popup's IOTA box is `record`'s reference; `iota_offer` is what the popup filled it with
+/// ([`get_iota_offer`]), which marks it as that source's when logged as it was.
 #[tauri::command]
 async fn confirm_pending_log(
     state: State<'_, SharedEngine>,
@@ -32194,7 +32719,8 @@ fn discard_pending_log(
 /// `state_source` is where the form's STATE came from ("operator", "callbook" or "park"; see
 /// [`tempo_app::engine::StateSource`]); absent is the operator's. A park or summit the record
 /// carries is placed here, before the Engine lock ([`ota_park_places`]).
-/// `iota_offer` is the IOTA offer the operator took on the form, if any ([`get_iota_offer`]).
+/// The form's IOTA box is `record`'s reference; `iota_offer` is what the form filled it with
+/// ([`get_iota_offer`]), which marks it as that source's when logged as it was.
 #[tauri::command]
 async fn log_qso(
     state: State<'_, SharedEngine>,
@@ -32220,8 +32746,8 @@ async fn log_qso(
         let mut eng = engine_lock(&engine);
         eng.with_log_tickets(|eng| {
             let mut rec: tempo_core::logbook::QsoRecord = record.into();
-            // The IOTA offer the operator took on the form ([`get_iota_offer`]): written into an
-            // empty field only, and held back from uploads until they touch it.
+            // The reference the form filled its IOTA box with ([`get_iota_offer`]): marked as its
+            // source's when the box still holds it (or is empty); one the operator changed is theirs.
             if let Some(offer) = &iota_offer {
                 tempo_core::logbook::offer::accept_iota_offer(&mut rec, offer);
             }
@@ -34927,6 +35453,110 @@ async fn cancel_confirmation_check(
     Ok(())
 }
 
+// ----- Logbook ▸ Check eQSL sent marks ------------------------------------------------------------
+// The contacts holding the "QSL sent, electronic" an eQSL card copied onto them before a card
+// stopped bringing its sender's mark (`tempo_core::eqsl::holds_card_sent_mark`), listed for the
+// operator, and cleared only by the operator's tick.
+
+/// One contact the Logbook's eQSL sent-mark review lists.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EqslSentMarkDto {
+    id: String,
+    call: String,
+    when_unix: u64,
+    band: String,
+    mode: String,
+}
+
+/// What a clear in the review made: the contacts it cleared, and the time it recorded as the
+/// operator's clear, which its Undo names ([`restore_eqsl_sent_marks`]).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EqslSentClearedDto {
+    ids: Vec<String>,
+    cleared_unix: u64,
+}
+
+/// The review's list, newest first ([`tempo_app::station::holding_card_sent_marks`]), read with
+/// the Engine lock released. It writes nothing.
+fn eqsl_sent_mark_review_on(engine: &SharedEngine) -> Result<Vec<EqslSentMarkDto>, String> {
+    let rows = engine_lock(engine).log_rows();
+    let held = tempo_app::station::holding_card_sent_marks(&rows)?;
+    Ok(held
+        .into_iter()
+        .filter_map(|r| {
+            Some(EqslSentMarkDto {
+                id: r.id?.to_string(),
+                call: r.call,
+                when_unix: r.when_unix,
+                band: r.band,
+                mode: r.mode,
+            })
+        })
+        .collect())
+}
+
+/// The Logbook's "Check eQSL sent marks": the contacts holding the sent mark an eQSL card left
+/// ([`eqsl_sent_mark_review_on`]). It reads; it never writes.
+#[tauri::command]
+async fn eqsl_sent_mark_review(
+    state: State<'_, SharedEngine>,
+) -> Result<Vec<EqslSentMarkDto>, String> {
+    let engine = Arc::clone(&state);
+    log_folds::off_the_runtime(move || eqsl_sent_mark_review_on(&engine)).await
+}
+
+/// The contacts a review names, by the ids it was given.
+fn review_ids(ids: &[String]) -> Result<Vec<tempo_core::logbook::RecordId>, String> {
+    ids.iter()
+        .map(|id| id.parse().map_err(|_| LOG_ROW_GONE.to_string()))
+        .collect()
+}
+
+/// Clear in "Check eQSL sent marks": the sent mark of each contact the operator ticked, only while
+/// it still holds the mark a card left, cleared as the row's QSL menu clears one
+/// ([`tempo_app::logwrite::card_sent_marks`]). Nothing is uploaded. What it cleared, once it is on
+/// disk.
+#[tauri::command]
+async fn clear_eqsl_sent_marks(
+    state: State<'_, SharedEngine>,
+    ids: Vec<String>,
+) -> Result<EqslSentClearedDto, String> {
+    let ids = review_ids(&ids)?;
+    let engine = Arc::clone(&state);
+    let now = u64::try_from(now_unix()).unwrap_or(0);
+    durable_command(move || {
+        let change = tempo_app::station::CardSentChange::Clear { now_unix: now };
+        let (made, durability) = tempo_app::logwrite::card_sent_marks(&engine, &ids, change);
+        let made = made.map(|ids| EqslSentClearedDto {
+            ids: ids.iter().map(ToString::to_string).collect(),
+            cleared_unix: now,
+        });
+        (made, durability)
+    })
+    .await
+}
+
+/// Undo of a clear in "Check eQSL sent marks": the mark put back on each contact of `ids` that
+/// still holds the clear made at `cleared_unix`, and on no other
+/// ([`tempo_app::logwrite::card_sent_marks`]). How many, once it is on disk.
+#[tauri::command]
+async fn restore_eqsl_sent_marks(
+    state: State<'_, SharedEngine>,
+    ids: Vec<String>,
+    cleared_unix: u64,
+) -> Result<usize, String> {
+    let ids = review_ids(&ids)?;
+    let engine = Arc::clone(&state);
+    durable_command(move || {
+        let change = tempo_app::station::CardSentChange::Restore { cleared_unix };
+        let (made, durability) = tempo_app::logwrite::card_sent_marks(&engine, &ids, change);
+        (made.map(|ids| ids.len()), durability)
+    })
+    .await
+}
+
 /// Where a park or summit is: the US states, DC and Canadian provinces it lies in, as the hunter
 /// feed writes them ("US-ND"; a park on a state line names each). Empty where nothing here places
 /// it, and its contact then takes a state as every contact did before.
@@ -35054,59 +35684,144 @@ fn callbook_iota_for_call(call: &str) -> Option<String> {
         .map(|(_, i)| i.clone())
 }
 
-/// How far back the Spots board shows a spot, and the log-time IOTA offer reads one.
+use tempo_core::logbook::offer::SpotIota;
+
+/// How far back the Spots board shows a spot.
 const SPOTS_WINDOW: std::time::Duration = std::time::Duration::from_secs(1200);
+
+/// How old a spot naming the station's IOTA group may be and still count at log time (operator
+/// ruling, 2026-11-10; it was the Spots board's 20 minutes): an hour, for the log form's offer and
+/// for a contact no form shows first. An island activation stays on one group for hours or days,
+/// and the spots of one thin out between pileups.
+const SPOT_IOTA_WINDOW: std::time::Duration = std::time::Duration::from_secs(3600);
 
 /// Every IOTA group a cluster spot's comment named, by the call spotted and when the spot came in:
 /// the log-time offer's spot side. Kept beside the spot buffer because that buffer merges every spot
 /// of one call within a couple of kHz into one row and keeps only the newest comment, so two spots
 /// of one station on one band naming different groups would read as one. Only spots that name a
-/// group are kept, for [`SPOTS_WINDOW`]; emptied with the spot buffer ([`clear_spot_iota`]).
+/// group are kept, for [`SPOT_IOTA_WINDOW`]; emptied with the spot buffer ([`clear_spot_iota`]).
 #[derive(Default)]
 struct SpotIotaLog {
-    named: std::collections::VecDeque<(std::time::Instant, String, String)>,
+    named: std::collections::VecDeque<NamedGroup>,
 }
 
-/// A memory ceiling only: far above the IOTA-naming spots one window holds.
-const SPOT_IOTA_CAP: usize = 4096;
+/// One spot's group, as [`SpotIotaLog`] keeps it.
+struct NamedGroup {
+    /// When it came in, by which the offer and the keeping measure.
+    at: std::time::Instant,
+    /// When the spot says it was made ([`spot_made_unix`]), the contact's time is compared with.
+    made_unix: u64,
+    call: String,
+    group: String,
+    /// The band of its frequency; `None` off the band table.
+    band: Option<&'static str>,
+}
+
+/// When a spot was made, Unix seconds: the "1234Z" it carries, on the day nearest to when it came
+/// in (`received_unix`), else when it came in. A node can replay old spots at login and they arrive
+/// as new, so the arrival alone says nothing of their age.
+fn spot_made_unix(time_utc: Option<&str>, received_unix: u64) -> u64 {
+    let hhmm = time_utc
+        .map(|t| t.trim().trim_end_matches(['Z', 'z']))
+        .filter(|t| t.len() == 4 && t.bytes().all(|b| b.is_ascii_digit()))
+        .and_then(|t| Some((t[..2].parse::<u64>().ok()?, t[2..].parse::<u64>().ok()?)))
+        .filter(|&(h, m)| h < 24 && m < 60);
+    let Some((h, m)) = hhmm else {
+        return received_unix;
+    };
+    const DAY: u64 = 86_400;
+    let today = received_unix - received_unix % DAY + h * 3600 + m * 60;
+    [today.saturating_sub(DAY), today, today + DAY]
+        .into_iter()
+        .min_by_key(|t| t.abs_diff(received_unix))
+        .unwrap_or(received_unix)
+}
+
+/// A memory ceiling only, sized so a whole [`SPOT_IOTA_WINDOW`] of an IOTA contest fits: a spot
+/// dropped early is one that can no longer refuse a wrong fill. A busy cluster node at a big contest's
+/// peak passes about 100 human spots a minute (RBN skimmer spots carry no IOTA reference); in the IOTA
+/// contest nearly every one may name a group. Doubled for a burst, 200 a minute × 60 minutes is 12,000
+/// spots, rounded up to 16,384. At roughly 150 bytes a spot that is about 2.5 MB at most, and only
+/// in that contest's busiest hour.
+const SPOT_IOTA_CAP: usize = 16_384;
 
 impl SpotIotaLog {
-    /// Keep the group `spot`'s comment names, if it names one, as heard at `at`.
-    fn note(&mut self, at: std::time::Instant, spot: &tempo_net::cluster::ClusterSpot) {
+    /// Keep the group `spot`'s comment names, if it names one, as heard at `at` (`at_unix` by the
+    /// wall clock).
+    fn note(
+        &mut self,
+        at: std::time::Instant,
+        at_unix: u64,
+        spot: &tempo_net::cluster::ClusterSpot,
+    ) {
         while self
             .named
             .front()
-            .is_some_and(|(t, _, _)| at.saturating_duration_since(*t) > SPOTS_WINDOW)
+            .is_some_and(|n| at.saturating_duration_since(n.at) > SPOT_IOTA_WINDOW)
         {
             self.named.pop_front();
         }
-        let Some(r) = propagation::iota::in_comment(&spot.comment) else {
+        let Some(group) = propagation::iota::in_comment(&spot.comment) else {
             return;
         };
         if self.named.len() >= SPOT_IOTA_CAP {
             self.named.pop_front();
         }
-        self.named
-            .push_back((at, spot.dx_call.trim().to_ascii_uppercase(), r));
+        self.named.push_back(NamedGroup {
+            at,
+            made_unix: spot_made_unix(spot.time_utc.as_deref(), at_unix),
+            call: spot.dx_call.trim().to_ascii_uppercase(),
+            group,
+            band: propagation::Band::from_mhz(spot.freq_mhz()).map(propagation::Band::label),
+        });
     }
 
-    /// The group every spot of exactly `call` within [`SPOTS_WINDOW`] of `now` names, or none
+    /// The group every spot of exactly `call` within [`SPOT_IOTA_WINDOW`] of `now` names, or none
     /// when none names one or any two name different groups (an old trip's re-spot, or a typo,
     /// is not this activation; the comment parser refuses a comment naming two groups the same
     /// way).
     fn group_for(&self, now: std::time::Instant, call: &str) -> Option<String> {
         let call = call.trim();
         let mut named: Option<&String> = None;
-        for (_, _, r) in self.named.iter().filter(|(t, c, _)| {
-            now.saturating_duration_since(*t) <= SPOTS_WINDOW && c.eq_ignore_ascii_case(call)
+        for n in self.named.iter().filter(|n| {
+            now.saturating_duration_since(n.at) <= SPOT_IOTA_WINDOW
+                && n.call.eq_ignore_ascii_case(call)
         }) {
             match named {
-                Some(n) if n != r => return None,
+                Some(g) if *g != n.group => return None,
                 Some(_) => {}
-                None => named = Some(r),
+                None => named = Some(&n.group),
             }
         }
         named.cloned()
+    }
+
+    /// What the spots say of an FT contact logged with no popup: stricter than the offer, since no
+    /// one looks at it first. Reading every spot of exactly `call` made within [`SPOT_IOTA_WINDOW`]
+    /// of the contact's start (`when_unix`), on any band: none names a group; or they all name one
+    /// and one of them is on the contact's `band`; or they all name one and none is, which the
+    /// callbook has to agree with; or they disagree and are refused (an old trip's re-spot, a typo).
+    fn group_at_contact(&self, call: &str, band: &str, when_unix: u64) -> SpotIota {
+        let call = call.trim();
+        let mut spots = self.named.iter().filter(|n| {
+            n.call.eq_ignore_ascii_case(call)
+                && n.made_unix.abs_diff(when_unix) <= SPOT_IOTA_WINDOW.as_secs()
+        });
+        let Some(first) = spots.next() else {
+            return SpotIota::Silent;
+        };
+        let mut on_band = false;
+        for n in std::iter::once(first).chain(spots) {
+            if n.group != first.group {
+                return SpotIota::Refused;
+            }
+            on_band |= n.band.is_some_and(|b| b.eq_ignore_ascii_case(band.trim()));
+        }
+        if on_band {
+            SpotIota::Names(first.group.clone())
+        } else {
+            SpotIota::OtherBand(first.group.clone())
+        }
     }
 }
 
@@ -35116,8 +35831,22 @@ static SPOT_IOTA: std::sync::LazyLock<std::sync::Mutex<SpotIotaLog>> =
 /// Keep the group a cluster spot just pushed into the spot buffer names ([`SpotIotaLog`]).
 fn note_spot_iota(spot: &tempo_net::cluster::ClusterSpot) {
     if let Ok(mut log) = SPOT_IOTA.lock() {
-        log.note(std::time::Instant::now(), spot);
+        log.note(std::time::Instant::now(), now_unix().max(0) as u64, spot);
     }
+}
+
+/// What the spots say of a contact no form shows first (`tempo_core::logbook::offer::fill_iota_at_log`;
+/// [`SpotIotaLog::group_at_contact`]), under the offer's rule ([`get_iota_offer`]): no spots in an
+/// unassisted contest entry. Called under the Engine lock: the lock it takes is held only for a
+/// read, and no holder of it waits for the Engine.
+fn spot_iota_at_log(call: &str, band: &str, when_unix: u64) -> SpotIota {
+    if unassisted() {
+        return SpotIota::Silent;
+    }
+    SPOT_IOTA
+        .lock()
+        .map(|log| log.group_at_contact(call, band, when_unix))
+        .unwrap_or(SpotIota::Silent)
 }
 
 /// Forget every spot's group, with the spot buffer it sits beside.
@@ -35127,13 +35856,13 @@ fn clear_spot_iota() {
     }
 }
 
-/// What IOTA reference to OFFER the contact the log form, or the confirm-before-log popup, holds
-/// for `call` (`tempo_core::logbook::offer::iota_offer`; operator decision, 2026-10-27): the group
-/// the spot comments for that call name (the Spots board's window, never in an unassisted contest
+/// What IOTA reference to FILL the box of the log form, or the confirm-before-log popup, with for
+/// `call` (`tempo_core::logbook::offer::iota_offer`; operator ruling, 2026-11-10): the group the
+/// spot comments for that call name ([`SPOT_IOTA_WINDOW`], never in an unassisted contest
 /// entry), else the group a callbook lookup this session answered for exactly that call. Nothing
 /// when the form already holds a reference (`held`), and with the island list held, nothing it
-/// lacks. An offer writes nothing: the operator takes it, and `log_qso` / `confirm_pending_log`
-/// then write it, held back from uploads until the operator touches it.
+/// lacks. Asking writes nothing: the form puts it in its box for the operator to change or clear,
+/// and `log_qso` / `confirm_pending_log` log what the box holds.
 #[tauri::command(async)]
 fn get_iota_offer(
     state: State<'_, SharedEngine>,
@@ -35662,12 +36391,44 @@ async fn import_adif(state: State<'_, SharedEngine>, text: String) -> Result<Imp
         let (made, durability) = tempo_app::logwrite::until_written(|| {
             tempo_app::logwrite::import_adif_in_run(&engine, &text, &run)
         });
-        let made = made.map(|(added, skipped, updated, total)| ImportStats {
+        let made = made.map(|(added, skipped, updated, total, unmatched)| ImportStats {
             added,
             skipped,
             updated,
             total,
             run: Some(run.clone()),
+            unmatched,
+        });
+        (made, durability)
+    })
+    .await
+}
+
+/// The import preview's "Add N unmatched rows as new contacts", after a LoTW report's import: the
+/// report's confirmations that match no contact added as contacts, marked uploaded to LoTW so none
+/// is sent back ([`tempo_app::logwrite::add_lotw_unmatched`]). Takes the same file's text the
+/// import took. One run of its own, which its Undo undoes. How many it added, and the log's size
+/// after it.
+#[tauri::command]
+async fn import_lotw_unmatched(
+    state: State<'_, SharedEngine>,
+    text: String,
+) -> Result<ImportStats, String> {
+    let engine = Arc::clone(&state);
+    let now = now_unix();
+    // Planned with the Engine lock released and made under it, as the import is.
+    durable_command(move || {
+        let run = tempo_app::loghistory::new_run();
+        let (made, durability) = tempo_app::logwrite::until_written(|| {
+            tempo_app::logwrite::add_lotw_unmatched(&engine, &text, now, &run)
+        });
+        let made = made.map(|(added, total)| ImportStats {
+            added,
+            skipped: 0,
+            updated: 0,
+            total,
+            run: Some(run.clone()),
+            unmatched: 0,
         });
         (made, durability)
     })
@@ -35690,11 +36451,12 @@ async fn preview_import(
         let mut preview = import::preview(&source);
         // The records let go before the plan parses the text again.
         let adif = source.into_adif();
-        let (new, duplicates, updates) =
+        let (new, duplicates, updates, lotw_unmatched) =
             tempo_app::logwrite::preview_import(&engine, adif.as_deref().unwrap_or(&text))?;
         preview.new = new;
         preview.duplicates = duplicates;
         preview.updates = updates;
+        preview.lotw_unmatched = lotw_unmatched;
         Ok(preview)
     })
     .await
@@ -35734,13 +36496,14 @@ async fn import_log(
                 tempo_app::logwrite::import_adif_in_run(&engine, adif, &run)
             }
         });
-        let made = made.map(|(added, skipped, updated, total)| ImportDone {
+        let made = made.map(|(added, skipped, updated, total, unmatched)| ImportDone {
             stats: ImportStats {
                 added,
                 skipped,
                 updated,
                 total,
                 run: Some(run.clone()),
+                unmatched,
             },
             report: import::report(&source, (added, skipped, updated), new_only),
         });
@@ -36021,6 +36784,9 @@ struct ConnEvent {
     /// "ok" | "info" | "error"
     level: String,
     message: EphemeralText,
+    /// A connector's one standing line ([`conn_log_standing`]): it replaces the one before it,
+    /// and the ring's cap passes over it.
+    standing: bool,
 }
 
 /// The wire shape of a [`ConnEvent`] — the one boundary a service's own words cross.
@@ -36856,7 +37622,26 @@ fn qrz_logbook_health(logged: HealthTriple, session: HealthTriple) -> HealthTrip
 /// convention: [`EphemeralText`] implements no `Display` and no `Debug`, so a line added below
 /// that formats it does not compile.
 fn conn_log(connector: &'static str, level: &'static str, message: impl Into<String>) {
-    let message = EphemeralText::new(message.into());
+    conn_log_event(connector, level, message.into(), false);
+}
+
+/// `connector`'s one standing line, for a state that lasts and whose count changes: it replaces
+/// the one before, so the log says how things stand rather than every step of getting there.
+fn conn_log_standing(connector: &'static str, level: &'static str, message: impl Into<String>) {
+    conn_log_standing_ends(connector);
+    conn_log_event(connector, level, message.into(), true);
+}
+
+/// `connector` has no standing line any more.
+fn conn_log_standing_ends(connector: &'static str) {
+    CONN_LOG
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .retain(|ev| !(ev.standing && ev.connector == connector));
+}
+
+fn conn_log_event(connector: &'static str, level: &'static str, message: String, standing: bool) {
+    let message = EphemeralText::new(message);
     eprintln!("conn[{connector}/{level}]");
     let mut log = CONN_LOG.lock().unwrap_or_else(|e| e.into_inner());
     log.push_back(ConnEvent {
@@ -36864,9 +37649,17 @@ fn conn_log(connector: &'static str, level: &'static str, message: impl Into<Str
         connector: connector.to_string(),
         level: level.to_string(),
         message,
+        standing,
     });
     while log.len() > CONN_LOG_CAP {
-        log.pop_front();
+        match log.iter().position(|ev| !ev.standing) {
+            Some(oldest) => {
+                log.remove(oldest);
+            }
+            None => {
+                log.pop_front();
+            }
+        }
     }
 }
 
@@ -41121,16 +41914,1119 @@ mod upload_record_tests {
         )
         .pop()
         .unwrap();
+        let owing = |rec: &tempo_core::logbook::QsoRecord| tempo_app::engine::PendingUpload {
+            rec: rec.clone(),
+            origin: tempo_app::engine::UploadOrigin::Live,
+            legs: tempo_app::engine::upload_legs::ALL,
+            attempts: 0,
+            retry_after_unix: 0,
+            corrected: false,
+        };
         assert_eq!(
-            crate::dxkeeper_target_for(Some(&dxk), &mine),
+            crate::dxkeeper_target_for(Some(&dxk), &owing(&mine)),
             Some(dxk.clone())
         );
-        assert_eq!(crate::dxkeeper_target_for(None, &mine), None);
+        assert_eq!(crate::dxkeeper_target_for(None, &owing(&mine)), None);
         mine.extra.push((
             tempo_app::log_intake::VIA_FIELD.to_string(),
             "WSJT-X".to_string(),
         ));
-        assert_eq!(crate::dxkeeper_target_for(Some(&dxk), &mine), None);
+        assert_eq!(crate::dxkeeper_target_for(Some(&dxk), &owing(&mine)), None);
+    }
+
+    /// ⛔ A CONTACT GOES TO DXKEEPER ONCE. With the internet down, every retry of a failed service
+    /// came back through the push and the operator's master log took a copy each time, and a
+    /// catch-up sweep sent old contacts again. These walk one contact down each way back onto the
+    /// queue, with the engine's own queue and the worker's own Cloudlog hold, and ask the push.
+    #[test]
+    fn dxkeeper_is_sent_a_contact_once_whichever_way_it_comes_back() {
+        use tempo_app::engine::{upload_legs as legs, PendingUpload, UploadOrigin};
+        use tempo_app::settings::KeysToConfirm;
+        let dxk = ("127.0.0.1".to_string(), 52000u16, false);
+        let pushes = |p: &PendingUpload| crate::dxkeeper_target_for(Some(&dxk), p).is_some();
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN61", 0),
+        ));
+        let log = |call: &str, time: &str| {
+            let mut rec = tempo_core::logbook::parse_adif(&format!(
+                "<CALL:{}>{call}<QSO_DATE:8>20261014<TIME_ON:6>{time}<BAND:3>20m<MODE:2>CW<EOR>",
+                call.len()
+            ))
+            .pop()
+            .unwrap();
+            rec.id = None;
+            let mut eng = crate::engine_lock(&engine);
+            eng.log_qso(rec);
+            eng.take_pending_uploads()
+                .pop()
+                .expect("the funnel queued it")
+        };
+        let take = || crate::engine_lock(&engine).take_pending_uploads().pop();
+
+        // The first pass of a contact at the key pushes.
+        let first = log("K1ABC", "120000");
+        assert_eq!(first.origin, UploadOrigin::Live, "premise: logged live");
+        assert!(pushes(&first), "the first live pass goes to DXKeeper");
+
+        // Every retry, to the end of the budget, with every service still down: what the worker
+        // does with what `auto_push_one` fails, which it builds from the services' legs alone.
+        let failed = legs::ALL & !legs::DXKEEPER;
+        let mut p = first;
+        let mut sent = 0;
+        for attempts in 1..tempo_app::engine::MAX_UPLOAD_RETRIES {
+            sent += usize::from(pushes(&p));
+            crate::engine_lock(&engine).requeue_after_failure(
+                p.rec.clone(),
+                failed,
+                attempts,
+                0,
+                p.origin,
+            );
+            p = take().expect("still within the budget");
+            assert_eq!(p.attempts, attempts, "premise: a real retry");
+        }
+        sent += usize::from(pushes(&p));
+        assert_eq!(sent, 1, "one copy, however many retries");
+
+        // A Cloudlog leg held for its key comes back with no attempt spent and still Live: neither
+        // `attempts` nor the origin can tell it from a first pass.
+        crate::engine_lock(&engine).set_keys_to_confirm(KeysToConfirm {
+            cloudlog: true,
+            icom_lan: vec![],
+            ..Default::default()
+        });
+        let first = log("W1AW", "121500");
+        assert!(pushes(&first), "the pass that holds the leg back pushes");
+        crate::hold_a_waiting_cloudlog_leg(&engine, &first, 1_000_000);
+        let held = take().expect("the held leg is queued");
+        assert_eq!(
+            (held.attempts, held.origin, held.legs),
+            (0, UploadOrigin::Live, legs::CLOUDLOG),
+            "premise: it looks like a first pass in everything but what it owes"
+        );
+        assert!(!pushes(&held), "the held leg's return does not push again");
+        crate::engine_lock(&engine).set_keys_to_confirm(KeysToConfirm::default());
+
+        // A record not yet due goes back as it was. It has pushed nothing, so it still owes.
+        let waiting = log("N0CALL", "123000");
+        crate::engine_lock(&engine).requeue_upload_at(
+            waiting.rec.clone(),
+            waiting.legs,
+            waiting.attempts,
+            i64::MAX,
+            waiting.origin,
+        );
+        let waiting = take().expect("back on the queue");
+        assert!(pushes(&waiting), "a pass not made yet is still owed");
+
+        // The catch-up sweep of history owes only the services it is short of.
+        let stale = log("K9OLD", "124500");
+        crate::engine_lock(&engine).requeue_catch_up(vec![(stale.rec, legs::QRZ | legs::EQSL)]);
+        let stale = take().expect("the sweep queued it");
+        assert_eq!(stale.origin, UploadOrigin::CatchUp, "premise: the sweep");
+        assert!(!pushes(&stale), "a catch-up does not send it again");
+
+        // Another program's contact: owed on the queue as any other, and never pushed.
+        let mut theirs = log("K2DEF", "130000");
+        theirs.rec.extra.push((
+            tempo_app::log_intake::VIA_FIELD.to_string(),
+            "WSJT-X".to_string(),
+        ));
+        assert_ne!(theirs.legs & legs::DXKEEPER, 0, "premise: it owes the leg");
+        assert!(!pushes(&theirs), "it may have come from DXKeeper");
+    }
+
+    /// The worker's own trip for one record and its tick for what waits, against real sockets:
+    /// DXKeeper, and N3FJP standing in for any service, each on a loopback port listening or closed.
+    mod dxkeeper_wait {
+        use crate::{
+            dxkeeper_wait_tick, send_queued_upload, ConnectorToggles, DxkeeperWait, SharedEngine,
+        };
+        use std::io::Read;
+        use std::net::TcpListener;
+        use tempo_app::engine::{upload_legs as legs, PendingUpload};
+
+        const NOW: i64 = 1_792_324_800;
+
+        /// One test at a time: a port one lets go of is not then another's listener.
+        static PORTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        fn one_at_a_time() -> std::sync::MutexGuard<'static, ()> {
+            PORTS.lock().unwrap_or_else(|e| e.into_inner())
+        }
+
+        fn free_port() -> u16 {
+            let l = TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        }
+
+        fn listen(port: u16) -> TcpListener {
+            let l = TcpListener::bind(("127.0.0.1", port)).unwrap();
+            l.set_nonblocking(true).unwrap();
+            l
+        }
+
+        /// What has come in, one entry a connection: the directive, empty for a connection check.
+        /// It waits a moment, as a connect can return before the listener has it queued.
+        fn arrived(l: &TcpListener) -> Vec<String> {
+            let until = std::time::Instant::now() + std::time::Duration::from_millis(100);
+            let mut got = Vec::new();
+            while std::time::Instant::now() < until {
+                if let Ok((conn, _)) = l.accept() {
+                    conn.set_nonblocking(false).unwrap();
+                    let mut text = String::new();
+                    conn.take(1 << 16).read_to_string(&mut text).unwrap();
+                    got.push(text);
+                } else {
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+            }
+            got
+        }
+
+        /// The calls in what `arrived` read, connection checks left out.
+        fn calls(got: &[String]) -> Vec<String> {
+            got.iter()
+                .filter(|d| !d.is_empty())
+                .map(|d| {
+                    let start = d.to_ascii_uppercase().find("<CALL:").expect("a contact") + 6;
+                    let tail = &d[start..];
+                    let open = tail.find('>').unwrap() + 1;
+                    let len: usize = tail[..open - 1].parse().unwrap();
+                    tail[open..open + len].to_string()
+                })
+                .collect()
+        }
+
+        fn engine(n3fjp_port: u16) -> SharedEngine {
+            let mut e = tempo_app::engine::Engine::new("W9XYZ", "EN61", 0);
+            let mut s = e.settings().clone();
+            s.n3fjp_host = "127.0.0.1".into();
+            s.n3fjp_port = n3fjp_port;
+            e.apply_settings(s);
+            std::sync::Arc::new(std::sync::Mutex::new(e))
+        }
+
+        fn log(engine: &SharedEngine, call: &str) -> PendingUpload {
+            let rec = tempo_core::logbook::parse_adif(&format!(
+                "<CALL:{}>{call}<QSO_DATE:8>20261014<TIME_ON:6>120000<BAND:3>20m<MODE:2>CW<EOR>",
+                call.len()
+            ))
+            .pop()
+            .unwrap();
+            let mut eng = crate::engine_lock(engine);
+            eng.log_qso(rec);
+            eng.take_pending_uploads().pop().expect("queued")
+        }
+
+        fn take(engine: &SharedEngine) -> Vec<PendingUpload> {
+            crate::engine_lock(engine).take_pending_uploads()
+        }
+
+        /// As every window's delete makes it, with the Engine lock released.
+        fn delete(engine: &SharedEngine, p: &PendingUpload) {
+            delete_rec(engine, &p.rec);
+        }
+
+        fn delete_rec(engine: &SharedEngine, rec: &tempo_core::logbook::QsoRecord) {
+            let id = rec.id.expect("the queue's copy names its row");
+            let (made, _) = tempo_app::logwrite::change_ops(
+                engine,
+                id,
+                None,
+                &[tempo_core::logbook::LogOp::Delete(id)],
+                "test",
+            );
+            made.expect("read").expect("made");
+        }
+
+        /// What is on the queue, left there.
+        fn take_back(engine: &SharedEngine) -> Vec<PendingUpload> {
+            let mut e = crate::engine_lock(engine);
+            let q = e.take_pending_uploads();
+            for p in &q {
+                e.requeue_upload_at(
+                    p.rec.clone(),
+                    p.legs,
+                    p.attempts,
+                    p.retry_after_unix,
+                    p.origin,
+                );
+            }
+            q
+        }
+
+        fn waiting(engine: &SharedEngine) -> usize {
+            crate::engine_lock(engine).dxkeeper_waiting_count()
+        }
+
+        fn target(dxk_port: u16) -> (String, u16, bool) {
+            ("127.0.0.1".to_string(), dxk_port - 1, false)
+        }
+
+        fn pass(
+            engine: &SharedEngine,
+            p: PendingUpload,
+            dxk_port: u16,
+            n3fjp_on: bool,
+            wait: &mut DxkeeperWait,
+        ) {
+            let legs = p.legs;
+            send_queued_upload(
+                engine,
+                p,
+                legs,
+                Some(&target(dxk_port)),
+                ConnectorToggles {
+                    qrz_on: false,
+                    clublog_on: false,
+                    eqsl_on: false,
+                    hrdlog_on: false,
+                    wrl_on: false,
+                    n3fjp_on,
+                    cloudlog_on: false,
+                },
+                wait,
+                NOW,
+            );
+        }
+
+        fn tick(engine: &SharedEngine, dxk_port: u16, wait: &mut DxkeeperWait, now: i64) {
+            dxkeeper_wait_tick(engine, Some(&target(dxk_port)), wait, now);
+        }
+
+        /// Contacts logged with `port` closed, left waiting.
+        fn logged_closed(engine: &SharedEngine, port: u16, n: usize, wait: &mut DxkeeperWait) {
+            for i in 0..n {
+                let p = log(engine, &format!("K{i}WT"));
+                pass(engine, p, port, false, wait);
+            }
+            assert_eq!(waiting(engine), n, "premise: all waiting");
+            assert!(take(engine).is_empty(), "and none on the service queue");
+        }
+
+        fn names(from: usize, to: usize) -> Vec<String> {
+            (from..to).map(|i| format!("K{i}WT")).collect()
+        }
+
+        /// More than the old cap of ten, with DXKeeper closed: all of them wait, and when it comes
+        /// back each arrives once, oldest first, one per tick, and nothing is left.
+        #[test]
+        fn more_than_ten_waiting_are_all_delivered_once_oldest_first_on_its_return() {
+            let _one = one_at_a_time();
+            let engine = engine(free_port());
+            let port = free_port();
+            let mut wait = DxkeeperWait::default();
+            logged_closed(&engine, port, 25, &mut wait);
+
+            let dxkeeper = listen(port);
+            let mut now = NOW + crate::DXKEEPER_CHECK_SECS;
+            tick(&engine, port, &mut wait, now);
+            assert!(wait.connected, "the check found it");
+            let check = arrived(&dxkeeper);
+            assert_eq!(check, [String::new()], "a check sends no contact");
+            assert_eq!(waiting(&engine), 25);
+
+            let mut got = Vec::new();
+            for sent in 1..=25 {
+                now += 2;
+                tick(&engine, port, &mut wait, now);
+                let one = arrived(&dxkeeper);
+                assert_eq!(one.len(), 1, "one per tick");
+                got.extend(one);
+                assert_eq!(waiting(&engine), 25 - sent);
+            }
+            assert_eq!(calls(&got), names(0, 25));
+            tick(&engine, port, &mut wait, now + 2);
+            assert_eq!(arrived(&dxkeeper).len(), 0, "and nothing after");
+            assert_eq!(wait.said, 0, "the wait is over");
+        }
+
+        /// The connection drops part-way. What went is not repeated, what did not still waits, and
+        /// both are right when it comes back.
+        #[test]
+        fn a_drop_part_way_sends_the_rest_and_repeats_nothing() {
+            let _one = one_at_a_time();
+            let engine = engine(free_port());
+            let port = free_port();
+            let mut wait = DxkeeperWait::default();
+            logged_closed(&engine, port, 12, &mut wait);
+
+            let dxkeeper = listen(port);
+            let mut now = NOW + 60;
+            tick(&engine, port, &mut wait, now);
+            let mut got = arrived(&dxkeeper);
+            for _ in 0..5 {
+                now += 2;
+                tick(&engine, port, &mut wait, now);
+            }
+            got.extend(arrived(&dxkeeper));
+            assert_eq!(calls(&got), names(0, 5));
+            drop(dxkeeper);
+
+            now += 2;
+            tick(&engine, port, &mut wait, now);
+            assert!(!wait.connected, "the send found it gone");
+            assert_eq!(waiting(&engine), 7, "nothing unsent was lost");
+
+            let dxkeeper = listen(port);
+            now += crate::DXKEEPER_CHECK_SECS;
+            let mut got = Vec::new();
+            for _ in 0..9 {
+                tick(&engine, port, &mut wait, now);
+                got.extend(arrived(&dxkeeper));
+                now += 2;
+            }
+            assert_eq!(calls(&got), names(5, 12), "the rest, and only the rest");
+            assert_eq!(waiting(&engine), 0);
+        }
+
+        /// A closed DXKeeper is looked for on the ladder and then each minute, and between those
+        /// times nothing connects at all. Its failed checks add no line of their own.
+        #[test]
+        fn a_closed_dxkeeper_is_checked_at_the_slow_interval() {
+            let _one = one_at_a_time();
+            let engine = engine(free_port());
+            let port = free_port();
+            let mut wait = DxkeeperWait::default();
+            logged_closed(&engine, port, 1, &mut wait);
+            assert_eq!(
+                wait.next_check_unix,
+                NOW + 4,
+                "the failed send's first step"
+            );
+            let mut now = NOW;
+            for step in [8, 16, 32, 60, 60, 60] {
+                now = wait.next_check_unix;
+                tick(&engine, port, &mut wait, now);
+                assert_eq!(wait.next_check_unix, now + step);
+            }
+            let dxkeeper = listen(port);
+            tick(&engine, port, &mut wait, now + 59);
+            assert_eq!(arrived(&dxkeeper).len(), 0, "not due");
+            tick(&engine, port, &mut wait, now + 60);
+            assert_eq!(arrived(&dxkeeper).len(), 1, "due");
+            assert_eq!(waiting(&engine), 1, "and a check sends nothing");
+        }
+
+        /// However many contacts and failed checks, the Connections log holds one line for them.
+        #[test]
+        fn the_connections_log_holds_one_line_for_what_waits() {
+            let _one = one_at_a_time();
+            let standing = || {
+                crate::CONN_LOG
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|ev| ev.standing && ev.connector == "DXKeeper")
+                    .count()
+            };
+            let engine = engine(free_port());
+            let port = free_port();
+            let mut wait = DxkeeperWait::default();
+            logged_closed(&engine, port, 3, &mut wait);
+            for now in [NOW + 10, NOW + 100, NOW + 200] {
+                tick(&engine, port, &mut wait, now);
+                assert_eq!(standing(), 1);
+            }
+            let p = log(&engine, "K9WT");
+            pass(&engine, p, port, false, &mut wait);
+            tick(&engine, port, &mut wait, NOW + 300);
+            assert_eq!((standing(), wait.said), (1, 4));
+
+            let _dxkeeper = listen(port);
+            let mut now = NOW + 400;
+            for _ in 0..6 {
+                tick(&engine, port, &mut wait, now);
+                now += 2;
+            }
+            assert_eq!(waiting(&engine), 0);
+            assert_eq!(standing(), 0, "the delivered line replaces it");
+
+            assert!(crate::dxkeeper_waiting_line(4, 0).contains("4 waiting for DXKeeper"));
+            let lost = crate::dxkeeper_waiting_line(4, 7);
+            assert!(
+                lost.contains("7 sent, then the connection was lost"),
+                "{lost}"
+            );
+        }
+
+        /// A contact logged while others wait joins them untried: no connection per contact, and
+        /// it does not overtake them when DXKeeper is back.
+        #[test]
+        fn a_new_contact_joins_the_wait_behind_the_others() {
+            let _one = one_at_a_time();
+            let engine = engine(free_port());
+            let port = free_port();
+            let mut wait = DxkeeperWait::default();
+            logged_closed(&engine, port, 2, &mut wait);
+            let dxkeeper = listen(port);
+            let p = log(&engine, "K2WT");
+            pass(&engine, p, port, false, &mut wait);
+            assert_eq!(arrived(&dxkeeper).len(), 0, "untried");
+            assert_eq!(waiting(&engine), 3);
+            let mut now = NOW + 60;
+            let mut got = Vec::new();
+            for _ in 0..4 {
+                tick(&engine, port, &mut wait, now);
+                got.extend(arrived(&dxkeeper));
+                now += 2;
+            }
+            assert_eq!(calls(&got), names(0, 3));
+        }
+
+        /// A contact deleted while it waits: the count follows on the next tick and it never goes.
+        /// Sent before the delete, it has gone: nothing asks DXKeeper to take it out.
+        #[test]
+        fn a_contact_deleted_while_it_waits_never_goes() {
+            let _one = one_at_a_time();
+            let engine = engine(free_port());
+            let port = free_port();
+            let mut wait = DxkeeperWait::default();
+            logged_closed(&engine, port, 3, &mut wait);
+            tick(&engine, port, &mut wait, NOW);
+            assert_eq!(wait.said, 3);
+
+            // As every window's delete makes it, with the Engine lock released.
+            let delete_oldest = || {
+                let oldest = crate::engine_lock(&engine)
+                    .dxkeeper_oldest_waiting()
+                    .unwrap();
+                let id = oldest.id.unwrap();
+                let (made, _) = tempo_app::logwrite::change_ops(
+                    &engine,
+                    id,
+                    None,
+                    &[tempo_core::logbook::LogOp::Delete(id)],
+                    "test",
+                );
+                made.expect("read").expect("made");
+                oldest
+            };
+            assert_eq!(delete_oldest().call, "K0WT", "premise");
+            tick(&engine, port, &mut wait, NOW);
+            assert_eq!(wait.said, 2, "the line says so");
+
+            let dxkeeper = listen(port);
+            let mut now = NOW + 60;
+            let mut got = Vec::new();
+            for _ in 0..4 {
+                tick(&engine, port, &mut wait, now);
+                got.extend(arrived(&dxkeeper));
+                now += 2;
+            }
+            assert_eq!(
+                calls(&got),
+                names(1, 3),
+                "the other two, and not the deleted one"
+            );
+
+            // The last one waiting, deleted: the wait ends, with no line that says it was delivered.
+            let p = log(&engine, "K9WT");
+            drop(dxkeeper);
+            pass(&engine, p, port, false, &mut wait);
+            tick(&engine, port, &mut wait, now + 2);
+            assert_eq!(wait.said, 1);
+            delete_oldest();
+            tick(&engine, port, &mut wait, now + 4);
+            assert_eq!((wait.said, wait.delivered), (0, 0));
+        }
+
+        /// ⛔ THE WORKER'S TRIP. It drains the whole queue and works through it off the lock, for as
+        /// long as the services take. A contact deleted once it holds it goes nowhere: not to DXKeeper
+        /// and not to a service, and it does not come back to the queue or the wait.
+        #[test]
+        fn a_contact_deleted_in_the_workers_hand_goes_nowhere() {
+            let _one = one_at_a_time();
+            let n3fjp_port = free_port();
+            let n3fjp = listen(n3fjp_port);
+            let engine = engine(n3fjp_port);
+            let port = free_port();
+            let dxkeeper = listen(port);
+            let mut wait = DxkeeperWait::default();
+            let gone = log(&engine, "K1GON");
+            let kept = log(&engine, "K2KPT");
+            delete(&engine, &gone);
+
+            pass(&engine, gone, port, true, &mut wait);
+            assert_eq!(arrived(&dxkeeper).len(), 0, "not DXKeeper");
+            assert_eq!(arrived(&n3fjp).len(), 0, "and not a service");
+            assert!(take(&engine).is_empty());
+            assert_eq!(waiting(&engine), 0);
+
+            pass(&engine, kept, port, true, &mut wait);
+            assert_eq!(calls(&arrived(&dxkeeper)), ["K2KPT"], "the neighbour goes");
+            assert_eq!(arrived(&n3fjp).len(), 1);
+        }
+
+        /// A contact deleted during its own trip: the legs still to come do not go. The one under way
+        /// when the delete landed has gone or has not, and this is the check before each next one.
+        #[test]
+        fn a_contact_deleted_part_way_through_its_legs_sends_no_more() {
+            let _one = one_at_a_time();
+            let n3fjp_port = free_port();
+            let n3fjp = listen(n3fjp_port);
+            let engine = engine(n3fjp_port);
+            let gone = log(&engine, "K1LEG");
+            let kept = log(&engine, "K2LEG");
+            let on = || ConnectorToggles {
+                qrz_on: false,
+                clublog_on: false,
+                eqsl_on: false,
+                hrdlog_on: false,
+                wrl_on: false,
+                n3fjp_on: true,
+                cloudlog_on: false,
+            };
+            delete(&engine, &gone);
+            let failed = crate::auto_push_one(
+                &engine,
+                crate::LoggedQso::from(gone.rec.clone()),
+                &gone.rec,
+                on(),
+                legs::N3FJP,
+            );
+            assert_eq!(failed, 0, "nothing tried, so nothing to retry");
+            assert_eq!(arrived(&n3fjp).len(), 0);
+
+            let failed = crate::auto_push_one(
+                &engine,
+                crate::LoggedQso::from(kept.rec.clone()),
+                &kept.rec,
+                on(),
+                legs::N3FJP,
+            );
+            assert_eq!(failed, 0);
+            assert_eq!(
+                arrived(&n3fjp).len(),
+                1,
+                "CONTROL: the neighbour's leg goes"
+            );
+        }
+
+        /// Run `during` as each leg starts, until the test clears it.
+        fn on_each_leg(during: impl FnMut(u8) + 'static) {
+            crate::LEG_UNDER_WAY.with(|hook| *hook.borrow_mut() = Some(Box::new(during)));
+        }
+
+        /// ⛔ A DELETE LANDING DURING A LEG. The leg has passed its check, so it goes, and arrives.
+        /// The leg after it never starts. CONTROL: with no delete, both start.
+        #[test]
+        fn a_delete_during_a_leg_lets_that_leg_go_and_stops_the_next() {
+            let _one = one_at_a_time();
+            let n3fjp_port = free_port();
+            let n3fjp = listen(n3fjp_port);
+            let engine = engine(n3fjp_port);
+            let gone = log(&engine, "K1FLT");
+            let control = log(&engine, "K2FLT");
+            let on = || ConnectorToggles {
+                qrz_on: false,
+                clublog_on: false,
+                eqsl_on: false,
+                hrdlog_on: false,
+                wrl_on: false,
+                n3fjp_on: true,
+                cloudlog_on: true,
+            };
+            let both = legs::N3FJP | legs::CLOUDLOG;
+            let started = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+
+            let seen = started.clone();
+            on_each_leg(move |leg| seen.borrow_mut().push(leg));
+            crate::auto_push_one(
+                &engine,
+                crate::LoggedQso::from(control.rec.clone()),
+                &control.rec,
+                on(),
+                both,
+            );
+            assert_eq!(*started.borrow(), [legs::N3FJP, legs::CLOUDLOG], "CONTROL");
+            assert_eq!(arrived(&n3fjp).len(), 1, "CONTROL");
+            started.borrow_mut().clear();
+
+            let seen = started.clone();
+            let (during, rec) = (engine.clone(), gone.rec.clone());
+            on_each_leg(move |leg| {
+                seen.borrow_mut().push(leg);
+                delete_rec(&during, &rec);
+            });
+            crate::auto_push_one(
+                &engine,
+                crate::LoggedQso::from(gone.rec.clone()),
+                &gone.rec,
+                on(),
+                both,
+            );
+            crate::LEG_UNDER_WAY.with(|hook| *hook.borrow_mut() = None);
+            assert_eq!(arrived(&n3fjp).len(), 1, "the leg under way went");
+            assert_eq!(
+                *started.borrow(),
+                [legs::N3FJP],
+                "and the next never started"
+            );
+        }
+
+        /// A delete landing during a leg that then fails: no retry comes of it, through the worker's
+        /// own trip. CONTROL: with no delete, the same failure goes back on the queue.
+        #[test]
+        fn a_delete_during_a_leg_that_fails_leaves_no_retry() {
+            let _one = one_at_a_time();
+            let engine = engine(free_port());
+            let port = free_port();
+            let dxkeeper = listen(port);
+            let mut wait = DxkeeperWait::default();
+
+            let control = log(&engine, "K1FLD");
+            pass(&engine, control, port, true, &mut wait);
+            let back = take(&engine);
+            assert_eq!(back.len(), 1, "CONTROL: N3FJP is closed, and it retries");
+            assert_eq!(back[0].legs, legs::N3FJP);
+
+            let gone = log(&engine, "K2FLD");
+            let (during, rec) = (engine.clone(), gone.rec.clone());
+            on_each_leg(move |_| delete_rec(&during, &rec));
+            pass(&engine, gone, port, true, &mut wait);
+            crate::LEG_UNDER_WAY.with(|hook| *hook.borrow_mut() = None);
+            assert!(take(&engine).is_empty(), "no retry");
+            assert_eq!(waiting(&engine), 0);
+            assert_eq!(
+                calls(&arrived(&dxkeeper)),
+                ["K1FLD", "K2FLD"],
+                "DXKeeper's went first"
+            );
+        }
+
+        /// A contact whose DXKeeper leg has gone keeps that fact when a service's retry is cancelled.
+        /// A failed service leg of a contact deleted before its retry does not retry.
+        #[test]
+        fn a_retry_waiting_on_the_queue_is_cancelled_by_a_delete() {
+            let _one = one_at_a_time();
+            let engine = engine(free_port());
+            let port = free_port();
+            let dxkeeper = listen(port);
+            let mut wait = DxkeeperWait::default();
+            let p = log(&engine, "K1RTY");
+            let id = p.rec.clone();
+            pass(&engine, p, port, true, &mut wait);
+            assert_eq!(calls(&arrived(&dxkeeper)), ["K1RTY"], "premise: sent");
+            assert_eq!(take_back(&engine).len(), 1, "premise: N3FJP retries");
+            delete_rec(&engine, &id);
+            assert!(take(&engine).is_empty(), "no retry");
+            assert_eq!(
+                arrived(&dxkeeper).len(),
+                0,
+                "and DXKeeper keeps its one copy"
+            );
+        }
+
+        /// ⛔ THE WORKER'S TRIP. It drains the whole queue and works through it off the lock. A contact
+        /// deleted once it holds it does not go to DXKeeper, and does not join the wait, and the
+        /// neighbour in the same batch does go.
+        #[test]
+        fn a_contact_deleted_in_the_workers_hand_does_not_reach_dxkeeper() {
+            let _one = one_at_a_time();
+            let engine = engine(free_port());
+            let port = free_port();
+            let mut wait = DxkeeperWait::default();
+            let gone = log(&engine, "K1GON");
+            let kept = log(&engine, "K2KPT");
+            let id = gone.rec.id.unwrap();
+            let (made, _) = tempo_app::logwrite::change_ops(
+                &engine,
+                id,
+                None,
+                &[tempo_core::logbook::LogOp::Delete(id)],
+                "test",
+            );
+            made.expect("read").expect("made");
+
+            // DXKeeper closed: it does not wait, and the worker's next tick has nothing for it.
+            pass(&engine, gone.clone(), port, false, &mut wait);
+            assert_eq!(waiting(&engine), 0);
+            // DXKeeper open: it is not sent.
+            let dxkeeper = listen(port);
+            pass(&engine, gone, port, false, &mut wait);
+            assert_eq!(arrived(&dxkeeper).len(), 0);
+            pass(&engine, kept, port, false, &mut wait);
+            assert_eq!(calls(&arrived(&dxkeeper)), ["K2KPT"]);
+        }
+
+        /// ⛔ HRD LOGBOOK CLOSED WITH SEVERAL CONTACTS QUEUED. Each tick's drain takes the whole queue
+        /// and stops at the first failure. Every contact still reaches HRD once it opens, in order,
+        /// none lost and none twice.
+        #[test]
+        fn hrd_closed_with_several_queued_loses_none_and_sends_none_twice() {
+            let _one = one_at_a_time();
+            let port = {
+                let probe = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+                probe.local_addr().unwrap().port()
+            };
+            let engine = engine(free_port());
+            {
+                let mut e = crate::engine_lock(&engine);
+                let mut s = e.settings().clone();
+                s.hrd_logging = true;
+                s.hrd_udp_addr = format!("127.0.0.1:{port}");
+                e.apply_settings(s);
+            }
+            for call in ["K1HRD", "K2HRD", "K3HRD"] {
+                log(&engine, call);
+            }
+            // Closed: two ticks, so an order that turned over would show.
+            for _ in 0..2 {
+                crate::drain_hrd(&engine);
+            }
+            assert_eq!(
+                crate::engine_lock(&engine).snapshot().radio.hrd_queued,
+                3,
+                "all three still queued"
+            );
+
+            let hrd = std::net::UdpSocket::bind(("127.0.0.1", port)).unwrap();
+            hrd.set_read_timeout(Some(std::time::Duration::from_millis(300)))
+                .unwrap();
+            for _ in 0..2 {
+                crate::drain_hrd(&engine);
+            }
+            let mut got = Vec::new();
+            let mut buf = [0u8; 4096];
+            while let Ok(n) = hrd.recv(&mut buf) {
+                let text = String::from_utf8_lossy(&buf[..n]).to_string();
+                let call = ["K1HRD", "K2HRD", "K3HRD"]
+                    .into_iter()
+                    .find(|c| text.contains(c))
+                    .expect("a contact");
+                got.push(call);
+            }
+            assert_eq!(got, ["K1HRD", "K2HRD", "K3HRD"], "each once, in order");
+            assert_eq!(crate::engine_lock(&engine).snapshot().radio.hrd_queued, 0);
+        }
+
+        /// ⛔ BOTH AT ONCE: a purge, then HRD Logbook closed, then open. What the purge took never
+        /// goes; every contact logged after it survives the failed sends and arrives once, in order.
+        #[test]
+        fn after_a_purge_and_a_closed_hrd_every_surviving_contact_arrives_once_in_order() {
+            let _one = one_at_a_time();
+            let port = {
+                let probe = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+                probe.local_addr().unwrap().port()
+            };
+            let engine = engine(free_port());
+            {
+                let mut e = crate::engine_lock(&engine);
+                let mut s = e.settings().clone();
+                s.hrd_logging = true;
+                s.hrd_udp_addr = format!("127.0.0.1:{port}");
+                e.apply_settings(s);
+            }
+            // The worker's trip has begun with this one; then the log is cleared.
+            log(&engine, "K4HRD");
+            crate::engine_lock(&engine).clear_logbook();
+            for call in ["K1HRD", "K2HRD", "K3HRD"] {
+                let rec = tempo_core::logbook::parse_adif(&format!(
+                    "<CALL:5>{call}<QSO_DATE:8>20261014<TIME_ON:6>121000<BAND:3>20m<MODE:2>CW<EOR>"
+                ))
+                .pop()
+                .unwrap();
+                crate::engine_lock(&engine).log_qso(rec);
+            }
+            // HRD closed, in the same trip and the next.
+            for _ in 0..2 {
+                crate::drain_hrd(&engine);
+            }
+            assert_eq!(
+                crate::engine_lock(&engine).snapshot().radio.hrd_queued,
+                3,
+                "the three logged after the purge are all still queued"
+            );
+
+            let hrd = std::net::UdpSocket::bind(("127.0.0.1", port)).unwrap();
+            hrd.set_read_timeout(Some(std::time::Duration::from_millis(300)))
+                .unwrap();
+            for _ in 0..2 {
+                crate::drain_hrd(&engine);
+            }
+            let mut got = Vec::new();
+            let mut buf = [0u8; 4096];
+            while let Ok(n) = hrd.recv(&mut buf) {
+                let text = String::from_utf8_lossy(&buf[..n]).to_string();
+                let call = ["K4HRD", "K1HRD", "K2HRD", "K3HRD"]
+                    .into_iter()
+                    .find(|c| text.contains(c))
+                    .expect("a contact");
+                got.push(call);
+            }
+            assert_eq!(
+                got,
+                ["K1HRD", "K2HRD", "K3HRD"],
+                "each once, in order, and not the purged one"
+            );
+            assert_eq!(crate::engine_lock(&engine).snapshot().radio.hrd_queued, 0);
+        }
+
+        /// ⛔ A PURGE DURING THE WORKER'S TRIP. A contact logged after it, within the same trip, still
+        /// reaches HRD Logbook on that trip's drain; one in HRD's queue at the purge never does.
+        #[test]
+        fn a_contact_logged_after_a_purge_in_the_same_trip_reaches_hrd() {
+            let _one = one_at_a_time();
+            let hrd = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+            hrd.set_read_timeout(Some(std::time::Duration::from_millis(300)))
+                .unwrap();
+            let engine = engine(free_port());
+            {
+                let mut e = crate::engine_lock(&engine);
+                let mut s = e.settings().clone();
+                s.hrd_logging = true;
+                s.hrd_udp_addr = hrd.local_addr().unwrap().to_string();
+                e.apply_settings(s);
+            }
+            let before = log(&engine, "K1PRG");
+            assert_eq!(before.rec.call, "K1PRG", "premise: the trip has begun");
+            crate::engine_lock(&engine).clear_logbook();
+            // Logged, and left on the upload queue: the worker drains that at its next tick.
+            let after = tempo_core::logbook::parse_adif(
+                "<CALL:5>K2AFT<QSO_DATE:8>20261014<TIME_ON:6>120500<BAND:3>20m<MODE:2>CW<EOR>",
+            )
+            .pop()
+            .unwrap();
+            crate::engine_lock(&engine).log_qso(after);
+            crate::drain_hrd(&engine);
+            let mut got = Vec::new();
+            let mut buf = [0u8; 4096];
+            while let Ok(n) = hrd.recv(&mut buf) {
+                got.push(String::from_utf8_lossy(&buf[..n]).to_string());
+            }
+            assert_eq!(got.len(), 1, "one datagram: {got:?}");
+            assert!(got[0].contains("K2AFT"), "{got:?}");
+        }
+
+        /// A send that connected is never repeated: not by a service's retries, and not by anything
+        /// that waits after it.
+        #[test]
+        fn a_service_retry_does_not_send_to_dxkeeper_again() {
+            let _one = one_at_a_time();
+            let engine = engine(free_port());
+            let port = free_port();
+            let dxkeeper = listen(port);
+            let mut wait = DxkeeperWait::default();
+            let mut p = log(&engine, "K1SVC");
+            for attempts in 1..=8 {
+                pass(&engine, p, port, true, &mut wait);
+                tick(&engine, port, &mut wait, NOW + i64::from(attempts));
+                p = take(&engine).pop().expect("N3FJP is closed: it comes back");
+                assert_eq!(p.legs, legs::N3FJP, "for the service alone");
+                assert_eq!(p.attempts, attempts);
+            }
+            assert_eq!(calls(&arrived(&dxkeeper)), ["K1SVC"], "one copy");
+            assert_eq!(waiting(&engine), 0);
+        }
+
+        /// DXKeeper's wait sends nothing to a service that already has the contact, and leaves a
+        /// failing service's retries on their own ladder.
+        #[test]
+        fn dxkeepers_wait_does_not_touch_a_service() {
+            let _one = one_at_a_time();
+            let n3fjp_port = free_port();
+            let n3fjp = listen(n3fjp_port);
+            let engine = engine(n3fjp_port);
+            let port = free_port();
+            let mut wait = DxkeeperWait::default();
+            let p = log(&engine, "K1RVS");
+            pass(&engine, p, port, true, &mut wait);
+            assert_eq!(arrived(&n3fjp).len(), 1, "premise: the service took it");
+            assert!(take(&engine).is_empty(), "the service owes nothing");
+            assert_eq!(waiting(&engine), 1);
+
+            let dxkeeper = listen(port);
+            let mut now = NOW + 60;
+            for _ in 0..3 {
+                tick(&engine, port, &mut wait, now);
+                now += 2;
+            }
+            assert_eq!(calls(&arrived(&dxkeeper)), ["K1RVS"]);
+            assert_eq!(arrived(&n3fjp).len(), 0, "and no second copy");
+            drop(dxkeeper);
+            drop(n3fjp);
+
+            // The other way about: both closed. The service alone goes back on the queue.
+            let p = log(&engine, "K2RVS");
+            pass(&engine, p, port, true, &mut wait);
+            let q = take(&engine);
+            assert_eq!(q.len(), 1);
+            assert_eq!((q[0].legs, q[0].attempts), (legs::N3FJP, 1));
+            assert_eq!(waiting(&engine), 1, "and DXKeeper's half waits");
+        }
+
+        /// Another program's contact never goes, on the first pass or through the wait.
+        #[test]
+        fn another_programs_contact_never_reaches_dxkeeper() {
+            let _one = one_at_a_time();
+            let engine = engine(free_port());
+            let port = free_port();
+            let dxkeeper = listen(port);
+            let mut p = log(&engine, "K1OTH");
+            p.rec.extra.push((
+                tempo_app::log_intake::VIA_FIELD.to_string(),
+                "WSJT-X".to_string(),
+            ));
+            let mut wait = DxkeeperWait::default();
+            pass(&engine, p, port, false, &mut wait);
+            tick(&engine, port, &mut wait, NOW);
+            assert_eq!(arrived(&dxkeeper).len(), 0);
+            assert!(take(&engine).is_empty());
+            assert_eq!(waiting(&engine), 0);
+        }
+
+        /// A write that failed after connecting may have arrived. It is not repeated, in either
+        /// place it can happen, and the connection is taken as lost.
+        #[test]
+        fn a_send_that_may_have_arrived_is_not_retried() {
+            use tempo_net::dxkeeper::PushError;
+            let _one = one_at_a_time();
+            let engine = engine(free_port());
+            let port = free_port();
+            let mut wait = DxkeeperWait::default();
+            logged_closed(&engine, port, 2, &mut wait);
+            let rec = crate::engine_lock(&engine)
+                .dxkeeper_oldest_waiting()
+                .unwrap();
+            wait.connected = true;
+            crate::dxkeeper_settle_waiting(
+                &engine,
+                &mut wait,
+                &rec,
+                Err(PushError::Unsure("DXKeeper send: reset".into())),
+                NOW,
+            );
+            assert_eq!(waiting(&engine), 1, "not waiting any more");
+            assert_ne!(
+                crate::engine_lock(&engine)
+                    .dxkeeper_oldest_waiting()
+                    .unwrap()
+                    .call,
+                rec.call
+            );
+            assert!(!wait.connected);
+            let line = crate::dxkeeper_unsure_line(&rec, "DXKeeper send: reset");
+            assert!(line.contains("K0WT (20m CW"), "{line}");
+            assert!(line.contains("not sent again"), "{line}");
+        }
+
+        /// EXIT. What waits is on disk: the next launch has every contact still waiting, none on the
+        /// service queue, and sends each once. What was sent before the exit does not go again.
+        #[test]
+        fn what_waits_survives_an_exit_and_what_went_does_not_go_again() {
+            let _one = one_at_a_time();
+            let dir = std::env::temp_dir().join(format!(
+                "nexus-dxk-wait-{}-{}",
+                std::process::id(),
+                free_port()
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("contest_held_uploads.json");
+            let port = free_port();
+            let launch = |path: &std::path::Path| {
+                let engine = engine(free_port());
+                {
+                    let mut e = crate::engine_lock(&engine);
+                    e.set_contest_held_uploads_path(path.to_path_buf());
+                    e.restore_contest_held_uploads(NOW);
+                }
+                engine
+            };
+
+            let engine = launch(&path);
+            let mut wait = DxkeeperWait::default();
+            logged_closed(&engine, port, 12, &mut wait);
+            // Three go, and then Nexus is closed.
+            let dxkeeper = listen(port);
+            let mut now = NOW + 60;
+            let mut got = Vec::new();
+            for _ in 0..4 {
+                tick(&engine, port, &mut wait, now);
+                now += 2;
+            }
+            got.extend(arrived(&dxkeeper));
+            assert_eq!(calls(&got), names(0, 3));
+            drop(engine);
+
+            let engine = launch(&path);
+            assert!(take(&engine).is_empty(), "none on the paced service queue");
+            assert_eq!(waiting(&engine), 9, "the rest wait");
+            let mut wait = DxkeeperWait::default();
+            let mut got = Vec::new();
+            for _ in 0..11 {
+                tick(&engine, port, &mut wait, now);
+                got.extend(arrived(&dxkeeper));
+                now += 2;
+            }
+            assert_eq!(calls(&got), names(3, 12), "each once");
+            assert!(!path.exists(), "and nothing is left owing");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+
+        /// A contact contest mode held, across a restart, as one that owes the services too. While
+        /// it waits, the leg stays in its file; once sent, the file no longer owes it.
+        #[test]
+        fn a_held_contact_waits_too_and_goes_once() {
+            let _one = one_at_a_time();
+            let dir = std::env::temp_dir().join(format!(
+                "nexus-dxk-held-{}-{}",
+                std::process::id(),
+                free_port()
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let path = dir.join("contest_held_uploads.json");
+            let contest = |on: bool, e: &mut tempo_app::engine::Engine| {
+                let mut s = e.settings().clone();
+                s.fd_active = on;
+                s.fd_class = "3A".into();
+                s.fd_section = "WI".into();
+                e.apply_settings(s);
+            };
+            let port = free_port();
+            let engine = self::engine(free_port());
+            {
+                let mut e = crate::engine_lock(&engine);
+                e.set_contest_held_uploads_path(path.clone());
+                contest(true, &mut e);
+                e.set_mode("fieldday-sp").unwrap();
+                e.log_qso(
+                    tempo_core::logbook::parse_adif(
+                        "<CALL:5>K1HLD<QSO_DATE:8>20261014<TIME_ON:6>120000<BAND:3>20m\
+                         <MODE:2>CW<EOR>",
+                    )
+                    .pop()
+                    .unwrap(),
+                );
+                assert!(e.take_pending_uploads().is_empty(), "premise: held");
+                contest(false, &mut e);
+            }
+            let p = take(&engine).pop().expect("released");
+            let mut wait = DxkeeperWait::default();
+            pass(&engine, p, port, false, &mut wait);
+            assert_eq!(waiting(&engine), 1);
+            drop(engine);
+
+            let engine = self::engine(free_port());
+            {
+                let mut e = crate::engine_lock(&engine);
+                e.set_contest_held_uploads_path(path.clone());
+                e.restore_contest_held_uploads(NOW);
+            }
+            assert_eq!(waiting(&engine), 1, "still owed");
+            let dxkeeper = listen(port);
+            let mut wait = DxkeeperWait::default();
+            let mut now = NOW;
+            for _ in 0..3 {
+                tick(&engine, port, &mut wait, now);
+                now += 2;
+            }
+            assert_eq!(calls(&arrived(&dxkeeper)), ["K1HLD"]);
+            assert!(!path.exists(), "sent: not sent again");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 
     /// Every service push sends the contact `upload_record` makes of its row, and the DXKeeper
@@ -41159,9 +43055,13 @@ mod upload_record_tests {
         }
         let launch = body(src, "start_on_the_logbook");
         assert!(launch.contains("wire_country_resolvers(&mut eng);"));
-        assert!(launch.contains("dxkeeper_push_async(host, base, uploads, dxkeeper_adif(&rec));"));
+        let send = body(src, "send_queued_upload");
+        assert!(body(src, "dxkeeper_send").contains("dxkeeper_adif(rec)"));
+        // The one push asks what the record still owes.
+        assert!(send.contains("dxkeeper_target_for(dxk, &p)"));
+        assert!(!body(src, "auto_push_one").contains("DXKEEPER"));
         assert!(body(src, "dxkeeper_adif").contains("log_queries::sent(rec.clone())"));
-        assert_eq!(launch.matches("dxkeeper_push_async(").count(), 1);
+        assert_eq!(src.matches(concat!("dxkeeper::", "push_qso(")).count(), 1);
     }
 
     /// DXKeeper gets the operator's own record, private note included, but never a grid kept for
@@ -41194,20 +43094,21 @@ mod upload_record_tests {
         assert!(super::dxkeeper_adif(&todays).contains("<GRIDSQUARE:6>FN31pr"));
     }
 
-    /// Nor an IOTA reference taken from a log-time offer the operator has not confirmed: DXKeeper
-    /// can upload it to LoTW and the other services. One the operator typed, and an older
-    /// callbook-filled one, are sent as before.
+    /// An IOTA reference Nexus filled at log time goes to DXKeeper like one typed (operator ruling,
+    /// 2026-11-10: nothing is held back), including one logged under the old hold.
     #[test]
-    fn dxkeeper_never_gets_a_held_iota() {
+    fn dxkeeper_gets_a_filled_iota() {
         let parse = |adif: &str| tempo_core::logbook::parse_adif(adif).remove(0);
-        let held = parse(
+        let filled = parse(
             "<CALL:4>IA5X<BAND:3>20m<MODE:2>CW<QSO_DATE:8>20261027<TIME_ON:6>120000\
              <IOTA:6>EU-028<NOTES:4>mine<APP_NEXUS_OFFER_HELD:4>IOTA<EOR>",
         );
-        assert!(tempo_core::logbook::offer::withhold_iota(&held), "premise");
-        let sent = super::dxkeeper_adif(&held);
-        assert!(!sent.contains("<IOTA:"), "{sent}");
-        assert!(!sent.contains("APP_NEXUS_OFFER_HELD"), "{sent}");
+        assert!(
+            tempo_core::logbook::offer::is_offer_held(&filled, "IOTA"),
+            "premise"
+        );
+        let sent = super::dxkeeper_adif(&filled);
+        assert!(sent.contains("<IOTA:6>EU-028"), "{sent}");
         assert!(
             sent.contains("<NOTES:4>mine"),
             "still their own record: {sent}"
@@ -41217,11 +43118,6 @@ mod upload_record_tests {
              <IOTA:6>EU-028<EOR>",
         );
         assert!(super::dxkeeper_adif(&typed).contains("<IOTA:6>EU-028"));
-        let older = parse(
-            "<CALL:4>IA5X<BAND:3>20m<MODE:2>CW<QSO_DATE:8>20261027<TIME_ON:6>120000\
-             <IOTA:6>EU-025<APP_NEXUS_CALLBOOK_FILLED:4>IOTA<EOR>",
-        );
-        assert!(super::dxkeeper_adif(&older).contains("<IOTA:6>EU-025"));
     }
 }
 
@@ -42360,15 +44256,6 @@ fn n3fjp_push_qso_impl(dto: &LoggedQso, engine: &SharedEngine) -> Result<(), Str
     tempo_net::n3fjp::push_qso(&host, port, &push)
 }
 
-/// Forward ONE logged QSO to DXKeeper's TCP Network Service, off-thread.
-///
-/// Fire-and-forget by design. DXKeeper never acknowledges a directive, so there is nothing
-/// to wait for — and the connect carries a 3 s timeout, which inline would stall EVERY log
-/// by three seconds whenever DXKeeper simply is not running. That is the common case (the
-/// operator has Nexus open and DXLab closed), so it must not be on the logging path.
-///
-/// Failures land in the connector log rather than a toast: a logger that is not running is
-/// not an error worth interrupting an operator mid-QSO.
 /// Send one HRD Logbook datagram, returning whether it was DELIVERED. HRD's QSO-Forwarding
 /// listener does not ack, so delivery cannot be confirmed positively over UDP — but a
 /// CONNECTED socket lets the OS report a closed listener: on localhost a datagram to a port
@@ -42406,34 +44293,253 @@ fn dxkeeper_adif(rec: &tempo_core::logbook::QsoRecord) -> String {
     tempo_core::logbook::adif_record_own_logger(&log_queries::sent(rec.clone()))
 }
 
-/// Where the upload worker pushes `rec` in DXKeeper (`dxk`, the push's host, base port and uploads
-/// switch while it is on): nowhere for a contact another program logged into Nexus
+/// Where the upload worker pushes queued record `p` in DXKeeper (`dxk`, the push's host, base port
+/// and uploads switch while it is on): nowhere unless `p` still owes DXKeeper its one send
+/// ([`tempo_app::engine::upload_legs::DXKEEPER`]), so no retry, held leg or catch-up sends a contact
+/// again; and nowhere for a contact another program logged into Nexus
 /// (`tempo_app::log_intake::from_another_program`), since DXKeeper may be the program that sent it
 /// and it would come back in.
+///
+/// What it owes, and not `attempts` or the origin: a leg held for its key comes back with no attempt
+/// spent and still `Live`, and a contact contest mode held makes its first pass as a `CatchUp`.
 fn dxkeeper_target_for(
     dxk: Option<&(String, u16, bool)>,
-    rec: &tempo_core::logbook::QsoRecord,
+    p: &tempo_app::engine::PendingUpload,
 ) -> Option<(String, u16, bool)> {
-    dxk.filter(|_| !tempo_app::log_intake::from_another_program(rec))
+    use tempo_app::engine::upload_legs::DXKEEPER;
+    dxk.filter(|_| p.legs & DXKEEPER != 0 && !tempo_app::log_intake::from_another_program(&p.rec))
         .cloned()
 }
 
-fn dxkeeper_push_async(host: String, base_port: u16, uploads: bool, adif: String) {
-    std::thread::spawn(move || {
-        match tempo_net::dxkeeper::push_qso(&host, base_port, &adif, uploads) {
-            Ok(()) => conn_log(
+/// Seconds between checks for a DXKeeper that stays closed. The first checks of an outage come
+/// sooner, on the shared ladder ([`tempo_app::engine::upload_backoff_secs`]: 4, 8, 16 and 32 s),
+/// for the DXKeeper that was only just being started.
+const DXKEEPER_CHECK_SECS: i64 = 60;
+
+/// Where the upload worker has got to with the contacts waiting for DXKeeper
+/// ([`tempo_app::engine::Engine::dxkeeper_hold`]). The contacts themselves are the engine's; this is
+/// only the worker's own schedule, so it starts over at a launch, with a check at once.
+#[derive(Default)]
+struct DxkeeperWait {
+    /// A check found DXKeeper, so one waiting contact goes per worker tick (2 s).
+    connected: bool,
+    /// Connections that have failed since the last send that got through.
+    failures: u8,
+    next_check_unix: i64,
+    /// Sent since the wait began, for the line that says they were.
+    delivered: usize,
+    /// The count the standing Connections line gives.
+    said: usize,
+}
+
+impl DxkeeperWait {
+    fn connection_failed(&mut self, now_unix: i64) {
+        self.connected = false;
+        self.failures = self.failures.saturating_add(1);
+        self.next_check_unix = now_unix
+            + tempo_app::engine::upload_backoff_secs(self.failures).min(DXKEEPER_CHECK_SECS);
+    }
+}
+
+/// A contact as a DXKeeper line names it.
+fn dxkeeper_qso_words(rec: &tempo_core::logbook::QsoRecord) -> String {
+    let (y, mo, d, h, mi, _) = tempo_core::logbook::datetime_utc(rec.when_unix);
+    format!(
+        "{} ({} {}, {y:04}-{mo:02}-{d:02} {h:02}:{mi:02}Z)",
+        rec.call, rec.band, rec.mode
+    )
+}
+
+/// What the Connections log says of a contact whose send connected and then failed: it may have
+/// arrived, and is never sent again.
+fn dxkeeper_unsure_line(rec: &tempo_core::logbook::QsoRecord, why: &str) -> String {
+    format!(
+        "{why} — the QSO with {} may or may not have arrived, and is not sent again in case it \
+         did; check DXKeeper's log, and if it is missing, use Logbook ▸ Export ADIF and import the \
+         file into DXKeeper",
+        dxkeeper_qso_words(rec)
+    )
+}
+
+/// What the Connections log says of a contact past the ceiling on what can wait.
+fn dxkeeper_past_ceiling_line(rec: &tempo_core::logbook::QsoRecord) -> String {
+    format!(
+        "not delivered: the QSO with {}, because {} contacts are waiting for DXKeeper, the most \
+         Nexus keeps; to add it, use Logbook ▸ Export ADIF and import the file into DXKeeper",
+        dxkeeper_qso_words(rec),
+        tempo_app::engine::CONTEST_HELD_UPLOADS_CAP
+    )
+}
+
+/// The one standing line while contacts wait and DXKeeper does not answer.
+fn dxkeeper_waiting_line(count: usize, delivered: usize) -> String {
+    let sent = if delivered > 0 {
+        format!("{delivered} sent, then the connection was lost; ")
+    } else {
+        String::new()
+    };
+    format!(
+        "{sent}{count} waiting for DXKeeper, which is not answering (is Network Service enabled in \
+         DXKeeper ▸ Configuration ▸ Defaults?). Nexus checks every minute and sends each one once \
+         when it answers"
+    )
+}
+
+/// One send to DXKeeper, the only one in the app.
+fn dxkeeper_send(
+    (host, base, uploads): &(String, u16, bool),
+    rec: &tempo_core::logbook::QsoRecord,
+) -> Result<(), tempo_net::dxkeeper::PushError> {
+    // ⭐ THE PRIVATE NOTE RIDES ALONG HERE, deliberately — the one outbound
+    // call site that does. DXKeeper is the operator's OWN logging software on
+    // their OWN machine (a failed connect just means DXLab is not running),
+    // reached point-to-point as the master log they
+    // nominated. That is their data moving between their own programs, not a
+    // publication, and stripping it would leave their master log missing what
+    // they typed in Nexus. The line this fix draws is a nominated local logger
+    // vs a service or a broadcast — flip this one word if the operator wants it
+    // drawn elsewhere. Its COUNTRY is the one its DXCC number gives it, as
+    // every service's is (`log_queries::sent`).
+    tempo_net::dxkeeper::push_qso(host, *base, &dxkeeper_adif(rec), *uploads)
+}
+
+/// Keep `rec` for DXKeeper, and name what the ceiling put out, if anything.
+fn dxkeeper_hold(engine: &SharedEngine, rec: &tempo_core::logbook::QsoRecord) {
+    let past_ceiling = engine_lock_result(engine)
+        .unwrap_or_else(|e| e.into_inner())
+        .dxkeeper_hold(rec);
+    if let Some(gone) = past_ceiling {
+        conn_log("DXKeeper", "error", dxkeeper_past_ceiling_line(&gone));
+    }
+}
+
+/// What one send of the oldest waiting contact came to.
+///
+/// ⛔ ONLY A CONNECTION THAT FAILED LEAVES IT WAITING. DXKeeper never acknowledges, so a contact it
+/// was sent can never be told from one it lost, and sending it again is what filled master logs
+/// with copies. So a send that connected is finished whatever became of it. That includes the
+/// ambiguous case, a connection made and the write then failing, where DXKeeper may hold the whole
+/// directive: it is not repeated, and its line names the contact.
+fn dxkeeper_settle_waiting(
+    engine: &SharedEngine,
+    wait: &mut DxkeeperWait,
+    rec: &tempo_core::logbook::QsoRecord,
+    result: Result<(), tempo_net::dxkeeper::PushError>,
+    now_unix: i64,
+) {
+    use tempo_app::engine::upload_legs::DXKEEPER;
+    use tempo_net::dxkeeper::PushError;
+    let spent = match result {
+        Ok(()) => {
+            wait.delivered += 1;
+            wait.failures = 0;
+            true
+        }
+        Err(PushError::NotConnected(_)) => {
+            wait.connection_failed(now_unix);
+            false
+        }
+        Err(PushError::Unsure(why)) => {
+            conn_log("DXKeeper", "error", dxkeeper_unsure_line(rec, &why));
+            wait.connection_failed(now_unix);
+            true
+        }
+    };
+    if spent {
+        engine_lock_result(engine)
+            .unwrap_or_else(|e| e.into_inner())
+            .contest_upload_done(rec, DXKEEPER);
+    }
+}
+
+/// The upload worker's tick for the contacts waiting for DXKeeper.
+///
+/// While it does not answer, a connection and nothing more, at [`DXKEEPER_CHECK_SECS`]: no contact
+/// leaves, the attempts write no line, and one standing Connections line says how many wait. Once a
+/// check finds it, one contact per tick, oldest first, because DXKeeper closes and reopens its port
+/// after each directive. If a connection fails part-way, what is unsent waits for the next check.
+fn dxkeeper_wait_tick(
+    engine: &SharedEngine,
+    dxk: Option<&(String, u16, bool)>,
+    wait: &mut DxkeeperWait,
+    now_unix: i64,
+) {
+    use tempo_app::engine::upload_legs::DXKEEPER;
+    let evicted = {
+        let mut eng = engine_lock_result(engine).unwrap_or_else(|e| e.into_inner());
+        eng.settle_gone_rows();
+        eng.take_dxkeeper_evicted()
+    };
+    for gone in &evicted {
+        conn_log("DXKeeper", "error", dxkeeper_past_ceiling_line(gone));
+    }
+    let Some(target) = dxk else {
+        return;
+    };
+    let (oldest, count) = {
+        let eng = engine_lock_result(engine).unwrap_or_else(|e| e.into_inner());
+        (eng.dxkeeper_oldest_waiting(), eng.dxkeeper_waiting_count())
+    };
+    let Some(rec) = oldest else {
+        if wait.said > 0 || wait.delivered > 0 {
+            conn_log_standing_ends("DXKeeper");
+        }
+        if wait.delivered > 0 {
+            conn_log(
                 "DXKeeper",
                 "ok",
-                // Deliberately not "logged" — we cannot know that. DXKeeper replies to
-                // nothing; its Server Log is the only place a rejection shows up.
                 format!(
-                    "sent to {host}:{}",
-                    tempo_net::dxkeeper::port_for_base(base_port)
+                    "delivered: {} of the contacts waiting for DXKeeper sent, and none waits now",
+                    wait.delivered
                 ),
-            ),
-            Err(e) => conn_log("DXKeeper", "error", e),
+            );
         }
-    });
+        *wait = DxkeeperWait::default();
+        return;
+    };
+    // …never a contact another program logged into Nexus, however it came to be owing.
+    if tempo_app::log_intake::from_another_program(&rec) {
+        engine_lock_result(engine)
+            .unwrap_or_else(|e| e.into_inner())
+            .contest_upload_done(&rec, DXKEEPER);
+        return;
+    }
+    if !wait.connected {
+        if wait.said != count {
+            let line = dxkeeper_waiting_line(count, wait.delivered);
+            conn_log_standing("DXKeeper", "error", line);
+            wait.said = count;
+        }
+        if now_unix >= wait.next_check_unix {
+            match tempo_net::dxkeeper::test_connection(&target.0, target.1) {
+                // The next tick sends: the port has just been opened and closed.
+                Ok(_) => wait.connected = true,
+                Err(_) => wait.connection_failed(now_unix),
+            }
+        }
+        return;
+    }
+    let result = dxkeeper_send(target, &rec);
+    dxkeeper_settle_waiting(engine, wait, &rec, result, now_unix);
+    let left = engine_lock_result(engine)
+        .unwrap_or_else(|e| e.into_inner())
+        .dxkeeper_waiting_count();
+    if wait.connected && left > 0 {
+        conn_log_standing(
+            "DXKeeper",
+            "info",
+            format!("sending the waiting contacts, one at a time: {left} still waiting"),
+        );
+        wait.said = left;
+    } else if !wait.connected && left > 0 {
+        // Said at once, as the count may not change while it waits.
+        conn_log_standing(
+            "DXKeeper",
+            "error",
+            dxkeeper_waiting_line(left, wait.delivered),
+        );
+        wait.said = left;
+    }
 }
 
 /// Forward ONE logged QSO to a Cloudlog/Wavelog instance (HTTP JSON ADIF POST). URL +
@@ -42724,6 +44830,193 @@ fn cloudlog_class_name(class: propagation::live::cloudlog::CloudlogFailure) -> &
     }
 }
 
+// What a test does in the moment a leg has passed its check and is on its way: a delete can land there,
+// and nowhere else can a test put one deterministically.
+#[cfg(test)]
+type LegUnderWay = Option<Box<dyn FnMut(u8)>>;
+#[cfg(test)]
+thread_local! {
+    static LEG_UNDER_WAY: std::cell::RefCell<LegUnderWay> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn leg_under_way(leg: u8) {
+    let hook = LEG_UNDER_WAY.with(|hook| hook.borrow_mut().take());
+    if let Some(mut during) = hook {
+        during(leg);
+        LEG_UNDER_WAY.with(|hook| *hook.borrow_mut() = Some(during));
+    }
+}
+
+/// HRD Logbook drain (F4MQS): the datagram used to be fire-and-forget from log_qso, so a QSO logged
+/// while HRD was closed vanished. Now the engine queues them and the upload worker sends them here,
+/// each tick — CONNECTED to the target so a closed HRD on localhost surfaces ConnectionRefused
+/// (ICMP port-unreachable), which we report back so the record is re-queued and the cockpit shows
+/// the link down.
+/// ⚠️ NEEDS-BENCH: the closed-port detection is OS/loopback-dependent; verified on Windows/Linux
+/// localhost but confirm on the operator's box.
+fn drain_hrd(engine: &SharedEngine) {
+    let (pending, addr) = {
+        let mut eng = engine_lock_result(engine).unwrap_or_else(|e| e.into_inner());
+        (eng.take_hrd_pending(), eng.hrd_addr())
+    };
+    let mut pending = pending.into_iter();
+    while let Some(rec) = pending.next() {
+        // A purge counts from HRD's own take (`Engine::hrd_cancelled`), not the upload queue's.
+        let cancelled = engine_lock_result(engine)
+            .unwrap_or_else(|e| e.into_inner())
+            .hrd_cancelled(&rec);
+        if cancelled {
+            continue;
+        }
+        let datagram = {
+            let eng = engine_lock_result(engine).unwrap_or_else(|e| e.into_inner());
+            eng.hrd_datagram(&rec)
+        };
+        // connect()+send() off the lock — DNS/connect can block, and a slow
+        // resolver must never freeze the engine (the original spawn's reason).
+        let delivered = hrd_send_connected(&addr, datagram.as_bytes());
+        let mut eng = engine_lock_result(engine).unwrap_or_else(|e| e.into_inner());
+        if !delivered {
+            // Stop hammering a closed HRD this tick. The one that failed goes back with every one
+            // this drain took and did not try, in order, for the next tick: the take emptied HRD's
+            // queue, and this is all that holds them. One log line, not one per queued record.
+            eng.hrd_unreachable(std::iter::once(rec).chain(pending).collect());
+            conn_log("HRD", "error", "HRD Logbook not reachable — QSO queued");
+            break;
+        }
+        eng.note_hrd_result(rec, true);
+        conn_log("HRD", "ok", "QSO forwarded to HRD Logbook");
+    }
+}
+
+/// Whether the contact of `rec`, a copy the upload worker holds off the lock, has since left the log.
+fn upload_cancelled(engine: &SharedEngine, rec: &tempo_core::logbook::QsoRecord) -> bool {
+    engine_lock_result(engine)
+        .unwrap_or_else(|e| e.into_inner())
+        .upload_cancelled(rec)
+}
+
+/// One due record's trip through the upload worker: `legs` is what it sends now
+/// ([`legs_to_send_now`]). DXKeeper first, then every service it owes. What a service failed for a
+/// reason that may pass goes back on the queue, and only that; DXKeeper has its own wait.
+fn send_queued_upload(
+    engine: &SharedEngine,
+    p: tempo_app::engine::PendingUpload,
+    legs: u8,
+    dxk: Option<&(String, u16, bool)>,
+    on: ConnectorToggles,
+    wait: &mut DxkeeperWait,
+    now_unix: i64,
+) {
+    use tempo_app::engine::upload_legs::DXKEEPER;
+    use tempo_net::dxkeeper::PushError;
+    if upload_cancelled(engine, &p.rec) {
+        return;
+    }
+    let rec = p.rec.clone();
+    // DXKeeper never acknowledges, so a send that connected is the end of the leg, whatever became
+    // of it. A connection that failed delivered nothing, and almost always just means DXLab is not
+    // running: the contact waits for it, on the engine's held list so that it outlives this run
+    // ([`dxkeeper_wait_tick`]). With contacts already waiting this one joins them untried, so they
+    // go oldest first and a closed DXKeeper costs no connection per contact.
+    // …never a contact another program logged into Nexus (`tempo_app::log_intake`): DXKeeper may
+    // be the program that sent it, and it would come back in.
+    let mut dxk_waits = false;
+    if let Some(target) = dxkeeper_target_for(dxk, &p) {
+        let others_waiting = engine_lock_result(engine)
+            .unwrap_or_else(|e| e.into_inner())
+            .dxkeeper_waiting_count()
+            > 0;
+        dxk_waits = others_waiting;
+        if !others_waiting {
+            match dxkeeper_send(&target, &rec) {
+                // Deliberately not "logged" — we cannot know that. DXKeeper replies to nothing; its
+                // Server Log is the only place a rejection shows up.
+                Ok(()) => conn_log(
+                    "DXKeeper",
+                    "ok",
+                    format!("sent the QSO with {}", dxkeeper_qso_words(&rec)),
+                ),
+                Err(PushError::NotConnected(_)) => {
+                    wait.connection_failed(now_unix);
+                    dxk_waits = true;
+                }
+                Err(PushError::Unsure(why)) => {
+                    conn_log("DXKeeper", "error", dxkeeper_unsure_line(&rec, &why));
+                }
+            }
+        }
+        if dxk_waits {
+            dxkeeper_hold(engine, &rec);
+        }
+    }
+    // Written down before the services are tried, which can take a while: a quit in between must
+    // not send a held contact to DXKeeper again at the next launch.
+    if legs & DXKEEPER != 0 && !dxk_waits {
+        engine_lock_result(engine)
+            .unwrap_or_else(|e| e.into_inner())
+            .contest_upload_done(&rec, DXKEEPER);
+    }
+    let services = legs & !DXKEEPER;
+    let failed = auto_push_one(engine, LoggedQso::from(p.rec), &rec, on, services);
+    // Deleted during the trip: what failed is not retried, and nothing is left owing to give up on.
+    if upload_cancelled(engine, &rec) {
+        return;
+    }
+    let capped = cap_hrdlog_retries(failed, p.attempts);
+    if capped != failed {
+        conn_log(
+            "HRDLog.net",
+            "error",
+            format!(
+                "gave up on the QSO with {} after {HRDLOG_MAX_RETRIES} retries — \
+                 push it again from the Logbook",
+                rec.call
+            ),
+        );
+    }
+    // Every leg it owed but did not fail transiently is done: sent, or refused for
+    // good. A contact contest mode held stays in its file until it owes nothing, so
+    // a quit part-way through the paced release sends the rest at the next launch.
+    // `failed` before the HRDLog cap: a leg that cap gives up on is retried then.
+    let done = services & !failed;
+    if done != 0 {
+        engine_lock_result(engine)
+            .unwrap_or_else(|e| e.into_inner())
+            .contest_upload_done(&rec, done);
+    }
+    let failed = capped;
+    // Transient failures (network down / service busy) → re-queue ONLY
+    // the legs that failed so the next tick retries them, without
+    // re-pushing the legs that already succeeded (no double-upload).
+    if failed != 0 {
+        let attempts = p.attempts.saturating_add(1);
+        // #290: at the budget the re-queue below drops the record without a
+        // word — say so here, while the contact is still in hand.
+        let given_up = GivenUpQso {
+            call: &rec.call,
+            band: &rec.band,
+            mode: &rec.mode,
+            when_unix: rec.when_unix,
+        };
+        for (service, line) in upload_give_up_lines(failed, attempts, &given_up) {
+            conn_log(service, "error", line);
+        }
+        let due = now_unix + tempo_app::engine::upload_backoff_secs(attempts);
+        let mut eng = engine_lock_result(engine).unwrap_or_else(|e| e.into_inner());
+        // `p.origin` CARRIED, not re-derived: a catch-up record that blips on
+        // the network must come back as a catch-up record, or the retry would
+        // re-enter the queue as if it were a live contact (#193).
+        // PACED, not stamped-and-forgotten. `requeue_after_failure` keeps a
+        // catch-up record in the pacing lane instead of letting its backoff put
+        // it back in the free-for-all: a busy ClubLog fails everything that
+        // comes due, and without this they would all be due in the past when it
+        // recovers and leave inside one tick — the burst again, compressed.
+        eng.requeue_after_failure(rec, failed, attempts, due, p.origin);
+    }
+}
+
 /// Which connectors are enabled, for [`auto_push_one`] — bundled into one struct
 /// purely to keep that function's argument count down; each field is independent.
 struct ConnectorToggles {
@@ -42740,7 +45033,13 @@ struct ConnectorToggles {
 /// legs that failed TRANSIENTLY (network down / service busy) and should be
 /// retried — a permanent reject (bad auth, malformed) or a success is NOT in the
 /// return, so the worker's re-queue never re-pushes a leg that already landed.
-fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, owed: u8) -> u8 {
+fn auto_push_one(
+    engine: &SharedEngine,
+    dto: LoggedQso,
+    rec: &tempo_core::logbook::QsoRecord,
+    on: ConnectorToggles,
+    owed: u8,
+) -> u8 {
     let ConnectorToggles {
         qrz_on,
         clublog_on,
@@ -42751,12 +45050,22 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
         cloudlog_on,
     } = on;
     use tempo_app::engine::upload_legs as legs;
+    // Asked before each leg: a push can take many seconds, and a contact deleted meanwhile sends no
+    // more. A leg already under way when it went is past this.
+    let owes = |leg: u8| {
+        let owes = owed & leg != 0 && !upload_cancelled(engine, rec);
+        #[cfg(test)]
+        if owes {
+            leg_under_way(leg);
+        }
+        owes
+    };
     let call = dto.call.clone();
     let mut parts: Vec<String> = Vec::new();
     let mut all_ok = true;
     // Legs that failed transiently → the worker retries just these.
     let mut failed: u8 = 0;
-    if qrz_on && owed & legs::QRZ != 0 {
+    if qrz_on && owes(legs::QRZ) {
         let (part, ok, transient) = match qrz_push_qso_impl(dto.clone(), engine, false) {
             Ok(r) => {
                 let ok = matches!(r.result.as_str(), "ok" | "replace" | "duplicate");
@@ -42808,7 +45117,7 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
             failed |= legs::QRZ;
         }
     }
-    if clublog_on && owed & legs::CLUBLOG != 0 {
+    if clublog_on && owes(legs::CLUBLOG) {
         let (part, ok, transient) = match clublog_push_qso_impl(dto.clone(), engine, false) {
             Ok(r) => {
                 let ok = matches!(r.result.as_str(), "ok" | "modified" | "duplicate");
@@ -42858,7 +45167,7 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
             failed |= legs::CLUBLOG;
         }
     }
-    if hrdlog_on && owed & legs::HRDLOG != 0 {
+    if hrdlog_on && owes(legs::HRDLOG) {
         // `part` is the operator's toast and may quote HRDLog; `detail` is what the
         // Connections row persists and may not — see `note_conn_health`.
         let (part, ok, detail, transient) = match hrdlog_push_qso_impl(dto.clone(), engine) {
@@ -42914,7 +45223,7 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
             failed |= legs::HRDLOG;
         }
     }
-    if eqsl_on && owed & legs::EQSL != 0 {
+    if eqsl_on && owes(legs::EQSL) {
         let (part, ok, transient) = match eqsl_push_qso_impl(dto.clone(), engine, false) {
             Ok((r, refusal)) => {
                 let ok = matches!(r.outcome.as_str(), "accepted" | "duplicate");
@@ -42950,7 +45259,7 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
             failed |= legs::EQSL;
         }
     }
-    if wrl_on && owed & legs::WRL != 0 {
+    if wrl_on && owes(legs::WRL) {
         let (part, ok, detail, transient) = match wrl_push_qso_impl(dto.clone(), engine) {
             Ok(r) => {
                 let (ok, detail) = wrl_stamp(&r.result);
@@ -43002,7 +45311,7 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
             failed |= legs::WRL;
         }
     }
-    if n3fjp_on && owed & legs::N3FJP != 0 {
+    if n3fjp_on && owes(legs::N3FJP) {
         let (part, ok, transient) = match n3fjp_push_qso_impl(&dto, engine) {
             Ok(()) => {
                 conn_log("N3FJP", "ok", format!("auto-forward {call}"));
@@ -43020,7 +45329,7 @@ fn auto_push_one(engine: &SharedEngine, dto: LoggedQso, on: ConnectorToggles, ow
             failed |= legs::N3FJP;
         }
     }
-    if cloudlog_on && owed & legs::CLOUDLOG != 0 {
+    if cloudlog_on && owes(legs::CLOUDLOG) {
         let (part, ok, detail, transient) =
             match cloudlog_push_qso_impl(&dto, engine, cloudlog_key_from_keychain) {
                 Ok(_) => {
@@ -43553,7 +45862,9 @@ fn tv_rpc(cmd: &str, args: &str) -> tempo_app::connect_web::RpcOutcome {
             "get_ota_map_spots" => ok(get_ota_map_spots(app.state(), app.state()).await),
             "get_kp_forecast" => ok(get_kp_forecast(app.state()).await),
             "get_solar_indices" => ok(get_solar_indices(app.state()).await),
-            "get_band_outlook" => ok(get_band_outlook(app.state(), app.state(), app.state()).await),
+            "get_band_outlook" => {
+                ok(get_band_outlook(app.state(), app.state(), app.state(), app.state()).await)
+            }
             "get_path_regions" => ok(get_path_regions(app.state(), app.state(), app.state()).await),
             "get_path_outlook" => {
                 let grid = v
@@ -43576,7 +45887,7 @@ fn tv_rpc(cmd: &str, args: &str) -> tempo_app::connect_web::RpcOutcome {
             }
             "get_dxped_windows" => {
                 let days = v.get("days").and_then(|x| x.as_u64()).map(|d| d as u32);
-                ok(get_dxped_windows(app.state(), app.state(), days).await)
+                ok(get_dxped_windows(app.state(), app.state(), app.state(), days).await)
             }
             "get_openings_log" => ok(Ok::<_, String>(get_openings_log())),
             "get_declination" => ok(get_declination(app.state())),
@@ -44815,7 +47126,7 @@ enum FdGiveDto {
 /// a press that comes through a stream.
 #[tauri::command(async)]
 fn fd_club_give_position(state: State<'_, SharedEngine>, handle: u64) -> FdGiveDto {
-    let given = engine_lock(&state).fd_club_give_position(handle);
+    let given = club_journaled(&state, |e| e.fd_club_give_position(handle));
     match given {
         Ok(()) => FdGiveDto::Given,
         Err(refusal) => FdGiveDto::Refused {
@@ -44853,14 +47164,29 @@ impl From<Result<(), tempo_app::fdevent::RemoveRefusal>> for FdRemoveDto {
 /// press that comes through a stream. Nothing here transmits or touches the radio.
 #[tauri::command(async)]
 fn fd_club_remove_position(state: State<'_, SharedEngine>, posid: String) -> FdRemoveDto {
-    engine_lock(&state).fd_club_remove_position(&posid).into()
+    club_journaled(&state, |e| e.fd_club_remove_position(&posid)).into()
 }
 
 /// Let a removed position back in ([`tempo_app::engine::Engine::fd_club_allow_back`]): its next
 /// try joins, and it sends what it logged meanwhile. The host's own board only, as Remove is.
 #[tauri::command(async)]
 fn fd_club_allow_back(state: State<'_, SharedEngine>, posid: String) -> FdRemoveDto {
-    engine_lock(&state).fd_club_allow_back(&posid).into()
+    club_journaled(&state, |e| e.fd_club_allow_back(&posid)).into()
+}
+
+/// A host button's change to the club, then — with the Engine lock released — the club journal
+/// it appended to fsynced ([`tempo_app::fdevent::ClubJournal::sync`]), as the club link's own
+/// changes are.
+fn club_journaled<T>(state: &SharedEngine, f: impl FnOnce(&mut Engine) -> T) -> T {
+    let (out, journal) = {
+        let mut e = engine_lock(state);
+        let out = f(&mut e);
+        (out, e.fd_club_journal())
+    };
+    if let Some(j) = journal {
+        j.sync();
+    }
+    out
 }
 
 /// Best-effort LAN IP via the UDP-connect trick: no packet is sent — connect()
@@ -48559,11 +50885,9 @@ fn install_panic_logger() {
         // `info` renders payload + location; the applog redactor scrubs it either way.
         tempo_core::applog::error("panic", &format!("at {where_}: {info}"));
         // Error level flushes, but a panic can be followed immediately by an abort, so make
-        // the wait explicit rather than relying on the writer getting a slice first. TX SAFETY:
-        // not on a transmit session's driver, whose stops go out the moment this hook returns
-        // (it catches its own panic, so no abort follows): the line is queued, and the writer
-        // flushes an error line as soon as it has it.
-        if !tempo_net::on_a_transmit_driver() {
+        // the wait explicit rather than relying on the writer getting a slice first, except
+        // where waiting would hold a Stop (`a_panic_here_may_wait_for_the_disk`).
+        if a_panic_here_may_wait_for_the_disk() {
             tempo_core::applog::flush();
         }
         // ★ THE STARTUP-SILENCE CATCH. A panic BEFORE the main window exists is the shape the
@@ -48577,6 +50901,30 @@ fn install_panic_logger() {
         }
         previous(info);
     }));
+}
+
+/// Whether the panic hook may wait (up to 2 s) for the panic's line to reach the disk on this
+/// thread.
+///
+/// TX SAFETY: a panic hook runs at the panic, before anything unwinds, so everything the thread
+/// holds stays held while it waits. So it never waits:
+/// - on a transmit session's driver, whose stops go out the moment the hook returns (it catches
+///   its own panic, so no abort follows);
+/// - under the Engine lock (any guard on this thread, counted in every build): the radio loop
+///   needs it every 20 ms and is the only thing that unkeys the radio, so a stop verb that
+///   panicked there would hold the unkey for as long as the disk took;
+/// - on Stop's second road's stopper, which runs every later Stop's verbs.
+///
+/// The line is queued anyway, and the writer flushes an error line as soon as it has it.
+///
+/// ⚠️ Deliberate: such a panic followed at once by an abort (one that unwinds into an `extern "C"`
+/// frame, or a panic while panicking) can lose its line, because the writer may not get a turn
+/// before the process dies. The wait would not have saved the transmission there, and it would
+/// hold the Engine for up to 2 s whenever no abort follows. Do not put the wait back.
+fn a_panic_here_may_wait_for_the_disk() -> bool {
+    !tempo_net::on_a_transmit_driver()
+        && tempo_core::logbook::io_fence::engine_guards_held() == 0
+        && !remote_service::operations::on_the_road_stopper()
 }
 
 /// Build and run the Tauri application.
@@ -48676,6 +51024,12 @@ pub fn run() {
 
     let mut settings = Settings::load(&settings_path());
     move_upload_start_beside_the_log(&mut settings, &shared_data_dir());
+    // One-time migration: every saved "heuristic" moves to P.533, and says so once. Launch, before
+    // the Engine and any settings writer exist: a bare save, exempt from the writer's Engine-lock
+    // precondition (`tempo_app::settings::writer`). A refused save leaves this run as it was.
+    if let Err(e) = settings.move_prop_engine_once(|settings| settings.save(&settings_path())) {
+        eprintln!("tempo: couldn't save the move to P.533, trying again next launch: {e}");
+    }
     // The DEBUG tier, as early as the settings are known — a diagnostic session must capture
     // the startup it was turned on for, not just what came after.
     tempo_core::applog::set_debug(settings.diag_debug_log);
@@ -49396,6 +51750,7 @@ fn start_on_the_logbook(
         // administrative subdivision", so "ON" on a Canadian contact is the correct value for
         // an export and for TQSL, and no province code can collide with a WAS state.
         eng.set_state_resolver(subdivision_hint);
+        eng.set_iota_at_log(spot_iota_at_log, iota_list::known, iota_list::name);
         // Grid-rarity gems: geography table + the measured-activity census
         // (demote-only refinement). Restore the persisted census BEFORE any
         // stamping so the first snapshot already shows refined tiers.
@@ -49797,6 +52152,7 @@ fn start_on_the_logbook(
     // Runs regardless of the `radio` feature: Companion-sourced QSOs upload too.
     {
         let push_engine = engine.clone();
+        let mut dxk_wait = DxkeeperWait::default();
         std::thread::spawn(move || loop {
             std::thread::sleep(std::time::Duration::from_secs(2));
             let (
@@ -49969,6 +52325,10 @@ fn start_on_the_logbook(
                 .filter(|p| p.origin == tempo_app::engine::UploadOrigin::CatchUp)
                 .count();
             for p in recs {
+                // Deleted since the drain: it does not go back on the queue or anywhere else.
+                if upload_cancelled(&push_engine, &p.rec) {
+                    continue;
+                }
                 // BACKOFF: a record not yet due goes back on the queue untouched — no push,
                 // no attempt spent, no toast. This is what turns 20-in-40-seconds into one
                 // push every few minutes for a genuinely-down service. It is ALSO what
@@ -49984,33 +52344,15 @@ fn start_on_the_logbook(
                 // waits on the queue, unspent, and the rest go now.
                 let legs = legs_to_send_now(&push_engine, &p, now_unix, &mut catchup_left);
                 if legs == 0 {
-                    // Nothing else owed: nothing goes anywhere, DXKeeper included, which saw
-                    // this contact the first time it came round.
+                    // Nothing goes anywhere now: the leg left on the queue is a held one, and
+                    // DXKeeper's was not owed.
                     continue;
                 }
-                let rec = p.rec.clone();
-                // DXKeeper is deliberately OUTSIDE the legs/retry machinery: it never
-                // acknowledges, so there is no success to distinguish from failure and
-                // nothing meaningful to retry. A failed connect almost always just means
-                // DXLab is not running. Fire it and move on.
-                // …but never a contact another program logged into Nexus (`tempo_app::log_intake`):
-                // DXKeeper may be the program that sent it, and it would come back in.
-                if let Some((host, base, uploads)) = dxkeeper_target_for(dxk.as_ref(), &rec) {
-                    // ⭐ THE PRIVATE NOTE RIDES ALONG HERE, deliberately — the one outbound
-                    // call site that does. DXKeeper is the operator's OWN logging software on
-                    // their OWN machine (the comment above says it: a failed connect just means
-                    // DXLab is not running), reached point-to-point as the master log they
-                    // nominated. That is their data moving between their own programs, not a
-                    // publication, and stripping it would leave their master log missing what
-                    // they typed in Nexus. The line this fix draws is a nominated local logger
-                    // vs a service or a broadcast — flip this one word if the operator wants it
-                    // drawn elsewhere. Its COUNTRY is the one its DXCC number gives it, as
-                    // every service's is (`log_queries::sent`).
-                    dxkeeper_push_async(host, base, uploads, dxkeeper_adif(&rec));
-                }
-                let failed = auto_push_one(
+                send_queued_upload(
                     &push_engine,
-                    LoggedQso::from(p.rec),
+                    p,
+                    legs,
+                    dxk.as_ref(),
                     ConnectorToggles {
                         qrz_on,
                         clublog_on: clublog_live,
@@ -50020,95 +52362,12 @@ fn start_on_the_logbook(
                         n3fjp_on,
                         cloudlog_on,
                     },
-                    legs,
+                    &mut dxk_wait,
+                    now_unix,
                 );
-                let capped = cap_hrdlog_retries(failed, p.attempts);
-                if capped != failed {
-                    conn_log(
-                        "HRDLog.net",
-                        "error",
-                        format!(
-                            "gave up on the QSO with {} after {HRDLOG_MAX_RETRIES} retries — \
-                             push it again from the Logbook",
-                            rec.call
-                        ),
-                    );
-                }
-                // Every leg it owed but did not fail transiently is done: sent, or refused for
-                // good. A contact contest mode held stays in its file until it owes nothing, so
-                // a quit part-way through the paced release sends the rest at the next launch.
-                // `failed` before the HRDLog cap: a leg that cap gives up on is retried then.
-                let done = legs & !failed;
-                if done != 0 {
-                    engine_lock_result(&push_engine)
-                        .unwrap_or_else(|e| e.into_inner())
-                        .contest_upload_done(&rec, done);
-                }
-                let failed = capped;
-                // Transient failures (network down / service busy) → re-queue ONLY
-                // the legs that failed so the next tick retries them, without
-                // re-pushing the legs that already succeeded (no double-upload).
-                if failed != 0 {
-                    let attempts = p.attempts.saturating_add(1);
-                    // #290: at the budget the re-queue below drops the record without a
-                    // word — say so here, while the contact is still in hand.
-                    let given_up = GivenUpQso {
-                        call: &rec.call,
-                        band: &rec.band,
-                        mode: &rec.mode,
-                        when_unix: rec.when_unix,
-                    };
-                    for (service, line) in upload_give_up_lines(failed, attempts, &given_up) {
-                        conn_log(service, "error", line);
-                    }
-                    let due = now_unix + tempo_app::engine::upload_backoff_secs(attempts);
-                    let mut eng =
-                        engine_lock_result(&push_engine).unwrap_or_else(|e| e.into_inner());
-                    // `p.origin` CARRIED, not re-derived: a catch-up record that blips on
-                    // the network must come back as a catch-up record, or the retry would
-                    // re-enter the queue as if it were a live contact (#193).
-                    // PACED, not stamped-and-forgotten. `requeue_after_failure` keeps a
-                    // catch-up record in the pacing lane instead of letting its backoff put
-                    // it back in the free-for-all: a busy ClubLog fails everything that
-                    // comes due, and without this they would all be due in the past when it
-                    // recovers and leave inside one tick — the burst again, compressed.
-                    eng.requeue_after_failure(rec, failed, attempts, due, p.origin);
-                }
             }
-            // HRD Logbook drain (F4MQS): the datagram used to be fire-and-forget from
-            // log_qso, so a QSO logged while HRD was closed vanished. Now the engine
-            // queues them and we send here — CONNECTED to the target so a closed HRD on
-            // localhost surfaces ConnectionRefused (ICMP port-unreachable), which we
-            // report back so the record is re-queued and the cockpit shows the link down.
-            // ⚠️ NEEDS-BENCH: the closed-port detection is OS/loopback-dependent; verified
-            // on Windows/Linux localhost but confirm on the operator's box.
-            {
-                let (pending, addr) = {
-                    let mut eng =
-                        engine_lock_result(&push_engine).unwrap_or_else(|e| e.into_inner());
-                    (eng.take_hrd_pending(), eng.hrd_addr())
-                };
-                for rec in pending {
-                    let datagram = {
-                        let eng =
-                            engine_lock_result(&push_engine).unwrap_or_else(|e| e.into_inner());
-                        eng.hrd_datagram(&rec)
-                    };
-                    // connect()+send() off the lock — DNS/connect can block, and a slow
-                    // resolver must never freeze the engine (the original spawn's reason).
-                    let delivered = hrd_send_connected(&addr, datagram.as_bytes());
-                    let mut eng =
-                        engine_lock_result(&push_engine).unwrap_or_else(|e| e.into_inner());
-                    eng.note_hrd_result(rec, delivered);
-                    if !delivered {
-                        // Stop hammering a closed HRD this tick — the queue stays, the next
-                        // tick retries. One log line, not one per queued record.
-                        conn_log("HRD", "error", "HRD Logbook not reachable — QSO queued");
-                        break;
-                    }
-                    conn_log("HRD", "ok", "QSO forwarded to HRD Logbook");
-                }
-            }
+            dxkeeper_wait_tick(&push_engine, dxk.as_ref(), &mut dxk_wait, now_unix);
+            drain_hrd(&push_engine);
         });
     }
 
@@ -51155,6 +53414,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         export_general_log,
         export_selected_log,
         save_text_to_downloads,
+        reveal_in_downloads,
         save_text_as,
         save_png_to_downloads,
         civ_diagnostic_log,
@@ -51198,6 +53458,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         radio_picker_timed_out,
         radio_picker_unavailable,
         import_pota_log,
+        import_lotw_unmatched,
         set_skip_tx1,
         civ_diagnostic_status,
         broadcast,
@@ -51344,6 +53605,8 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         dxcc_entity_locations,
         set_frequency,
         sstv_tune,
+        sstv_tune_recall,
+        work_spot_recall,
         sstv_tune_on_open,
         pick_band,
         tune_channel,
@@ -51433,6 +53696,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         remove_station_profile,
         set_experience_level,
         mark_setup_wizard_seen,
+        dismiss_prop_engine_note,
         route_preview,
         route_preview_draft,
         test_radio_cat,
@@ -51498,6 +53762,7 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         set_rtty_macros,
         set_contest_esm,
         set_psk_macros,
+        set_cw_macros,
         set_beta_updates,
         set_logbook_columns,
         set_logbook_filters,
@@ -51677,12 +53942,16 @@ pub(crate) fn app_commands() -> Box<dyn Fn(tauri::ipc::Invoke) -> bool + Send + 
         confirmation_check,
         apply_confirmation_check,
         cancel_confirmation_check,
+        eqsl_sent_mark_review,
+        clear_eqsl_sent_marks,
+        restore_eqsl_sent_marks,
         get_need_alerts,
         get_all_spots,
         get_tci_spots,
         click_tci_spot,
         get_propagation,
         get_path_outlook,
+        best_times::get_best_times,
         get_path_regions,
         log_path_grades,
         contact_path_day,
@@ -52559,6 +54828,55 @@ fn winlink_disconnect() -> Result<(), String> {
 mod tests {
     use crate::remote_service::stored_log_tests::StoredLog;
 
+    /// ⛔ A panic on the Stop path never waits for the disk. The panic hook runs at the panic,
+    /// before anything unwinds, so whatever the thread holds stays held while the hook waits:
+    /// under the Engine lock that is the radio loop, which unkeys the radio, and on the road's
+    /// stopper it is every later Stop's verbs. A stop verb that panicked there would hold the unkey
+    /// for as long as the disk took, up to 2 s. CONTROL: an ordinary thread's panic still waits
+    /// for its line, and so does a thread once its Engine guard is gone.
+    #[test]
+    fn a_panic_on_the_stop_path_never_waits_for_the_disk() {
+        let engine = std::sync::Arc::new(std::sync::Mutex::new(tempo_app::engine::Engine::new(
+            "W9XYZ", "EN52", 0,
+        )));
+        let on = |name: &str, holding_engine: bool| {
+            let engine = engine.clone();
+            std::thread::Builder::new()
+                .name(name.into())
+                .spawn(move || {
+                    let _guard = holding_engine.then(|| tempo_app::engine::engine_lock(&engine));
+                    super::a_panic_here_may_wait_for_the_disk()
+                })
+                .unwrap()
+                .join()
+                .unwrap()
+        };
+        assert!(
+            on("some-thread", false),
+            "CONTROL: an ordinary panic waits for the disk"
+        );
+        assert!(
+            !on("some-thread", true),
+            "a panic under the Engine lock never waits for the disk"
+        );
+        assert!(
+            !on("nexus-remote-road-stopper", false),
+            "a panic on the road's stopper never waits for the disk"
+        );
+        assert!(
+            !on(tempo_net::flex::session::DRIVER_THREAD, false),
+            "CONTROL: nor on a transmit session's driver, as before"
+        );
+        let after = std::thread::spawn(move || {
+            drop(tempo_app::engine::engine_lock(&engine));
+            super::a_panic_here_may_wait_for_the_disk()
+        });
+        assert!(
+            after.join().unwrap(),
+            "CONTROL: the guard gone, a panic waits again"
+        );
+    }
+
     /// The AI decoder's provisional tail is for the eye only. The copilot's callsign chips and the
     /// report and name the log entry takes all read the CONFIRMED copy, so a
     /// letter the next pass may still change never reaches a log, a macro or the entry.
@@ -52696,6 +55014,35 @@ mod tests {
         let r = super::read_cw_state(&e);
         assert_eq!(r.turn, None, "unassisted: no turn cue");
         assert!(r.unassisted);
+    }
+
+    /// A restore makes the one-time move to P.533 for a backup with no marker, note included, as an
+    /// upgraded settings file does; a backup with the marker keeps its engine.
+    #[test]
+    fn a_backup_from_before_the_engine_move_is_moved_and_one_from_after_is_not() {
+        let bundle = |engine: Option<&str>, moved: Option<bool>| {
+            let mut v = serde_json::json!({});
+            if let Some(engine) = engine {
+                v["propEngine"] = engine.into();
+            }
+            if let Some(moved) = moved {
+                v["propEngineMoved"] = moved.into();
+            }
+            super::settings_from_bundle(v).unwrap()
+        };
+        for (engine, moved, want, note) in [
+            (None, None, "p533", true),
+            (Some("heuristic"), None, "p533", true),
+            (Some("p533"), None, "p533", false),
+            (Some("voacap"), None, "voacap", false),
+            (Some("heuristic"), Some(true), "heuristic", false),
+            (Some("p533"), Some(true), "p533", false),
+        ] {
+            let s = bundle(engine, moved);
+            assert_eq!(s.prop_engine, want, "{engine:?} {moved:?}");
+            assert_eq!(s.prop_engine_note_due, note, "{engine:?} {moved:?}");
+            assert!(s.prop_engine_moved, "{engine:?} {moved:?}");
+        }
     }
 
     /// The settings backup's stated contract is that it CARRIES NO SECRETS, and
@@ -57479,8 +59826,8 @@ mod tests {
         tle_seed_path, tle_set_currency, view_passes, write_json_atomic, write_qso_wav_in,
         AssistanceEvent, AssistanceSourceState, MoonRun, MoonTrackDto, SatBird, SatTrackDto,
         SatTrackLoss, SatTrackRun, SatnogsFetchState, SharedEngine, SpotIotaLog, TleFlightGuard,
-        TleSnapshot, SAT_TRACK, SAT_TRACK_GEN, SPOTS_WINDOW, TLE_ACT_STALE_DAYS, TLE_FETCHING,
-        TLE_STALE_LINE_DAYS,
+        TleSnapshot, SAT_TRACK, SAT_TRACK_GEN, SPOTS_WINDOW, SPOT_IOTA_WINDOW, TLE_ACT_STALE_DAYS,
+        TLE_FETCHING, TLE_STALE_LINE_DAYS,
     };
 
     /// A scratch file path unique to this test process (std-only — no tempfile
@@ -59018,8 +61365,269 @@ mod tests {
         );
     }
 
-    /// The log-time offer's spot side: the group EVERY spot of exactly this call within the
-    /// Spots board's window names, none when any two name different groups, and never another
+    /// ★ What a no-popup FT contact may take from the spots: the contact's own call, its band, and
+    /// spots made within the window of its start, all naming one group. Silence lets the callbook
+    /// speak; spots that cannot be taken do not.
+    #[test]
+    fn a_no_popup_contact_takes_only_a_fresh_spot_on_its_own_band() {
+        use tempo_core::logbook::offer::SpotIota;
+        use tempo_net::cluster::ClusterSpot;
+        const T: u64 = 1_793_000_000; // the contact's start
+        const WINDOW: u64 = SPOT_IOTA_WINDOW.as_secs();
+        let mk = |call: &str, freq_khz: f64, comment: &str| ClusterSpot {
+            spotter: "W3LPL".into(),
+            dx_call: call.into(),
+            freq_khz,
+            comment: comment.into(),
+            time_utc: None,
+            received_unix: 0,
+            corroborators: Vec::new(),
+            rbn: false,
+        };
+        let log_of = |spots: &[(u64, ClusterSpot)]| {
+            let mut log = SpotIotaLog::default();
+            let t0 = std::time::Instant::now();
+            for (at, sp) in spots {
+                log.note(t0, *at, sp);
+            }
+            log
+        };
+        let eu028 = || mk("IA5X", 14074.0, "IOTA EU-028 FT8");
+        let names = || SpotIota::Names("EU-028".into());
+
+        let log = log_of(&[(T - 60, eu028())]);
+        assert_eq!(
+            log.group_at_contact("ia5x", "20m", T),
+            names(),
+            "a minute old"
+        );
+        assert_eq!(
+            log.group_at_contact("IA5X", "40m", T),
+            SpotIota::OtherBand("EU-028".into()),
+            "another band"
+        );
+        assert_eq!(
+            log.group_at_contact("IA5X/P", "20m", T),
+            SpotIota::Silent,
+            "another call"
+        );
+        assert_eq!(log.group_at_contact("IA5Y", "20m", T), SpotIota::Silent);
+
+        // The window, both ways: a spot during the contact counts too.
+        assert_eq!(
+            log_of(&[(T - WINDOW, eu028())]).group_at_contact("IA5X", "20m", T),
+            names()
+        );
+        assert_eq!(
+            log_of(&[(T + 30, eu028())]).group_at_contact("IA5X", "20m", T),
+            names()
+        );
+        assert_eq!(
+            log_of(&[(T - WINDOW - 1, eu028())]).group_at_contact("IA5X", "20m", T),
+            SpotIota::Silent,
+            "a stale spot says nothing"
+        );
+
+        // Two groups named for the call, on any band, are refused.
+        let log = log_of(&[
+            (T - 60, eu028()),
+            (T - 30, mk("IA5X", 7074.0, "IOTA EU-031")),
+        ]);
+        assert_eq!(log.group_at_contact("IA5X", "20m", T), SpotIota::Refused);
+        // A stale one does not stand against a fresh one.
+        let log = log_of(&[
+            (T - WINDOW - 1, mk("IA5X", 14074.0, "IOTA EU-031")),
+            (T - 60, eu028()),
+        ]);
+        assert_eq!(log.group_at_contact("IA5X", "20m", T), names());
+    }
+
+    /// A spot naming the station's group counts up to an hour from the contact's start (operator
+    /// ruling, 2026-11-10; it was 20 minutes): 30 and 59 minutes old it fills, 61 it does not. The
+    /// log form's offer reads the same hour.
+    #[test]
+    fn an_iota_spot_up_to_an_hour_old_still_counts() {
+        use tempo_core::logbook::offer::SpotIota;
+        use tempo_net::cluster::ClusterSpot;
+        const T: u64 = 1_793_000_000; // the contact's start
+        let spot = ClusterSpot {
+            spotter: "W3LPL".into(),
+            dx_call: "IA5X".into(),
+            freq_khz: 14074.0,
+            comment: "IOTA EU-028".into(),
+            time_utc: None,
+            received_unix: 0,
+            corroborators: Vec::new(),
+            rbn: false,
+        };
+        let at_contact = |minutes_old: u64| {
+            let mut log = SpotIotaLog::default();
+            log.note(std::time::Instant::now(), T - minutes_old * 60, &spot);
+            log.group_at_contact("IA5X", "20m", T)
+        };
+        for minutes in [30, 59] {
+            assert_eq!(
+                at_contact(minutes),
+                SpotIota::Names("EU-028".into()),
+                "{minutes} minutes old"
+            );
+        }
+        assert_eq!(at_contact(61), SpotIota::Silent, "61 minutes old");
+
+        // The form's offer, by when the spot came in.
+        let t0 = std::time::Instant::now();
+        let mut log = SpotIotaLog::default();
+        log.note(t0, 0, &spot);
+        let after = |minutes: u64| t0 + std::time::Duration::from_secs(minutes * 60);
+        for minutes in [30, 59] {
+            assert_eq!(
+                log.group_for(after(minutes), "IA5X").as_deref(),
+                Some("EU-028"),
+                "{minutes} minutes old"
+            );
+        }
+        assert_eq!(log.group_for(after(61), "IA5X"), None, "61 minutes old");
+        // Kept that long: a spot noted 59 minutes after it is not the one that lets it go.
+        log.note(after(59), 0, &spot);
+        assert_eq!(log.named.len(), 2);
+    }
+
+    /// The cap holds an IOTA-contest hour: a disagreeing spot an hour old still refuses the fill
+    /// after 12,000 other IOTA-naming spots (200 a minute for the hour) have come in after it.
+    #[test]
+    fn an_iota_contest_hour_of_spots_keeps_an_old_disagreeing_spot() {
+        use tempo_core::logbook::offer::SpotIota;
+        use tempo_net::cluster::ClusterSpot;
+        const T: u64 = 1_793_000_000;
+        let mk = |call: String, comment: &str| ClusterSpot {
+            spotter: "W3LPL".into(),
+            dx_call: call,
+            freq_khz: 14_260.0,
+            comment: comment.into(),
+            time_utc: None,
+            received_unix: 0,
+            corroborators: Vec::new(),
+            rbn: false,
+        };
+        let t0 = std::time::Instant::now();
+        let mut log = SpotIotaLog::default();
+        log.note(t0, T - 3_540, &mk("IA5X".into(), "IOTA EU-031"));
+        for n in 0..12_000u64 {
+            let at = t0 + std::time::Duration::from_millis(n * 295);
+            log.note(
+                at,
+                T - 3_540 + n * 295 / 1000,
+                &mk(format!("K{n}ABC"), "IOTA NA-046"),
+            );
+        }
+        log.note(t0, T - 60, &mk("IA5X".into(), "IOTA EU-028"));
+        assert_eq!(
+            log.group_at_contact("IA5X", "20m", T),
+            SpotIota::Refused,
+            "the hour-old EU-031 still stands against EU-028"
+        );
+    }
+
+    /// Another portable form of the same base call is another call: a spot of `IA5C/M` names
+    /// nothing for a contact with `IA5C/P`, on either read.
+    #[test]
+    fn a_sibling_portable_spot_does_not_count_for_the_contact() {
+        use tempo_core::logbook::offer::SpotIota;
+        use tempo_net::cluster::ClusterSpot;
+        const T: u64 = 1_793_000_000;
+        let spot = ClusterSpot {
+            spotter: "W3LPL".into(),
+            dx_call: "IA5C/M".into(),
+            freq_khz: 14_074.0,
+            comment: "IOTA EU-028".into(),
+            time_utc: None,
+            received_unix: 0,
+            corroborators: Vec::new(),
+            rbn: false,
+        };
+        let t0 = std::time::Instant::now();
+        let mut log = SpotIotaLog::default();
+        log.note(t0, T - 60, &spot);
+        assert_eq!(log.group_at_contact("IA5C/P", "20m", T), SpotIota::Silent);
+        assert_eq!(log.group_for(t0, "IA5C/P"), None);
+        assert_eq!(
+            log.group_at_contact("IA5C", "20m", T),
+            SpotIota::Silent,
+            "nor the base call"
+        );
+        assert_eq!(
+            log.group_at_contact("IA5C/M", "20m", T),
+            SpotIota::Names("EU-028".into()),
+            "CONTROL: the spotted call itself"
+        );
+    }
+
+    /// A node replaying an old spot at login delivers it now; the time it carries is its age.
+    #[test]
+    fn a_replayed_spot_is_as_old_as_the_time_it_carries() {
+        use tempo_core::logbook::offer::SpotIota;
+        use tempo_net::cluster::ClusterSpot;
+        // 12:00:00 UTC on a day boundary multiple.
+        const NOON: u64 = 20_750 * 86_400 + 12 * 3600;
+        let mk = |time: &str| ClusterSpot {
+            spotter: "W3LPL".into(),
+            dx_call: "IA5X".into(),
+            freq_khz: 14074.0,
+            comment: "IOTA EU-028".into(),
+            time_utc: Some(time.into()),
+            received_unix: 0,
+            corroborators: Vec::new(),
+            rbn: false,
+        };
+        let at = |time: &str| {
+            let mut log = SpotIotaLog::default();
+            log.note(std::time::Instant::now(), NOON, &mk(time));
+            log.group_at_contact("IA5X", "20m", NOON)
+        };
+        assert_eq!(
+            at("1155Z"),
+            SpotIota::Names("EU-028".into()),
+            "five minutes old"
+        );
+        assert_eq!(
+            at("0900Z"),
+            SpotIota::Silent,
+            "three hours old, delivered just now"
+        );
+        // No date in the token: the time nearest to arrival, across midnight too.
+        assert_eq!(
+            super::spot_made_unix(Some("2359Z"), NOON - 12 * 3600 + 60),
+            NOON - 12 * 3600 - 60
+        );
+        assert_eq!(
+            super::spot_made_unix(Some("0001Z"), NOON + 12 * 3600 - 60),
+            NOON + 12 * 3600 + 60
+        );
+        // A token that is no time leaves the arrival.
+        for junk in [None, Some("late"), Some("2575Z"), Some("12Z")] {
+            assert_eq!(super::spot_made_unix(junk, NOON), NOON, "{junk:?}");
+        }
+    }
+
+    /// The lookup the engine is given keeps the offer's rules: no spots at all in an unassisted
+    /// contest entry, and the island list judges what it writes.
+    #[test]
+    fn the_no_popup_lookup_is_wired_and_gated_like_the_offer() {
+        let src = include_str!("lib.rs");
+        let start = src.find("fn spot_iota_at_log(").expect("the lookup");
+        let b = &src[start..src[start..].find("\n}\n").unwrap() + start];
+        let gate = b.find("if unassisted()").expect("the unassisted gate");
+        let read = b.find(".group_at_contact(").expect("the spot read");
+        assert!(gate < read, "{b}");
+        // Split, or this test's own source would satisfy it.
+        assert!(src.contains(concat!(
+            "eng.set_iota_at_log(",
+            "spot_iota_at_log, iota_list::known, iota_list::name);"
+        )));
+    }
+
+    /// The log-time offer's spot side: the group EVERY spot of exactly this call within
+    /// [`SPOT_IOTA_WINDOW`] names, none when any two name different groups, and never another
     /// call's. Two spots of one station on one band merge into one row of the spot buffer, which
     /// keeps only the newest comment; the offer still sees both.
     #[test]
@@ -59050,7 +61658,7 @@ mod tests {
         let mut log = SpotIotaLog::default();
         for sp in &spots {
             buf.push_at(t0, sp.clone());
-            log.note(t0, sp);
+            log.note(t0, 0, sp);
         }
         let rows = buf.recent_within(t0, SPOTS_WINDOW);
         assert_eq!(
@@ -59072,10 +61680,10 @@ mod tests {
         );
         assert_eq!(log.group_for(t0, "IT9ABC"), None, "two groups name neither");
         assert_eq!(log.group_for(t0, "K1ABC"), None);
-        // Past the Spots board's window a spot no longer counts, for or against.
-        let later = t0 + SPOTS_WINDOW + std::time::Duration::from_secs(1);
+        // Past the window a spot no longer counts, for or against.
+        let later = t0 + SPOT_IOTA_WINDOW + std::time::Duration::from_secs(1);
         assert_eq!(log.group_for(later, "IA5X"), None);
-        log.note(later, &mk("IA5Y", 14025.0, "IOTA EU-031"));
+        log.note(later, 0, &mk("IA5Y", 14025.0, "IOTA EU-031"));
         assert_eq!(log.group_for(later, "IA5Y").as_deref(), Some("EU-031"));
         assert_eq!(log.named.len(), 1, "older spots are let go");
     }
@@ -61399,6 +64007,160 @@ mod tests {
                 let _ = t.join();
             }
         }
+    }
+
+    /// A Hamlib rotctld for a mount declaring `max_el` of elevation (`0`: none, `rot_type=Az`),
+    /// standing at 100° / 45°, that refuses a `P` above its elevation range as Hamlib's frontend
+    /// does (`RPRT -1`) and takes any other.
+    fn hamlib_mount(max_el: u32) -> FakeRotctld {
+        FakeRotctld::serve(move |cmd| {
+            if cmd == "\\dump_state" {
+                let kind = if max_el > 0 { "AzEl" } else { "Az" };
+                return format!(
+                    "1\n603\nmin_az=0.000000\nmax_az=360.000000\nmin_el=0.000000\n\
+                     max_el={max_el}.000000\nsouth_zero=0\nrot_type={kind}\ndone\n"
+                );
+            }
+            if cmd == "p" {
+                return "100.000000\n45.000000\n".into();
+            }
+            let el = cmd
+                .split_whitespace()
+                .nth(2)
+                .and_then(|w| w.parse::<f64>().ok());
+            match el {
+                Some(el) if cmd.starts_with('P') && el > f64::from(max_el) => "RPRT -1\n".into(),
+                _ => "RPRT 0\n".into(),
+            }
+        })
+    }
+
+    /// The elevation of every `P` line a fake rotctld was sent.
+    fn p_elevations(rot: &FakeRotctld) -> Vec<f64> {
+        rot.commands()
+            .iter()
+            .filter(|c| c.starts_with('P'))
+            .filter_map(|c| c.split_whitespace().nth(2)?.parse::<f64>().ok())
+            .collect()
+    }
+
+    /// Review F1: with Allow flip on, a high pass asks an az/el mount for more than its declared
+    /// 90°, and the mount refuses. The fallback used to be `P <az> 0`, so the antenna went to the
+    /// horizon on the first tick and on every azimuth-only tick after it. On a mount that declares
+    /// an elevation axis the azimuth-only sends now keep the elevation it reports.
+    #[test]
+    fn an_azel_mount_that_refuses_an_elevation_keeps_its_elevation() {
+        use tempo_core::rotator::{RotOutcome, RotStep};
+        let rot = hamlib_mount(90);
+        assert_eq!(
+            super::send_rot_step(
+                &rot.addr,
+                RotStep::PointAzEl {
+                    az: 10.0,
+                    el: 120.0
+                }
+            ),
+            RotOutcome::AzOnly
+        );
+        assert_eq!(
+            super::send_rot_step(&rot.addr, RotStep::PointAz { az: 20.0 }),
+            RotOutcome::AzOk
+        );
+        assert_eq!(
+            p_elevations(&rot),
+            vec![120.0, 45.0, 45.0],
+            "refused, then azimuth with the elevation held: {:?}",
+            rot.commands()
+        );
+    }
+
+    /// CONTROL: a mount with no elevation axis is sent exactly the azimuth line it always was.
+    #[test]
+    fn an_azimuth_only_mount_still_gets_its_azimuth_line() {
+        use tempo_core::rotator::{RotOutcome, RotStep};
+        let rot = hamlib_mount(0);
+        assert_eq!(
+            super::send_rot_step(&rot.addr, RotStep::PointAzEl { az: 10.0, el: 30.0 }),
+            RotOutcome::AzOnly
+        );
+        assert_eq!(
+            super::send_rot_step(&rot.addr, RotStep::PointAz { az: 20.0 }),
+            RotOutcome::AzOk
+        );
+        let points: Vec<String> = rot
+            .commands()
+            .into_iter()
+            .filter(|c| c.starts_with('P'))
+            .collect();
+        assert_eq!(
+            points,
+            vec![
+                "P 10.0 30.0".to_string(),
+                tempo_audio::rotator::point_line(10.0).trim().to_string(),
+                tempo_audio::rotator::point_line(20.0).trim().to_string(),
+            ]
+        );
+    }
+
+    /// Review F1 on the PstRotator link (#480): a flipped elevation past the link's 90° is
+    /// refused, and neither the fallback nor the azimuth-only ticks after it send PstRotator an
+    /// `<ELEVATION>0</ELEVATION>`: they keep the 30° it reports.
+    #[test]
+    fn a_refused_flip_never_sends_pstrotator_to_the_horizon() {
+        use tempo_core::rotator::{RotOutcome, RotStep};
+        let (pst, link) = (0..50)
+            .find_map(|_| {
+                let pst = std::net::UdpSocket::bind("127.0.0.1:0").ok()?;
+                let port = pst.local_addr().ok()?.port();
+                let link =
+                    tempo_audio::pstrotator::PstRotatorLink::start(&format!("127.0.0.1:{port}"), 0)
+                        .ok()?;
+                Some((pst, link))
+            })
+            .expect("a free UDP port pair");
+        let reply = pst.local_addr().expect("its port").port() + 1;
+        let heard = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let log = heard.clone();
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 256];
+            while let Ok((n, _)) = pst.recv_from(&mut buf) {
+                let d = String::from_utf8_lossy(&buf[..n]).to_string();
+                let answer: Option<&[u8]> = match d.as_str() {
+                    "<PST>AZ?</PST>" => Some(b"AZ:100.0\r"),
+                    "<PST>EL?</PST>" => Some(b"EL:30.0\r"),
+                    _ => None,
+                };
+                match answer {
+                    Some(a) => {
+                        let _ = pst.send_to(a, ("127.0.0.1", reply));
+                    }
+                    None => log.lock().expect("the fake's log").push(d),
+                }
+            }
+        });
+        let addr = link.rotctld_addr().to_string();
+        assert_eq!(
+            super::send_rot_step(
+                &addr,
+                RotStep::PointAzEl {
+                    az: 10.0,
+                    el: 120.0
+                }
+            ),
+            RotOutcome::AzOnly
+        );
+        assert_eq!(
+            super::send_rot_step(&addr, RotStep::PointAz { az: 20.0 }),
+            RotOutcome::AzOk
+        );
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert_eq!(
+            *heard.lock().expect("the fake's log"),
+            vec![
+                "<PST><AZIMUTH>10</AZIMUTH><ELEVATION>30</ELEVATION></PST>".to_string(),
+                "<PST><AZIMUTH>20</AZIMUTH><ELEVATION>30</ELEVATION></PST>".to_string(),
+            ]
+        );
     }
 
     /// SO-50 armed for real: an FM bird worked with a handheld beam or a
@@ -66268,6 +69030,73 @@ mod tests {
         }
     }
 
+    /// Logbook ▸ Check eQSL sent marks reaches the backend only through its three commands, each
+    /// DEFINED as an `async fn` and REGISTERED, as Check confirmations' are.
+    #[test]
+    fn the_eqsl_sent_mark_commands_are_async_and_registered() {
+        let src = include_str!("lib.rs");
+        let list = src
+            .split_once("tauri::generate_handler![")
+            .expect("the handler list")
+            .1
+            .split_once("])")
+            .expect("the end of the handler list")
+            .0;
+        for name in [
+            "eqsl_sent_mark_review",
+            "clear_eqsl_sent_marks",
+            "restore_eqsl_sent_marks",
+        ] {
+            // Column zero, so this test's own strings cannot satisfy it.
+            assert!(
+                src.lines()
+                    .any(|l| l.starts_with(&format!("async fn {name}("))),
+                "{name} is not an async command"
+            );
+            assert!(
+                list.lines().any(|l| l.trim() == format!("{name},")),
+                "{name} is not registered"
+            );
+        }
+    }
+
+    /// ★ "Check eQSL sent marks" lists the contacts holding the sent mark an eQSL card left, newest
+    /// first, under the names the Logbook reads, and reading it writes nothing. A bureau mark
+    /// beside a card, the undated electronic mark with no card and a card with no mark are not
+    /// listed.
+    #[test]
+    fn the_eqsl_sent_mark_review_lists_only_card_marks_and_writes_nothing() {
+        let engine = fresh_engine();
+        engine.lock().unwrap().import_adif(
+            "<CALL:4>K1AA<BAND:3>20m<FREQ:6>14.074<MODE:3>FT8<QSO_DATE:8>20260102<TIME_ON:6>010101<QSL_SENT:1>Y<QSL_SENT_VIA:1>E<EQSL_QSL_RCVD:1>Y<EOR>\n\
+             <CALL:4>K2BB<BAND:3>20m<FREQ:6>14.074<MODE:3>FT8<QSO_DATE:8>20260102<TIME_ON:6>010202<QSL_SENT:1>Y<QSL_SENT_VIA:1>E<EQSL_QSL_RCVD:1>Y<EOR>\n\
+             <CALL:4>K3CC<BAND:3>20m<FREQ:6>14.074<MODE:3>FT8<QSO_DATE:8>20260102<TIME_ON:6>010303<QSL_SENT:1>Y<QSL_SENT_VIA:1>B<EQSL_QSL_RCVD:1>Y<EOR>\n\
+             <CALL:4>K4DD<BAND:3>20m<FREQ:6>14.074<MODE:3>FT8<QSO_DATE:8>20260102<TIME_ON:6>010404<QSL_SENT:1>Y<QSL_SENT_VIA:1>E<EOR>\n\
+             <CALL:4>K5EE<BAND:3>20m<FREQ:6>14.074<MODE:3>FT8<QSO_DATE:8>20260102<TIME_ON:6>010505<EQSL_QSL_RCVD:1>Y<EOR>\n",
+        );
+        let before = engine.lock().unwrap().stored_log();
+        let listed = crate::eqsl_sent_mark_review_on(&engine).expect("the review reads");
+        let row = |call: &str| before.iter().find(|r| r.call == call).unwrap();
+        let line = |call: &str| {
+            serde_json::json!({
+                "id": row(call).id.unwrap().to_string(),
+                "call": call,
+                "whenUnix": row(call).when_unix,
+                "band": "20m",
+                "mode": "FT8",
+            })
+        };
+        assert_eq!(
+            serde_json::to_value(&listed).unwrap(),
+            serde_json::json!([line("K2BB"), line("K1AA")])
+        );
+        assert_eq!(
+            engine.lock().unwrap().stored_log(),
+            before,
+            "reading the review writes nothing"
+        );
+    }
+
     /// One hunter-feed row, spotted `age_secs` ago. The AGE is the point: both feed paths judge
     /// an activation by the spot's own time, not by when the poller last fetched.
     fn live_spot(
@@ -70360,6 +73189,168 @@ mod tests {
             }
         }
         assert!(armed.is_empty(), "Enable TX armed from afar by {armed:?}");
+    }
+
+    /// ⛔ RECALLING AN SSTV MEMORY ARMS NOTHING. Through the shack's own runner with the arguments
+    /// recall sends: Enable TX stays off when it was off, and it was off, from Digital and from
+    /// Phone alike. What was already armed stays armed: a recall changes neither way. CONTROL: the
+    /// SSTV screen's own pick keeps arming on the way into Phone.
+    #[test]
+    fn recalling_an_sstv_memory_leaves_enable_tx_where_it_was() {
+        use crate::command_dispatch::{tauri_runner, Runner};
+        use crate::{sstv_tune, sstv_tune_recall};
+        use serde_json::{json, Value};
+        use tempo_app::settings::OperatingMode;
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        let app = tauri::test::mock_builder()
+            .manage(engine.clone())
+            .invoke_handler(tauri::generate_handler![sstv_tune, sstv_tune_recall])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("a mock app");
+        let _main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("a main window");
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let ask = |cmd: &str, args: Value| -> Result<Value, String> {
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                cmd.to_string(),
+                args,
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            answered
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the handler answered")
+        };
+        let args = json!({"dialMhz": 144.8875, "band": "2m", "mode": "FM"});
+        for (section, armed) in [
+            ("digital", false),
+            ("phone", false),
+            ("digital", true),
+            ("phone", true),
+        ] {
+            {
+                let mut e = engine_lock(&engine);
+                e.set_operating_mode(section, false);
+                e.set_tx_enabled(armed);
+                assert_eq!(e.tx_enabled(), armed, "premise: {section}");
+            }
+            let ran = ask("sstv_tune_recall", args.clone());
+            assert!(ran.is_ok(), "{section}: {ran:?}");
+            let e = engine_lock(&engine);
+            assert_eq!(
+                e.settings().operating_mode,
+                OperatingMode::Phone,
+                "{section}"
+            );
+            assert!((e.settings().dial_mhz - 144.8875).abs() < 1e-9, "{section}");
+            assert_eq!(e.tx_enabled(), armed, "from {section}, armed: {armed}");
+        }
+
+        {
+            let mut e = engine_lock(&engine);
+            e.set_operating_mode("digital", false);
+            e.set_tx_enabled(false);
+        }
+        assert!(ask("sstv_tune", args).is_ok());
+        assert!(
+            engine_lock(&engine).tx_enabled(),
+            "CONTROL: the SSTV screen's own pick still arms"
+        );
+    }
+
+    /// ⛔ RECALLING A MEMORY TO RTTY, PSK OR JTTY ARMS NOTHING, as recalling it arms nothing where a
+    /// digital memory went before those screens could be saved on. Through the shack's own runner
+    /// with the arguments recall sends: the section is entered and the dial moved, Enable TX stays
+    /// as it was, and the hint tells a following window not to re-assert the section. CONTROLS: the
+    /// ordinary Work of a spot, on the same section, still arms, and says a following window may
+    /// assert; and so does the entry a tab makes.
+    #[test]
+    fn recalling_a_memory_to_a_keyboard_screen_leaves_enable_tx_where_it_was() {
+        use crate::command_dispatch::{tauri_runner, Runner};
+        use crate::{set_operating_mode, work_spot, work_spot_recall};
+        use serde_json::{json, Value};
+        let engine: crate::SharedEngine = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_app::engine::Engine::new("W9XYZ", "EN52", 0),
+        ));
+        let spots: crate::SharedSpots = std::sync::Arc::new(std::sync::Mutex::new(
+            tempo_net::cluster::SpotBuffer::new(8),
+        ));
+        let app = tauri::test::mock_builder()
+            .manage(engine.clone())
+            .manage(spots)
+            .invoke_handler(tauri::generate_handler![
+                set_operating_mode,
+                work_spot,
+                work_spot_recall
+            ])
+            .build(tauri::test::mock_context(tauri::test::noop_assets()))
+            .expect("a mock app");
+        let _main = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+            .build()
+            .expect("a main window");
+        let runner: Runner = tauri_runner(app.handle().clone());
+        let ask = |cmd: &str, args: Value| -> Value {
+            let (answer, answered) = std::sync::mpsc::channel();
+            runner(
+                cmd.to_string(),
+                args,
+                Box::new(move |result| {
+                    let _ = answer.send(result);
+                }),
+            );
+            answered
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the handler answered")
+                .unwrap_or_else(|why| panic!("{cmd}: {why}"))
+        };
+        for section in ["rtty", "keyboard", "jtty"] {
+            let args = json!({"mode": section, "freqMhz": 14.08, "band": "20m"});
+            let from = |e: &mut tempo_app::engine::Engine, start: &str, armed: bool| {
+                e.set_operating_mode(start, false);
+                e.set_tx_enabled(armed);
+                assert_eq!(e.tx_enabled(), armed, "premise: {section} from {start}");
+            };
+            for (start, armed) in [
+                ("digital", false),
+                ("phone", false),
+                ("digital", true),
+                ("phone", true),
+            ] {
+                from(&mut engine_lock(&engine), start, armed);
+                let snap = ask("work_spot_recall", args.clone());
+                assert_eq!(snap["workAfar"], json!(true), "{section}: no re-assert");
+                let e = engine_lock(&engine);
+                assert!((e.settings().dial_mhz - 14.08).abs() < 1e-9, "{section}");
+                assert_eq!(
+                    e.tx_enabled(),
+                    armed,
+                    "{section} from {start}, armed: {armed}"
+                );
+            }
+
+            from(&mut engine_lock(&engine), "digital", false);
+            let snap = ask("work_spot", args);
+            assert_ne!(snap["workAfar"], json!(true), "CONTROL {section}");
+            assert!(
+                engine_lock(&engine).tx_enabled(),
+                "CONTROL: an ordinary spot's Work on {section} still arms"
+            );
+
+            from(&mut engine_lock(&engine), "digital", false);
+            ask(
+                "set_operating_mode",
+                json!({"mode": section, "followFreq": false}),
+            );
+            assert!(
+                engine_lock(&engine).tx_enabled(),
+                "CONTROL: opening {section} by its tab still arms"
+            );
+        }
     }
 
     /// The Phone tab pressed on the SSTV screen, through the shack's own runner with the arguments

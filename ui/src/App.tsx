@@ -57,6 +57,7 @@ import {
   subscribeSnapshot,
 } from './api'
 import { withErrorToast, pushToast, dismissToast, setPopupNotifications, setPopupMinSeconds } from './toast'
+import { patchSettings } from './settings/patch'
 import { setPopupCorner } from './features/popupCorner'
 import { contestStartWarning } from './features/contestLocation'
 import { keptFileMessage } from './features/keptFiles'
@@ -65,7 +66,9 @@ import { flexVoiceNeedsDax } from './features/flexDaxNote'
 import { phoneTuneNeedsRearSource } from './features/yaesuTuneNote'
 import { useActivationNotices } from './useActivationNotices'
 import { t } from './i18n'
+import { ALARM_CELL_VIEWS } from './features/alarmCellViews'
 import { resolveUnits, setUnitsMirror } from './units'
+import { setSwrCutoffMirror } from './swrCutoff'
 import { doubleBeep, processDecodes, txEarcon, type NeededAlert } from './alerts'
 import { openingToastSpec } from './openingAlert'
 import { announce } from './announce'
@@ -175,6 +178,7 @@ import {
   setLicenseClass,
   setExperienceLevel as apiSetExperienceLevel,
   markSetupWizardSeen,
+  dismissPropEngineNote,
   stopQsoRecording,
   pointRotatorAtCall,
   qsySetEnabled as apiQsySetEnabled,
@@ -192,9 +196,13 @@ import {
   hotkeyRecallTarget,
   markRecalled,
   memoriesStore,
+  memoryModeFromRig,
+  nextModeScreen,
   planRecall,
   type Memory,
+  type MemoryScreen,
 } from './features/memories'
+import { modeNotCommanded, recallLeavesTxAlone, ridesPhone, tuneForRecall, useMemoryOpenScreenRequests } from './features/memoryRecall'
 import { dueNetReminders, reminderKey, untilPhrase } from './features/nets'
 import { bandLabelForMhz } from './band'
 import { sameCall } from './callsign'
@@ -219,6 +227,7 @@ import { slotOverDroppedLane } from './features/slotOverDropped'
 import { pttRefusedLane } from './features/pttRefused'
 import { pcMicLane } from './features/pcMic'
 import { voiceDroppedLane } from './features/voiceDropped'
+import { atuFailedLane } from './features/atuFailed'
 import { clockRepairHoldLane } from './features/clockRepairHold'
 import { heldLine, txOnHeldLane } from './features/txOnHeld'
 import { drivesAnotherStation } from './features/durableStore'
@@ -263,6 +272,9 @@ import { FirstContactWalk } from './components/FirstContactWalk'
 import { RadioPicker } from './components/RadioPicker'
 import { PROFILES, type ProfileId } from './features/profiles'
 import { CallCardHost } from './components/CallCard'
+import { BestTimesCardHost } from './components/BestTimesCard'
+import { noteRadioMode } from './features/bestTimesAsk'
+import { radioModeOf } from './features/bestTimes'
 import { useRadioSwitchNotice } from './useRadioSwitchNotice'
 
 // ⚠️ THIS FILE IS ON THE MIGRATED LIST (i18n/hardcoded-strings.test.ts). It is the shell: it
@@ -448,6 +460,10 @@ function App() {
   const { leftW, rightW, leftMax, rightMax, commitLeft, commitRight, resetLeft, resetRight, resetWidths } =
     usePaneWidths(scale)
   const [snap, setSnap] = useState<AppSnapshot | null>(null)
+  // The card a call menu opens starts on the mode the radio is in (features/bestTimesAsk). Here, with
+  // the snapshot and ahead of every early return, so the hook order never changes.
+  const radioModeForBestTimes = radioModeOf(snap)
+  useEffect(() => noteRadioMode(radioModeForBestTimes), [radioModeForBestTimes])
   // Night (Settings ▸ Appearance ▸ Theme): App is its one writer. Auto goes by the sun at the
   // station's grid square, which arrives with the snapshot — until then Auto has no grid and stays off.
   const { night, setNight, gridKnown: nightGridKnown } = useNight(snap?.mygrid ?? '')
@@ -524,6 +540,8 @@ function App() {
   }, [view])
   // Bird handed off from a map satellite click — the Satellites section opens on it.
   const [satFocus, setSatFocus] = useState<string | null>(null)
+  // Bird handed off by NORAD id — the Phone/CW band picker's QO-100 row (`BandPicker`).
+  const [satFocusNorad, setSatFocusNorad] = useState<number | null>(null)
   // Callsign handed off from a cockpit recall card's previous-contact row (#192) — the Logbook
   // opens with it in the search box. `pendingWork`'s shape, not `satFocus`'s, and the `ts` nonce
   // is the reason: the operator can type over the Logbook's search box, go back to the cockpit
@@ -645,6 +663,12 @@ function App() {
   // and stop the decoder under the screen the operator is on. So a leave that lands with its screen
   // in front again asks for that screen's entry arm once more (only ever an upgrade from off, and
   // refused after the operator's own Stop, as on entry).
+  // The mode screen a save from the Memories section came from (`nextModeScreen`). Null until one
+  // has been entered: a launch straight into Memories names none, and such a save recalls by mode.
+  const lastModeScreenRef = useRef<MemoryScreen | null>(nextModeScreen(null, view))
+  useEffect(() => {
+    lastModeScreenRef.current = nextModeScreen(lastModeScreenRef.current, view)
+  }, [view])
   const decoderScreensRef = useRef<DecoderScreen[]>(isDecoderScreen(view) ? [view] : [])
   useEffect(() => {
     const { left, held } = enterView(decoderScreensRef.current, view)
@@ -926,6 +950,31 @@ function App() {
     setStatus('voiceDropped', voiceDroppedLane(snap?.radio.voiceDropped))
   }, [snap?.radio.voiceDropped?.at, snap?.radio.voiceDropped?.cause])
 
+  // An ATU press the button accepted that came to nothing in the radio loop (dropped, refused by the
+  // radio, or no answer): the lane says which, since the button's answer came before it, until the
+  // next press the button accepts; not on the Remote page either.
+  useEffect(() => {
+    setStatus('atuFailed', atuFailedLane(snap?.radio.atuFailed))
+  }, [
+    snap?.radio.atuFailed?.at,
+    snap?.radio.atuFailed?.cause,
+    snap?.radio.atuFailed?.why,
+    snap?.radio.atuFailed?.stoodDown,
+  ])
+
+  // The TX watchdog halted transmit: a CRITICAL lane item while the station says so (it was the top
+  // bar's own chip, whose width wrapped the bar and moved Stop TX under it). Critical, so it is also
+  // shown beside Stop TX on the operating screens' TX strip (TxAlarmBanner). Its words are the
+  // catalog's sentence for this halt, with how to transmit again (the bar's old chip said it).
+  useEffect(() => {
+    setStatus(
+      'txWatchdog',
+      snap?.radio.txWatchdog
+        ? { tier: 'critical', message: t('remote.stream.mic.ended.watchdog'), detail: t('shell.lane.txWatchdog.detail') }
+        : null,
+    )
+  }, [snap?.radio.txWatchdog])
+
   // A clock repair holds transmit: from the press of Repair clock until the repair ends, the
   // station starts no transmission, and the lane says so on every screen while it lasts. Not on
   // the Remote page either: that page is frozen.
@@ -1056,6 +1105,9 @@ function App() {
   const workDxpedRef = useRef<((c: WorkableCard) => void) | null>(null)
   // Latest link tier (TempoFast/TempoDeep/FT8/FT4) — the rail's Digital button preserves it.
   const tierRef = useRef<Tier>('FT8')
+  // Whether the Satellites screen exists, for the poll below (mounted once, so it reads a ref).
+  const satsOnRef = useRef(false)
+  satsOnRef.current = features.isOn('sats')
   useEffect(() => {
     let live = true
     const OPENING_ALERT_COOLDOWN_MS = 10 * 60_000
@@ -1100,7 +1152,19 @@ function App() {
           const armedSats = Object.keys(satAlarmMap())
           if (armedSats.length > 0) {
             getSatSchedule(armedSats, 2)
-              .then((passes) => checkSatAlarms(passes, Date.now()))
+              .then((passes) =>
+                checkSatAlarms(
+                  passes,
+                  Date.now(),
+                  // #478: the notice's button opens that pass on the Satellites screen.
+                  satsOnRef.current
+                    ? (name) => {
+                        setSatFocus(name)
+                        setView('sats')
+                      }
+                    : undefined,
+                ),
+              )
               .catch(() => {})
           }
           // ISS SSTV auto-arm (opt-in, default off): at AOS tune 145.800 FM + arm
@@ -1601,6 +1665,12 @@ function App() {
     setUnitsMirror(settings?.units)
   }, [settings?.units])
 
+  // #476: the high-SWR cutoff, for the TX meters' tooltip (swrCutoff.ts). Not before the first
+  // load, so a window opening does not blank the value every other window is showing.
+  useEffect(() => {
+    if (settings) setSwrCutoffMirror(settings)
+  }, [settings])
+
   // The station profile changed (the picker, Settings, or an activation picking its park's): the
   // settings copy every screen reads takes the profile's call, grid, state and power.
   const activeStationProfile = snap?.activeStationProfile
@@ -2062,7 +2132,14 @@ function App() {
 
   // #451: the SSTV screen's tune on opening — the app's tune, never remembered as the
   // operator's Phone dial (`sstv_tune_on_open`).
+  // Not when a recall opened the screen: the memory's frequency is the one the operator asked for,
+  // and the recall's toast has just named it.
+  const sstvOpenedByRecallRef = useRef(false)
+  useEffect(() => {
+    if (view !== 'sstv') sstvOpenedByRecallRef.current = false
+  }, [view])
   const handleSstvTuneOnOpen = useCallback((dialMhz: number, band: string, mode: string) => {
+    if (sstvOpenedByRecallRef.current) return
     void withErrorToast(
       () => apiSstvTuneOnOpen(dialMhz, band, mode),
       t('shell.frequency.failed'),
@@ -2257,11 +2334,13 @@ function App() {
   // change and re-homes the dial; the setFrequency lands LAST so the recalled frequency
   // is the final word. A feature-disabled cockpit gates only the NAV — the rig still
   // retunes (same behavior as the Needed board's work-click).
+  const isScreenOn = features.isOn
   const recallMemory = useCallback(
     (m: Memory) => {
-      const plan = planRecall(m)
+      // A recorded screen that is switched off plans as a memory with none, so these two gates
+      // keep their meaning.
+      const plan = planRecall(m, isScreenOn)
       const target = plan.view
-      const opMode: 'digital' | 'phone' | 'cw' = target === 'operate' ? 'digital' : target
       // The CW/Phone cockpits are opt-in. Recalling into a disabled cockpit would tune the
       // rig but leave the operator with no place to work it — and (finding) half-apply a
       // heavyweight settings write for a hidden feature. Guide them to enable it instead.
@@ -2294,7 +2373,7 @@ function App() {
           // ATOMIC band+mode+freq — the SAME verb the Needed board uses, so the rig can never
           // land in the new mode at the old dial (no wrong-mode flash) and the mode is always
           // asserted, gated path excluded above.
-          const s2 = await workSpot(opMode, plan.freqMhz, band)
+          const s2 = await tuneForRecall(plan, band)
           if (!s2) {
             pushToast(t('shell.recall.failed'), 'error', 3000)
             return
@@ -2303,23 +2382,25 @@ function App() {
           // Honor a saved SSB memory's EXACT sideband over the band-auto convention (some nets
           // run off-convention, e.g. USB below 10 MHz), and drop any stale manual override.
           // Set AFTER the tune — set_frequency clears the override on a band change.
-          if (target === 'phone' && (mode === 'USB' || mode === 'LSB')) {
+          if (ridesPhone(target) && (mode === 'USB' || mode === 'LSB')) {
             const s3 = await setSidebandOverride(mode as 'USB' | 'LSB')
             if (s3) setSnap(s3)
           }
-          // Keep the rig-mode effect's guard in sync so the nav doesn't re-home the dial.
-          lastOpModeRef.current = opMode
-          lastHomedModeRef.current = opMode // recalled to an EXACT dial — do not re-home
+          // Keep the rig-mode effect's guard in sync so the nav doesn't re-home the dial. SSTV and
+          // APRS own no rig mode, so entering them asserts nothing and there is nothing to guard.
+          const rigMode = RIG_MODE_BY_VIEW[target]
+          if (rigMode) {
+            lastOpModeRef.current = rigMode
+            lastHomedModeRef.current = rigMode // recalled to an EXACT dial — do not re-home
+          }
+          // The tune entered the section and left Enable TX as it was, so the [view] effect must not
+          // re-assert it and arm the latch (`recallLeavesTxAlone`).
+          if (recallLeavesTxAlone(target)) afarEntryRef.current = target
+          if (target === 'sstv' && viewRef.current !== 'sstv') sstvOpenedByRecallRef.current = true
           setView(target)
           memoriesStore.update((b) => markRecalled(b, m.id, Math.floor(Date.now() / 1000)))
-          // The phone policy commands only SSB/FM; AM/WFM/DV/DN can't be set there, so for a
-          // phone memory in one of those we tune the dial but tell the operator to set the mode
-          // on the rig rather than claim a mode we didn't command. (CW and digital recalls set
-          // their mode via the CW/DATA operating policy, so they're always honest.)
-          const phoneUncommandable =
-            target === 'phone' && mode !== 'USB' && mode !== 'LSB' && mode !== 'FM'
           pushToast(
-            phoneUncommandable
+            modeNotCommanded(plan)
               ? t('shell.recall.done.setMode', {
                   name: m.name,
                   freq: plan.freqMhz.toFixed(3),
@@ -2338,7 +2419,7 @@ function App() {
         }
       })()
     },
-    [cwEnabled, phoneEnabled],
+    [cwEnabled, phoneEnabled, isScreenOn],
   )
 
   // Global quick-recall hotkeys: Ctrl+1..9 (or ⌘+1..9 — the native chord on macOS, where
@@ -2800,6 +2881,25 @@ function App() {
     [handleSetMode, settings?.fdActive, snap?.mode],
   )
 
+  // The one-time notice after the move to P.533 (Settings::move_prop_engine_once): a sticky notice
+  // in the pop-up corner, which covers no transmit control in any corner and moves nothing in the
+  // cockpit. Raised once a run; the settings file is its only record, cleared by ✕ or by opening
+  // Settings from it (dismiss_prop_engine_note). A save that is refused shows it again next launch.
+  const engineNoteRaised = useRef(false)
+  useEffect(() => {
+    if (engineNoteRaised.current || !settings?.propEngineNoteDue || settings.propEngine !== 'p533') return
+    engineNoteRaised.current = true
+    const answered = () => void dismissPropEngineNote().catch(() => {})
+    pushToast(t('prop.engine.note'), 'info', 0, {
+      action: () => {
+        handleView('settings')
+        answered()
+      },
+      actionLabel: t('nav.settings.label'),
+      onClose: answered,
+    })
+  }, [settings, handleView])
+
   // ⭐ "WORK THIS CONTEST IN CW / IN PHONE" FROM A CONTEST WINDOW (features/contestWorkIn): the same switch
   // as the rail's, so the contest's S&P is entered where the session dropped and a station already in
   // the contest keeps its role, and then this window comes to the front, where the operator asked to be.
@@ -2807,6 +2907,13 @@ function App() {
   useWorkInRequests((next) => {
     handleView(next)
     void focusWindow().catch(() => {})
+  })
+  // A recall from the Memories pop-out into SSTV or APRS, whose tunes tick no nav hint. The pop-out
+  // has tuned already; both screens are entered without asserting anything on the rig.
+  useMemoryOpenScreenRequests((screen) => {
+    if (!features.isOn(screen)) return
+    if (screen === 'sstv' && viewRef.current !== 'sstv') sstvOpenedByRecallRef.current = true
+    setView(screen)
   })
 
   // ⭐ CTRL+O FROM A CONTEST STRIP (`features/contestKeys.ts`): the Contest screen, with an ask its
@@ -2961,6 +3068,15 @@ function App() {
         )
       }
     })
+  }, [])
+
+  // #468: the top bar's listening level. Saves that one field over the settings as the backend
+  // holds them (the patch seam), then reads them back so the slider settles on what was kept; a
+  // failed save says so and rejects, which puts the slider back.
+  const handleListenLevel = useCallback(async (level: number) => {
+    const saved = await withErrorToast(() => patchSettings(() => ({ monitorLevel: level })), t('settings.save.failed'))
+    if (!saved) throw new Error('not saved')
+    setSettings(await getSettings())
   }, [])
 
   const handleSettingsSaved = useCallback(() => {
@@ -3623,6 +3739,14 @@ function App() {
     settings?.fdActive === true && snap.mode !== 'fieldDay' && !contestReentering
       ? () => void handleSetMode('fieldday-sp')
       : undefined
+  // The band picker's QO-100 row opens the Satellites screen on the bird, as a map click does.
+  const openSatellite = features.isOn('sats')
+    ? (norad: number) => {
+        setSatFocus(null)
+        setSatFocusNorad(norad)
+        setView('sats')
+      }
+    : undefined
   const cwWorkspace = (
     <CwCockpit
       esmSetting={esmSettingFor('cw')}
@@ -3631,6 +3755,7 @@ function App() {
       announceVerbosity={settings?.announceVerbosity ?? 'needed'}
       onResumeContest={resumeContest}
       onOpenLogbook={openLogbookFor}
+      onOpenSatellite={openSatellite}
       onEntryCall={reportEntry.cw}
       pitchHz={settings?.cwPitchHz ?? 600}
       onPitch={(cwPitchHz) => setSettings((prev) => (prev ? { ...prev, cwPitchHz } : prev))}
@@ -3663,6 +3788,7 @@ function App() {
       yaesuTuneNote={settings ? phoneTuneNeedsRearSource(settings) : false}
       onResumeContest={resumeContest}
       onOpenLogbook={openLogbookFor}
+      onOpenSatellite={openSatellite}
       onEntryCall={reportEntry.phone}
       snap={snap}
       panels={phonePanels}
@@ -4011,6 +4137,7 @@ function App() {
             features.isOn('sats')
               ? (name) => {
                   setSatFocus(name)
+                  setSatFocusNorad(null)
                   setView('sats')
                 }
               : undefined
@@ -4046,6 +4173,7 @@ function App() {
           <SatellitesView
             onOpenLogbook={openLogbookFor}
             focusSat={satFocus}
+            focusNorad={satFocusNorad}
             snap={snap}
             onPopOut={() => void openPanelWindow('sats')}
             onSnap={setSnap}
@@ -4062,8 +4190,13 @@ function App() {
             onPopOut={() => void openPanelWindow('memories')}
             myGrid={settings?.mygrid ?? ''}
             dialMhz={snap.radio.dialMhz}
+            dialScreen={lastModeScreenRef.current ?? undefined}
             dialMode={
-              lastOpModeRef.current === 'cw'
+              lastModeScreenRef.current === 'sstv' || lastModeScreenRef.current === 'aprs'
+                ? // Neither screen is a section, so the ladder below would answer for whichever
+                  // section the operator came through: FT8 for a channel held in FM on SSTV.
+                  memoryModeFromRig(snap.radio.rigMode?.trim() || snap.radio.sideband || 'USB')
+                : lastOpModeRef.current === 'cw'
                 ? 'CW'
                 : lastOpModeRef.current === 'phone'
                   ? settings?.phoneMode === 'fm'
@@ -4237,6 +4370,8 @@ function App() {
       <KeyConfirmBanner />
       {/* The window's one station card: a call clicked anywhere on screen opens it (CallCard.tsx). */}
       <CallCardHost snap={snap} spots={allSpots} needAlertsByCall={needAlertsByCall} />
+      {/* And its Best times card, from a call menu's Best times item (BestTimesCard.tsx). */}
+      <BestTimesCardHost spots={allSpots} />
       {/* ⚠️ NOT ON CONNECT, by the operator's ruling (2026-10-01): "at very top, its the frequency, the
           band dropdown, tx off, tune, stop tx.  That bar doenst need to live in connect/conditions",
           then "remove all radio control from connect, reclaim that space". So the whole bar goes on
@@ -4268,6 +4403,10 @@ function App() {
         // Tempo's cluster moved into its TX strip under the Tempo header (2026-10-01), so
         // the top bar hides it there exactly as on Operate.
         hideTxControls={effectiveView === 'operate' || effectiveView === 'chat'}
+        // The screens whose TX strip carries the transmitter alarm cell (TxAlarmBanner), where every
+        // critical lane item is also shown beside Stop TX, so the bar's lane may be cut. Elsewhere
+        // (Logbook, Field Day, Satellites, Settings…) the lane is the only place a critical item shows.
+        alarmCell={ALARM_CELL_VIEWS.has(effectiveView)}
         hideFrequencyControl={
           effectiveView === 'phone' ||
           effectiveView === 'cw' ||
@@ -4328,6 +4467,11 @@ function App() {
         fdActive={settings?.fdActive ?? false}
         showLocalClock={localClock}
         nowBar={nowBarInTopBar ? nowBar(true) : undefined}
+        listenLevel={
+          settings?.monitorEnabled
+            ? { level: settings.monitorLevel ?? 0.5, onCommit: handleListenLevel }
+            : undefined
+        }
       />}
 
       <UpdateBanner update={selfUpdate} />
@@ -4584,9 +4728,9 @@ function App() {
                     onAtuTune={handleAtuTune}
                     onAtuBypass={handleAtuBypass}
                     onStopTx={handleHaltTx}
+                    alarm={<TxAlarmBanner alarms={snap.txAlarms} onSnap={setSnap} />}
                   />
                 }
-                txAlarm={<TxAlarmBanner alarms={snap.txAlarms} onSnap={setSnap} />}
                 onOpenSettings={openSettingsAt}
               />
             </div>

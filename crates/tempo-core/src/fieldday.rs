@@ -271,7 +271,10 @@ pub struct LoggedQso {
     /// 0 = never assigned (rows built by paths that predate sync).
     pub seq: u64,
     /// ⭐ **This contact duplicates one already in the log** — it is REPORTED to the
-    /// sponsor and worth nothing. Every contest logs its dupes
+    /// sponsor and worth nothing. A contact in a mode the contest bans is not one the sponsor
+    /// credits, so a legal contact after it is no duplicate of it
+    /// (the log's scoring list); what the FT sequencer treats as worked is the dupe index,
+    /// which still holds it. Every contest logs its dupes
     /// ([`DupeRule::log_dupes`](crate::contest::DupeRule::log_dupes), the operator's ruling
     /// of 2026-10-11), so a row of any contest, Field Day's included, can carry it.
     ///
@@ -360,6 +363,18 @@ pub struct LoggedQso {
     /// and carried into the Logbook by the merge as the my-side park fields, so the contact
     /// counts for the activation too; no contest file writes it.
     pub activation: RowActivation,
+    /// ⭐ **Made on natural power** (ARRL Field Day 7.3.8: *"A separate list of natural power
+    /// QSOs should be submitted with your entry"*) — Settings' "on natural power now" at the
+    /// moment it was logged, as [`FieldDayLog::natural_power`] held it. Journaled
+    /// (`APP_NEXUS_NATPOWER`) and read by [`FieldDayLog::natural_power_list`] alone: no
+    /// submitted file and no club sync carries it, so the list is this laptop's own.
+    pub natural_power: bool,
+    /// The worked station's IOTA reference, as Nexus filled it at log time from a spot or the
+    /// callbook (`logbook::offer::iota_at_log`; operator ruling, 2026-11-10: every log path),
+    /// with where it came from. No exchange carries an island, so this is the only way one reaches
+    /// the general log: the merge writes it, marked by its source (`contest::merge`). In the
+    /// journal alone (`APP_NEXUS_IOTA`, `APP_NEXUS_IOTA_SRC`), never the contest's own export.
+    pub iota: Option<crate::logbook::offer::IotaOffer>,
 }
 
 /// The my-side activation a contest row was logged during ([`LoggedQso::activation`]): empty
@@ -413,20 +428,11 @@ impl LoggedQso {
     /// mode: an empty mode is never banned, as `FdRuleset::mode_banned` says.
     ///
     /// The same answer as `FdRuleset::mode_banned(&self.submode)` without its allocation, which the
-    /// scorer's walk of every row on every snapshot must not make: the row's mode is stored trimmed
-    /// and uppercase, and the loader takes a banned mode only uppercase and non-empty.
-    ///
-    /// ⭐ **…except a `CW` row, whose CLASS is its mode.** A CW contact records no submode (CW
-    /// needs none, [`FieldDayLog::log_mode_at`]), and that is not missing evidence: it
-    /// was worked in CW. A contest that bans CW (the ARRL RTTY Roundup, RTTY only) must not
-    /// credit it for having nothing in the submode.
+    /// scorer's walk of every row on every snapshot must not make, ⭐ **except a `CW` row, whose
+    /// CLASS is its mode**: [`worked_in_banned_mode`], the one decision every judge of a banned
+    /// mode makes, the club's included.
     pub fn banned_under(&self, rs: &crate::fd_rules::FdRuleset) -> bool {
-        let mode = if self.submode.is_empty() && self.mode == "CW" {
-            "CW"
-        } else {
-            self.submode.as_str()
-        };
-        rs.banned_modes.contains(&mode)
+        worked_in_banned_mode(&self.mode, &self.submode, rs)
     }
 
     /// ⭐ **What the dupe key needs to know about this row's bird** — [`SatKey`]'s
@@ -552,6 +558,10 @@ impl SpotMults {
         mode_class: &str,
         submode: Option<&str>,
     ) -> Vec<(&'static str, String)> {
+        // The mode the spot NAMES, never its class: a spot that names none has its class guessed
+        // from its frequency, and a guess is not a contact in a banned mode (a "CW" spot on 40 m
+        // during the RTTY Roundup is likely RTTY). A logged row is judged by
+        // [`worked_in_banned_mode`].
         if submode.is_some_and(|m| self.ruleset.mode_banned(m)) {
             return Vec::new();
         }
@@ -723,6 +733,32 @@ fn record_when(f: &std::collections::HashMap<String, String>) -> u64 {
     }
 }
 
+/// ⭐ **Was a contact of mode class `mode` (`CW` | `PH` | `DIG`), recorded as `submode`, worked
+/// in a mode `rs` bans?** The one decision every judge of a banned CONTACT makes: a row
+/// ([`LoggedQso::banned_under`]), the dupe check that admits a row before it exists and the
+/// club's merged rows (tempo-app's `ClubLog`). Not a spot's multiplier preview ([`SpotMults`]): a
+/// spot's class may be a guess from its frequency, so the preview reads only the mode it names.
+///
+/// ⭐ **A `CW` contact with no recorded mode was worked in CW.** CW needs no submode, so its rows
+/// record none ([`FieldDayLog::log_mode_at`]); a contest that bans CW (the ARRL RTTY Roundup) must
+/// not credit it for having nothing there. Any other empty mode is never banned, as
+/// [`FdRuleset::mode_banned`](crate::fd_rules::FdRuleset::mode_banned) says: a guess is not a
+/// contact in a banned mode. Case and surrounding spaces do not matter, and nothing is allocated:
+/// the scorer asks for every row on every snapshot.
+pub fn worked_in_banned_mode(mode: &str, submode: &str, rs: &crate::fd_rules::FdRuleset) -> bool {
+    let submode = submode.trim();
+    let worked = if submode.is_empty() && mode.trim().eq_ignore_ascii_case("CW") {
+        "CW"
+    } else {
+        submode
+    };
+    !worked.is_empty()
+        && rs
+            .banned_modes
+            .iter()
+            .any(|m| m.eq_ignore_ascii_case(worked))
+}
+
 /// ADIF `MODE` and `SUBMODE` → (mode class, actual mode): how the journal reads a row's mode back
 /// ([`FieldDayLog::restore_row`]) — the reverse of the map in [`adif`](FieldDayLog::adif), so keep
 /// the two in step — and how an edit reads the mode the operator picked ([`mode_of_recorded`]),
@@ -806,6 +842,9 @@ fn set_row_call(row: &mut LoggedQso, call: &str) {
         row.entity = placed.map(|p| p.entity.to_string());
         row.continent = placed.map(|p| p.continent.to_string());
         row.prefix = crate::contest::wpx_prefix(call);
+        // …and the island group Nexus filled for the busted call is that station's, not this
+        // one's ([`LoggedQso::iota`]): it goes, as the general log's popup drops it.
+        row.iota = None;
     }
 }
 
@@ -1026,6 +1065,10 @@ pub struct FieldDayLog {
     /// contest entry and whenever the activation changes, and copied as [`rig`](Self::rig) is
     /// ([`LoggedQso::activation`]).
     pub activation: RowActivation,
+    /// Whether this station is on natural power RIGHT NOW, stamped by the engine at contest
+    /// entry and on every save, and copied onto each row as it is logged exactly as
+    /// [`operator`](Self::operator) is ([`LoggedQso::natural_power`]).
+    pub natural_power: bool,
     /// The LIVE rows: what is scored, duped, exported, merged and synced.
     qsos: Vec<LoggedQso>,
     /// ⭐ **The contacts the operator took out of the live log — kept, never deleted**
@@ -1041,6 +1084,17 @@ pub struct FieldDayLog {
     /// as an ordered `Vec<String>` rather than by a `(call, band, mode)` tuple — a
     /// mobile in a new county is a new station, and a tuple cannot say so.
     worked: HashSet<Vec<String>>,
+    /// ⭐ **The scoring list: the keys of the contacts the sponsor CREDITS**, which
+    /// [`LoggedQso::dupe`] is read against. Every row in [`worked`](Self::worked) but those
+    /// worked in a mode the contest bans ([`LoggedQso::banned_under`]): the sponsor gives such a
+    /// contact no credit, so a legal contact made after it with the same station, band, mode
+    /// group and exchange is the first one it credits, and counts.
+    ///
+    /// ⚠️ **A second set, never a change to `worked`.** The FT sequencer's "worked before" and
+    /// the B4 marks read `worked`, and at Winter Field Day the sequencer logs FT8 contacts: a
+    /// banned row stays in it, so what an FT contest treats as worked is what it always was.
+    /// For a contest that bans no mode the two sets are equal.
+    credited: HashSet<Vec<String>>,
     /// ⭐ **The `constant_sent` warning raised at LOG time** (§6.3) — `Some` once a
     /// contact has been logged whose sent value for a slot the role declares constant
     /// disagrees with the log's first row.
@@ -1128,9 +1182,11 @@ impl FieldDayLog {
             tx_power: String::new(),
             grid: String::new(),
             activation: RowActivation::default(),
+            natural_power: false,
             qsos: Vec::new(),
             removed: Vec::new(),
             worked: HashSet::new(),
+            credited: HashSet::new(),
             constant_sent_warning: None,
             next_seq: 1,
             held: Vec::new(),
@@ -1314,14 +1370,29 @@ impl FieldDayLog {
     /// Both write paths — [`log_exchange_at`](Self::log_exchange_at) and the journal's
     /// `restore_row` — come through here, because two copies of this decision is how
     /// the live log and the restored one come to disagree about the same contact.
-    fn admit_row(&mut self, key: Vec<String>, satellite: bool) -> Option<bool> {
+    ///
+    /// The mark it returns is the scoring list's ([`credited`](Self::credited)): a row in a
+    /// mode the contest bans (its class `mode` and its recorded `submode`, judged as
+    /// [`LoggedQso::banned_under`] judges the row) is marked as the index says, and enters only
+    /// the index, so a legal contact after it is no duplicate.
+    fn admit_row(
+        &mut self,
+        key: Vec<String>,
+        satellite: bool,
+        mode: &str,
+        submode: &str,
+    ) -> Option<bool> {
         // ⭐ A satellite contact this ruleset gives no credit (Winter Field Day) is logged,
         // worth nothing, and a dupe of nothing: kept out of the index, it can never refuse a
         // later contact that does count.
         if satellite && !self.ruleset().satellite_credit {
             return Some(false);
         }
-        self.admit(key)
+        if worked_in_banned_mode(mode, submode, self.ruleset()) {
+            return self.admit(key);
+        }
+        self.admit(key.clone())?;
+        Some(!self.credited.insert(key))
     }
 
     fn admit(&mut self, key: Vec<String>) -> Option<bool> {
@@ -1350,9 +1421,11 @@ impl FieldDayLog {
     /// test that says so. `log_dupes` does not appear here on purpose: refusing happens
     /// when a row is offered, and every row already in the log was already admitted.
     fn rebuild_dupe_index(&mut self) {
-        let rule = self.dupe_rule();
-        let credit = self.ruleset().satellite_credit;
+        let rs = self.ruleset();
+        let rule = rs.dupe_rule;
+        let credit = rs.satellite_credit;
         let mut worked: HashSet<Vec<String>> = HashSet::new();
+        let mut credited: HashSet<Vec<String>> = HashSet::new();
         for q in &mut self.qsos {
             // A satellite contact the ruleset gives no credit stays out, as `admit_row`
             // keeps it out.
@@ -1361,10 +1434,19 @@ impl FieldDayLog {
                 continue;
             }
             // `insert` is false when the key was already present — an earlier row has
-            // it, which is precisely what makes this row a duplicate.
-            q.dupe = !worked.insert(rule.key(q));
+            // it, which is precisely what makes this row a duplicate. A row in a banned mode
+            // is marked by the index and enters only it; any other is marked by the scoring
+            // list, as `admit_row` marks it.
+            let key = rule.key(q);
+            q.dupe = if q.banned_under(rs) {
+                !worked.insert(key)
+            } else {
+                worked.insert(key.clone());
+                !credited.insert(key)
+            };
         }
         self.worked = worked;
+        self.credited = credited;
     }
 
     /// ⭐ **Correct a contact already in the log** — a busted callsign or a wrong band,
@@ -1871,7 +1953,7 @@ impl FieldDayLog {
             .key_of(call, &band, &mode, &rx, &tx, sat_key);
         // The per-ruleset split lives in [`admit`](Self::admit) — one decision, shared
         // with the journal restore, so the live log and the restored one cannot disagree.
-        let Some(dupe) = self.admit_row(key, sat.is_some()) else {
+        let Some(dupe) = self.admit_row(key, sat.is_some(), &mode, submode) else {
             return false;
         };
         // ⭐ FIRING SITE 1 of 3 (§6.3): the cheap one, at the moment the operator can
@@ -1935,6 +2017,9 @@ impl FieldDayLog {
             tx_power: self.tx_power.clone(),
             grid: self.grid.clone(),
             activation: self.activation.clone(),
+            natural_power: self.natural_power,
+            // Filled by the engine once the row is in ([`FieldDayLog::set_iota_since`]).
+            iota: None,
         });
         // The contact is logged, so nothing is in flight any more: the next exchange
         // composed issues its own serial instead of re-sending this one's.
@@ -2066,9 +2151,10 @@ impl FieldDayLog {
     /// ⭐ **A contact in a mode the contest bans is left out the same way** (FT8 at the
     /// Illinois QSO Party: *"FT4 and FT8 contacts will receive no contact credit"*): logged,
     /// in the files, and worth no point, multiplier, bonus or board cell
-    /// ([`LoggedQso::banned_under`]). It still keys the dupe index like any row, so whether a
-    /// later contact is a duplicate is what it always was, and the FT sequencer, which asks
-    /// that index whether a station was worked, is not touched by it.
+    /// ([`LoggedQso::banned_under`]). It still keys the dupe index like any row, so the FT
+    /// sequencer, which asks that index whether a station was worked, is not touched by it; it
+    /// stays off the scoring list ([`credited`](Self::credited)), so a legal contact made after
+    /// it with the same station is no duplicate and counts, as the sponsor credits it.
     ///
     /// ⚠️ **The hosted Remote page recounts [`qso_count`](Self::qso_count) from the rows it
     /// is sent**, by the marks a row carries (its `dupe`, its `sat` when the status says
@@ -2115,6 +2201,22 @@ impl FieldDayLog {
 
     /// The live rows, in log order. A contact the operator removed is not here; it is in
     /// [`removed`](Self::removed).
+    /// Give every row of `call` from index `from` on (the rows one contact just wrote: a county
+    /// line writes several) the IOTA reference Nexus filled for it ([`LoggedQso::iota`]). A row
+    /// that already holds one keeps it.
+    pub fn set_iota_since(
+        &mut self,
+        from: usize,
+        call: &str,
+        offer: &crate::logbook::offer::IotaOffer,
+    ) {
+        for q in self.qsos.iter_mut().skip(from) {
+            if q.iota.is_none() && q.call.eq_ignore_ascii_case(call) {
+                q.iota = Some(offer.clone());
+            }
+        }
+    }
+
     pub fn qsos(&self) -> &[LoggedQso] {
         &self.qsos
     }
@@ -2177,6 +2279,46 @@ impl FieldDayLog {
     pub fn bonus_station_points(&self) -> u32 {
         self.ruleset()
             .bonus_station_points(self.counting().map(|q| q.call.as_str()))
+    }
+
+    /// ⭐ **The separate list of natural power QSOs** ARRL Field Day 7.3.8 asks for: *"100
+    /// bonus points for Field Day groups making a minimum of five QSOs without using power
+    /// from commercial mains or petroleum driven generator … A separate list of natural power
+    /// QSOs should be submitted with your entry."* Every counting row marked
+    /// [`LoggedQso::natural_power`], in log order, one line each. This laptop's rows only:
+    /// the mark rides no club sync.
+    pub fn natural_power_list(&self) -> String {
+        let rows: Vec<&LoggedQso> = self.counting().filter(|q| q.natural_power).collect();
+        let mut s = String::from("NATURAL POWER QSOs (ARRL Field Day rule 7.3.8)\n");
+        s.push_str(&format!("Station {}\n", self.mycall));
+        s.push_str(&format!(
+            "{} contact{} (the bonus needs at least five)\n\n",
+            rows.len(),
+            if rows.len() == 1 { "" } else { "s" }
+        ));
+        for q in rows {
+            let (date, time) = cabrillo_datetime(q.when_unix);
+            s.push_str(&format!(
+                "{date} {time}Z  {:<5} {:<5} {}\n",
+                q.band,
+                q.recorded_mode(),
+                q.call
+            ));
+        }
+        s
+    }
+
+    /// ⭐ **Counting contacts a GOTA station made** — the rows sent under another call than
+    /// the log's own ([`LoggedQso::station_call`]), which only a club's rebuild stamps, and
+    /// only for its GOTA station's rows. ARRL 7.3.13.1: *"Any successfully completed contacts
+    /// made by an operator at the GOTA station are worth five (5) bonus points"*. 0 on a
+    /// position's own log, whose rows carry no station call.
+    pub fn gota_contacts(&self) -> u32 {
+        let n = self
+            .counting()
+            .filter(|q| !q.station_call.is_empty())
+            .count();
+        u32::try_from(n).unwrap_or(u32::MAX)
     }
 
     /// Distinct ARRL/RAC sections worked — a DISPLAY count for the worked-sections
@@ -2587,6 +2729,20 @@ impl FieldDayLog {
                 if !q.activation.state.is_empty() {
                     s.push_str(&adif_field("APP_NEXUS_MYSTATE", &q.activation.state));
                 }
+            }
+            // Made on natural power, in the journal alone: the separate list is built from it.
+            if journal && q.natural_power {
+                s.push_str(&adif_field("APP_NEXUS_NATPOWER", "Y"));
+            }
+            // The IOTA reference Nexus filled, with its source, in the journal alone: the merge
+            // writes it into the general log ([`LoggedQso::iota`]).
+            if let Some(o) = q.iota.as_ref().filter(|_| journal) {
+                s.push_str(&adif_field("APP_NEXUS_IOTA", &o.reference));
+                let src = match o.source {
+                    crate::logbook::offer::OfferSource::Spot => "spot",
+                    crate::logbook::offer::OfferSource::Callbook => "callbook",
+                };
+                s.push_str(&adif_field("APP_NEXUS_IOTA_SRC", src));
             }
             // A contact the operator removed: kept, with when (`restore_row` reads it back).
             if let Some(at) = removed_unix {
@@ -3047,7 +3203,7 @@ impl FieldDayLog {
             None if journaled_seq.is_some_and(|s| self.qsos.iter().any(|q| q.seq == s)) => {
                 return RowFate::Passed;
             }
-            None => match self.admit_row(key, sat.is_some()) {
+            None => match self.admit_row(key, sat.is_some(), mode, &submode) {
                 Some(dupe) => dupe,
                 None => return RowFate::Passed,
             },
@@ -3175,6 +3331,27 @@ impl FieldDayLog {
                 },
                 _ => RowActivation::default(),
             },
+            // From the journal's own `APP_NEXUS_NATPOWER`: a row journaled before the tag
+            // existed was not marked.
+            natural_power: f
+                .get("APP_NEXUS_NATPOWER")
+                .is_some_and(|v| v.trim().eq_ignore_ascii_case("Y")),
+            // From the journal's own `APP_NEXUS_IOTA` and its source: none on an older row.
+            iota: f
+                .get("APP_NEXUS_IOTA")
+                .map(|r| r.trim().to_ascii_uppercase())
+                .filter(|r| !r.is_empty())
+                .map(|reference| crate::logbook::offer::IotaOffer {
+                    reference,
+                    source: if f
+                        .get("APP_NEXUS_IOTA_SRC")
+                        .is_some_and(|v| v.trim().eq_ignore_ascii_case("callbook"))
+                    {
+                        crate::logbook::offer::OfferSource::Callbook
+                    } else {
+                        crate::logbook::offer::OfferSource::Spot
+                    },
+                }),
         };
         match removed_unix {
             Some(at) => self.keep_removed(row, at),
@@ -8855,6 +9032,125 @@ mod tests {
         let row = &log.qsos()[0];
         assert_eq!(row.call, "K9AAB", "the edit took");
         assert_eq!(row.activation, activation("POTA", "US-0001", "ND"));
+    }
+
+    /// The IOTA reference Nexus filled for a contest row, with its source, survives a restart
+    /// (the journal carries it), never reaches the contest's own export, and goes when the call
+    /// is corrected (the busted call's island group is not this station's).
+    #[test]
+    fn a_rows_filled_iota_is_journaled_and_dropped_with_a_corrected_call() {
+        use crate::logbook::offer::{IotaOffer, OfferSource};
+        let mut log = ilqp_from_kane();
+        ilqp_contact(&mut log, "K9AAA", "599", "COOK", "CW");
+        let offer = IotaOffer {
+            reference: "NA-046".into(),
+            source: OfferSource::Callbook,
+        };
+        log.set_iota_since(0, "K9AAA", &offer);
+        assert_eq!(log.qsos()[0].iota.as_ref(), Some(&offer));
+        let journal = log.journal_adif();
+        assert!(journal.contains("<APP_NEXUS_IOTA:6>NA-046"), "{journal}");
+        assert!(
+            journal.contains("<APP_NEXUS_IOTA_SRC:8>callbook"),
+            "{journal}"
+        );
+        assert!(
+            !log.adif().contains("IOTA"),
+            "not in the contest's own export"
+        );
+        let mut back = ilqp_from_kane();
+        back.restore_journal(&journal, 0, log.qsos()[0].when_unix + 60);
+        assert_eq!(back.qsos()[0].iota.as_ref(), Some(&offer), "read back");
+
+        let when = log.qsos()[0].when_unix;
+        let edit = ContactEdit {
+            call: "K9AAB".into(),
+            rows: vec![vec![
+                ("RST".into(), "599".into()),
+                ("QTH".into(), "COOK".into()),
+            ]],
+            band: log.qsos()[0].band.clone(),
+            mode: "CW".into(),
+        };
+        log.edit_contact("K9AAA", when, &edit).unwrap();
+        assert_eq!(log.qsos()[0].iota, None, "a corrected call drops it");
+    }
+
+    /// ⭐ **ARRL Field Day 7.3.8's separate list of natural power QSOs.** A contact logged while
+    /// the station is on natural power is marked, the journal keeps the mark (a restart reads
+    /// it back), no submitted file carries it, and the list holds exactly the marked contacts
+    /// that count — a duplicate is not one.
+    #[test]
+    fn the_natural_power_list_holds_the_marked_contacts_and_the_journal_keeps_the_mark() {
+        let fd = || {
+            FieldDayLog::new(
+                "W9XYZ",
+                ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+                "20m",
+            )
+        };
+        let mut log = fd();
+        assert!(log.log_mode_at("K9AAA", "2A", "IL", "CW", 0, 1_782_583_200));
+        log.natural_power = true;
+        assert!(log.log_mode_at("K9BBB", "1D", "WI", "CW", 0, 1_782_583_260));
+        assert!(log.log_mode_at("K9CCC", "1E", "IN", "PH", 0, 1_782_583_320));
+        // The same station again: a duplicate, logged, and not a natural power QSO to list.
+        log.log_mode_at("K9BBB", "1D", "WI", "CW", 0, 1_782_583_380);
+        log.natural_power = false;
+        assert!(log.log_mode_at("K9DDD", "3A", "OH", "CW", 0, 1_782_583_440));
+
+        let marked = |log: &FieldDayLog| -> Vec<String> {
+            log.qsos()
+                .iter()
+                .filter(|q| q.natural_power)
+                .map(|q| q.call.clone())
+                .collect()
+        };
+        assert_eq!(marked(&log), ["K9BBB", "K9CCC", "K9BBB"]);
+        assert_eq!(
+            log.natural_power_list(),
+            "NATURAL POWER QSOs (ARRL Field Day rule 7.3.8)\n\
+             Station W9XYZ\n\
+             2 contacts (the bonus needs at least five)\n\n\
+             2026-06-27 1801Z  20m   CW    K9BBB\n\
+             2026-06-27 1802Z  20m   SSB   K9CCC\n"
+        );
+
+        let journal = log.journal_adif();
+        assert_eq!(
+            journal.matches("<APP_NEXUS_NATPOWER:1>Y").count(),
+            3,
+            "{journal}"
+        );
+        for export in [log.adif(), log.submission_adif()] {
+            assert!(!export.contains("APP_NEXUS_NATPOWER"), "{export}");
+        }
+        let mut back = fd();
+        back.merge_adif(&journal, 0);
+        assert_eq!(
+            marked(&back),
+            ["K9BBB", "K9CCC", "K9BBB"],
+            "read back from the journal"
+        );
+        assert_eq!(back.natural_power_list(), log.natural_power_list());
+    }
+
+    /// ⭐ A position's own log holds no GOTA contact (its rows carry no station call); a row
+    /// stamped with another call (a club's rebuild of its GOTA station's rows) is one, once it
+    /// counts.
+    #[test]
+    fn gota_contacts_are_the_counting_rows_sent_under_another_call() {
+        let mut log = FieldDayLog::new(
+            "W9XYZ",
+            ContestSession::field_day(FdEvent::ArrlFd, "3A", "WI"),
+            "20m",
+        );
+        assert!(log.log_mode_at("K9AAA", "2A", "IL", "CW", 0, 1_782_583_200));
+        assert_eq!(log.gota_contacts(), 0);
+        log.station_call = "K9GOTA".into();
+        assert!(log.log_mode_at("K9BBB", "1D", "WI", "CW", 0, 1_782_583_260));
+        assert!(log.log_mode_at("K9CCC", "1E", "IN", "PH", 0, 1_782_583_320));
+        assert_eq!(log.gota_contacts(), 2);
     }
 }
 

@@ -1738,6 +1738,38 @@ pub enum VoiceDropCause {
     Keyed,
 }
 
+/// An ATU press Nexus accepted that did not end in a tune-up the radio took
+/// ([`RadioStatus::atu_failed`]). The button's own refusals are toasts; these happen after it
+/// answered, in the radio loop, so nothing else would tell the operator.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AtuFailed {
+    /// When, in Unix seconds.
+    pub at: u64,
+    pub cause: AtuFailCause,
+    /// Why a [`AtuFailCause::Dropped`] press was dropped, in the gate's own words. `None` for the
+    /// other causes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
+    /// [`AtuFailCause::NoAnswer`] only: the Digital section stood transmit down in case the radio
+    /// is tuning (`Engine::note_atu_tune_started`). The other sections have nothing to stand down.
+    #[serde(default)]
+    pub stood_down: bool,
+}
+
+/// What became of an ATU press that did not end in a tune-up the radio took ([`AtuFailed`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AtuFailCause {
+    /// Nothing was sent: the press went stale before the radio loop could send it, a transmit gate
+    /// closed in between, or the radio connection was changing over.
+    Dropped,
+    /// The radio answered the tune-up with an error, so nothing is tuning.
+    Refused,
+    /// The tune-up went out and no answer came back: the radio may be tuning.
+    NoAnswer,
+}
+
 /// A slot over's unkey the radio did not accept ([`RadioStatus::slot_unkey_failed`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1931,6 +1963,12 @@ pub struct RadioStatus {
     pub tx_alc_zone: Option<f32>,
     #[serde(default)]
     pub tx_po_w: Option<f32>,
+    /// `tx_po_w` is DERIVED, not the radio's own watts: the radio's Hamlib backend gives no
+    /// `RFPOWER_METER_WATTS`, so its `RFPOWER_METER` (a share of the radio's meter) is shown as
+    /// that share of `rated_watts` (#489). The meter marks it as an estimate, and it is never
+    /// written to the log. Left out of the JSON when false.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub tx_po_derived: bool,
     #[serde(default)]
     pub tx_comp_db: Option<f32>,
     /// The radio's own PA (finals) temperature in degrees CELSIUS, as its CAT interface last
@@ -2083,6 +2121,12 @@ pub struct RadioStatus {
     /// when false.
     #[serde(default, skip_serializing_if = "is_false")]
     pub phone_mode_refused: bool,
+    /// The licence lock is the data MODE alone, and the rule that refuses it
+    /// (`Engine::data_mode_refusal`): the same over in another mode would key. `tx_allowed` is
+    /// false with it, and the cockpit names the rule and the mode instead of "this frequency is
+    /// outside your license privileges". Skipped when `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_mode_refusal: Option<DataModeRefusal>,
     /// The rig is held on an FM channel at or above 29 MHz (`Engine::fm_channel`), so FM is
     /// commanded whatever the section's own policy says: in Phone, the FM channel kept from the
     /// SSTV screen. The Phone cockpit's AUTO reads FM from it. Skipped when false.
@@ -2186,6 +2230,12 @@ pub struct RadioStatus {
     /// byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub voice_dropped: Option<VoiceDropped>,
+    /// The last ATU press that did not end in a tune-up the radio took, after the button had
+    /// accepted it: dropped before it was sent, refused by the radio, or sent with no answer.
+    /// Cleared by the next press the button accepts. ABSENT until it happens, so every snapshot
+    /// before one is byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub atu_failed: Option<AtuFailed>,
     /// FT8/FT4 decode depth (1=Fast, 2=Normal, 3=Deep) — mirrored into the snapshot so the Operate
     /// cockpit can show + change it live (a mid-session CPU/battery lever), not only Settings.
     #[serde(default = "default_decode_depth_dto")]
@@ -2495,6 +2545,29 @@ pub struct RadioStatus {
     /// scale and cannot define it.
     #[serde(default)]
     pub rated_watts: u32,
+}
+
+/// Why the licence refuses a data over for its MODE alone ([`RadioStatus::data_mode_refusal`]).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DataModeRefusal {
+    /// The rule that refuses it.
+    pub rule: DataModeRule,
+    /// The mode as the operator picked it, period and submode included: `"Q65-30E"`, `"MSK144-15"`.
+    pub mode: String,
+}
+
+/// The rules [`DataModeRefusal`] names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DataModeRule {
+    /// Wider than the 2.8 kHz US data is held to below 28.3 MHz: Q65-30E and Q65-15D.
+    TooWide,
+    /// Faster than the 300 baud US data is held to on 2200 m and 630 m: MSK144.
+    TooFast,
+    /// MSK144 keys at 1500 Hz above the dial whatever the TX marker says, and its signal there
+    /// is outside the licence while the marker is not.
+    FixedCentre,
 }
 
 /// serde default helper: TX drive defaults to 0.9.
@@ -4606,6 +4679,10 @@ pub struct ImportStats {
     /// (`tempo_app::loghistory::undo_run`). `None` from a build that named none.
     #[serde(default)]
     pub run: Option<String>,
+    /// The confirmations of a LoTW report that match no contact in the log: reported, and added
+    /// only when the operator presses Add (`logwrite::add_lotw_unmatched`). 0 for any other file.
+    #[serde(default)]
+    pub unmatched: usize,
 }
 
 /// A confirmation in a synced report with no matching logged QSO (diagnostic).

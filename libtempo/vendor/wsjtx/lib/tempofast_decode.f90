@@ -5,8 +5,7 @@
 !
 ! WSJT-X is free software: you can redistribute it and/or modify
 ! it under the terms of the GNU General Public License as published by
-! the Free Software Foundation, either version 3 of the License, or
-! (at your option) any later version.
+! the Free Software Foundation, version 3 of the License.
 !
 ! WSJT-X is distributed in the hope that it will be useful,
 ! but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -100,7 +99,7 @@ contains
       procedure(ft1_decode_callback) :: callback
       logical, intent(in) :: lapcqonly
 
-      parameter (NDMAX=NMAX/NDOWN)            !Max downsampled samples (48000/54=888)
+      parameter (NDMAX=NMAX/NDOWN)            !Baseband samples kept (888 at 224 Hz)
 
       character message*37,msgsent*37
       character c77*77
@@ -212,6 +211,10 @@ contains
 
 ! Top-K Phase 1 candidate selection for Phase 2 Viterbi
       integer, parameter :: NTOP=3           !Number of Phase 1 peaks to try
+! A candidate this close to a signal already decoded in this frame is that signal again.
+      real, parameter :: REPEAT_HZ=8.0
+      real :: fdec(100)                      !Frequency of each entry in decodes
+      logical :: repeat_cand
       integer :: itop_idx(3)                 !Indices of top Phase 1 peaks
       real    :: df_top(3)                   !Coarse freq for each top peak
       integer :: ibest_top(3)                !Best timing for each top peak
@@ -247,7 +250,7 @@ contains
       nd1=0
 
       if(first) then
-         fs=12000.0/NDOWN                    !Sample rate after downsampling
+         fs=NDFFT*12000.0/NMAX               !Baseband rate: 224 Hz, 8 samples/symbol
          dt_samp=1.0/fs                      !Sample interval (s)
          tt=real(NSPS)/12000.0               !Symbol period (s)
          txt=real(NZ)/12000.0                !TX duration (s)
@@ -396,6 +399,15 @@ contains
 ! ================================================================
          do icand=1,ncand
             f0=candidate(1,icand)
+! Skip a candidate on a signal already decoded: it can only decode to the same text, which the
+! duplicate check would then discard, after a full timing and frequency search. Each decoded
+! signal comes round again because later passes sync on the same audio. Close pairs lose
+! nothing by this: at under 60 Hz spacing two equal signals were not copied either way.
+            repeat_cand=.false.
+            do i=1,ndecodes
+               if(abs(f0-fdec(i)).lt.REPEAT_HZ) repeat_cand=.true.
+            enddo
+            if(repeat_cand) cycle
             snr0=candidate(2,icand)-1.0
             irv=nint(candidate(3,icand))     !RV index hint (0,1,2) from sync
             this%cur_rv=0                    !Reported RV = #RVs combined; standalone/AP
@@ -438,7 +450,7 @@ contains
 ! ================================================================
 
                nss_ds = NSS
-               nsps_dn = real(NSPS_NUM)/(real(NSPS_DEN)*real(NDOWN))
+               nsps_dn = real(NSS)
 
 ! Phase 1: Coarse sync metric at 1 Hz steps
                call timer('sync1d  ',0)
@@ -776,9 +788,12 @@ contains
                      if(decodes(i).eq.message) idupe=1
                   enddo
                   if(idupe.eq.1) cycle
+! A full decode list (decodes and fdec both hold 100) takes no more, like a duplicate.
+                  if(ndecodes.ge.size(decodes)) cycle
 
                   ndecodes=ndecodes+1
                   decodes(ndecodes)=message
+                  fdec(ndecodes)=f1
 
                   nsnr=nint(snr_est)
                   xdt=ibest/fs - 0.5
@@ -891,9 +906,12 @@ contains
                         if(decodes(i).eq.message) idupe=1
                      enddo
                      if(idupe.eq.1) exit
+! A full decode list takes no more, like a duplicate.
+                     if(ndecodes.ge.size(decodes)) exit
 
                      ndecodes=ndecodes+1
                      decodes(ndecodes)=message
+                     fdec(ndecodes)=f1
                      nsnr=nint(snr_est)
                      xdt=ibest/fs - 0.5
                      qual=1.0-(nharderror+dmin)/60.0
@@ -973,9 +991,11 @@ contains
                            do i=1,ndecodes
                               if(decodes(i).eq.message) idupe=1
                            enddo
-                           if(idupe.eq.0) then
+! A full decode list takes no more, like a duplicate.
+                           if(idupe.eq.0 .and. ndecodes.lt.size(decodes)) then
                               ndecodes=ndecodes+1
                               decodes(ndecodes)=message
+                              fdec(ndecodes)=f1
                               nsnr=nint(snr_est)
                               xdt=real(harq_sibest)/fs - 0.5
                               qual=1.0-(nharderror+dmin)/60.0
@@ -1037,7 +1057,7 @@ subroutine sync1d_ft1(cd0,i0,ctwk,itwk,icos,sync)
   nsync_len=4*NSS_DS                            !32 samples per sync group
 
 ! Sync group positions using fractional samples/symbol
-  nsps_down=real(NSPS_NUM)/(real(NSPS_DEN)*real(NDOWN))  !7.9365
+  nsps_down=real(NSS_DS)
   i1=i0                                         !G1: symbol 0
   i2=i0+nint(47.0*nsps_down)                    !G2: symbol 47
   i3=i0+nint(95.0*nsps_down)                    !G3: symbol 95
@@ -1279,8 +1299,8 @@ subroutine ft1_freq_est_acorr(cd0, npts, i0, df_est)
 
   pi = 4.0*atan(1.0)
   twopi = 2.0*pi
-  nsps_down = 3000.0 / (7.0 * real(NDOWN))
-  dt_ds = real(NDOWN) / 12000.0
+  nsps_down = real(NSS_DS)
+  dt_ds = real(NMAX) / (real(NDFFT) * 12000.0)
 
 ! ================================================================
 ! Step 1: Generate self-reference (once, cached)

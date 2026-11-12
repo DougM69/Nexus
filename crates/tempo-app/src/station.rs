@@ -1187,6 +1187,98 @@ pub(crate) fn park_state_pairs(
         .collect()
 }
 
+/// What [`holding_card_sent_marks`] reads of each contact: what the Logbook lists of it (its call,
+/// time, band and mode), and what [`tempo_core::eqsl::holds_card_sent_mark`] decides by, eQSL's
+/// confirmation and the whole sent mark, its method, date and clear included.
+const CARD_SENT_MARKS: tempo_core::logbook::sqlite::Narrow = tempo_core::logbook::sqlite::Narrow {
+    columns: &[
+        "call",
+        "when_unix",
+        "band",
+        "mode",
+        "eqsl_rcvd_raw",
+        "qsl_sent",
+        "qsl_sent_via",
+        "qsl_sent_date_unix",
+        "qsl_sent_cleared_unix",
+    ],
+    uploads: false,
+};
+
+/// The contacts holding the sent mark an eQSL card left ([`tempo_core::eqsl::holds_card_sent_mark`]),
+/// newest first, as one narrow pass reads them: the Logbook's eQSL sent-mark review, read from the
+/// store with the Engine lock released. It writes nothing: a mark is cleared only by the
+/// operator's tick ([`card_sent_pairs`]).
+///
+/// ⚠️ It reads the store: never under the Engine lock. Take `rows` ([`StationCore::log_rows`])
+/// under it.
+pub fn holding_card_sent_marks(rows: &crate::logstore::LogRows) -> Result<Vec<QsoRecord>, String> {
+    use std::ops::ControlFlow;
+    use tempo_core::logbook::sqlite::{Order, Scope};
+    let mut held = Vec::new();
+    rows.each(CARD_SENT_MARKS, Scope::All, Order::Log, &mut |r| {
+        if tempo_core::eqsl::holds_card_sent_mark(r) {
+            held.push(r.clone());
+        }
+        ControlFlow::Continue(())
+    })
+    .map_err(|e| e.to_string())?;
+    held.sort_by(|a, b| b.when_unix.cmp(&a.when_unix));
+    Ok(held)
+}
+
+/// What the Logbook's eQSL sent-mark review makes of a contact it names ([`card_sent_pairs`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CardSentChange {
+    /// Clear the sent mark a card left, as the row's QSL menu clears one ([`LogOp::MarkQslSent`]
+    /// with no method): the operator's decision, at `now_unix`, which keeps a later import of a
+    /// file still holding the mark from putting it back
+    /// ([`tempo_core::logbook::QslSent::merge`]).
+    Clear { now_unix: u64 },
+    /// Undo a [`Self::Clear`] made at `cleared_unix`: the mark it took off, back as it was.
+    Restore { cleared_unix: u64 },
+}
+
+/// The rows `change` makes of `rows`: each contact still holding what the change takes, changed in
+/// its sent mark alone. A clear takes the mark a card left
+/// ([`tempo_core::eqsl::holds_card_sent_mark`]); a restore takes exactly the clear made at its
+/// time, and puts back [`tempo_core::eqsl::CARD_SENT_MARK`], the one mark a clear here takes off.
+/// A contact changed since (marked or cleared by hand, its card taken off) is left as it is: the
+/// operator ticked the mark they were shown.
+pub(crate) fn card_sent_pairs(rows: &[Arc<QsoRecord>], change: CardSentChange) -> Vec<MadeRow> {
+    rows.iter()
+        .filter_map(|row| {
+            let id = row.id?;
+            let now = match change {
+                CardSentChange::Clear { now_unix } => {
+                    if !tempo_core::eqsl::holds_card_sent_mark(row) {
+                        return None;
+                    }
+                    let clear = LogOp::MarkQslSent {
+                        id,
+                        via: None,
+                        date_unix: now_unix,
+                    };
+                    ops_on(row, &[clear])?.1?
+                }
+                CardSentChange::Restore { cleared_unix } => {
+                    let made = tempo_core::logbook::QslSent {
+                        cleared_unix: Some(cleared_unix),
+                        ..Default::default()
+                    };
+                    if row.qsl_sent != made {
+                        return None;
+                    }
+                    let mut now = QsoRecord::clone(row);
+                    now.qsl_sent = tempo_core::eqsl::CARD_SENT_MARK;
+                    now
+                }
+            };
+            Some((Arc::clone(row), Some(Arc::new(now))))
+        })
+        .collect()
+}
+
 /// What a check of one service ([`check_lotw_confirmations`] and the others) reads of a contact it
 /// only counts: its call, the call it was logged under (the station call, else the operator), its
 /// confirmations and its upload marks. LoTW's check reads every contact's station call in the same
@@ -2340,6 +2432,24 @@ pub(crate) fn plan_lotw_report(
     })
 }
 
+/// Import ADIF's "Add the unmatched rows as new contacts" for a LoTW report planned: the rows
+/// [`plan_lotw_report`] counts as matching no contact appended, marked uploaded to LoTW at
+/// `when_unix` — `Logbook::add_lotw_orphans`, on the rows of the report's calls. How many it adds,
+/// and the plan.
+///
+/// ⚠️ It reads the store: never under the Engine lock.
+pub(crate) fn plan_lotw_orphans(
+    plan: &LogPlan,
+    text: &str,
+    settings_call: Option<&str>,
+    when_unix: i64,
+) -> Result<(usize, Planned), String> {
+    let (calls, _) = calls_and_ids(text);
+    plan_on_candidates(plan, calls, &[], OpClass::Upgrade, |log| {
+        log.add_lotw_orphans(text, settings_call, when_unix)
+    })
+}
+
 /// A downloaded logbook planned (QRZ's fetch): its contacts the log lacks appended, and the ones it
 /// holds upgraded — `Logbook::merge_downloaded`, on the rows of the download's calls. How many it
 /// added and its summary, and the plan.
@@ -2421,6 +2531,20 @@ fn wider(a: OpClass, b: OpClass) -> OpClass {
     }
 }
 
+/// What a contact being logged reads for its IOTA reference and its group's name. Each runs under
+/// the Engine lock, so they only read what the command layer holds in memory.
+pub(crate) struct IotaAtLog {
+    /// What the spots say for a call, band and start time.
+    #[allow(clippy::type_complexity)]
+    pub(crate) spots:
+        Box<dyn Fn(&str, &str, u64) -> tempo_core::logbook::offer::SpotIota + Send + Sync>,
+    /// Whether a reference is an island group.
+    pub(crate) known: Box<dyn Fn(&str) -> bool + Send + Sync>,
+    /// The group's name from the IOTA list, for the contact's COMMENT; `None` without the list.
+    #[allow(clippy::type_complexity)]
+    pub(crate) name: Box<dyn Fn(&str) -> Option<String> + Send + Sync>,
+}
+
 /// The operator's station: one log, one identity of record, one set of outbound
 /// connector queues — shared by every receive/transmit chain the app runs.
 pub struct StationCore {
@@ -2480,6 +2604,18 @@ pub struct StationCore {
     /// happen for any log path. Drained by [`Self::take_pending_uploads`];
     /// bounded so a worker outage can't grow it without limit.
     pub(crate) pending_uploads: VecDeque<PendingUpload>,
+    /// The contacts that have left the log since the engine last looked
+    /// ([`Self::take_rows_gone`]), and whether a purge took them all. What the held list keeps
+    /// is the engine's, and every change to the log passes [`Self::make`].
+    rows_gone: Vec<RecordId>,
+    every_row_gone: bool,
+    /// Every contact deleted this session and not put back: [`Self::upload_cancelled`]. Off the
+    /// lock, the upload worker holds a copy of what it drained, and a sweep what it picked; neither
+    /// may send one of these or put it back on the queue.
+    gone_ids: std::collections::HashSet<RecordId>,
+    /// A purge since the worker's last drain: what it holds is cancelled, whatever its id, and
+    /// nothing logged after the purge can be among it.
+    purged_since_drain: bool,
     /// Uploads the full queue dropped (#290), held for the connector worker to report — see
     /// [`Self::enqueue_upload`]. Bounded like the queue.
     pub(crate) dropped_uploads: Vec<PendingUpload>,
@@ -2587,6 +2723,11 @@ pub struct StationCore {
     #[allow(clippy::type_complexity)]
     pub(crate) state_resolve:
         Option<Box<dyn Fn(&str, Option<&str>) -> Option<String> + Send + Sync>>,
+    /// What a contact being logged reads for its IOTA reference
+    /// ([`tempo_core::logbook::offer::fill_iota_at_log`]) and its group's name
+    /// ([`tempo_core::logbook::offer::note_iota_in_comment`]). Injected by the command layer, which
+    /// keeps the spots and the island list. `None` in headless tests (nothing is written).
+    pub(crate) iota_at_log: Option<IotaAtLog>,
     /// The log-time path grader, injected by the command layer (which holds the propagation
     /// model and the path card it last computed): for a contact being logged, its graded route
     /// ([`tempo_core::logbook::path_stamp`]). Same pattern as [`Self::set_state_resolver`], for
@@ -2780,6 +2921,10 @@ impl StationCore {
             all_txt_pending: Vec::new(),
             all_txt_held_tx: Vec::new(),
             pending_uploads: VecDeque::new(),
+            rows_gone: Vec::new(),
+            every_row_gone: false,
+            gone_ids: std::collections::HashSet::new(),
+            purged_since_drain: false,
             dropped_uploads: Vec::new(),
             corrections: HashMap::new(),
             lotw_batches: 0,
@@ -2806,6 +2951,7 @@ impl StationCore {
             dxcc_country: None,
             country_dxcc: None,
             state_resolve: None,
+            iota_at_log: None,
             path_at_log: None,
             grid_rarity_resolve: None,
             lotw_resolve: None,
@@ -3226,6 +3372,7 @@ impl StationCore {
     /// its pairs — the half of [`Self::commit`] and [`Self::append`] that does not touch the
     /// disk. A purge hands back the index as it stood, for its rows ([`Self::follow_purge`]).
     fn make(&mut self, change: &RowChange) -> (Watermarks, Option<HotIndex>) {
+        self.note_rows_gone(change);
         // The pairs start where the index does: nothing reached the log around the station.
         let at = hot_mut(&mut self.hot).at();
         self.check_in_step(at);
@@ -3250,6 +3397,59 @@ impl StationCore {
         }
         self.follow(&change.pairs, marks);
         (marks, None)
+    }
+
+    /// A contact that leaves the log, by any change, leaves every upload not yet sent: it comes off
+    /// the queue here at once, whatever it owes, and the engine takes it off the held list and HRD's
+    /// queue ([`crate::engine::Engine::settle_gone_rows`]). A contact put back is no longer
+    /// cancelled, though what was cancelled is not queued again. Only that contact's entries go: no
+    /// other's legs, and none of the upload stamps on the rows, which are what stop a duplicate.
+    fn note_rows_gone(&mut self, change: &RowChange) {
+        let start = self.rows_gone.len();
+        for (before, after) in &change.pairs {
+            match (before, after) {
+                (Some(row), None) => {
+                    if let Some(id) = row.id {
+                        self.rows_gone.push(id);
+                        self.gone_ids.insert(id);
+                    }
+                }
+                (None, Some(row)) if !self.gone_ids.is_empty() => {
+                    if let Some(id) = row.id {
+                        self.gone_ids.remove(&id);
+                    }
+                }
+                _ => {}
+            }
+        }
+        if change.purged {
+            self.every_row_gone = true;
+            self.purged_since_drain = true;
+            self.pending_uploads.clear();
+        } else if self.rows_gone.len() != start {
+            let gone = &self.rows_gone[start..];
+            self.pending_uploads
+                .retain(|p| !p.rec.id.is_some_and(|id| gone.contains(&id)));
+        }
+    }
+
+    /// Whether `rec`, a copy held off the lock, has been cancelled by its contact leaving the log.
+    pub(crate) fn upload_cancelled(&self, rec: &QsoRecord) -> bool {
+        self.purged_since_drain || self.deleted(rec)
+    }
+
+    /// Whether the contact of `rec` was deleted this session and not put back. A purge names no ids:
+    /// each drain says for itself whether one happened since it took its copies.
+    pub(crate) fn deleted(&self, rec: &QsoRecord) -> bool {
+        rec.id.is_some_and(|id| self.gone_ids.contains(&id))
+    }
+
+    /// The contacts that have left the log since the last call, and whether every one has.
+    pub(crate) fn take_rows_gone(&mut self) -> (Vec<RecordId>, bool) {
+        (
+            std::mem::take(&mut self.rows_gone),
+            std::mem::take(&mut self.every_row_gone),
+        )
     }
 
     /// ★ Make a change planned off the Engine lock (SPEC-2 v3 §4.6) — under it. `rows` are the
@@ -3714,6 +3914,20 @@ impl StationCore {
         self.state_resolve = Some(Box::new(resolve));
     }
 
+    /// Inject what a contact being logged reads for its IOTA reference ([`Self::iota_at_log`]).
+    pub fn set_iota_at_log(
+        &mut self,
+        spots: impl Fn(&str, &str, u64) -> tempo_core::logbook::offer::SpotIota + Send + Sync + 'static,
+        known: impl Fn(&str) -> bool + Send + Sync + 'static,
+        name: impl Fn(&str) -> Option<String> + Send + Sync + 'static,
+    ) {
+        self.iota_at_log = Some(IotaAtLog {
+            spots: Box::new(spots),
+            known: Box::new(known),
+            name: Box::new(name),
+        });
+    }
+
     /// Inject the log-time path grader ([`Self::path_at_log`]).
     pub fn set_path_grader(
         &mut self,
@@ -4072,6 +4286,7 @@ impl StationCore {
     /// Drain the freshly-logged QSOs awaiting connector auto-upload (FIFO).
     /// Called by the shell's upload worker; empty when nothing was logged.
     pub fn take_pending_uploads(&mut self) -> Vec<PendingUpload> {
+        self.purged_since_drain = false;
         self.pending_uploads.drain(..).collect()
     }
 
@@ -4137,7 +4352,10 @@ impl StationCore {
         retry_after_unix: i64,
         origin: crate::engine::UploadOrigin,
     ) {
-        if legs == 0 || attempts >= MAX_UPLOAD_RETRIES {
+        if legs == 0
+            || attempts >= MAX_UPLOAD_RETRIES
+            || rec.id.is_some_and(|id| self.gone_ids.contains(&id))
+        {
             return;
         }
         // PACING, and only for catch-up (#193). An UNSTAMPED catch-up record (`0` = due
@@ -5335,7 +5553,8 @@ impl StationCore {
     /// log that the import restates — the confirmations and credits a LoTW/eQSL/QRZ download
     /// carries — are upgraded in place. Planned on the rows of the calls it brings
     /// ([`plan_import`]), in one breath here; a command plans it with the Engine lock released
-    /// ([`crate::logwrite::import_adif`]).
+    /// ([`crate::logwrite::import_adif`]), which merges a LoTW report as Sync confirmations' file
+    /// button does instead.
     ///
     /// ORDER — another instance's commits are taken in before the import is planned
     /// ([`Self::log_plan`]), as before every change. A confirmation report is about contacts

@@ -111,6 +111,16 @@ pub enum SatVfoMap {
 }
 
 impl Settings {
+    /// ⭐ What this station claims of the contest's bonus menu: the ticked ids, the counts
+    /// typed beside the per-unit ones, and the entry class (`fd_rules::BonusClaim`).
+    pub fn fd_bonus_claim(&self) -> tempo_core::fd_rules::BonusClaim<'_> {
+        tempo_core::fd_rules::BonusClaim {
+            claimed: &self.fd_bonuses,
+            counts: &self.fd_bonus_counts,
+            class: &self.fd_class,
+        }
+    }
+
     /// The rotator policy these settings describe — one place that turns the
     /// flat persisted fields into the pointing rules.
     pub fn rotator_config(&self) -> tempo_core::rotator::RotatorConfig {
@@ -240,6 +250,10 @@ pub enum SatUplinkOffer {
 /// Hamlib): IC-9700, IC-910, IC-9100, IC-905. Duplicated rather than imported
 /// because `tempo-app` does not depend on `tempo-audio` — the arrow points the
 /// other way.
+/// The longest amplifier TX delay a radio takes, in ms ([`RadioProfile::amp_tx_delay_ms`]): WSJT-X's
+/// own Tx delay stops at 0.5 s, and every FT budget the delay comes out of is sized for it.
+pub const AMP_TX_DELAY_MAX_MS: u32 = 500;
+
 pub const MAIN_SUB_SAT_RIGS: [u32; 4] = [3081, 3044, 3068, 3090];
 
 /// The human DX-cluster node list a fresh install starts with under **Use my list** — the
@@ -1238,10 +1252,11 @@ impl KeysToConfirm {
     }
 }
 
-/// ⭐ **The seven settings a contest weekend changes, as they were before it changed them** —
+/// ⭐ **The eight settings a contest weekend changes, as they were before it changed them** —
 /// the note the contest-over checklist offers back when Contest mode goes off: the station
 /// callsign a club set, the operator at the key, the position, the entry category (MULTI-OP),
-/// the entry class, the power category and Unassisted. Each field is the [`Settings`] field of
+/// the entry class, the power category, the band category and Unassisted. A note an earlier
+/// build wrote has no band category: it reads as blank, the band category's own "not declared". Each field is the [`Settings`] field of
 /// the same name. Who takes the note, when, and when it is let go: `engine/contest_before.rs`.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -1252,11 +1267,12 @@ pub struct ContestBefore {
     pub contest_category_operator: String,
     pub contest_entry_class: String,
     pub contest_category_power: String,
+    pub contest_category_band: String,
     pub unassisted_mode: bool,
 }
 
 impl ContestBefore {
-    /// The seven, as `s` holds them now.
+    /// The eight, as `s` holds them now.
     pub fn of(s: &Settings) -> Self {
         Self {
             mycall: s.mycall.clone(),
@@ -1265,6 +1281,7 @@ impl ContestBefore {
             contest_category_operator: s.contest_category_operator.clone(),
             contest_entry_class: s.contest_entry_class.clone(),
             contest_category_power: s.contest_category_power.clone(),
+            contest_category_band: s.contest_category_band.clone(),
             unassisted_mode: s.unassisted_mode,
         }
     }
@@ -1715,7 +1732,7 @@ pub struct Settings {
     ///
     /// ⚠️ **Not [`Self::fd_power_mult`]**, which is Field Day's scoring TIER
     /// picked from a legal set. §6.1 rules that neither is derived from the
-    /// other: the thresholds differ (SS: 5 W / 100 W / 1500 W; FD's tier: 150 W)
+    /// other: the thresholds differ (SS: 5 W / 100 W / 1500 W; FD's tiers: 5 W / 100 W)
     /// and one is a claim about the entry while the other multiplies a score.
     #[serde(default)]
     pub contest_category_power: String,
@@ -1881,7 +1898,9 @@ pub struct Settings {
     /// that contact only. OFF by default, and then the entry is exactly what it always was.
     #[serde(default)]
     pub contest_rst_sent_box: bool,
-    /// Power multiplier tier: 5 = QRP battery/natural, 2 = <=150 W, 1 = >150 W.
+    /// Power multiplier tier (ARRL Field Day rules 7.2.1-7.2.4): 5 = 5 W or less from a source
+    /// other than commercial mains or a motor-driven generator, 2 = 100 W or less (5 W or less
+    /// on mains or a generator included), 1 = more than 100 W, from any source.
     #[serde(default = "default_fd_power")]
     pub fd_power_mult: u32,
     /// Claimed bonus ids (the UI checklist; each maps to points in the bonus
@@ -1896,6 +1915,20 @@ pub struct Settings {
     /// same points it always did.
     #[serde(default)]
     pub fd_bonuses_planned: Vec<String>,
+    /// ⭐ The count typed beside a bonus worth so much PER UNIT (the rules file's `per_unit`:
+    /// ARRL's transmitters on emergency power, youth participants, messages handled), by
+    /// bonus id. Read only for an id that is also in [`Self::fd_bonuses`]: the box claims the
+    /// bonus and this says how many. A claimed box with no count here is one unit, which is
+    /// what it scored before the count existed. `#[serde(default)]`, so an older settings
+    /// file loads with none and scores what it always did.
+    #[serde(default)]
+    pub fd_bonus_counts: std::collections::BTreeMap<String, u32>,
+    /// ⭐ **This station is on natural power now** (ARRL Field Day 7.3.8: *"without using
+    /// power from commercial mains or petroleum driven generator"*). While it is on, each
+    /// contact this laptop logs is marked ([`tempo_core::fieldday::LoggedQso::natural_power`])
+    /// for the separate list the rule asks for. This laptop's own: no club sync carries it.
+    #[serde(default)]
+    pub fd_natural_power: bool,
     /// ⭐ Ticked OBJECTIVE ids — the objectives a contest that scores by them (Winter Field
     /// Day) has completed, from its rules file's `objective_menu`. What the claimed score
     /// MULTIPLIES by: QSO points × (the objectives' multipliers + 1).
@@ -2273,6 +2306,11 @@ pub struct Settings {
     /// (flat mirror — see [`RadioProfile::data_modes_plain_ssb`]). Default off.
     #[serde(default)]
     pub data_modes_plain_ssb: bool,
+    /// RUNTIME ONLY, never saved, never compared: the DATA words the active radio's CAT link has
+    /// shown it does not take, judged by the radio loop from what happened on the wire
+    /// ([`crate::rig_modes`]). Read by [`Self::plain_ssb_if_configured`].
+    #[serde(skip)]
+    pub link_refusals: crate::rig_modes::LinkRefusals,
     /// Hold the DATA submode (FM-D on FM, USB-D/LSB-D on HF) for as long as the SSTV receiver
     /// is running, for the active radio (flat mirror — see
     /// [`RadioProfile::sstv_hold_data_submode`]). Default off.
@@ -2541,6 +2579,9 @@ pub struct Settings {
     /// switch an operator can judge and one they have to guess at.
     #[serde(default)]
     pub amp_follow_band: bool,
+    /// Amplifier TX delay, ms (flat mirror of [`RadioProfile::amp_tx_delay_ms`]).
+    #[serde(default)]
+    pub amp_tx_delay_ms: u32,
     /// ADVANCED override: an external `rotctld` daemon address `host:port`
     /// (for operators who already run their own). Non-empty wins over the
     /// integrated model/port spawn. Empty + model 0 = no rotator.
@@ -3214,11 +3255,26 @@ pub struct Settings {
     /// without a bench.
     #[serde(default = "default_max_power_am")]
     pub max_power_am: Option<f32>,
-    /// Path-prediction engine: "heuristic" (physics-lite, the default) or
-    /// "p533" (the native ITU-R P.533 engine). Unknown values fall back to
-    /// the heuristic in the factory, so old configs can never break.
-    #[serde(default = "default_prop_engine")]
+    /// Path-prediction engine: "p533" (the native ITU-R P.533 engine, the default) or
+    /// "heuristic" (physics-lite). Unknown values fall back to the heuristic in the factory, so
+    /// old configs can never break.
+    ///
+    /// Always written out, so a saved value alone does not say whether the operator chose it:
+    /// that is [`Self::prop_engine_moved`]'s job. A file with no key was running the heuristic,
+    /// the default of the builds that wrote it, and moves like any other that says so.
+    #[serde(default = "prop_engine_of_an_older_file")]
     pub prop_engine: String,
+    /// The one-time move to P.533 has been made for this file ([`Self::move_prop_engine_once`]).
+    /// From then on a saved "heuristic" is the operator's choice and is never moved. True for a
+    /// new install, which has nothing to move; absent, so false, in a file from before the move.
+    /// No form sets it (`Engine::apply_settings_inner`).
+    #[serde(default)]
+    pub prop_engine_moved: bool,
+    /// The move changed this station's engine and the one-time note saying so is still to be
+    /// dismissed. Written in the same save as the move, so the two cannot come apart. One writer
+    /// clears it, `Engine::dismiss_prop_engine_note`; no form can bring it back.
+    #[serde(default)]
+    pub prop_engine_note_due: bool,
     /// Save each received period's audio as a WAV: "none" (default) | "all"
     /// (every RX period — ~2 GB/day, debugging/archival) | "decodes" (only
     /// periods that produced at least one decode). WSJT-X's Save menu.
@@ -4427,6 +4483,10 @@ fn default_lotw_max_age_days() -> u32 {
 }
 
 fn default_prop_engine() -> String {
+    "p533".to_string()
+}
+
+fn prop_engine_of_an_older_file() -> String {
     "heuristic".to_string()
 }
 
@@ -5270,6 +5330,13 @@ pub struct RadioProfile {
     pub amp_model: String,
     pub amp_port: String,
     pub amp_follow_band: bool,
+    /// Amplifier TX delay: how long after the radio is keyed, in ms, before Nexus sends any audio,
+    /// so an amplifier keyed from the radio has switched before RF reaches it. 0 = off, the
+    /// default, so nothing changes for a station that never sets it. Read through
+    /// `Engine::amp_tx_delay_ms`, which holds it to 0 to [`AMP_TX_DELAY_MAX_MS`]. Per radio: it
+    /// belongs to the amplifier behind THAT radio. Set at the station only; a save from a remote
+    /// client keeps the station's value.
+    pub amp_tx_delay_ms: u32,
     pub rotator_host: String,
     /// UNIQUE across enabled profiles (validated) — each radio's own rotctld TCP port.
     pub rotctld_port: u16,
@@ -5471,6 +5538,10 @@ pub struct RadioProfilePatch {
     pub amp_model: String,
     pub amp_port: String,
     pub amp_follow_band: bool,
+    /// See `RadioProfile::amp_tx_delay_ms`. An `Option`, like the microphone's: `None` (a form from
+    /// before it) leaves the radio's stored value alone.
+    #[serde(default)]
+    pub amp_tx_delay_ms: Option<u32>,
     pub rotator_host: String,
     pub rotctld_port: u16,
     pub native_scope: String,
@@ -5630,6 +5701,9 @@ impl RadioProfilePatch {
         p.amp_model = self.amp_model;
         p.amp_port = self.amp_port;
         p.amp_follow_band = self.amp_follow_band;
+        if let Some(v) = self.amp_tx_delay_ms {
+            p.amp_tx_delay_ms = v;
+        }
         p.rotator_baud = self.rotator_baud;
         p.rotator_host = self.rotator_host;
         p.rotctld_port = self.rotctld_port;
@@ -5779,6 +5853,7 @@ impl Default for RadioProfile {
             amp_model: String::new(),
             amp_port: String::new(),
             amp_follow_band: false,
+            amp_tx_delay_ms: 0,
             rotator_host: String::new(),
             rotctld_port: 4533,
             bands: Vec::new(),
@@ -5846,6 +5921,51 @@ pub fn net_rigctl_addr<'a>(
     }
     let (_, port) = split_host_port(rig_addr)?;
     Some((rig_addr.trim(), port))
+}
+
+/// Does `name` read as a serial port rather than a network host? `COM4`, `com12`, `COM4:`,
+/// `\\\\.\\COM4` or anything under `/dev/`. A host and port is never one (`COM4:4532` is a machine
+/// that happens to be called COM4), nor is a longer name (`com4.local`, `comet`).
+///
+/// A bare `COM4` could in principle be a machine on the network. That is why nothing decides on
+/// this alone: it only ever chooses words, and only for a radio that has failed to connect or a
+/// form being filled in ([`net_rigctl_serial_port`]). The table both this and the Settings form
+/// read is `tests/fixtures/serial_port_names.json`.
+pub fn looks_like_serial_port(name: &str) -> bool {
+    let name = name.trim();
+    if name.starts_with("/dev/") {
+        return true;
+    }
+    let name = name.strip_prefix(r"\\.\").unwrap_or(name);
+    let name = name.strip_suffix(':').unwrap_or(name);
+    name.get(..3).is_some_and(|c| c.eq_ignore_ascii_case("com"))
+        && name.len() > 3
+        && name.as_bytes()[3..].iter().all(u8::is_ascii_digit)
+}
+
+/// The serial port a NET rigctl radio has been given, when it has: `None` for every other radio.
+/// NET rigctl (Hamlib model 2) only ever dials a rigctld over TCP, so whatever rigctld it is handed
+/// is resolved as a host name. `rigctld -m 2 -r COM4` opens no serial port; Hamlib looks up a
+/// machine called COM4 and says `COM4 No such file or directory`.
+///
+/// ⚠️ THE SAME SETTINGS ALSO WORK, while another program's rigctld answers on rigctld TCP Port:
+/// Nexus shares it and never uses the port name. So this is a reason for words, never for
+/// refusing a save, changing the settings or starting anything differently.
+pub fn net_rigctl_serial_port<'a>(
+    rig_model: u32,
+    rig_conn: &str,
+    serial_port: &'a str,
+    rig_addr: &'a str,
+) -> Option<&'a str> {
+    if rig_model != 2 || matches!(rig_conn, "omnirig" | "icomlan" | "tci") {
+        return None;
+    }
+    let dialled = if rig_conn_is_network(rig_conn, rig_addr) {
+        rig_addr
+    } else {
+        serial_port
+    };
+    looks_like_serial_port(dialled).then(|| dialled.trim())
 }
 
 /// [`net_rigctl_addr`], when the address is on this computer: the rigctld the operator runs here
@@ -6662,6 +6782,8 @@ impl Default for Settings {
             fd_power_mult: 2,
             fd_bonuses: Vec::new(),
             fd_bonuses_planned: Vec::new(),
+            fd_bonus_counts: std::collections::BTreeMap::new(),
+            fd_natural_power: false,
             fd_objectives: Vec::new(),
             fd_objectives_planned: Vec::new(),
             n3fjp_host: String::new(),
@@ -6727,6 +6849,7 @@ impl Default for Settings {
             native_scope: default_native_scope(),
             tx_audio_source: default_tx_audio_source(),
             data_modes_plain_ssb: false,
+            link_refusals: crate::rig_modes::LinkRefusals::default(),
             sstv_hold_data_submode: false,
             aprs_data_fm: false,
             pc_mic: false,
@@ -6773,6 +6896,7 @@ impl Default for Settings {
             amp_model: String::new(),
             amp_port: String::new(),
             amp_follow_band: false,
+            amp_tx_delay_ms: 0,
             rotator_host: String::new(),
             // Satellite Doppler is OFF and unmapped by default: a station
             // with no satellite interest must never have its dial moved.
@@ -6915,6 +7039,8 @@ impl Default for Settings {
             max_power_digital: None,
             max_power_am: default_max_power_am(),
             prop_engine: default_prop_engine(),
+            prop_engine_moved: true,
+            prop_engine_note_due: false,
             save_wav: default_save_wav(),
             lotw_max_age_days: default_lotw_max_age_days(),
             ant_tx_gain_dbi: 0.0,
@@ -7119,6 +7245,39 @@ impl Settings {
         self.js8_hb_networking = self.js8_hb_ack || self.js8_hb_interval_min > 0;
     }
 
+    /// The one-time move to P.533, in memory: every "heuristic" moves and is due the note; "p533"
+    /// and a name this build does not know stay as they are. Either way the move is recorded as
+    /// made, so a "heuristic" chosen later is never moved. False when it was already made.
+    pub fn move_prop_engine_in_memory(&mut self) -> bool {
+        if self.prop_engine_moved {
+            return false;
+        }
+        self.prop_engine_moved = true;
+        if self.prop_engine == "heuristic" {
+            self.prop_engine = default_prop_engine();
+            self.prop_engine_note_due = true;
+        }
+        true
+    }
+
+    /// [`Self::move_prop_engine_in_memory`] at launch, kept only if `save` took it. The engine,
+    /// the marker and the note go in one save, a temp file renamed into place, so a crash leaves
+    /// all of them or none. A refused save (a read-only folder, a file that could not be read)
+    /// leaves this station as it was, on its old engine with no note, and the next launch tries
+    /// again: nothing moves or nags at each launch. `Ok(true)` when the move was made and saved.
+    pub fn move_prop_engine_once(
+        &mut self,
+        save: impl FnOnce(&Settings) -> std::io::Result<()>,
+    ) -> std::io::Result<bool> {
+        let mut moved = self.clone();
+        if !moved.move_prop_engine_in_memory() {
+            return Ok(false);
+        }
+        save(&moved)?;
+        *self = moved;
+        Ok(true)
+    }
+
     /// Is DX cluster / RBN spot ingestion EFFECTIVELY on? Cluster and RBN spots are
     /// callsign-and-frequency identification from other people's receivers — the textbook
     /// QSO-finding assistance, named by both CQ WW and ARRL.
@@ -7218,6 +7377,7 @@ impl Settings {
             amp_model: self.amp_model.clone(),
             amp_port: self.amp_port.clone(),
             amp_follow_band: self.amp_follow_band,
+            amp_tx_delay_ms: self.amp_tx_delay_ms,
             rotctld_port: 4533,
             bands: Vec::new(),
             last_dial_mhz: self.dial_mhz,
@@ -7726,6 +7886,7 @@ impl Settings {
         self.amp_model = p.amp_model;
         self.amp_port = p.amp_port;
         self.amp_follow_band = p.amp_follow_band;
+        self.amp_tx_delay_ms = p.amp_tx_delay_ms;
         self.rotator_baud = p.rotator_baud;
         self.rotator_host = p.rotator_host;
         // The Flex three ride the SAME mirror as every other rig field, so every existing consumer
@@ -7789,6 +7950,7 @@ impl Settings {
             amp_model,
             amp_port,
             amp_follow_band,
+            amp_tx_delay_ms,
             flex_radio_ip,
             flex_native_pan,
             flex_native_audio,
@@ -7838,6 +8000,7 @@ impl Settings {
             self.amp_model.clone(),
             self.amp_port.clone(),
             self.amp_follow_band,
+            self.amp_tx_delay_ms,
             self.flex_radio_ip.clone(),
             self.flex_native_pan,
             self.flex_native_audio,
@@ -7888,6 +8051,7 @@ impl Settings {
             p.amp_model = amp_model;
             p.amp_port = amp_port;
             p.amp_follow_band = amp_follow_band;
+            p.amp_tx_delay_ms = amp_tx_delay_ms;
             p.flex_radio_ip = flex_radio_ip;
             p.flex_native_pan = flex_native_pan;
             p.flex_native_audio = flex_native_audio;
@@ -8927,8 +9091,14 @@ impl Settings {
     /// ⚠️ Read the warning on `RadioProfile::data_modes_plain_ssb` before touching this: for a
     /// normally-wired rig, plain SSB on a soundcard mode transmits NO RF. This exists for
     /// mic-jack interfaces, and it is off by default for everyone else.
+    ///
+    /// ⭐ THE SECOND REASON, AND IT NEEDS NO SWITCH: this radio's link has SHOWN it does not take
+    /// the DATA word ([`crate::rig_modes`]): it refused it, or Hamlib answered the set and the
+    /// radio still read back the plain sideband. Through Hamlib's SDR Console backend (2056) the
+    /// word goes out as `MDD;`, which SDR Console rejects at every key-down. Only the SSB words
+    /// are judged; nothing judged changes nothing.
     pub(crate) fn plain_ssb_if_configured(&self, m: &str) -> String {
-        if !self.data_modes_plain_ssb {
+        if !self.data_modes_plain_ssb && !self.link_refusals.refused(self.rig_model, m) {
             return m.to_string();
         }
         match m {
@@ -9463,6 +9633,7 @@ mod tests {
             amp_model: String::new(),
             amp_port: String::new(),
             amp_follow_band: false,
+            amp_tx_delay_ms: Some(120),
             rotator_host: "192.0.2.20".into(),
             rotctld_port: 4534,
             native_scope: "civ".into(),
@@ -9527,6 +9698,64 @@ mod tests {
     /// are the ones `RadioProfilePatch`'s own doc names — identity, band coverage and the
     /// `last_*` tune memory the radio loop owns — and adding a field to `RadioProfile` that is
     /// neither excluded nor in the patch fails here rather than in the field.
+    /// The amplifier TX delay is per radio, 0 unless set, and survives every path a radio's
+    /// settings take: a settings file from before it reads 0 (off, nothing changes), the flat
+    /// mirror follows the active radio both ways, a patch that carries it lands on that radio
+    /// alone, and a form from before it (`None`) leaves the stored value as it was.
+    #[test]
+    fn the_amp_tx_delay_is_per_radio_off_by_default_and_kept_by_every_path() {
+        // A settings file from before the field: off.
+        let mut old = serde_json::to_value(Settings::default()).unwrap();
+        old.as_object_mut().unwrap().remove("ampTxDelayMs");
+        let loaded: Settings = serde_json::from_value(old).unwrap();
+        assert_eq!(loaded.amp_tx_delay_ms, 0);
+        let mut profile = serde_json::to_value(RadioProfile::default()).unwrap();
+        profile.as_object_mut().unwrap().remove("ampTxDelayMs");
+        let profile: RadioProfile = serde_json::from_value(profile).unwrap();
+        assert_eq!(profile.amp_tx_delay_ms, 0);
+
+        let mut s = Settings {
+            radios: vec![
+                RadioProfile {
+                    id: 0,
+                    amp_tx_delay_ms: 50,
+                    ..RadioProfile::default()
+                },
+                RadioProfile {
+                    id: 1,
+                    amp_tx_delay_ms: 200,
+                    ..RadioProfile::default()
+                },
+            ],
+            active_radio: 1,
+            ..Settings::default()
+        };
+        s.sync_flat_from_active();
+        assert_eq!(
+            s.amp_tx_delay_ms, 200,
+            "the flat mirror is the active radio's"
+        );
+        s.amp_tx_delay_ms = 300;
+        s.sync_active_from_flat();
+        assert_eq!(
+            s.radios[1].amp_tx_delay_ms, 300,
+            "the flat edit lands on the active radio"
+        );
+        assert_eq!(s.radios[0].amp_tx_delay_ms, 50, "and on no other");
+
+        let mut edit = patch_of(&s.radios[0]);
+        edit.amp_tx_delay_ms = Some(120);
+        edit.apply_to(&mut s.radios[0]);
+        assert_eq!(s.radios[0].amp_tx_delay_ms, 120);
+        let mut older_form = patch_of(&s.radios[0]);
+        older_form.amp_tx_delay_ms = None;
+        older_form.apply_to(&mut s.radios[0]);
+        assert_eq!(
+            s.radios[0].amp_tx_delay_ms, 120,
+            "a form from before it keeps the value"
+        );
+    }
+
     #[test]
     fn editing_one_radios_amplifier_leaves_the_others_alone() {
         // The SO2R case, and the reason the amplifier is a PER-RADIO field rather than a station
@@ -9827,6 +10056,7 @@ mod tests {
             amp_model: String::new(),
             amp_port: String::new(),
             amp_follow_band: false,
+            amp_tx_delay_ms: None,
             rotator_host: String::new(),
             rotctld_port: 0,
             native_scope: String::new(),
@@ -9994,6 +10224,7 @@ mod tests {
             amp_model: String::new(),
             amp_port: String::new(),
             amp_follow_band: false,
+            amp_tx_delay_ms: None,
             rotator_host: String::new(),
             rotctld_port: 0,
             native_scope: String::new(),
@@ -10348,6 +10579,7 @@ mod tests {
             amp_model: String::new(),
             amp_port: String::new(),
             amp_follow_band: false,
+            amp_tx_delay_ms: Some(p.amp_tx_delay_ms),
             rotator_host: p.rotator_host.clone(),
             rotctld_port: p.rotctld_port,
             native_scope: p.native_scope.clone(),
@@ -11529,6 +11761,56 @@ mod tests {
         // True FSK: the rig's RTTY mode (unlocks its narrow RTTY filters).
         s.rtty_backend = "fsk".to_string();
         assert_eq!(s.rig_mode(), "RTTY");
+    }
+
+    /// A radio whose link has shown it does not take the SSB DATA word (`rig_modes`) gets the
+    /// plain sideband for every sound-card mode, as the operator's own switch would give it,
+    /// and only for the word it refused. Nothing else moves: CW reverse, FSK RTTY and `PKTFM`
+    /// are commanded as before.
+    #[test]
+    fn a_link_that_refused_the_data_word_gets_the_plain_sideband_without_being_configured() {
+        const MODEL: u32 = 2056;
+        let mut s = Settings::default();
+        s.rig_model = MODEL;
+        s.link_refusals.refuse(MODEL, "PKTUSB");
+        assert!(!s.data_modes_plain_ssb, "premise: the operator set nothing");
+        s.operating_mode = OperatingMode::Digital;
+        s.dial_mhz = 14.074;
+        assert_eq!(s.rig_mode(), "USB", "FT8 on 20 m");
+        s.operating_mode = OperatingMode::Rtty;
+        assert_eq!(s.rig_mode(), "PKTLSB", "PKTLSB was not refused: kept");
+        s.link_refusals.refuse(MODEL, "PKTLSB");
+        assert_eq!(s.rig_mode(), "LSB", "and once refused, the plain side");
+        s.rtty_backend = "fsk".into();
+        assert_eq!(s.rig_mode(), "RTTY");
+        s.operating_mode = OperatingMode::Cw;
+        s.cw_keyer = CwKeyerBackend::Cat;
+        s.cw_reverse = true;
+        assert_eq!(s.rig_mode(), "CWR", "CW reverse is never judged");
+        assert_eq!(s.plain_ssb_if_configured("PKTFM"), "PKTFM");
+        s.rig_model = 2014;
+        s.operating_mode = OperatingMode::Digital;
+        assert_eq!(
+            s.rig_mode(),
+            "PKTUSB",
+            "another model never sees the judgement"
+        );
+        s.rig_model = MODEL;
+        s.link_refusals.forget();
+        assert_eq!(s.rig_mode(), "PKTUSB", "a new connection is judged afresh");
+    }
+
+    /// CONTROL: a radio whose link refused nothing keeps its DATA word, and the operator's
+    /// explicit switch still gives the plain sideband on it.
+    #[test]
+    fn a_link_that_refused_nothing_keeps_the_data_word_and_the_switch_still_wins() {
+        let mut s = Settings::default();
+        s.rig_model = 2056;
+        s.operating_mode = OperatingMode::Digital;
+        s.dial_mhz = 14.074;
+        assert_eq!(s.rig_mode(), "PKTUSB");
+        s.data_modes_plain_ssb = true;
+        assert_eq!(s.rig_mode(), "USB");
     }
 
     /// The AFSK sideband setting. LSB, the default, is unchanged; USB commands the DATA submode
@@ -17094,6 +17376,248 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// A new install runs P.533, whether it starts from no file at all or from the defaults.
+    #[test]
+    fn a_new_install_predicts_with_p533() {
+        assert_eq!(Settings::default().prop_engine, "p533");
+        let path = scratch_dir("engine_new").join("settings.json");
+        assert_eq!(Settings::load(&path).prop_engine, "p533");
+    }
+
+    /// A settings file as an older build left it: `engine` for its `propEngine` (`None`, no key),
+    /// and no marker unless `moved` says one.
+    fn engine_file(label: &str, engine: Option<&str>, moved: Option<bool>) -> std::path::PathBuf {
+        let path = scratch_dir(&format!("engine_{label}")).join("settings.json");
+        let _ = std::fs::remove_file(&path);
+        Settings::default().save(&path).unwrap();
+        let mut v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let o = v.as_object_mut().unwrap();
+        o.remove("propEngineMoved");
+        o.remove("propEngineNoteDue");
+        o.remove("propEngine");
+        if let Some(engine) = engine {
+            o.insert("propEngine".into(), engine.into());
+        }
+        if let Some(moved) = moved {
+            o.insert("propEngineMoved".into(), moved.into());
+        }
+        std::fs::write(&path, v.to_string()).unwrap();
+        path
+    }
+
+    /// Every kind of file a launch can meet: what it runs afterwards, whether the note is due, and
+    /// that all of it is on disk and a second launch changes nothing.
+    #[test]
+    fn the_engine_moves_once_for_every_kind_of_older_file() {
+        for (label, engine, moved, want, note) in [
+            ("nokey", None, None, "p533", true),
+            ("heuristic", Some("heuristic"), None, "p533", true),
+            ("p533", Some("p533"), None, "p533", false),
+            ("unknown", Some("voacap"), None, "voacap", false),
+            ("chosen", Some("heuristic"), Some(true), "heuristic", false),
+            ("chosen_p533", Some("p533"), Some(true), "p533", false),
+        ] {
+            let path = engine_file(label, engine, moved);
+            let mut s = Settings::load(&path);
+            let first = s.move_prop_engine_once(|m| m.save(&path)).unwrap();
+            assert_eq!(
+                first,
+                moved.is_none(),
+                "{label}: only an unmarked file moves"
+            );
+            assert_eq!(s.prop_engine, want, "{label}");
+            assert!(s.prop_engine_moved, "{label}");
+            assert_eq!(s.prop_engine_note_due, note, "{label}");
+            let mut again = Settings::load(&path);
+            assert_eq!(again.prop_engine, want, "{label}: on disk");
+            assert!(again.prop_engine_moved, "{label}: on disk");
+            assert_eq!(again.prop_engine_note_due, note, "{label}: on disk");
+            assert!(
+                !again.move_prop_engine_once(|m| m.save(&path)).unwrap(),
+                "{label}: once"
+            );
+            assert_eq!(again.prop_engine, want, "{label}: second launch");
+            assert_eq!(again.prop_engine_note_due, note, "{label}: second launch");
+        }
+    }
+
+    /// Real files from older versions, not just the one key.
+    #[test]
+    fn the_engine_moves_in_real_files_from_older_versions() {
+        for (label, text) in [
+            (
+                "v1_15",
+                include_str!("../../../src-tauri/tests/fixtures/settings-1.15.0.json"),
+            ),
+            (
+                "v1_17",
+                include_str!(
+                    "../../tempo-audio/tests/fixtures/settings-1.17.0-net-rigctl-clash.json"
+                ),
+            ),
+            (
+                "before_tci",
+                include_str!("../tests/fixtures/settings-before-tci-two-radios.json"),
+            ),
+        ] {
+            let path = scratch_dir(&format!("engine_real_{label}")).join("settings.json");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, text).unwrap();
+            let mut s = Settings::load(&path);
+            assert_eq!(s.prop_engine, "heuristic", "{label}: what the file says");
+            assert!(!s.prop_engine_moved, "{label}");
+            assert!(
+                s.move_prop_engine_once(|m| m.save(&path)).unwrap(),
+                "{label}"
+            );
+            let back = Settings::load(&path);
+            assert_eq!(back.prop_engine, "p533", "{label}");
+            assert!(
+                back.prop_engine_moved && back.prop_engine_note_due,
+                "{label}"
+            );
+        }
+    }
+
+    /// A new install has nothing to move and no reason for a note, and neither does a station
+    /// whose file could not be read, which starts from the defaults.
+    #[test]
+    fn a_new_install_has_no_move_to_make_and_no_note() {
+        let path = scratch_dir("engine_fresh").join("settings.json");
+        let _ = std::fs::remove_file(&path);
+        let mut s = Settings::load(&path);
+        assert!(!s.move_prop_engine_once(|m| m.save(&path)).unwrap());
+        assert_eq!(s.prop_engine, "p533");
+        assert!(!s.prop_engine_note_due);
+        assert!(Settings::not_a_new_install().prop_engine_moved);
+    }
+
+    /// A refused save moves nothing: this run stays on its old engine with no note and the file
+    /// is untouched, so no launch can show the note again without a move having been saved.
+    #[cfg(unix)]
+    #[test]
+    fn a_refused_save_moves_nothing_and_shows_no_note() {
+        use std::os::unix::fs::PermissionsExt;
+        let path = engine_file("readonly", Some("heuristic"), None);
+        let dir = path.parent().unwrap().to_path_buf();
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        for launch in 0..2 {
+            let mut s = Settings::load(&path);
+            assert!(
+                s.move_prop_engine_once(|m| m.save(&path)).is_err(),
+                "launch {launch}"
+            );
+            assert_eq!(s.prop_engine, "heuristic", "launch {launch}");
+            assert!(!s.prop_engine_moved, "launch {launch}");
+            assert!(!s.prop_engine_note_due, "launch {launch}");
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
+        }
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        // The folder writable again: the next launch makes the move, once.
+        let mut s = Settings::load(&path);
+        assert!(s.move_prop_engine_once(|m| m.save(&path)).unwrap());
+        assert_eq!(s.prop_engine, "p533");
+        assert!(s.prop_engine_note_due);
+    }
+
+    /// After the move a saved "heuristic" is a real choice, through every later save and launch.
+    #[test]
+    fn heuristic_chosen_after_the_move_is_never_moved_again() {
+        let path = engine_file("after", Some("heuristic"), None);
+        let mut s = Settings::load(&path);
+        s.move_prop_engine_once(|m| m.save(&path)).unwrap();
+        let mut e = crate::engine::Engine::with_settings(s);
+        let mut form = e.settings().clone();
+        form.prop_engine = "heuristic".into();
+        e.apply_settings(form);
+        assert!(
+            !e.settings().prop_engine_note_due,
+            "the note says P.533 is in use; it no longer is"
+        );
+        e.settings().save(&path).unwrap();
+        for _ in 0..2 {
+            let mut next = Settings::load(&path);
+            assert!(!next.move_prop_engine_once(|m| m.save(&path)).unwrap());
+            assert_eq!(next.prop_engine, "heuristic");
+            assert!(!next.prop_engine_note_due);
+            next.save(&path).unwrap();
+        }
+    }
+
+    /// No form, the Settings panel's or Remote's, can reset the marker or bring back the note:
+    /// `propEngine` is writable from afar but these two are not, and a stale form holds old values.
+    #[test]
+    fn a_stale_form_cannot_reset_the_marker_or_bring_back_the_note() {
+        let path = engine_file("form", Some("heuristic"), None);
+        let mut s = Settings::load(&path);
+        s.move_prop_engine_once(|m| m.save(&path)).unwrap();
+        let stale = s.clone();
+        let mut e = crate::engine::Engine::with_settings(s);
+        assert!(e.settings().prop_engine_note_due);
+        e.dismiss_prop_engine_note();
+        assert!(!e.settings().prop_engine_note_due);
+        e.apply_settings(stale);
+        assert!(
+            !e.settings().prop_engine_note_due,
+            "dismissed stays dismissed"
+        );
+        let mut older = e.settings().clone();
+        older.prop_engine_moved = false;
+        e.apply_settings(older);
+        assert!(e.settings().prop_engine_moved, "made stays made");
+    }
+
+    /// A form cannot make the note due on a station that was never moved.
+    #[test]
+    fn a_form_cannot_raise_the_note() {
+        let mut e = crate::engine::Engine::with_settings(Settings::default());
+        let mut form = e.settings().clone();
+        form.prop_engine_note_due = true;
+        e.apply_settings(form);
+        assert!(!e.settings().prop_engine_note_due);
+    }
+
+    /// An engine picked from a form during a run whose launch save was refused is a choice too.
+    #[test]
+    fn an_engine_picked_before_the_move_was_saved_is_a_choice() {
+        let path = engine_file("picked", Some("p533"), None);
+        let s = Settings::load(&path);
+        assert!(!s.prop_engine_moved);
+        let mut e = crate::engine::Engine::with_settings(s);
+        let mut form = e.settings().clone();
+        form.prop_engine = "heuristic".into();
+        e.apply_settings(form);
+        e.settings().save(&path).unwrap();
+        let mut next = Settings::load(&path);
+        assert!(!next.move_prop_engine_once(|m| m.save(&path)).unwrap());
+        assert_eq!(next.prop_engine, "heuristic");
+    }
+
+    /// A restored backup keeps the note its settings carry: the restore is not a form.
+    #[test]
+    fn a_restore_keeps_the_note_it_carries() {
+        let mut bundle = Settings::default();
+        bundle.prop_engine_note_due = true;
+        let mut e = crate::engine::Engine::with_settings(Settings::default());
+        e.apply_restored_settings(bundle);
+        assert!(e.settings().prop_engine_note_due);
+    }
+
+    /// The marker and the note survive an ordinary load and save.
+    #[test]
+    fn the_marker_and_the_note_survive_a_round_trip() {
+        let path = engine_file("round", Some("heuristic"), None);
+        let mut s = Settings::load(&path);
+        s.move_prop_engine_once(|m| m.save(&path)).unwrap();
+        Settings::load(&path).save(&path).unwrap();
+        let back = Settings::load(&path);
+        assert_eq!(back.prop_engine, "p533");
+        assert!(back.prop_engine_moved);
+        assert!(back.prop_engine_note_due);
+    }
+
     #[test]
     fn load_migrates_old_rbn_cluster_host_to_a_human_node() {
         // cluster_host used to BE the RBN endpoint (digital-only) — that's why CW/Phone
@@ -19830,5 +20354,88 @@ mod am_power_tests {
     fn an_old_settings_file_gains_the_am_cap() {
         let old: Settings = serde_json::from_str("{}").expect("empty settings loads");
         assert_eq!(old.max_power_am, Some(0.25));
+    }
+}
+
+#[cfg(test)]
+mod net_rigctl_serial_port_tests {
+    use super::*;
+
+    /// The table the Settings form reads too (`rigFormChecks.netrigctl.test.ts`), so the two
+    /// answers about one name cannot drift.
+    #[test]
+    fn a_serial_port_name_is_told_from_a_host_by_the_shared_table() {
+        let table: serde_json::Value =
+            serde_json::from_str(include_str!("../tests/fixtures/serial_port_names.json")).unwrap();
+        let names = |k: &str| -> Vec<String> {
+            table[k]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|n| n.as_str().unwrap().to_string())
+                .collect()
+        };
+        for port in names("ports") {
+            assert!(looks_like_serial_port(&port), "{port} is a serial port");
+        }
+        for host in names("hosts") {
+            assert!(!looks_like_serial_port(&host), "{host} is a network host");
+        }
+    }
+
+    #[test]
+    fn only_a_net_rigctl_radio_given_a_port_name_is_answered() {
+        let ask = net_rigctl_serial_port;
+        // The field report's shape: Connection Serial, and an older file with no connection at all.
+        assert_eq!(ask(2, "serial", "COM4", ""), Some("COM4"));
+        assert_eq!(ask(2, "", " COM4 ", ""), Some("COM4"));
+        // A Network Address that holds a port name.
+        assert_eq!(ask(2, "network", "", "COM4"), Some("COM4"));
+        assert_eq!(ask(2, "network", "", "/dev/ttyUSB0"), Some("/dev/ttyUSB0"));
+        // A real address beats a port left in the other field.
+        assert_eq!(ask(2, "network", "COM4", "192.168.1.20:4532"), None);
+        assert_eq!(ask(2, "network", "COM4", "COM4:4532"), None);
+        // Nothing given, a real radio on its port, and the connections that use neither field.
+        assert_eq!(ask(2, "serial", "", ""), None);
+        assert_eq!(ask(847, "serial", "COM4", ""), None);
+        assert_eq!(ask(0, "serial", "COM4", ""), None);
+        assert_eq!(ask(2, "omnirig", "COM4", ""), None);
+        assert_eq!(ask(2, "tci", "COM4", ""), None);
+    }
+
+    /// A station saved by an older version loads as it was saved, and saves back as it was: this
+    /// combination is told about, never repaired behind the operator's back. Its connection is
+    /// written out, and left out as a file from before the field existed has it.
+    #[test]
+    fn a_saved_net_rigctl_radio_on_a_com_port_loads_and_saves_unchanged() {
+        for conn in [r#""rigConn":"serial","#, ""] {
+            let json = format!(
+                r#"{{"catBroker":false,"radios":[{{"id":0,"name":"FT847","rigModel":2,{conn}"serialPort":"COM4","baud":9600,"rigctldPort":4532}}]}}"#
+            );
+            let mut loaded: Settings = serde_json::from_str(&json).unwrap();
+            loaded.ensure_distinct_radio_ports();
+            let radio = &loaded.radios[0];
+            assert_eq!(
+                (
+                    radio.rig_model,
+                    radio.serial_port.as_str(),
+                    radio.baud,
+                    radio.rigctld_port
+                ),
+                (2, "COM4", 9600, 4532)
+            );
+            assert_eq!(
+                net_rigctl_serial_port(
+                    radio.rig_model,
+                    &radio.rig_conn,
+                    &radio.serial_port,
+                    &radio.rig_addr
+                ),
+                Some("COM4")
+            );
+            let again: Settings =
+                serde_json::from_str(&serde_json::to_string(&loaded).unwrap()).unwrap();
+            assert_eq!(again.radios[0], *radio);
+        }
     }
 }

@@ -12,7 +12,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import type { AppSnapshot, CwTurn, FieldDayStatus, NeedTag, Settings, SpotRow } from '../types'
 import { PhoneScope } from './PhoneScope'
 import { useSmeterDb } from './LiveMeters'
-import { TxMeters, TX_METERS_WHEN } from './TxMeters'
+import { TxMeters, TxMetersPane, TX_METERS_WHEN } from './TxMeters'
 import { useCompactChrome } from '../features/compactChrome'
 import { HeaderOverflow } from './HeaderOverflow'
 import { DraftNumberInput } from './DraftNumberInput'
@@ -22,10 +22,11 @@ import { BandStrip } from './BandStrip'
 import { TuningStrip } from './TuningStrip'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitTxStrip, keepInSight, revealAfterPress } from './CockpitTxStrip'
+import { TxAlarmBanner } from './TxAlarmBanner'
 import { ZeroBeat } from './ZeroBeat'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { RegionColumnSeams } from './panes/RegionColumnSeams'
-import { isFieldDay } from '../fdEvent'
+import { contestShortName, isFieldDay } from '../fdEvent'
 import {
   CW_CONTEST_LAYOUT,
   CW_CONTEST_NO_REPORT_LAYOUT,
@@ -52,7 +53,7 @@ import {
   type MacroSlot,
 } from '../features/macroSets'
 import { macroSlotName } from '../features/macroSlotWords'
-import { cwStoredBuiltIn, cwVisibleMacros, withCwEntry, type CwProfile } from '../features/cwMacros'
+import { cwShownProfile, cwStoredBuiltIn, cwVisibleMacros, withCwDockEntry, type CwProfile } from '../features/cwMacros'
 import { PaneCloseButton } from './panes/PaneCloseButton'
 import { MemoryStrip } from './MemoryStrip'
 import { IS_MAC, FN_KEY_HINT } from '../platform'
@@ -85,6 +86,7 @@ import {
   sendCw,
   sendCwArmed,
   setCwKeyer,
+  setCwMacros,
   setCwWpm,
   stopCw,
   cwDecode,
@@ -112,7 +114,7 @@ import {
   stopQsoRecording,
   getCatCwUnprovenRigModels,
 } from '../api'
-import { patchSettings } from '../settings/patch'
+import { inSettingsQueue, patchSettings } from '../settings/patch'
 import { icomScopeCure } from '../rigFormChecks'
 import { bandLabelForMhz, sidebandForQsy } from '../band'
 import { pushToast, withErrorToast } from '../toast'
@@ -381,6 +383,9 @@ interface Props {
   /** Open the Logbook filtered to a callsign (#192) — handed to the log strip's recall card,
    *  whose previous-contact rows become clickable when it is present. Omitted ⇒ inert rows. */
   onOpenLogbook?: (call: string, id?: string | null) => void
+  /** Open the Satellites screen on a bird by NORAD id — the band picker's QO-100 row. Omitted ⇒
+   *  the picker lists no QO-100 row. */
+  onOpenSatellite?: (norad: number) => void
   /** The call in this cockpit's log strip, for the Rotor box beside it (LogEntry `onEntryCall`). */
   onEntryCall?: (call: string) => void
   /** Panel visibility/resize record — host-owned (App) so it survives this view's remounts.
@@ -442,6 +447,7 @@ const cwPanelLabels = (): Record<Exclude<CwPanelId, BoxId>, string> => ({
   scopeCtl: t('cw.panel.scopeCtl'),
   dsp: t('cw.panel.dsp'),
   txmeters: t('cw.panel.txmeters'),
+  txMetersPane: t('meters.tx.pane.title'),
   turnCue: t('cw.panel.turnCue'),
   rxdsp: t('cw.panel.rxdsp'),
   bandActivity: t('cw.panel.bandActivity'),
@@ -571,6 +577,7 @@ export function CwCockpit({
   onOpenMemories,
   onOpenSettings,
   onOpenLogbook,
+  onOpenSatellite,
   onEntryCall,
   panels,
   spotsBoard,
@@ -1023,7 +1030,12 @@ export function CwCockpit({
     // Re-read on a radio switch too: the flat rig fields (model, connection, baud, CI-V switch) are
     // the ACTIVE radio's, and the scope toolbar's Icom hint reads them (`icomScopeCure`).
   }, [active, snap.activeRadioId])
-  const profileMacros = profiles[activeProfile]?.macros
+  // During a contest, a profile on the built-ins shows the contest's own profile when an edit made
+  // one (`cwShownProfile`); everywhere else the active profile.
+  // A blank event is ARRL Field Day, as everywhere else.
+  const contestProfile = fieldDay ? contestShortName(fieldDay.event || 'arrlfd') : null
+  const shownProfile = cwShownProfile(profiles, activeProfile, contestProfile)
+  const profileMacros = profiles[shownProfile]?.macros
   // Typed as CwMacro[] so the row renderer reads ONE shape: a profile macro's label is the
   // operator's own words, a built-in's is either on-air shorthand or a catalog key.
   // ⭐ WHICH CONTEST IS RUNNING decides the built-in set: Field Day's own `CQ FD` is right
@@ -1404,7 +1416,7 @@ export function CwCockpit({
   // profile's only while it has keys of its own, and the one an earlier Reset left is not read.
   const roles = esmRoles(
     cwBuiltInRoles(macros),
-    profileMacros && profileMacros.length ? profiles[activeProfile]?.esmRoles : undefined,
+    profileMacros && profileMacros.length ? profiles[shownProfile]?.esmRoles : undefined,
   )
   // CW SPEED MATCH: an answer is marked as one only while the switch is on, so with it off every
   // send goes to the engine exactly as before. The engine decides the speed (and falls back to
@@ -1442,9 +1454,11 @@ export function CwCockpit({
   // `line`, not `t` — the catalog lookup is `t()` in every migrated file, so a parameter by
   // that name would shadow it here and nowhere else.
   //
-  // It answers whether the line went to `send_cw` (true) or was refused here (false), for the
-  // macro editor's Send once, which keeps the operator's draft open when the send was refused.
-  const send = (line: string, key: string | null = null): boolean => {
+  // It answers false when the line was refused here, and otherwise whether the `send_cw` call
+  // succeeded, for the macro editor's Send once, which keeps the operator's draft open when the send
+  // was refused here or the call failed. `send_cw` answers Ok for a message the engine then drops
+  // (a clock repair holding TX, a keyer that will not take it), so that one closes the editor.
+  const send = (line: string, key: string | null = null): false | Promise<boolean> => {
     if (!line.trim()) return false
     // The engine blocks keying outside privileges anyway; surface why up front.
     if (!snapRef.current.radio.txAllowed) {
@@ -1459,15 +1473,14 @@ export function CwCockpit({
     // Through the ref: the keyboard handler is bound once and calls the first render's `send`.
     const answer =
       speedMatchRef.current.on && cwSendsAnswer(speedMatchRef.current.roles, key, line)
-    void withErrorToast(async () => {
+    return withErrorToast(async () => {
       if (committing) await committing
       return answer ? sendCw(line, true) : sendCw(line)
-    }, t('cw.send.failed'))
-    return true
+    }, t('cw.send.failed')).then((s) => s !== null)
   }
   /** One F-key macro, from its button or the editor's Send once: `send()` and Enter Sends
    *  Message hearing the key, as the F-key itself does. */
-  const sendMacro = (m: { key: string; text: string }): boolean => {
+  const sendMacro = (m: { key: string; text: string }): false | Promise<boolean> => {
     const sent = send(m.text, m.key)
     esm.noteKey(m.key)
     return sent
@@ -1491,16 +1504,28 @@ export function CwCockpit({
   // during one, the everyday set otherwise).
   //
   // SAVE writes THE STORE SETTINGS ▸ CW ▸ MACROS EDITS: the active profile's keys,
-  // `settings.macros.cwProfiles[activeCwProfile]`, through the settings patch seam the profile
-  // switch above uses, over the settings the backend holds at that moment. A profile on the
-  // built-ins becomes the operator's own set first, the keys the dock showed with this one changed
-  // (`withCwEntry`, which also keeps the Enter Sends Message steps it was sending). A settings save
-  // leaves the CW queue alone, so an over on the air keeps keying through it.
+  // `settings.macros.cwProfiles[activeCwProfile]`, over the profiles the backend holds at that
+  // moment, through the dock's own narrow save (`set_cw_macros`, in the settings patch queue) and
+  // NEVER the settings form, which advances the TX gate generation, revokes Remote actuation and
+  // clears the FT queues. A profile on
+  // the built-ins becomes the operator's own set first, the keys the dock showed with this one
+  // changed (`withCwEntry`, which also keeps the Enter Sends Message steps it was sending); during
+  // a contest that set goes into a profile named for the contest instead (`withCwDockEntry`), so the
+  // everyday profile stays on the built-ins. Neither save touches the CW queue, so an over on the
+  // air keeps keying through it.
   //
   // SEND ONCE sends the editor's message through `sendMacro`, the key's own path: `send()`'s
   // licence check, the His Call commit, `send_cw` and the engine's every gate behind it, and its
-  // tokens expanded there exactly as the key's are. The saved key is not touched.
+  // tokens expanded there exactly as the key's are. The saved key is not touched. The editor
+  // closes once the engine has taken the message, so ONE Send once is in flight at a time
+  // (`sendingOnce`): a second press while the engine answers would key the message twice.
   const [editing, setEditing] = useState<string | null>(null)
+  const editingRef = useRef(editing)
+  editingRef.current = editing
+  /** The editor a Send once is in flight from (its `editorSeq`), or null. */
+  const sendingOnce = useRef<number | null>(null)
+  /** Counts the editor's openings, so a Send once answered late never closes a later one. */
+  const editorSeq = useRef(0)
   const [editorFocus, setEditorFocus] = useState<MacroEditorFocus>('title')
   const [editorLeft, setEditorLeft] = useState(0)
   const [savingMacros, setSavingMacros] = useState(false)
@@ -1530,6 +1555,7 @@ export function CwCockpit({
     const el = dockRef.current?.querySelector<HTMLElement>(`[data-cw-macro="${key}"]`)
     setEditorLeft(el?.offsetLeft ?? 0)
     setEditorFocus(focus)
+    editorSeq.current += 1
     setEditing(key)
   }
   const closeEditor = () => {
@@ -1551,21 +1577,24 @@ export function CwCockpit({
   const writeKey = async (key: string, entry: { label: string; text: string }) => {
     setSavingMacros(true)
     const out: { saved: { profiles: CwProfile[]; active: number } | null } = { saved: null }
+    // In this window's settings queue, read and write together: a profile switch or any other
+    // patch started first is written before this read, and none started after can write an older
+    // copy back over the key.
     const after = await withErrorToast(
       () =>
-        patchSettings((s) => {
-          const saved = withCwEntry(s.macros?.cwProfiles ?? [], s.macros?.activeCwProfile ?? 0, builtInStored, key, entry)
+        inSettingsQueue(async () => {
+          const s = await getSettings()
+          const saved = withCwDockEntry(s.macros?.cwProfiles ?? [], s.macros?.activeCwProfile ?? 0, contestProfile, builtInStored, key, entry)
           out.saved = saved
-          return { macros: { ...s.macros, cwProfiles: saved.profiles, activeCwProfile: saved.active } }
+          return setCwMacros(saved.profiles, saved.active)
         }),
       t('cw.macros.saveFailed'),
     )
     setSavingMacros(false)
     // A failed save keeps the editor open with the operator's draft.
     if (!after || !out.saved) return
-    setProfiles(out.saved.profiles)
-    setActiveProfile(out.saved.active)
-    onSnap?.(after)
+    setProfiles(after.cwProfiles ?? out.saved.profiles)
+    setActiveProfile(after.activeCwProfile ?? out.saved.active)
     closeEditor()
   }
   const saveMacro = (key: string, label: string, text: string) => {
@@ -1585,9 +1614,18 @@ export function CwCockpit({
     const stock = builtInOf(key)
     void writeKey(key, { label: stock.label, text: stock.text })
   }
-  // Sent, the editor closes; refused here, it stays open with the draft, as a failed Save does.
+  // Sent, the editor closes; refused here, or the `send_cw` call failed, it stays open with the
+  // draft, as a failed Save does. A press while one is in flight sends nothing.
   const sendOnce = (key: string, message: string) => {
-    if (macros.some((x) => x.key === key) && sendMacro({ key, text: message })) closeEditor()
+    if (sendingOnce.current !== null) return
+    const sent = macros.some((x) => x.key === key) ? sendMacro({ key, text: message }) : false
+    if (!sent) return
+    const seq = editorSeq.current
+    sendingOnce.current = seq
+    void sent.then((ok) => {
+      sendingOnce.current = null
+      if (ok && editorSeq.current === seq && editingRef.current === key) closeEditor()
+    })
   }
   // "Live" is anything the snapshot shows holding the transmitter (`txBusyReason`, the engine's
   // arbiter: CW's queue, a tune, a PTT, any other mode's over) or keying a slot or a tune. It
@@ -1694,9 +1732,11 @@ export function CwCockpit({
   // `halt_tx`, so TX stays on and Enter Sends Message is not refused after a cancel). It still
   // stops the CW keyer (`stop_cw`) there, because the last word of an over is on the air with
   // nothing the snapshot shows; on an idle keyer that stop has nothing to cut.
+  // A Send once the engine has not answered yet counts as live: the editor is still open, and the
+  // over it handed over may be about to key.
   useEscStop(true, () => {
     const k = editRef.current
-    if (k.editorOpen && !k.live) {
+    if (k.editorOpen && !k.live && sendingOnce.current === null) {
       void stopCw()
       k.closeEditor()
     } else abort()
@@ -1779,6 +1819,8 @@ export function CwCockpit({
   // THE STATS PANE under the log form, in the station's own window (CallStatsPane). It ships hidden, so
   // with no panel record at all (no ⊞, nothing ticked) it stays hidden, as its vocabulary says.
   const hasStatsPane = host != null && shown('stats')
+  // THE LARGE TX METERS PANE: ships hidden, so with no panel record it stays hidden (the Stats pane's rule).
+  const hasMetersPane = host != null && shown('txMetersPane')
   // THE RECENT CONTACTS PANE, the same way (RecentQsosPane): inside the log pane, under the form.
   const hasRecentPane = host != null && shown('recent')
   // The three rig-control groups share ONE frame (see rigCtlPane), so the frame renders when
@@ -1809,6 +1851,7 @@ export function CwCockpit({
           spots: hasSpotsPane,
           needed: hasNeededPane,
           stats: hasStatsPane,
+          txMetersPane: hasMetersPane,
         })[id as string] ?? false)
   const placed3 = regionGroups(CW_PANELS.arrange!, place, 3, paneShown)
   // BELOW THREE TRACKS the leading and middle columns are one (regionGroups): column a then b once
@@ -2310,13 +2353,19 @@ export function CwCockpit({
     return i >= 0 && c[i + 1] === 'needed'
   })
   const feedsSplit = hasSpotsPane && hasNeededPane && feedsAdjacent && cols >= 2 && panels != null
+  // The large TX meters pane shares a divider with a feed directly under it, as the feeds do with each other.
+  // Each pane stands in one pair at most, so a feed already in the feeds' pair is not its partner.
+  const metersIds = cols === 3 ? [placed3[0].ids, placed3[1].ids, placed3[2].ids].find((ids) => ids.includes('txMetersPane')) : merged
+  const underMeters = cols >= 2 && hasMetersPane && panels != null && metersIds?.includes('txMetersPane') ? metersIds[metersIds.indexOf('txMetersPane') + 1] : undefined
+  const metersWith = !feedsSplit && (underMeters === 'spots' || underMeters === 'needed') ? underMeters : null
+  const metersFrameRef = useRef<HTMLElement>(null)
   const spotsPane =
     hasSpotsPane && spotsBoard ? (
       <CockpitPaneFrame
         title={t('cw.pane.spots.title')}
         paneId="spots"
-        split={feedsSplit ? 1 : undefined}
-        share={feedsSplit ? panels?.layout.share.spots : undefined}
+        split={feedsSplit || metersWith === 'spots' ? 1 : undefined}
+        share={feedsSplit || metersWith === 'spots' ? panels?.layout.share.spots : undefined}
         paneRef={spotsFrameRef}
         {...closeProps('spots')}
       >
@@ -2335,8 +2384,8 @@ export function CwCockpit({
       <CockpitPaneFrame
         title={t('cw.pane.needed.title')}
         paneId="needed"
-        split={feedsSplit ? 1 : undefined}
-        share={feedsSplit ? panels?.layout.share.needed : undefined}
+        split={feedsSplit || metersWith === 'needed' ? 1 : undefined}
+        share={feedsSplit || metersWith === 'needed' ? panels?.layout.share.needed : undefined}
         paneRef={neededFrameRef}
         {...closeProps('needed')}
       >
@@ -2363,7 +2412,28 @@ export function CwCockpit({
   // Each placed pane by its id, KEYED by it (layout L3): a move within a column is a React move, not
   // a remount, and only a change of column remounts a pane (the log form, keyed apart, never moves).
   // The feeds' divider rides with Spots.
+  const metersSeam =
+    metersWith && panels ? (
+      <PaneSeam
+        above={metersFrameRef}
+        below={metersWith === 'spots' ? spotsFrameRef : neededFrameRef}
+        varName="--pane-share"
+        onCommit={(av, bv) => panels.setShares({ txMetersPane: av, [metersWith]: bv })}
+        onReset={() => panels.setShares({ txMetersPane: null, [metersWith]: null })}
+        label={t('operate.seam.pair.label', { above: labels.txMetersPane, below: labels[metersWith] })}
+        className="in-column"
+      />
+    ) : null
   const paneEls: Partial<Record<CwPanelId, React.ReactNode>> = {
+    txMetersPane: hasMetersPane ? (
+      <TxMetersPane
+        radio={snap.radio}
+        paneRef={metersFrameRef}
+        split={metersWith ? 1 : undefined}
+        share={metersWith ? panels?.layout.share.txMetersPane : undefined}
+        close={closeProps('txMetersPane')}
+      />
+    ) : null,
     decode: decodePane,
     sent: sentPane,
     bandActivity: bandPane,
@@ -2401,6 +2471,7 @@ export function CwCockpit({
     <Fragment key={id}>
       {paneEls[id]}
       {id === 'spots' && feedSeam}
+      {id === 'txMetersPane' && metersSeam}
     </Fragment>
   )
   const rigCtlSlot = <Fragment key="rigctl">{rigCtlPane}</Fragment>
@@ -2417,6 +2488,7 @@ export function CwCockpit({
   // the scope, or after the contact in the hosted Quick presentation (below).
   const txStrip = (
     <CockpitTxStrip
+      alarm={<TxAlarmBanner alarms={snap.txAlarms} onSnap={onSnap} />}
       radio={snap.radio}
       onSetTxEnabled={
         drivesAnotherStation()
@@ -2445,6 +2517,7 @@ export function CwCockpit({
       // THE COMPACT DOCK (md and up): the read-only meters stand in the strip's empty right side, as
       // in Operate's QSO strip, and the dock loses their row. They keep their ⊞ id — a readout.
       meters={chrome.wide && shown('txmeters') ? <TxMeters radio={snap.radio} strip /> : undefined}
+      metersPane={panels?.setPanelState ? { shown: hasMetersPane, onToggle: () => panels.setPanelState('txMetersPane', hasMetersPane ? 'removed' : 'docked') } : undefined}
     />
   )
   // The header's occasional controls, drawn inline or behind its ⋯ (see the header below).
@@ -2454,6 +2527,7 @@ export function CwCockpit({
         <MemoryStrip
           dialMhz={snap.radio.dialMhz}
           mode="CW"
+          screen="cw"
           onRecall={onRecallMemory}
           onManage={onOpenMemories}
         />
@@ -2471,16 +2545,16 @@ export function CwCockpit({
           transmitting. Fixing the gate without this left the fix unreachable by the operator
           who reported it, and he was a CW operator.
   
-          Gated on `catOk` like Phone's: with no CAT there is nothing to command, and the
-          header is width-critical at 1024 (see the density note above), so it costs nothing
-          when there is no radio to talk to. NOT a stop control — see SplitControl's header. */}
-      {catOk && (
-        <SplitControl
-          snap={snap}
-          onSnap={onSnap}
-          onError={(m) => pushToast(m, 'error')}
-        />
-      )}
+          DRAWN WHATEVER CAT SAYS, disabled without it (2026-11-07). It was gated on `catOk`,
+          and this header stands above the TX strip: the control coming and going with CAT
+          re-wrapped the header and moved Stop TX. It costs no width CAT-up did not already pay.
+          NOT a stop control — see SplitControl's header. */}
+      <SplitControl
+        snap={snap}
+        onSnap={onSnap}
+        onError={(m) => pushToast(m, 'error')}
+        unavailable={catOk ? undefined : { title: t('cockpit.header.cat.bad.title') }}
+      />
       {/* Dot + "REC", the same `.ph-rec` class Phone uses. This header already carries the band
           picker, tuning strip, Tune, Stop TX, speed, pitch, macros, BW, memories and the rotator,
           and its own density note records that width here is what wraps it at 1024, so this was
@@ -2513,7 +2587,7 @@ export function CwCockpit({
             {CW}
           </span>
         }
-        bandControl={<BandPicker snap={snap} mode="cw" onSnap={onSnap} />}
+        bandControl={<BandPicker snap={snap} mode="cw" onSnap={onSnap} onOpenSatellite={onOpenSatellite} />}
         onCommitDial={commitDial}
         actions={
           host && panels ? (
@@ -2631,7 +2705,7 @@ export function CwCockpit({
             <span>{t('cw.macroProfile.label')}</span>
             <select
               className="settings-input"
-              value={activeProfile}
+              value={shownProfile}
               onChange={(e) => switchProfile(Number(e.target.value))}
               aria-label={t('cw.macroProfile.aria')}
             >
@@ -2645,28 +2719,29 @@ export function CwCockpit({
             </select>
           </label>
         )}
-        {catOk && (
-          <div className="ph-filter" title={t('cw.filter.title')}>
-            <span className="ph-filter-lbl">{BW}</span>
-            <button
-              type="button"
-              className="ph-filter-step"
-              onClick={() => bumpFilter(-FILTER_STEP_HZ)}
-              title={t('cw.filter.narrower.title', { step: FILTER_STEP_HZ })}
-            >
-              −
-            </button>
-            <span className="ph-filter-val mono">{filterHz ? `${filterHz}` : '—'}</span>
-            <button
-              type="button"
-              className="ph-filter-step"
-              onClick={() => bumpFilter(FILTER_STEP_HZ)}
-              title={t('cw.filter.wider.title', { step: FILTER_STEP_HZ })}
-            >
-              +
-            </button>
-          </div>
-        )}
+        {/* Drawn whatever CAT says, disabled without it, for Split's reason just above. */}
+        <div className="ph-filter" title={catOk ? t('cw.filter.title') : t('cockpit.header.cat.bad.title')}>
+          <span className="ph-filter-lbl">{BW}</span>
+          <button
+            type="button"
+            className="ph-filter-step"
+            disabled={!catOk}
+            onClick={() => bumpFilter(-FILTER_STEP_HZ)}
+            title={catOk ? t('cw.filter.narrower.title', { step: FILTER_STEP_HZ }) : t('cockpit.header.cat.bad.title')}
+          >
+            −
+          </button>
+          <span className="ph-filter-val mono">{filterHz ? `${filterHz}` : '—'}</span>
+          <button
+            type="button"
+            className="ph-filter-step"
+            disabled={!catOk}
+            onClick={() => bumpFilter(FILTER_STEP_HZ)}
+            title={catOk ? t('cw.filter.wider.title', { step: FILTER_STEP_HZ }) : t('cockpit.header.cat.bad.title')}
+          >
+            +
+          </button>
+        </div>
         {/* THE OCCASIONAL CONTROLS — memories, the rotator, split and REC: inline at xl and below md,
             behind the header's ⋯ at md and lg (components/HeaderOverflow, features/compactChrome),
             so the header is one row on a 1080p window. None of them keys or stops a transmission. */}

@@ -43,6 +43,7 @@ pub mod privileges;
 pub mod radio_claim;
 pub mod remote_control;
 pub mod remote_monitor;
+pub mod rig_modes;
 pub mod scp;
 pub mod sstv_gallery;
 #[cfg(test)]
@@ -329,6 +330,7 @@ impl AppState {
                 tx_alc: None,
                 tx_alc_zone: None,
                 tx_po_w: None,
+                tx_po_derived: false,
                 tx_comp_db: None,
                 pa_temp_c: None,
                 pa_temp_meter: None,
@@ -364,6 +366,7 @@ impl AppState {
                 tx_emission_mhz: None,
                 phone_usb_only: false,
                 phone_mode_refused: false,
+                data_mode_refusal: None,
                 fm_channel: false,
                 tuning: false,
                 tx_watchdog: false,
@@ -374,6 +377,7 @@ impl AppState {
                 ptt_refused: None,
                 pc_mic_ended: None,
                 voice_dropped: None,
+                atu_failed: None,
                 decode_depth: 3,
                 qso_recording: false,
                 cat_ok: None,

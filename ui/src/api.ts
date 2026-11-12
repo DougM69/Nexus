@@ -283,6 +283,12 @@ export async function getPathOutlook(grid: string): Promise<PathPrediction> {
   return invoke<PathPrediction>('get_path_outlook', { grid })
 }
 
+/** Best times to work `call` (or the square it names): `grid` a grid typed for it this session,
+ * `mode` FT8, FT4, CW or SSB. Answers from what the shack holds; never asks the network. */
+export async function getBestTimes(call: string, grid: string | null, mode: import('./types').BestMode): Promise<import('./types').BestTimesView> {
+  return invoke<import('./types').BestTimesView>('get_best_times', { call, grid, mode })
+}
+
 /** The path grade of each Logbook row: its own stamp when it carries one made for its current
  * grid and band, else the display-only grade of the log, else null. */
 export async function logPathGrades(rows: import('./types').PathGradeAsk[]): Promise<(import('./types').PathGrade | null)[]> {
@@ -506,15 +512,15 @@ export async function getIotaGroups(): Promise<IotaGroup[]> {
   return invoke<IotaGroup[]>('get_iota_groups')
 }
 
-/** An IOTA reference the station OFFERS a contact being logged (`tempo_core::logbook::offer::IotaOffer`),
+/** An IOTA reference the station names for a contact being logged (`tempo_core::logbook::offer::IotaOffer`),
  *  and where it came from: the spot comments for the call, or a callbook lookup made this session. */
 export interface IotaOfferData {
   reference: string
   source: 'spot' | 'callbook'
 }
 
-/** What IOTA reference the station offers the contact a form holds for `call`; null for none, and
- *  none while the form holds a reference of its own (`held`). Asking writes nothing. */
+/** What IOTA reference a log form fills its box with for `call`; null for none, and none while the
+ *  form holds a reference of its own (`held`). Asking writes nothing. */
 export async function getIotaOffer(call: string, held?: string | null): Promise<IotaOfferData | null> {
   return invoke<IotaOfferData | null>('get_iota_offer', { call, held: held ?? null })
 }
@@ -1437,8 +1443,8 @@ export async function resumeChatCq(): Promise<AppSnapshot> {
  * engine refuses an answer whose key is not the head's, so an edited call can never be filed
  * onto a contact that was promoted while the operator was typing.
  *
- * `iotaOffer` is the IOTA offer the operator took in the popup: the station writes it into an
- * empty IOTA field, held back from uploads until the operator touches it. */
+ * The popup's IOTA box is `record.ota.iota`; `iotaOffer` is what the station filled it with, while
+ * the box still holds it, so the log marks it by its source. */
 export async function confirmPendingLog(record: LoggedQso, expectedKey?: string | null, iotaOffer?: IotaOfferData | null): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('confirm_pending_log', { record, expectedKey, ...(iotaOffer ? { iotaOffer } : {}) })
 }
@@ -1559,9 +1565,9 @@ export async function logCurrentQso(): Promise<{ logged: boolean; call?: string 
  *  callbook's, and the operator's outrank both. */
 export type StateSource = 'operator' | 'callbook' | 'park'
 
-/** Append a contact to the ADIF logbook. Returns the fresh snapshot. `iotaOffer` is the IOTA offer
- *  the operator took on the form ([`getIotaOffer`]): written into an empty IOTA field, held back
- *  from uploads until the operator touches it. */
+/** Append a contact to the ADIF logbook. Returns the fresh snapshot. The form's IOTA box is
+ *  `record.ota.iota`; `iotaOffer` is what the form filled it with ([`getIotaOffer`]), while the box
+ *  still holds it, so the log marks it by its source. */
 export async function logQso(record: LoggedQso, stateSource?: StateSource, iotaOffer?: IotaOfferData | null): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('log_qso', { record, stateSource, ...(iotaOffer ? { iotaOffer } : {}) })
 }
@@ -1706,6 +1712,39 @@ export async function applyConfirmationCheck(
 /** Drop the check the station holds, and one still downloading. Nothing changes. */
 export async function cancelConfirmationCheck(): Promise<void> {
   await invoke<void>('cancel_confirmation_check')
+}
+
+/** One contact "Check eQSL sent marks" lists: it holds the "QSL sent, electronic" mark, with no
+ *  date, beside an eQSL card, the mark an eQSL card copied onto a contact in earlier versions. */
+export interface EqslSentMark {
+  id: string
+  call: string
+  whenUnix: number
+  band: string
+  mode: string
+}
+
+/** The Logbook's "Check eQSL sent marks" list, newest first. Reads; writes nothing. */
+export async function eqslSentMarkReview(): Promise<EqslSentMark[]> {
+  return invoke<EqslSentMark[]>('eqsl_sent_mark_review')
+}
+
+/** What a clear made: the contacts it cleared, and the time of the clear, which its Undo names. */
+export interface EqslSentCleared {
+  ids: string[]
+  clearedUnix: number
+}
+
+/** Clear the sent mark of the ticked contacts, each only while it still holds the mark a card
+ *  left. Nothing is uploaded. */
+export async function clearEqslSentMarks(ids: string[]): Promise<EqslSentCleared> {
+  return invoke<EqslSentCleared>('clear_eqsl_sent_marks', { ids })
+}
+
+/** Undo a clear: the mark back on each of `ids` still holding the clear made at `clearedUnix`.
+ *  How many. */
+export async function restoreEqslSentMarks(ids: string[], clearedUnix: number): Promise<number> {
+  return invoke<number>('restore_eqsl_sent_marks', { ids, clearedUnix })
 }
 
 /** The cty.dat-resolved DXCC entity for a callsign, or null — the award
@@ -2406,6 +2445,12 @@ export async function importLog(text: string, newOnly: boolean): Promise<ImportD
   return invoke<ImportDone>('import_log', { text, newOnly })
 }
 
+/** After a LoTW report's import: add the report's rows that matched no contact as contacts, marked
+ *  as already on LoTW. `text` is the file the import took. `added`, `total` and `run` are set. */
+export async function importLotwUnmatched(text: string): Promise<ImportStats> {
+  return invoke<ImportStats>('import_lotw_unmatched', { text })
+}
+
 /** Reconcile a LoTW (or any ADIF) confirmation report INTO the log: upgrade
  * confirmation + credit on already-logged QSOs, return the diff + orphans. */
 export async function syncLotwReport(text: string): Promise<LotwSyncResult> {
@@ -3025,6 +3070,12 @@ export async function saveTextToDownloads(filename: string, text: string): Promi
   return invoke<string>('save_text_to_downloads', { filename, text })
 }
 
+/** Show a file saved by saveTextToDownloads in the file manager. False when it is no longer in
+ *  Downloads (moved, renamed or deleted); rejects when no file manager or folder could be opened. */
+export async function revealInDownloads(filename: string): Promise<boolean> {
+  return invoke<boolean>('reveal_in_downloads', { filename })
+}
+
 /** Save As: the OS save dialog, opening in Downloads with `filename` filled in, then the text
  *  written where the operator picked. The saved path, or null when the dialog was cancelled. */
 export async function saveTextAs(filename: string, text: string): Promise<string | null> {
@@ -3141,6 +3192,21 @@ export async function sstvTune(
   mode: string,
 ): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('sstv_tune', { dialMhz, band, mode })
+}
+
+/** A saved memory recalled to RTTY, PSK or JTTY: `workSpot`, but it never arms the section's Enable-TX
+ * latch, and its hint tells a following window not to re-assert the section either. */
+export async function workSpotRecall(mode: string, freqMhz: number, band: string): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('work_spot_recall', { mode, freqMhz, band })
+}
+
+/** A saved memory recalled to the SSTV screen: `sstvTune`, but it never arms Phone's Enable-TX latch. */
+export async function sstvTuneRecall(
+  dialMhz: number,
+  band: string,
+  mode: string,
+): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('sstv_tune_recall', { dialMhz, band, mode })
 }
 
 /** #451: the SSTV screen's own tune on opening — `sstvTune` as the APP's tune, so the channel is
@@ -3714,6 +3780,12 @@ export async function setExperienceLevel(level: ExperienceLevel): Promise<AppSna
   return invoke<AppSnapshot>('set_experience_level', { level })
 }
 
+/** The one-time note about the move to P.533 was dismissed (`Settings.propEngineNoteDue`'s one
+ *  writer). */
+export async function dismissPropEngineNote(): Promise<AppSnapshot> {
+  return invoke<AppSnapshot>('dismiss_prop_engine_note')
+}
+
 /** The first-run setup wizard was finished or skipped (`Settings.setupWizardSeen`'s one writer):
  *  recorded beside the station's settings, so it never opens by itself again. */
 export async function markSetupWizardSeen(): Promise<AppSnapshot> {
@@ -3826,6 +3898,9 @@ export interface RadioProfilePatch {
   ampModel: string
   ampPort: string
   ampFollowBand: boolean
+  /** Amplifier TX delay, ms: how long after the key this radio's audio is held back so an amplifier
+   * keyed from the radio has switched. 0 = off, 0 to 500. Set at the station only. */
+  ampTxDelayMs: number
   /** THIS radio's FlexRadio LAN IP (SmartSDR API, port 4992) for the native panadapter/DAX
    * workers. Per-radio since 2026-08-18: it was flat-only, so the per-radio Edit flow — which
    * saves through THIS patch — silently dropped it, and two Flexes could not both be configured
@@ -5082,6 +5157,18 @@ export async function setPskMacros(
   return invoke<Settings['macros']>('set_psk_macros', { profiles, active })
 }
 
+/** Save the CW dock's profiles and which one it shows, from its key editor: `macros.cwProfiles` +
+ * `macros.activeCwProfile` in one narrow, atomic write, NEVER the settings form, whose side effects
+ * (the TX gate generation, Remote actuation revoked, the FT queues cleared) a key edited mid-QSO
+ * must not have. The payload must round-trip exactly and the index be one of the profiles, or the
+ * save is refused. Resolves with the saved `macros`, for the caller's settings mirror. */
+export async function setCwMacros(
+  profiles: NonNullable<Settings['macros']['cwProfiles']>,
+  active: number,
+): Promise<Settings['macros']> {
+  return invoke<Settings['macros']>('set_cw_macros', { profiles, active })
+}
+
 /** On a computer driving a station, each settings read comes with the station's revision of what
  *  it read (`src-tauri/src/client_mode.rs` puts it beside the settings, under this key). It is
  *  taken off and kept on the copy under a symbol: no field, no JSON and no comparison sees it, yet
@@ -5554,7 +5641,7 @@ export async function civDiagnosticStatus(): Promise<string> {
  * text (the caller saves it via a browser download). Rejects if there is no
  * log to export (e.g. not in Field Day mode).
  */
-export async function exportLog(format: 'cabrillo' | 'adif'): Promise<string> {
+export async function exportLog(format: 'cabrillo' | 'adif' | 'natural-power'): Promise<string> {
   return invoke<string>('export_log', { format })
 }
 

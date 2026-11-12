@@ -62,14 +62,27 @@ pub enum PttMode {
     Serial { port: String, line: SerialLine },
 }
 
+/// A command's reply deadline (ms) on a local link: what [`Rig::transport_deadline_ms`] gives a
+/// command that names none, and the PTT deadline on every link ([`PTT_DEADLINE_MS`]).
+pub(crate) const FAST_LINK_DEADLINE_MS: u64 = 700;
+
+/// A command's reply deadline (ms) on a slow transport ([`Rig::set_slow_transport`]: a network
+/// radio link, a slow serial link, a daemon), and a network chain's key-down
+/// ([`NETWORK_KEY_DEADLINE_MS`]).
+pub(crate) const SLOW_LINK_DEADLINE_MS: u64 = 2_500;
+
+/// One socket read's timeout (ms) on the CAT connection. A command's deadline is looked at between
+/// reads, so a read that has started runs this long whatever the deadline left.
+pub(crate) const SOCKET_READ_TIMEOUT_MS: u64 = 500;
+
 /// Reply deadline (ms) for a PTT (`T`) command — a one-line RPRT that must answer fast. Kept off
 /// the slow-transport 2.5 s read window so an un-key can never hang the single-threaded radio loop.
-const PTT_DEADLINE_MS: u64 = 700;
+const PTT_DEADLINE_MS: u64 = FAST_LINK_DEADLINE_MS;
 
 /// Reply deadline (ms) for a KEY-DOWN on a network chain ([`Rig::set_network_chain`]): the same
 /// window every other command there gets, because a rigctld reaching its radio over the network
 /// can take that long to answer a key that works. The release keeps [`PTT_DEADLINE_MS`].
-const NETWORK_KEY_DEADLINE_MS: u64 = 2_500;
+const NETWORK_KEY_DEADLINE_MS: u64 = SLOW_LINK_DEADLINE_MS;
 
 /// How long a connection may go on owing late answers before it is given up and the next command
 /// opens a new one ([`Rig::command_lines`]). Counted from the first answer that went owed and is
@@ -233,6 +246,24 @@ pub fn split_mode_line(mode: &str, passband_hz: i32) -> String {
 pub fn vfo_line(vfo: &str) -> String {
     format!("V {vfo}\n")
 }
+/// What one `l METER` read established ([`Rig::read_meter_within`]): a reading, a REFUSAL (the rig
+/// has no such meter), or a miss (no answer this time, which says nothing about the meter).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MeterRead {
+    Value(f32),
+    Refused,
+    Missed,
+}
+
+/// The replies that say a meter is not there, as opposed to not answered this time. `RPRT -1`
+/// (`-RIG_EINVAL`) is rigctld's own answer for a level the rig does not declare: Hamlib 4.7.1
+/// `tests/rigctl_parse.c`, `get_level`, checks `rig_has_get_level` and, with no extra level of
+/// that name, returns it before the radio is asked (measured: a real `rigctld -m 1046` answers
+/// `l RFPOWER_METER_WATTS` with `RPRT -1`). `-4` (`-RIG_ENIMPL`) and `-11` (`-RIG_ENAVAIL`) are a
+/// backend's "not implemented" and "not available" (`src/settings.c`, `rig_get_level`). A timeout
+/// (`-5`), an I/O error (`-6`) or a protocol error (`-8`) is a miss, never a refusal.
+const METER_REFUSALS: [&str; 3] = ["RPRT -1", "RPRT -4", "RPRT -11"];
+
 /// What a `U FUNC <n>` attempt actually ESTABLISHED — three outcomes, not two.
 ///
 /// ⭐⭐ R1 (transmit review, 2026-09-19). Collapsing this into `Result` is what made a
@@ -658,6 +689,10 @@ pub struct Rig {
     /// CAT control channel — rigctld `host:port` (e.g. `127.0.0.1:4532`). `Some` =
     /// a CAT rig is configured; drives all freq/mode/CAT verbs AND `PttMode::Cat`.
     control: Option<String>,
+    /// Every mode write sent to the radio ([`Self::set_mode`]), counted, so the radio loop's
+    /// DATA-word judgement (`RadioLoop::judge_data_word`) judges only the reads after a mode write
+    /// of Nexus's own.
+    pub(crate) mode_writes: u64,
     /// Lazily-opened TCP connection to `control`.
     stream: Option<TcpStream>,
     /// How PTT is keyed (independent of `control`).
@@ -685,8 +720,9 @@ pub struct Rig {
     /// The TX dial and TX mode the radio last confirmed (`RPRT 0`) for Nexus's held Rig split on this
     /// connection, so an over whose split writes change nothing sends none of them. Forgotten by
     /// anything that may have moved VFO B or the dial: a new or dropped connection
-    /// ([`Self::drop_connection`]), any dial, mode or control write, a raw write, a dial read that
-    /// differs, and every refused or late split write.
+    /// ([`Self::drop_connection`]), any dial or control write, a mode write other than one of the
+    /// confirmed TX mode that the radio took, a raw write, a dial read that differs, and every
+    /// refused or late split write.
     pub(crate) split_confirmed: Option<SplitConfirmed>,
     /// True when the CAT link is a NETWORK transport (rigctld → SmartSDR / remote radio), where a
     /// reply can legitimately take seconds. Serial rigs answer in milliseconds, so a serial link
@@ -904,6 +940,7 @@ impl Rig {
     pub fn with_control(control: Option<String>, ptt_mode: PttMode) -> Self {
         Self {
             control,
+            mode_writes: 0,
             stream: None,
             ptt_mode,
             #[cfg(feature = "serial")]
@@ -942,6 +979,11 @@ impl Rig {
     /// slow reply isn't cut off; leave default (false) for serial rigs so a stalled read is bounded.
     pub fn set_slow_transport(&mut self, slow: bool) {
         self.slow_transport = slow;
+    }
+    /// Whether this link was marked a slow transport ([`Self::set_slow_transport`]).
+    #[cfg_attr(not(feature = "device"), allow(dead_code))] // the radio loop (service.rs, device)
+    pub(crate) fn slow_transport(&self) -> bool {
+        self.slow_transport
     }
     /// Mark this CAT link as reaching the radio over the network, so a key-down that waits for
     /// the link ([`Self::key_awaiting_answer`]) waits [`NETWORK_KEY_DEADLINE_MS`] for its answer.
@@ -1026,7 +1068,7 @@ impl Rig {
             self.owed_buf.clear();
             if let Some(addr) = &self.control {
                 let s = connect_cat(addr)?;
-                s.set_read_timeout(Some(Duration::from_millis(500)))?;
+                s.set_read_timeout(Some(Duration::from_millis(SOCKET_READ_TIMEOUT_MS)))?;
                 s.set_write_timeout(Some(Duration::from_millis(500)))?;
                 self.stream = Some(s);
                 // A new connection may be to a radio (or a daemon) that holds nothing we confirmed.
@@ -1406,11 +1448,11 @@ impl Rig {
     }
 
     /// A command's reply deadline (ms) when it names none: the long window on a slow transport.
-    fn transport_deadline_ms(&self) -> u64 {
+    pub(crate) fn transport_deadline_ms(&self) -> u64 {
         if self.slow_transport {
-            2_500
+            SLOW_LINK_DEADLINE_MS
         } else {
-            700
+            FAST_LINK_DEADLINE_MS
         }
     }
 
@@ -1516,7 +1558,8 @@ impl Rig {
             }
             stream.set_nonblocking(false)?;
         }
-        stream.set_read_timeout(Some(Duration::from_millis(500)))?; // restore blocking-with-timeout
+        // restore blocking-with-timeout
+        stream.set_read_timeout(Some(Duration::from_millis(SOCKET_READ_TIMEOUT_MS)))?;
         #[cfg(test)]
         if let Some(before_write) = before_write {
             before_write();
@@ -2009,8 +2052,26 @@ impl Rig {
                 Ok(())
             };
         }
-        self.split_confirmed = None;
-        let reply = self.command_permitted(&mode_line(mode, passband_hz), None, permission)?;
+        // ⛔ A WRITE OF THE MODE VFO B WAS CONFIRMED IN LEAVES IT CONFIRMED, once the radio has taken
+        // it: it cannot change VFO B's mode, and Call CQ's forced retune writes it just ahead of a
+        // key that would otherwise send the TX dial and mode again inside the key's budget. Any
+        // other mode forgets it, as does any answer but `RPRT 0`. A connection renewed by the write
+        // forgets it in `drop_connection`. A backend whose `M` also reaches VFO B in split puts it
+        // in this same mode, as WSJT-X 3.0.2 does on purpose (`HamlibTransceiver.cpp:940-941`).
+        // The dial write the receive-time retune sends after a mode write still forgets it.
+        if self
+            .split_confirmed
+            .as_ref()
+            .is_some_and(|c| c.tx_mode.as_deref() != Some(mode))
+        {
+            self.split_confirmed = None;
+        }
+        self.mode_writes = self.mode_writes.wrapping_add(1);
+        let reply = self.command_permitted(&mode_line(mode, passband_hz), None, permission);
+        if !reply.as_deref().is_ok_and(reply_ok) {
+            self.split_confirmed = None;
+        }
+        let reply = reply?;
         if reply_ok(&reply) || (permission.is_none() && reply.is_empty()) {
             Ok(())
         } else {
@@ -2116,17 +2177,38 @@ impl Rig {
     /// it is abandoned (the stream drops and reconnects on the next command) rather than
     /// waited for. `None` = the transport's normal deadline.
     pub fn read_meter_f32_within(&mut self, name: &str, deadline_ms: Option<u64>) -> Option<f32> {
-        self.control.as_ref()?;
+        match self.read_meter_within(name, deadline_ms) {
+            MeterRead::Value(v) => Some(v),
+            MeterRead::Refused | MeterRead::Missed => None,
+        }
+    }
+
+    /// [`read_meter_f32_within`], telling a REFUSAL from a miss: the forward-power read needs to
+    /// know whether the rig has no such meter at all (#489).
+    pub fn read_meter_within(&mut self, name: &str, deadline_ms: Option<u64>) -> MeterRead {
+        if self.control.is_none() {
+            return MeterRead::Missed;
+        }
         let line = format!("l {name}\n");
         let reply = match deadline_ms {
             Some(ms) => self.command_ending_by(&line, ms),
             None => self.command(&line),
-        }
-        .ok()?;
-        reply
+        };
+        let Ok(reply) = reply else {
+            return MeterRead::Missed;
+        };
+        if let Some(v) = reply
             .lines()
             .find_map(|l| l.trim().parse::<f32>().ok())
             .filter(|v| v.is_finite() && *v >= 0.0)
+        {
+            return MeterRead::Value(v);
+        }
+        if reply.lines().any(|l| METER_REFUSALS.contains(&l.trim())) {
+            MeterRead::Refused
+        } else {
+            MeterRead::Missed
+        }
     }
 
     /// Read a rig CAT function state (e.g. "NB", "NR", "ANF", "COMP", "VOX") via rigctld

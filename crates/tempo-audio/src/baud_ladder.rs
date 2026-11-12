@@ -96,7 +96,7 @@ pub enum LadderKind {
 /// 3091 X6200 → 164. Absent, correctly, for 1001 FT-847, every Kenwood, 1042 FTDX-10, 2053 FX-4.
 pub fn civ_addr_from_caps(rig_model: u32) -> Option<u8> {
     let model = rig_model.to_string();
-    parse_civ_addr(&crate::rigctld_proc::daemon_dump(&[
+    parse_civ_addr(&crate::rigctld_proc::show_conf_dump(&[
         "-m",
         model.as_str(),
         "-L",
@@ -383,6 +383,16 @@ pub struct LadderGate {
 pub const SWEEP_REFUSED_RTS_KEYS: &str = "Nexus did not try other baud rates: RTS keys your \
      transmitter on this port, and a baud sweep could not hold it unkeyed.";
 
+/// Why a baud sweep on this port is NOT run: it is a virtual port
+/// ([`crate::ports::has_no_modem_lines`]), the kind another program such as wfview makes and
+/// forwards to the radio. It has no baud rate, so every rung would answer the same, and on a Mac
+/// every rung would fail to open — a verdict blaming the rate or the port, both wrong. What can
+/// be wrong is the program behind it, so that is what the sentence points at.
+pub const SWEEP_SKIPPED_VIRTUAL_PORT: &str = "This is a virtual port, made by another program \
+     such as wfview, and a virtual port has no baud rate, so Nexus did not try other rates. \
+     Check that the program is running and connected to the radio, and that this is the port \
+     it made.";
+
 /// Should the sweep be refused? Wherever RTS keys the radio ([`LadderGate::rts_keys`]) and it is
 /// not PROVEN that a rung holds it down. A rung names ONE keying line to Hamlib (`-P`), so with
 /// DTR named RTS keeps the driver's open-time level: refused. With RTS named, `rig_open` lowers
@@ -407,11 +417,12 @@ fn sweep_refusal_given(
 }
 
 /// [`sweep_refusal_given`], asking the operator's own Hamlib about `rig_model` (a one-shot
-/// `rigctld -L` dump: it opens no port). Blocking; Test CAT calls it before taking the port.
+/// show-conf dump, [`crate::rigctld_proc::show_conf_dump`], which points the rig at no port).
+/// Blocking; Test CAT calls it before taking the port.
 pub fn sweep_refusal(rig_model: u32, gate: LadderGate) -> Option<&'static str> {
     sweep_refusal_given(gate, || {
         let model = rig_model.to_string();
-        crate::rigctld_proc::daemon_dump(&[
+        crate::rigctld_proc::show_conf_dump(&[
             "-m",
             &model,
             "-L",
@@ -462,7 +473,10 @@ pub fn ladder_applies(
     ptt_serial_port: &str,
     rts_keys: bool,
 ) -> Option<LadderGate> {
-    if is_network || serial_port.trim().is_empty() || rig_model == 0 {
+    // NET rigctl (2) has no serial rate to find: it dials a rigctld over TCP, so every rung would
+    // only look up the port name as a host, and the verdict would replace the words that say so
+    // (`tempo_app::settings::net_rigctl_serial_port`).
+    if is_network || serial_port.trim().is_empty() || rig_model == 0 || rig_model == 2 {
         return None;
     }
     let keying = match ptt_method {
@@ -1756,6 +1770,7 @@ mod tests {
         assert_eq!(cat(3078), none); // IC-7610
         assert_eq!(cat(1042), none); // FTDX-10 — no CI-V, still laddered
         assert_eq!(ladder_applies(true, 3078, "COM4", "cat", "", false), None); // network rig
+        assert_eq!(ladder_applies(false, 2, "COM4", "cat", "", false), None); // NET rigctl
         assert_eq!(cat(0), None); // no model picked
         assert_eq!(ladder_applies(false, 3078, "  ", "cat", "", false), None); // no port
     }

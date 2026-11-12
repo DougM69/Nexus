@@ -115,6 +115,7 @@ import { ALL_PANEL_VOCABULARIES, BOX_IDS } from '../features/panelState'
 import {
   CASES,
   CASE_BY_NAME,
+  CASE_SNAPS,
   cw,
   cwDual,
   js8,
@@ -135,6 +136,8 @@ import {
 import { rttyState } from './stop-line.api.testkit'
 import { AmpPane } from './prop/AmpPane'
 import { AmpStrip } from './AmpStrip'
+import { TempoHeader } from './TempoHeader'
+import { ALARM_CELL_VIEWS } from '../features/alarmCellViews'
 import type { AmpStatus, RttyState } from '../types'
 
 // THE BUDGET (2026-10-09). The slowest case without a budget of its own, "the RF scope pane is on screen with nothing
@@ -255,6 +258,27 @@ describe('the stop line, computed against the real cockpits', () => {
     // most seven mounts a test, where FT's case held eighteen and CW's twenty-two.
     30_000,
   )
+
+  // STOP TX ABOVE EVERY OVERLAY (components/StopLayer.tsx) finds the controls it keeps clickable by `data-stop-control`,
+  // so a Stop TX or a dock stop drawn without it would sit under a dialog again, unclickable, with nothing red. Every
+  // case's Stop TX and dock stop (Esc Stop, SSTV's Stop) must carry it; Tune, PTT and the TX latch are not stops of
+  // that kind (the latch's other click turns transmit ON) and must not.
+  it.each(CASES.map((c) => [c.cockpit, c] as const))('%s: every Stop TX and dock stop is one the stop layer keeps on top', async (_name, c) => {
+    c.render(panelsWith<string>([]))
+    await settle()
+    const on = stopsOnScreen(c.stopControls)
+    for (const [label] of c.stopControls) {
+      const stop = /^stop/i.test(label)
+      for (const el of on.get(label)!) {
+        expect(el.hasAttribute('data-stop-control'), `${c.cockpit}: "${label}" ${stop ? 'lacks' : 'carries'} data-stop-control`).toBe(stop)
+      }
+    }
+    // And the other way round: whatever carries the marker on this screen is a stop and nothing else — the stop
+    // layer draws a marked control above every dialog, so a marked Tune, PTT, latch or macro would key from there.
+    const marked = [...document.querySelectorAll('[data-stop-control]')].map((e) => (e.textContent ?? '').replace(/\s+/g, ' ').trim())
+    for (const name of marked) expect(name, `${c.cockpit}: a non-stop control carries data-stop-control`).toMatch(/^(stop tx|esc ?stop|esc ?abort|stop)$/i)
+    cleanup()
+  }, 30_000)
 
   it('the two Sub-receiver cases really draw a SUB row — else they would sweep a copy of their twin', async () => {
     for (const c of [phoneDual, cwDual] as Array<Case<any>>) {
@@ -473,6 +497,29 @@ describe('RTTY: the macro editor never stands between the operator and a stop', 
 
   afterEach(() => answering(rttyState))
 
+  // RTTY's sequencer row is drawn only with Auto on, so the per-cockpit marker census above never sees it: idle, it
+  // holds the keying keys (Auto CQ, which STARTS a transmission, and Answer); mid-sequence, the Abort. The Abort must
+  // carry `data-stop-control` (the stop layer keeps it on top of a dialog); CQ and Answer must not.
+  async function sequencer(seqState: string) {
+    answering({ ...rttyState, auto: true, seqState } as RttyState)
+    const from = asked()
+    render(<RttyCockpit snap={snap} active onSetTxEnabled={() => {}} />)
+    await settle()
+    await answered(from)
+    const marked = [...document.querySelectorAll('[data-stop-control]')].map((e) => (e.textContent ?? '').replace(/\s+/g, ' ').trim())
+    for (const name of marked) expect(name, 'a marked control that is not a stop').toMatch(/^(stop tx|esc ?stop|esc ?abort|stop)$/i)
+  }
+  it("idle, the sequencer's CQ and Answer keys are on screen and NOT marked", async () => {
+    await sequencer('idle')
+    const keys = [...document.querySelectorAll('.rtty-auto-cq, .rtty-auto-answer')]
+    expect(keys.map((k) => k.className.split(' ').pop()), 'fixture: both keying keys are drawn').toEqual(['rtty-auto-cq', 'rtty-auto-answer'])
+    for (const key of keys) expect(key.hasAttribute('data-stop-control'), key.className).toBe(false)
+  })
+  it("mid-sequence, the sequencer's Abort is on screen and marked as a stop", async () => {
+    await sequencer('cq')
+    expect(screen.getByRole('button', { name: /^esc\s*abort$/i }).getAttribute('data-stop-control')).toBe('sequencer-abort')
+  })
+
   it('Stop TX and the Esc/Stop macro are on screen and enabled while an over is on the air', async () => {
     await openEditor({ ...rttyState, sending: true } as RttyState, onAir)
     const stopTx = screen.getByRole('button', { name: /^stop tx$/i }) as HTMLButtonElement
@@ -602,3 +649,65 @@ describe('the amplifier’s Operate/Standby is not a stop control', () => {
     expect([...stopsOnScreen(everyStop).values()].some((els) => els.length > 0)).toBe(true)
   })
 })
+
+// STOP TX STAYS PUT WHEN A TRANSMITTER ALARM COMES OR GOES (2026-11-07). The alarm was the cockpit header's
+// last row, and the header stands above the TX strip: every alarm moved Stop TX 26 to 38 px (real Chrome).
+// It is the strip's last line now, which each screen passes in (`alarm`): rendered here with the props App
+// gives, every cockpit must draw it in its strip, after Stop TX, and nowhere in its header.
+describe('the transmitter alarm stands under Stop TX on every cockpit', () => {
+  const ALARM = { id: 7, text: 'the radio did not confirm the unkey', radioId: 1, radioName: 'FLEX-6600', atMs: 0 }
+  beforeEach(() => {
+    for (const s of CASE_SNAPS) (s as { txAlarms?: unknown }).txAlarms = [ALARM]
+  })
+  afterEach(() => {
+    for (const s of CASE_SNAPS) delete (s as { txAlarms?: unknown }).txAlarms
+  })
+  it.each(CASES.map((c) => [c.cockpit, c] as const))('%s', async (_name, c) => {
+    c.render(panelsWith<string>([]))
+    await settle()
+    const alarms = [...document.querySelectorAll('.ch-txalarm')]
+    expect(alarms.length, `${c.cockpit} draws the alarm once`).toBe(1)
+    const strip = alarms[0].closest('.cockpit-txstrip, .cockpit-qso')
+    expect(strip, `${c.cockpit}: the alarm is not in the TX strip`).not.toBeNull()
+    expect(alarms[0].closest('.cockpit-header'), `${c.cockpit}: the alarm is in the header, above Stop TX`).toBeNull()
+    const stop = [...strip!.querySelectorAll('button')].find((b) => /^stop tx$/i.test(b.textContent?.trim() ?? ''))
+    expect(stop, `${c.cockpit}: no Stop TX in the strip the alarm is in`).toBeDefined()
+    expect(stop!.compareDocumentPosition(alarms[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // FT's strip has two lines; the cell STARTS the second, right after the break. As the row's last cell it
+    // was below the fold where the strip is taller than its room (FT, ru, 900x600 pinned: on screen nowhere);
+    // at the end of the first line, that line's changing words pushed it off and grew the strip.
+    if (strip!.classList.contains('cockpit-qso'))
+      expect(alarms[0].previousElementSibling?.classList.contains('cq-break'), `${c.cockpit}: the cell does not start the strip's second line`).toBe(true)
+  })
+})
+
+// THE LIST THE TOP BAR TRUSTS (features/alarmCellViews): a view on it lets the bar's lane be cut, because its
+// strip shows every critical item beside Stop TX; a view off it keeps the lane's flag. Held to the cockpits that
+// really draw the cell: every swept cockpit above is on it (and draws the cell, the test above), and the two
+// that are not swept here are each checked where their cell comes from.
+describe('ALARM_CELL_VIEWS is exactly the views whose strip draws the alarm cell', () => {
+  it('every swept cockpit is on the list, and the list holds nothing else but Tempo and APRS', () => {
+    const swept = new Set(CASES.map((c) => c.view))
+    for (const v of swept) expect(ALARM_CELL_VIEWS.has(v as never), `${v} draws the cell but is not on the list`).toBe(true)
+    expect([...ALARM_CELL_VIEWS].filter((v) => !swept.has(v)).sort()).toEqual(['aprs', 'chat'])
+  })
+  it('Tempo (`chat`): its header’s TX strip draws the cell', async () => {
+    render(
+      <TempoHeader
+        snap={{ ...snap, chatCq: 'off' } as never}
+        tier="TempoFast" onTierChange={() => {}} bandPlan={[]} onSetFrequency={() => {}} onSetTxLevel={() => {}}
+        onToggleCqRun={() => {}} onResumeCqRun={() => {}} onSetTxEnabled={() => {}} onSetTune={() => {}}
+        onAtuTune={() => {}} onHaltTx={() => {}} onSetHoldTxFreq={() => {}}
+      />,
+    )
+    await settle()
+    expect(document.querySelector('.cockpit-txstrip .ch-txalarm')).not.toBeNull()
+  })
+  it('APRS: App hands its strip the cell (App draws APRS’s strip, so this reads App’s wiring)', () => {
+    const app = readFileSync(resolve(process.cwd(), 'src/App.tsx'), 'utf8')
+    const aprs = app.slice(app.indexOf('<AprsCockpit'), app.indexOf('/>', app.indexOf('txStrip={', app.indexOf('<AprsCockpit'))) + 2)
+    expect(aprs, 'the APRS host passes a TX strip').toContain('<CockpitTxStrip')
+    expect(aprs, 'App’s APRS strip carries the alarm cell').toMatch(/alarm=\{<TxAlarmBanner /)
+  })
+})
+

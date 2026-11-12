@@ -1229,6 +1229,7 @@ export const EN = {
     other: 'Imported {{count}} QSOs',
   },
   'logbook.import.dupes': ' ({{count}} dupes skipped)',
+  'logbook.import.addUnmatched': { one: 'Add {{count}} unmatched row as a new contact', other: 'Add {{count}} unmatched rows as new contacts' },
   'logbook.import.updated': {
     one: ' · {{count}} existing QSO updated with confirmations/credits',
     other: ' · {{count}} existing QSOs updated with confirmations/credits',
@@ -1252,6 +1253,8 @@ export const EN = {
   'logbook.import.preview.new': { one: '{{count}} new contact', other: '{{count}} new contacts' },
   'logbook.import.preview.dupes': { one: '{{count}} already in your log', other: '{{count}} already in your log' },
   'logbook.import.preview.updates': { one: '{{count}} of those would gain confirmations or credits', other: '{{count}} of those would gain confirmations or credits' },
+  'logbook.import.preview.lotwUnmatched': { one: '{{count}} matches no contact in your log', other: '{{count}} match no contact in your log' },
+  'logbook.import.preview.lotw': 'A LoTW report: each confirmation goes on LoTW for the contact it matches, and no contact is added.',
   'logbook.import.preview.problems': 'Problems found',
   'logbook.import.preview.noProblems': 'No problems found.',
   'logbook.import.preview.unmapped': 'Not stored as a field of a contact',
@@ -1518,6 +1521,18 @@ export const EN = {
   'logbook.confirmations.done.nothing': 'Nothing changed.',
   'logbook.confirmations.failed': 'Could not check confirmations',
   'logbook.confirmations.applyFailed': 'Could not change the ticked contacts',
+  'logbook.eqslSentMarks.button': { one: 'Check {{count}} eQSL sent mark', other: 'Check {{count}} eQSL sent marks' },
+  'logbook.eqslSentMarks.buttonTitle': 'List the contacts whose QSL sent mark may have come from an eQSL card and not from you, and clear the ones you tick',
+  'logbook.eqslSentMarks.title': 'Check eQSL sent marks',
+  'logbook.eqslSentMarks.intro': 'Earlier versions of Nexus copied the “QSL sent, electronic” mark that each eQSL card carries for its sender onto your contact, as if you had sent a card. These contacts hold that mark, with no date, beside an eQSL card. Some may be marks you set yourself in another program and brought in with your log: untick those. A mark you set in Nexus carries a date and is never listed here. Nothing changes until you press the button, and nothing is uploaded.',
+  'logbook.eqslSentMarks.cancel': 'Cancel',
+  'logbook.eqslSentMarks.skip': 'Skip to Cancel and Clear',
+  'logbook.eqslSentMarks.clear': { one: 'Clear {{count}} mark', other: 'Clear {{count}} marks' },
+  'logbook.eqslSentMarks.done': { one: 'QSL sent mark cleared on {{count}} contact', other: 'QSL sent mark cleared on {{count}} contacts' },
+  'logbook.eqslSentMarks.undo': 'Undo',
+  'logbook.eqslSentMarks.restored': { one: 'QSL sent mark put back on {{count}} contact', other: 'QSL sent mark put back on {{count}} contacts' },
+  'logbook.eqslSentMarks.failed': 'Could not clear the QSL sent marks',
+  'logbook.eqslSentMarks.undoFailed': 'Could not put the QSL sent marks back',
   'logbook.pota.title':
     'Import a pota.app hunter/activator ADIF export — stamps park references onto your matching logged QSOs. Never creates or overwrites records.',
   'logbook.pota.failed': 'POTA import failed',
@@ -1606,6 +1621,20 @@ export const EN = {
   'logbook.export.activation.button': 'Export activation',
   'logbook.export.activation.buttonTitle':
     'Save the selected activation as an ADIF named the way POTA asks. Ignores the date range — an activation is already one park on one UTC day',
+  // The way from that file to POTA's own upload page. Nexus opens a page and shows a file; it has
+  // no POTA login and hears nothing back, so none of these may say the log has gone. "My Log
+  // Uploads" is the name of POTA's page and stays in English.
+  'logbook.export.potaUpload.button': "Open POTA's upload page",
+  'logbook.export.potaUpload.title':
+    "Open My Log Uploads on pota.app in your browser and show this file in its folder. You log in and drop the file there: Nexus sends nothing to POTA. It needs internet, and it can wait until you have it: the file stays in Downloads",
+  'logbook.export.potaUpload.next':
+    "Your browser is opening POTA's My Log Uploads page, and {{filename}} is showing in its folder. Next, log in there and drop the file on the page, or choose it. Nothing has gone to POTA yet. No internet here? Do it later: the file stays in Downloads.",
+  'logbook.export.potaUpload.noBrowser':
+    'Nexus could not open your browser. Go to {{url}}, log in, and drop {{filename}} on the page, or choose it. Nothing has gone to POTA yet.',
+  'logbook.export.potaUpload.moved':
+    '{{filename}} is not in Downloads any more: it was moved, renamed or deleted. Press Export activation to write it again, or use the copy you moved.',
+  'logbook.export.potaUpload.noFileManager':
+    "Nexus could not open your file manager. The file is at {{path}}. Log in on POTA's page and drop it there, or choose it. Nothing has gone to POTA yet.",
 
   'logbook.lotw.upload.label': 'Upload to LoTW',
   'logbook.lotw.upload.labelCount': 'Upload to LoTW ({{count}})',
@@ -1838,6 +1867,8 @@ export const EN = {
   'contactCard.field.keep': 'Keep {{tag}}',
   'contactCard.freqRx': 'RX freq (MHz)',
   'contactCard.via': "Logged via",
+  'contactCard.eqslAg': 'eQSL Authenticity Guaranteed (AG)',
+  'contactCard.eqslMessage': 'eQSL message from them',
   'contactCard.recent': 'Recent contacts with this call',
   'contactCard.recent.qsl': 'QSL',
   'contactCard.recent.open': 'Open this contact on the card',
@@ -2106,11 +2137,13 @@ export const EN = {
   'logbook.row.qsl.lotw': 'LoTW confirmed (award-eligible)',
   'logbook.row.qsl.card': 'Paper card received (award-eligible)',
   'logbook.row.qsl.eqsl':
-    'eQSL received (ARRL awards do not accept it; CQ accepts it for WAZ and WPX from AG members, and Nexus does not count it toward WAZ yet)',
+    'eQSL received (ARRL awards do not accept it; CQ accepts it for WAZ and WPX from AG members, and Nexus counts an AG one toward WAZ)',
   'logbook.row.qsl.qrz': 'QRZ logbook confirmed (ARRL awards do not accept it)',
+  'logbook.row.qsl.eqslAg': 'Authenticity Guaranteed (AG) eQSL received (ARRL awards do not accept it; CQ accepts it for WAZ and WPX, and Nexus counts it toward WAZ)',
+  'logbook.row.qsl.eqslDate': 'eQSL card arrived {{date}}',
   'logbook.row.qsl.confirmed': 'LoTW / paper — award-eligible',
   'logbook.row.qsl.eqslOnly':
-    'eQSL only (ARRL awards do not accept it; CQ accepts it for WAZ and WPX from AG members, and Nexus does not count it toward WAZ yet)',
+    'eQSL only (ARRL awards do not accept it; CQ accepts it for WAZ and WPX from AG members, and Nexus counts an AG one toward WAZ)',
   'logbook.row.qsl.none': 'Not confirmed',
   'logbook.row.spot.title':
     "Spot {{call}} to the DX cluster (pre-fills this QSO's call + frequency)",
@@ -3073,6 +3106,8 @@ export const EN = {
     'IOTA ✓ (LoTW or card) · {{cards}} on cards — IOTA credits LoTW and cards, not eQSL',
   'awards.iota.note.worked':
     '{{worked}} worked · {{cards}} on cards — IOTA credits LoTW and cards, not eQSL',
+  // Island groups held on a contact, whether written with no popup or taken from an offer: in the
+  // worked count, in no confirmed one, until the operator confirms each on its contact card.
 
   // The breakdown panels. Every band and mode name under these headings is data.
   'awards.bands.head': 'DXCC by band',
@@ -5198,6 +5233,80 @@ export const EN = {
   'connect.pane.pathDay.basic': 'Select a station to see when its path opens today, and which way round.',
   'connect.pane.pathRegions.title': 'Paths to the regions',
   'connect.pane.pathRegions.basic': 'When and which way round each DX region opens today, modelled from your grid.',
+  'bestTimes.state.tooClose': '{{call}} is under 300 km away. That close, the model cannot tell the bands apart, so Nexus gives no answer.',
+  'callCard.bestTimes.title': 'When and on which band to work {{call}}',
+  'bestTimes.basis.callbookBase': 'Worked out from grid {{grid}}, the callbook\'s address for {{base}}, the home call. They may be elsewhere.',
+  'bestTimes.basis.homeElsewhere': 'The callbook has only {{base}}\'s home address, in another country, so it is not used.',
+  'bestTimes.next.noTxBand': 'Your licence has no band to transmit {{mode}} on, so there is nothing to suggest.',
+  'callMenu.bestTimes': 'Best times',
+  'bestTimes.card.aria': 'Best times for {{call}}',
+  'bestTimes.fullDay.failed': 'The Conditions window could not be opened.',
+  'connect.pane.bestTimes.title': 'Best times',
+  'connect.pane.bestTimes.basic': 'Type a call to see when and on which band you can work it, from your grid.',
+  'bestTimes.input.label': 'Callsign or grid square',
+  'bestTimes.input.placeholder': 'Call or grid',
+  'bestTimes.go': 'Best times',
+  'bestTimes.mode.aria': 'Mode the answer is for',
+  'bestTimes.state.loading': 'Working it out…',
+  'bestTimes.state.noGrid': 'Set your grid square in Settings to get an answer.',
+  'bestTimes.state.enterCall': 'Enter a callsign.',
+  'bestTimes.state.unplaceable': 'Nexus can\'t place this call. Type their grid if you know it.',
+  'bestTimes.state.sameEntity': 'Nexus doesn\'t know where in {{entity}} they are, and from inside {{entity}} its centre is no guide. Look them up, or type their grid.',
+  'bestTimes.state.maritime': 'Maritime or aeronautical mobile: location unknown. Type their grid if you know it.',
+  'bestTimes.state.you': 'That\'s you.',
+  'bestTimes.basis.typed': 'Worked out from grid {{grid}}, the grid you typed.',
+  'bestTimes.basis.logForm': 'Worked out from grid {{grid}}, from your log entry.',
+  'bestTimes.basis.heard': 'Worked out from grid {{grid}}, sent on the air.',
+  'bestTimes.basis.callbook': 'Worked out from grid {{grid}}, from the callbook.',
+  'bestTimes.basis.logged': 'Worked out from grid {{grid}}, from your log. It may be old.',
+  'bestTimes.basis.position': 'Worked out from the callbook\'s position for them.',
+  'bestTimes.basis.entity': 'Worked out from the centre of {{entity}}. Rough.',
+  'bestTimes.lookup': 'Look up',
+  'bestTimes.lookup.none': 'The callbook did not place them, so the answer stays rough.',
+  'bestTimes.grid.label': 'Their grid',
+  'bestTimes.grid.use': 'Use',
+  'bestTimes.now.try': 'Now: try {{band}}',
+  'bestTimes.now.until': '{{word}}, until about {{time}} UTC.',
+  'bestTimes.now.allDay': '{{word}}, all day.',
+  'bestTimes.now.runnerUp': '{{band}} possible, weaker.',
+  'bestTimes.now.longShot': 'Now: a long shot on {{band}}',
+  'bestTimes.now.notNow': 'Not now.',
+  'bestTimes.now.passedOver': '{{band}} would lead, but a flare or proton event is estimated to cost it about {{db}} dB now.',
+  'bestTimes.now.absorbed': 'A flare or proton event is estimated to cost {{band}} about {{db}} dB now.',
+  'bestTimes.next.title': 'Next best',
+  'bestTimes.next.when': '{{day}} {{from}}–{{to}} UTC',
+  'bestTimes.next.local': '{{time}} your time',
+  'bestTimes.next.none': 'The model finds no workable hour for {{mode}} in the next day.',
+  'bestTimes.day.today': 'today',
+  'bestTimes.day.tomorrow': 'tomorrow',
+  'bestTimes.tag.longShot': 'long shot',
+  'bestTimes.tag.greyline': 'greyline',
+  'bestTimes.tag.longPath': 'long path',
+  'bestTimes.tag.storm': 'Kp {{kp}} forecast',
+  'bestTimes.week.repeat': 'This week: these same hours repeat each day.',
+  'bestTimes.week.flag': '{{day}}: Kp {{kp}} forecast, and this path reaches the auroral zone.',
+  'bestTimes.week.noForecast': 'No Kp forecast is held, so no day can be told apart.',
+  'bestTimes.week.horizon': 'The Kp forecast runs to {{day}}; nothing is known past it.',
+  'bestTimes.model.p533': 'P.533 monthly median for {{month}}',
+  'bestTimes.model.heuristic': 'Simple model',
+  'bestTimes.model.noModes': 'the same for every mode',
+  'bestTimes.model.noGain': 'antenna gain not set',
+  'bestTimes.vhf': 'VHF and up are not predicted.',
+  'bestTimes.promise': 'A path forecast, not a promise they are on the air.',
+  'bestTimes.fullDay': 'See full day',
+  'bestTimes.lastSpotted': 'Last spotted {{min}} min ago on {{band}}.',
+  'bestTimes.lastSpotted.noBand': 'Last spotted {{min}} min ago.',
+  'bestTimes.chart.aria': 'Band by UTC hour',
+  'bestTimes.chart.cell': '{{band}} at {{time}} UTC: {{text}}',
+  'bestTimes.chart.short': 'short path',
+  'bestTimes.chart.long': 'long path',
+  'bestTimes.chart.unlicensed': 'not on your licence',
+  'bestTimes.chart.legend': 'Words for the mode chosen, a monthly median: a typical day, not today.',
+  'bestTimes.word.closed': 'Closed',
+  'bestTimes.word.marginal': 'Marginal',
+  'bestTimes.word.fair': 'Fair',
+  'bestTimes.word.good': 'Good',
+  'bestTimes.word.excellent': 'Excellent',
   'activation.pane.none': 'No activation running. Start one on the POTA / SOTA view.',
   'activation.pane.running': 'Running {{span}}',
   'activation.pane.midnight': '0000Z in {{span}}',
@@ -5367,6 +5476,12 @@ export const EN = {
   'ota.filter.hideWorked.hidden': 'Hide worked today · {{count}}',
   'ota.filter.hideWorked.title':
     'Hides activators you logged at this park since 0000Z. They come back at 0000Z or at a new park. Only contacts logged with the park count — HUNT adds it for you.',
+  // Only new: the rows wearing the NEW PARK badge — never logged, park or summit alike (the
+  // station keeps one index of hunter-side references, plus the imported Hunted Parks list).
+  'ota.filter.onlyNew.label': 'Only new',
+  'ota.filter.onlyNew.hidden': 'Only new · {{count}}',
+  'ota.filter.onlyNew.title':
+    'Shows only the parks and summits you have never logged — the rows marked NEW PARK. Parks in your imported Hunted Parks list count as logged.',
   'ota.badge.workedToday': 'WORKED TODAY',
   'ota.badge.workedToday.title':
     'You logged this activator at this park since 0000Z — the activation running now is hunted',
@@ -5374,6 +5489,11 @@ export const EN = {
     one: '1 activator is hidden: you worked that park today. Turn Hide worked today off to see it.',
     other:
       '{{count}} activators are hidden: you worked those parks today. Turn Hide worked today off to see them.',
+  },
+  'ota.empty.notNew': {
+    one: '1 activator is hidden: you have logged that park or summit before. Turn Only new off to see it.',
+    other:
+      '{{count}} activators are hidden: you have logged those parks or summits before. Turn Only new off to see them.',
   },
   // `{{source}}` is the feed's own name (pota.app, SOTAwatch); HUNT is the button above.
   'ota.source.hint':
@@ -5749,6 +5869,9 @@ export const EN = {
   'fieldDay.export.dupeSheet.label': 'Dupe sheet',
   'fieldDay.export.dupeSheet.title':
     'Download a dupe / multiplier check sheet (sections + callsigns worked)',
+  'fieldDay.export.naturalPower.label': 'Natural power',
+  'fieldDay.export.naturalPower.title':
+    'Download the natural power contacts this laptop logged (ARRL Field Day rule 7.3.8 asks for the list)',
   'fieldDay.export.done': 'Exported → {{path}}',
   'fieldDay.export.remote': 'Only at the station: a press through Remote exports no log.',
 
@@ -5759,6 +5882,13 @@ export const EN = {
   'fieldDay.bonuses.aria': 'Claimed FD bonuses',
   'fieldDay.bonus.aria': '{{label}} — {{points}} pts',
   'fieldDay.bonus.pts': '{{points}} pts',
+  'fieldDay.bonus.ptsEach': '{{points}} pts each',
+  'fieldDay.bonus.count.aria': 'How many for {{label}}',
+  'fieldDay.bonus.count.title': '{{points}} pts each, up to {{max}}',
+  'fieldDay.bonus.fromLog': '{{points}} pts per GOTA contact, counted from the club log',
+  'fieldDay.bonus.naturalNow': 'On natural power now',
+  'fieldDay.bonus.naturalNow.title':
+    'Marks each contact this laptop logs while on, for the natural power list (Export ▸ Natural power)',
 
   // Three states per bonus: not planned / planned / earned. Only EARNED scores — a plan is
   // a plan, not points — so these words carry that distinction and must keep carrying it in
@@ -6084,6 +6214,11 @@ export const EN = {
   },
   'fieldDay.unmerged.title':
     'Add these contacts to your general logbook as they were logged. Safe to press twice: a contact already there is skipped, never duplicated. Nothing is queued for upload.',
+  // Dismiss puts away the offer as it stands (its contest, count and days), on this computer, for
+  // good; the contacts stay in the journal. A changed offer is shown again.
+  'fieldDay.unmerged.dismiss': 'Dismiss',
+  'fieldDay.unmerged.dismissTitle':
+    "Stop offering these. They stay in this computer's contest journal, and nothing is deleted. A contact not offered here before is offered again.",
   'fieldDay.club.board.empty': 'No positions heard yet — every other Nexus position on this network appears here as it logs.',
   'fieldDay.club.board.column.position': 'Position',
   'fieldDay.club.bands.column.band': 'Band',
@@ -6423,7 +6558,7 @@ export const EN = {
   'settings.fieldDay.power.hundred.label': '×2 ≤100W',
   'settings.fieldDay.power.hundred.hint': '100W or less from any power source',
   'settings.fieldDay.power.high.label': '×1 >100W',
-  'settings.fieldDay.power.high.hint': 'Over 100W — commercial/generator power',
+  'settings.fieldDay.power.high.hint': 'Over 100W from any power source',
   'settings.fieldDay.power.hint':
     'Multiplies your QSO points. QRP/battery = ×5 (ARRL bonus for going off-grid). Choose before the event.',
 
@@ -6652,6 +6787,8 @@ export const EN = {
   'sat.alarm.up': '⏰ {{name}} is UP now (LOS {{los}}) · max {{maxEl}}°',
   'sat.alarm.rises': '⏰ {{name}} rises {{aos}} (~{{mins}} min) · max {{maxEl}}°',
   'sat.alarm.stop': 'Stop alarm',
+  // #478: the alarm notice's button where the Satellites screen exists: stops the alarm and opens that pass.
+  'sat.alarm.open': 'Open in Satellites',
 
   // ISS SSTV auto-arm (features/issAutoArm.ts). The dial and the mode are interpolated from
   // the module's own constants and never become text: a decimal comma reaching 145.800 is an
@@ -7232,6 +7369,7 @@ export const EN = {
   'memories.toolbar.grid.title': 'Grid view — the CHIRP-style spreadsheet',
   'memories.toolbar.save.label': '＋ Save {{freq}} {{mode}}',
   'memories.toolbar.save.title': 'Save the current dial frequency + mode as a memory',
+  'memories.toolbar.save.title.screen': 'Save the current dial frequency + mode as a memory. Recalling it opens {{screen}}.',
   'memories.toolbar.new.label': '＋ New',
   'memories.toolbar.new.title': 'Add a memory by hand',
   'memories.toolbar.import.label': 'Import CSV',
@@ -7292,6 +7430,9 @@ export const EN = {
   // only the words around them are prose.
   'memories.editor.name.label': 'Name',
   'memories.editor.kind.label': 'Kind',
+  'memories.editor.screen.label': 'Opens on',
+  'memories.editor.screen.auto': 'By its mode',
+  'memories.editor.screen.title': 'The screen a recall opens. A memory saved from a mode screen opens that screen; By its mode goes by the mode alone.',
   'memories.editor.rx.label': 'RX MHz',
   'memories.editor.mode.label': 'Mode',
   'memories.editor.offset.label': 'Offset',
@@ -7400,6 +7541,7 @@ export const EN = {
   // What the section says after it acts.
   'memories.toast.saved': 'Saved {{freq}} {{mode}}',
   'memories.toast.alreadySaved': '{{freq}} {{mode}} is already saved',
+  'memories.toast.moved': '{{freq}} {{mode}} now opens {{screen}}',
   'memories.export.empty': 'Nothing to export in this view',
   'memories.export.done': {
     one: 'Exported {{count}} channel → {{path}}',
@@ -7748,6 +7890,9 @@ export const EN = {
   'recall.log.comment.readAria': 'Comment — open it in the row',
   'recall.qrz.title': 'Open {{call}} on QRZ (browser)',
   'recall.qrz.error': 'Could not open {{call}} on QRZ',
+  // #483: the caller card's grid square, a button that opens it on OpenStreetMap in the browser.
+  'recall.grid.map.title': 'Open {{grid}} on OpenStreetMap (browser)',
+  'recall.grid.map.error': 'Could not open {{grid}} on OpenStreetMap',
   // Names the button the operator can see: the log strip's callbook button reads "Lookup".
   'recall.where.empty': 'Tab or press Lookup for name / QTH',
   // Two whole statements, and the conjunction between the two squares is inside a message of
@@ -7835,6 +7980,10 @@ export const EN = {
   'bandPicker.planAdvice.label': 'Outside band plan',
   'bandPicker.planAdvice.title':
     'Phone here on {{band}} is outside the usual band plan: every IARU region keeps this part of the band for CW and data. Nexus does not block it — your licence and your country’s band plan decide.',
+  // The band picker's last row: opens the Satellites screen on QO-100 (it tunes nothing itself).
+  'bandPicker.qo100.label': 'QO-100 satellite',
+  'bandPicker.qo100.title':
+    'Opens QO-100 on the Satellites screen. Pick its narrowband transponder there to tune the downlink.',
 
   'freq.control.aria': 'Frequency control',
   'freq.channel.label': 'Band / Channel',
@@ -7966,6 +8115,8 @@ export const EN = {
     '{{port}} is not connected right now — check the rig is powered on, or pick another port.',
   'settings.radio.check.dialIn':
     '{{port}} is a dial-in device and will hang waiting for carrier. Use the matching /dev/cu.… port instead.',
+  'settings.radio.check.netRigctlPort':
+    'NET rigctl reaches a radio through a rigctld on the network and cannot open {{port}} itself. To have Nexus run the radio on {{port}}, set Rig Model to your radio. Keep NET rigctl only if another program runs a rigctld for this radio.',
   'settings.radio.check.catNoModel':
     'PTT is set to CAT but the rig model is None/VOX — pick your rig model, or choose a different PTT method.',
   'settings.radio.check.noCatPtt':
@@ -8130,6 +8281,7 @@ export const EN = {
     "Saved to {{name}}. CAT can only be tested on the radio you're operating — make {{name}} active to test it.",
   'settings.cat.test.failed': 'Could not run the CAT test.',
   'settings.cat.autoTest.failed': 'Could not run the port auto-test.',
+  'settings.cat.autoTest.busy': 'Testing ports — {{seconds}}s (a port nothing answers on can take over a minute)…',
 
   'settings.profiles.saved': 'Profile "{{name}}" saved',
   'settings.profiles.loaded': 'Loaded profile "{{name}}"',
@@ -8604,8 +8756,18 @@ export const EN = {
   'settings.rigControl.serialHandshake.xonxoff': 'XON/XOFF (software)',
   'settings.rigControl.serialHandshake.hint':
     "Tells Nexus what your cable actually does, instead of letting it guess. Leave it on Auto unless you have a rig that keys at launch — Auto changes nothing about how your station works today. If you change it and CAT stops working, put it back on Auto: on some rigs Hamlib quietly refuses the setting and then answers without ever having opened the radio, so you get a CAT light and a rig that ignores you.",
+  'settings.rigControl.netRigctl.notConnected':
+    'Rig Model is NET rigctl, which reaches a radio through a rigctld on the network and cannot open {{port}} itself, and no rigctld answered. To have Nexus run the radio on {{port}}, set Rig Model to your radio. If another program runs a rigctld for it, start that program, or set Connection to Network with its address as host:port.',
+  'settings.rigControl.catSilentTxOff':
+    'Transmit was turned off because CAT to the radio was lost. Check the radio and its CAT cable; Nexus keeps trying. Press TX On to transmit again.',
+  'settings.rigControl.catBackTxOff':
+    'CAT to the radio was lost and transmit was turned off. CAT is back; press TX On to transmit.',
   'settings.rigControl.serialHandshake.rtsKeys':
     "RTS keys your transmitter on this port, so Serial handshake can't be Hardware — set it to Auto or None.",
+  // The launch Nexus refuses when this Hamlib cannot confirm the RTS/DTR holds: the backend sends
+  // exactly this (`HAMLIB_CANNOT_CONFIRM_HOLDS`, crates/tempo-audio/src/rigctld_proc.rs).
+  'settings.rigControl.hamlibCannotConfirmHolds':
+    "Nexus did not open the serial port: it could not confirm that this Hamlib will hold the RTS and DTR lines low, and opening the port without that can key a transmitter wired to either line. Try again, and if this keeps happening, update Hamlib or use the Hamlib that comes with Nexus.",
   'settings.rigControl.pttLineState.label': 'Keying line at startup',
   'settings.rigControl.pttLineState.auto': 'Auto (recommended)',
   'settings.rigControl.pttLineState.untouched': 'Never touch it',
@@ -8781,6 +8943,9 @@ export const EN = {
     'On Linux, pick it by its card name (hw: or plughw:): receive audio does not play on the system default, pulse or pipewire, which may be the radio’s card.',
   'settings.headphoneMonitor.level.label': 'Listening level',
   'settings.headphoneMonitor.level.aria': 'Receive listening level',
+  // #468: the same level as a slider in the top bar, shown while receive audio plays here.
+  'topbar.listen.title':
+    'Listening level {{pct}}%: how loud Nexus plays the receive audio on this computer (Settings ▸ Radio ▸ Receive audio on this computer). Click to change.',
   'settings.headphoneMonitor.level.hint':
     'Headphone listening volume (does not affect TX).',
 
@@ -8903,6 +9068,10 @@ export const EN = {
   'settings.amplifier.follow.label': 'Follow the radio\u2019s band',
   'settings.amplifier.follow.hint':
     'Step the amplifier to the band you are on, without being asked. Off by default \u2014 this is the one amplifier control that acts on its own. It never moves the amplifier while you are transmitting, and it steps one band at a time, checking where the amplifier actually is after each one rather than assuming it got there. \u26a0\ufe0f If your amplifier already follows the radio through its own band-data cable, as most SPE installations do, leave this off: the hardware is doing the same job, and two things steering one band is worse than either alone.',
+  'settings.amplifier.txDelay.label': "Amplifier TX delay",
+  'settings.amplifier.txDelay.value': "{{ms}} ms",
+  'settings.amplifier.txDelay.hint':
+    "After Nexus keys the radio it waits this long before sending any audio, so an amplifier keyed from the radio has time to switch before RF reaches it. 0 = off. It helps only where Nexus\u2019s audio makes the RF: SSB and data modes, the computer or remote microphone on Phone, soundcard CW, and Tune when Nexus makes the tune carrier. It cannot help with FM, AM, FSK RTTY, CW sent by the radio itself, the radio\u2019s own microphone, VOX, Tune on a Flex or TCI radio that makes its own tune carrier, or an amplifier keyed by RF sense: use the radio\u2019s own TX delay for those. A program transmitting through Nexus\u2019s TCI server gets no delay from Nexus; use that program\u2019s own Tx delay. FT8 already has half a second of quiet at the start of each over, so this changes nothing there unless the radio is slow to key. FT4 keeps WSJT-X\u2019s own timing and ignores this. FT2 overs start later by this much. On FT1 a long delay trims the end of each over at the slot boundary, and it still decodes. On Phone, letting go of PTT keeps the radio keyed until the speech you had already spoken has been sent.",
   'settings.amplifier.port.label': 'Amplifier port',
   'settings.amplifier.port.hint':
     'Its own port, not the one CAT uses — a serial port can only be open once, so sharing it stops the radio connecting. The speed is worked out for you.',
@@ -9155,7 +9324,7 @@ export const EN = {
   'setup.rig.selected.baud': ' @ {{baud}} baud',
   'setup.rig.selected.unnamedRadio': 'radio',
   'setup.rig.autoTest.action': '🔎 Auto-test my ports',
-  'setup.rig.autoTest.busy': 'Testing ports — {{seconds}}s (can take up to a minute)…',
+  'setup.rig.autoTest.busy': 'Testing ports — {{seconds}}s (a port nothing answers on can take over a minute)…',
   'setup.rig.autoTest.title':
     'Probes every USB port until a radio answers — read-only, never transmits',
   'setup.rig.autoTest.failed': 'Auto-test failed: {{error}}',
@@ -9197,7 +9366,7 @@ export const EN = {
   'setup.rig.second.action': '＋ I have a second radio',
   'setup.rig.second.title': 'Adds a radio profile and probes the remaining USB ports for it',
   'setup.rig.second.probing':
-    'Probing the other ports — {{seconds}}s (radio 1’s port is skipped; this can take up to a minute)…',
+    'Probing the other ports — {{seconds}}s (radio 1’s port is skipped; a port nothing answers on can take over a minute)…',
   'setup.rig.second.saved': 'Second radio: {{radio}} on {{port}} — saved to its own profile.',
   'setup.rig.second.addFailed': "Couldn't add the radio: {{error}}",
   'setup.rig.second.model.label': 'Which radio is the second one?',
@@ -10419,9 +10588,9 @@ export const EN = {
   // and stay in the panel.
   'settings.integrations.propEngine.label': 'Prediction engine',
   'settings.integrations.propEngine.heuristic': 'Modelled (fast heuristic)',
-  'settings.integrations.propEngine.p533': 'ITU-R P.533 (full physics)',
+  'settings.integrations.propEngine.p533': 'ITU-R P.533 (full physics, default)',
   'settings.integrations.propEngine.hint':
-    'Drives the per-station path outlook + 24h band×hour grid. P.533 is the real circuit-reliability method (validated against the ITU reference; ~0.1 s per prediction, uses your station power). Live spots always win over any model.',
+    'Drives the per-station path outlook + 24h band×hour grid. P.533, the default, is the real circuit-reliability method (validated against the ITU reference; ~0.1 s per prediction, uses your station power). Live spots always win over any model.',
   // The collapsed disclosure inside Integrations & Feeds. ⚠️ dBi, TX and RX are units and the
   // radio's own two states.
   'settings.antennaGain.title': 'Antenna gain (advanced)',
@@ -10540,16 +10709,15 @@ export const EN = {
   'iota.credit.title': 'Island group names: © Islands On The Air (IOTA) Ltd and RSGB — iota-world.org',
   'iota.list.failed': 'The IOTA island list could not be downloaded',
   'iota.notOnList': '{{ref}} is not on the IOTA island list.',
-  'iota.offer.chip': 'IOTA {{ref}}',
-  'iota.offer.aria': 'IOTA reference offered: {{ref}}',
+  'iota.prefill.label': 'IOTA',
+  'iota.prefill.aria': 'IOTA reference for this contact',
+  'iota.prefill.hint': 'Filled in from a spot or your callbook lookup. Logged and sent with the contact; change it or clear it before logging.',
   'iota.offer.fromSpot': 'from the spot',
   'iota.offer.fromCallbook': 'from the callbook',
-  'iota.offer.spotHeld': 'Kept in your log, but sent to no service until you confirm it on the contact card.',
-  'iota.offer.use': 'Use',
   'iota.offer.dismiss': 'Leave IOTA empty',
-  'iota.card.spotHeld': 'Filled from a spot: kept in your log, sent to no service until you confirm it.',
-  'iota.card.callbookHeld': 'Filled from the callbook: kept in your log, sent to no service until you confirm it.',
-  'iota.card.confirm': 'Confirm',
+  'iota.card.fromSpot': 'Filled in from a spot.',
+  'iota.card.fromCallbook': 'Filled in from your callbook lookup.',
+  'iota.card.clear': 'Clear',
   'spots.row.iota.title': 'IOTA {{ref}}, from the spot comment',
   'spots.row.iota.needed': 'New IOTA: {{ref}}, from the spot comment',
   'settings.iotaList.legend': 'IOTA island list',
@@ -11307,6 +11475,31 @@ export const EN = {
   // The engine behind a prediction. `P.533` is the ITU recommendation's number and stays in
   // the component beside it.
   'connect.engine.modelled': 'modelled',
+  // Shown where the engine's name goes when P.533 failed and the heuristic answered instead.
+  // ⚠️ `P.533` is the recommendation's number: keep it verbatim.
+  'prop.engine.fallback': 'modelled: P.533 could not run',
+  // The one-time note after an existing station is moved to P.533. The path names the Settings
+  // tab and the setting's own label, so each catalog repeats its own words for them.
+  // What a P.533 answer rests on: the storm correction laid over it and the power it assumes
+  // (components/prop/ModelBasis). ⚠️ `Kp`, `W` and `P.533` stay verbatim.
+  'prop.storm.applied': 'Adjusted for a geomagnetic storm, Kp up to {{kp}}.',
+  // The same correction below storm level (Kp under 5, NOAA's G1): unsettled, not a storm.
+  'prop.storm.unsettled': 'Adjusted for unsettled geomagnetic conditions, Kp up to {{kp}}.',
+  'prop.storm.someHours': 'Hours with no Kp forecast are not adjusted.',
+  'prop.power.setting': 'Assumes {{watts}} W, your station power setting.',
+  'prop.power.rig': 'Assumes about {{watts}} W, the radio\'s output on your last transmission.',
+  'prop.power.amplifier': 'Assumes about {{watts}} W, the amplifier\'s output on your last transmission.',
+  'prop.power.default': 'Assumes 100 W: no station power is set and the radio has not reported its output.',
+  'prop.power.amplifierSetUp': 'An amplifier is set up, so the power on the air may be higher.',
+  'prop.bands.simpleModel': 'With nothing heard, a band\'s word comes from the simple model, not P.533.',
+  // The hover on a P.533 answer's words (Band Outlook, the path card). ⚠️ The five words are
+  // the backend's, shown in English everywhere: keep them verbatim, and `P.533`, SSB, CW, FT8.
+  'prop.words.p533.title':
+    'P.533\'s words: Excellent, SSB usable on 3 days in 4 at the band\'s best hour; Good, CW usable on 3 days in 4; Fair, FT8 usable on half the days; Marginal, FT8 on 1 day in 10.',
+  'prop.words.ring.title':
+    'Toward DX, a band\'s word is the one it reaches in at least half the directions; its hours are its best direction\'s.',
+  'prop.engine.note':
+    'Predictions now use P.533, so some band answers have changed. To go back, open Settings ▸ Services ▸ Prediction engine.',
   'connect.engine.outlook': 'modelled · DX',
 
   'connect.path.heading': 'Path to {{call}}',
@@ -12126,6 +12319,8 @@ export const EN = {
   'operate.strip.state.transmitting': '▲ TRANSMITTING',
   'operate.strip.state.receiving': '▼ Receiving',
   'operate.strip.state.txOff': '■ TX off',
+  'operate.strip.state.txOffCatLost': 'CAT lost: press TX On',
+  'operate.strip.state.txOffCatBack': 'CAT is back: press TX On',
   'operate.strip.tune.radioPower': 'Radio tune power {{pct}} %',
   'operate.strip.tune.radioTimeoutSec': 'Radio TX timeout {{sec}} s',
   'operate.strip.tune.radioTimeoutMin': 'Radio TX timeout {{min}} min',
@@ -12460,6 +12655,10 @@ export const EN = {
   'rtty.panel.stream': 'Decoded Text',
   'rtty.header.mode.title':
     'RTTY — Baudot/ITA2 at the configured baud + shift (45.45 / 170 Hz is the HF standard; change it in Settings → RTTY)',
+  // #488: the baud picker beside the mode badge (the same setting as Settings → RTTY).
+  'rtty.header.baud.aria': 'RTTY baud rate',
+  'rtty.header.baud.title':
+    'Baud rate: 45.45 is the HF standard, 50 is used in parts of Europe, 75 on VHF and some nets. The same setting as Settings → RTTY. It cannot be changed while transmitting.',
   'rtty.header.backend.fsk.title':
     'True FSK — data bits on the serial keyline, rig in RTTY mode (its narrow RTTY filters work). Change the backend in Settings → RTTY.',
   'rtty.header.backend.afsk.title':
@@ -13470,7 +13669,7 @@ export const EN = {
     'Close',
   'sstv.viewer.close.title':
     'Close this window (Esc)',
-  'sstv.gallery.reveal.label': 'Reveal',
+  'sstv.gallery.reveal.label': 'Open folder',
   'sstv.gallery.reveal.title': 'Open the folder the received pictures are saved in (Pictures/Nexus SSTV)',
   'sstv.gallery.reveal.failed': 'Could not open the SSTV gallery folder',
   'sstv.gallery.thumb.alt': '{{mode}} image received {{when}}',
@@ -14352,6 +14551,9 @@ export const EN = {
   'shell.lane.pttRefused.message': 'PTT REFUSED',
   'shell.lane.pttRefused.detail':
     'Nexus did not key the {{mode}} over at {{time}} UTC: the radio was still taking its transmit audio from DAX, as Nexus had set it, not from its mic, so your voice would not have gone out. Nothing was sent. Let go of PTT and Nexus puts the radio back on its mic input within a moment; then press PTT again.',
+  // The TX watchdog's halt, a critical lane item (App): how to transmit again. `TX On` is the strip's
+  // button, whose label is not translated.
+  'shell.lane.txWatchdog.detail': 'Transmit is off. Press TX On to transmit again.',
   // A computer-microphone over that ended, or never keyed, for a reason the operator did not
   // choose (features/pcMic.ts). `{{why}}` is one of the sentences after it.
   'shell.lane.pcMic.message': 'COMPUTER MIC',
@@ -14397,6 +14599,19 @@ export const EN = {
     'Nexus did not play the voice message at {{time}} UTC: the radio did not switch its transmit audio to DAX within 2 seconds, so nothing was keyed. The message was dropped, not held; press its key again.',
   'shell.lane.voiceDropped.keyed':
     'Nexus did not play the voice message at {{time}} UTC: something else was transmitting or keyed the radio first (your mic or PTT, a tune carrier, another program), so nothing was keyed. The message was dropped, not held.',
+  // An ATU press the button accepted that came to nothing in the radio loop: dropped before it was
+  // sent, refused by the radio, or sent with no answer. The button's own refusals are toasts; these
+  // come after it answered. The next press the button accepts clears it.
+  'shell.lane.atuFailed.dropped.message': 'ATU PRESS DROPPED',
+  'shell.lane.atuFailed.dropped.detail': 'ATU press dropped at {{time}} UTC: {{why}}; press again.',
+  'shell.lane.atuFailed.refused.message': 'ATU REFUSED',
+  'shell.lane.atuFailed.refused.detail':
+    'The radio refused the tune-up at {{time}} UTC (check its tuner is set to the internal tuner).',
+  'shell.lane.atuFailed.noAnswer.message': 'ATU: NO ANSWER',
+  'shell.lane.atuFailed.noAnswer.stoodDown':
+    'No answer from the radio to the tune-up at {{time}} UTC; TX stood down in case it is tuning.',
+  'shell.lane.atuFailed.noAnswer.detail':
+    'No answer from the radio to the tune-up at {{time}} UTC; it may be tuning.',
   // A clock repair holds transmit: from the press of Repair clock until the repair ends, two minutes
   // at most, nothing starts transmitting, so the clock cannot move in the middle of an over. The lane
   // says so for as long as it lasts.
@@ -15105,6 +15320,10 @@ export const EN = {
   // report, as against the blank rows before the first over, which the line above answers.
   'phone.unavail.meter': 'Your radio does not report {{meter}} over CAT — the bar stays empty.',
   'meters.tx.swr.title': 'Antenna match — keep it under 2:1',
+  // #476: the same tip once the operator has switched on the high-SWR cutoff: the number it names
+  // is theirs, the one Nexus acts on, not the fixed rule of thumb above.
+  'meters.tx.swr.cutoff':
+    'Antenna match — Nexus stops transmitting above {{ratio}}:1, your setting in Settings ▸ Radio ▸ Transmit limits & sharing',
   // ⚠️ THE SAME READING, ON A SCALE NEXUS CANNOT VOUCH FOR (2026-09-20). `swrScaleVerified`
   // is false — the rig is outside the two paths whose meter curve we can point at — so the
   // line above must not be shown: "under 2:1" is a threshold on an absolute scale, and the
@@ -15115,6 +15334,10 @@ export const EN = {
     "Antenna match — this is the radio's own raw figure, and Nexus has no verified scale for this model, so it cannot tell you what counts as high here. Watch which way it moves as you tune; the absolute number may be well out, and nothing stops your transmission on it.",
   'meters.tx.alc.title': 'ALC — set mic gain so SSB peaks just tickle the zone, never peg it',
   'meters.tx.po.title': 'Actual output power',
+  // #489: the PO≈ label's tooltip, where the radio gives no watts and the figure is its meter's
+  // share of the rated power (Settings ▸ Radio ▸ Rig Control ▸ Rated power).
+  'meters.tx.po.derived':
+    'Output power, estimated: this radio reports its power only as a share of its meter, so Nexus shows that share of the rated power set for it in Settings ▸ Radio. It is not written to your log.',
   'meters.tx.needle.peak.title': 'The bright mark is the peak: it holds the highest reading for a second, then falls back. Between overs it shows the last over\'s peak.',
   'meters.tx.comp.title': 'Speech compression',
   'meters.tx.comp.level.aria': 'Speech processor level',
@@ -15241,6 +15464,9 @@ export const EN = {
   // Why the link is down. Four states, and `wrongModel` is the one that earns its own sentence:
   // a working link on a protocol Nexus does not speak must never read as "no amplifier".
   'amp.reason.noAnswer': 'Not answering',
+  // Before the amplifier's first answer after launch or a radio switch (the engine's not-yet-answered status: an
+  // empty reason). Not a fault: nothing has failed yet.
+  'amp.reason.waiting': 'Connecting…',
   'amp.reason.portBusy': 'Port in use by something else',
   'amp.reason.wrongModel': 'Answering, but in a protocol Nexus does not read yet',
   'amp.reason.malformed': 'Answering with something Nexus cannot read',
@@ -15347,6 +15573,14 @@ export const EN = {
   // slider (a CONFIGURATION control on the transmit path) and the CAT pill.
   'cockpit.header.readout.wheelTune.title': 'Scroll to tune',
   'cockpit.header.readout.digitTune.title': 'Scroll a digit to tune it',
+  // The red readout's words when the data MODE is the whole licence lock (`dataModeRefusal`). `{{mode}}` is the mode as
+  // picked, period and submode included ("Q65-30E", "MSK144-15").
+  'cockpit.header.readout.txLock.tooWide':
+    '{{mode}} is wider than 2.8 kHz, and below 28.3 MHz Nexus holds a US license’s data to that — transmit is blocked. Pick a narrower Q65 submode in Settings.',
+  'cockpit.header.readout.txLock.tooFast':
+    '{{mode}} keys at 2000 baud, and US data on 2200 m and 630 m may not exceed 300 baud — transmit is blocked. Pick another mode.',
+  'cockpit.header.readout.txLock.fixedCentre':
+    '{{mode}} always transmits centred 1500 Hz from the dial, above it on USB and below it on LSB, whatever the TX marker says, and its signal there is outside your license privileges — transmit is blocked. Move the dial further into the segment.',
   // Two WHOLE sentences, one per direction — the band name and the edge frequency are invariant
   // tokens formatted by the header, never by a locale-aware formatter.
   'cockpit.header.bandEdge.up':
@@ -15730,6 +15964,11 @@ export const EN = {
   // data, kept in the component, never here.
   'callStats.pane.title': 'Stats',
   'recentQsos.pane.title': 'Recent contacts',
+  // The large TX meters pane: its name in the frame and ⊞ Panels, and the ways to it from the strip's meters.
+  'meters.tx.pane.title': 'TX Meters, large',
+  'meters.tx.pane.open': 'Show the large TX meters pane',
+  'meters.tx.pane.hide': 'Hide the large TX meters pane',
+  'meters.tx.pane.fromDialog': 'Show as a pane',
   'recentQsos.empty': 'No contacts logged yet',
   'recentQsos.aria': 'The last {{count}} contacts, newest first',
   'callStats.empty': 'Type a call in the log entry: its DXCC, WAS and WAZ standing shows here.',

@@ -79,8 +79,7 @@ pub enum ModeKind {
     /// Carries nothing, unlike FST4/Q65/MSK144: the T/R period is FIXED at
     /// **3.75 s**, so the frame length is a constant and there is no setting to
     /// plumb. That 3.75 s is the tightest slotted period in the app — 2.52 s of
-    /// audio plus a 0.5 s lead-in leaves 0.73 s of slot, less slack than FT1's
-    /// 4 s, which already "carries no slack at all".
+    /// audio with no lead-in (`FT2_LEAD_IN_SECS` = 0.0) leaves 1.23 s of slot.
     Ft2,
     /// **JS8** (JS8Call-compatible, `crates/js8`) — keyboard-to-keyboard over an FT8-class
     /// physical layer. **Transmit-capable since B7 (operator gate G1)**: the engine's
@@ -483,7 +482,7 @@ pub trait Mode: Send + Sync {
 
     /// Synthesize the TX audio waveform for the given tones at carrier `f0`. The
     /// returned buffer is **slot-positioned** — it includes the mode's leading silence
-    /// (FT8/FT4 start 0.5 s into the slot) so the radio loop can play it straight at the
+    /// (FT8 starts 0.5 s into the slot, FT4 0.3 s) so the radio loop can play it straight at the
     /// slot boundary without the over going out early.
     ///
     /// Defaults to empty for the same reason as [`Mode::encode`]. An empty wave is
@@ -803,7 +802,7 @@ impl Mode for Ft8Mode {
         // already satisfies). Without it the radio loop plays the tones at the slot
         // boundary and the whole over goes out 0.5 s early — every receiver sees us at
         // DT ≈ −0.5 s, off-nominal and at the edge of the decode window.
-        let lead = (0.5 * fsample).round().max(0.0) as usize;
+        let lead = (FT8_LEAD_IN_SECS * fsample).round().max(0.0) as usize;
         let tones = crate::wsjt77::ft8_wave(itone, fsample, f0);
         let mut wave = vec![0f32; lead + tones.len()];
         wave[lead..].copy_from_slice(&tones);
@@ -999,9 +998,42 @@ impl Mode for Ft8Mode {
     }
 }
 
+/// Slot lead-in for FT8, in seconds: WSJT-X's 0.5 s transmit delay (`Modulator/Modulator.cpp:76`),
+/// which is also the decoder's nominal start (`xdt = t − 0.5`).
+pub(crate) const FT8_LEAD_IN_SECS: f32 = 0.5;
+
+/// Where an FT8, FT4 or FT2 over's tones sit in the slot-positioned wave [`Mode::gen_wave`] builds
+/// at 12 kHz, in samples: `(lead-in, tones)`. The lead-in is each mode's `*_LEAD_IN_SECS`, rounded
+/// as `gen_wave` rounds it; the tones are FT8's 79 × 1920, FT4's 105 × 576 (its 103 channel
+/// symbols and a ramp symbol at each end, without the frame's trailing silence) and FT2's
+/// `NWAVE`. The one source of the over lengths the radio loop and the engine use
+/// (`Engine::tx_over_secs`, `slot::wsjtx_tx_window_ms`). `None` for every other mode.
+pub fn slot_over_samples_12k(kind: ModeKind) -> Option<(usize, usize)> {
+    let lead = |secs: f32| (secs * 12_000.0).round().max(0.0) as usize;
+    match kind {
+        ModeKind::Ft8 => Some((lead(FT8_LEAD_IN_SECS), ft8::NZ)),
+        ModeKind::Ft4 => Some((
+            lead(FT4_LEAD_IN_SECS),
+            (ft4::NN + 2) * crate::wsjt77::wave::FT4_NSPS,
+        )),
+        ModeKind::Ft2 => Some((lead(FT2_LEAD_IN_SECS), ft2::NWAVE)),
+        _ => None,
+    }
+}
+
 /// Standard WSJT-X **FT4** — 7.5 s T/R, 4-GFSK, the fast contest sibling.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Ft4Mode;
+
+/// Slot lead-in for FT4, in seconds: how far into its 7.5 s T/R period the wave starts.
+///
+/// 0.3 s, what WSJT-X 3.0.2 sends: `Modulator/Modulator.cpp:79`, `if(mode=="FT4") delay_ms=300`
+/// (FT8 is 0.5 s, `:76`). It is NOT the decoder's nominal start: `ft4_decode.f90:454` reports
+/// `xdt = t − 0.5` and `ft4sim.f90:85` puts a DT = 0 signal's ramp symbol at 0.452 s, so an FT4
+/// over sent 0.3 s in reads DT ≈ −0.15 s with no sound-card latency, WSJT-X's and ours alike. This
+/// shipped as 0.5, read off the decoder, which put Nexus ~0.2 s later than every WSJT-X station.
+/// With 0.3 the 105 symbols (5.04 s) end 5.34 s into the slot, inside the 6.04 s window.
+pub(crate) const FT4_LEAD_IN_SECS: f32 = 0.3;
 
 impl Mode for Ft4Mode {
     fn kind(&self) -> ModeKind {
@@ -1036,13 +1068,12 @@ impl Mode for Ft4Mode {
         }
     }
     fn gen_wave(&self, itone: &[i32], fsample: f32, f0: f32) -> Vec<f32> {
-        // Same slot-positioning contract as FT8: WSJT-X's FT4 decoder reports
-        // `xdt = t − 0.5` (ft4_decode.f90), i.e. the nominal signal start is
-        // 0.5 s into the period — but `gen_ft4wave` places the tones at t ≈ 0
-        // (measured: signal 0.00–5.04 s of the 6.048 s buffer). Played at the
-        // boundary that put every transmission at DT ≈ −0.5 for the whole band.
-        // Prepend the lead-in so our FT4 goes out at the standard DT ≈ 0.
-        let lead = (0.5 * fsample).round().max(0.0) as usize;
+        // Same slot-positioning contract as FT8: `gen_ft4wave` places the tones at
+        // t ≈ 0 (measured: signal 0.00–5.04 s of the 6.048 s buffer), so the wave
+        // carries its own lead-in and the radio loop plays it from the boundary.
+        // The lead-in is WSJT-X's transmit delay, not the decoder's nominal start:
+        // see `FT4_LEAD_IN_SECS`.
+        let lead = (FT4_LEAD_IN_SECS * fsample).round().max(0.0) as usize;
         let tones = crate::wsjt77::ft4_wave(itone, fsample, f0);
         let mut wave = vec![0f32; lead + tones.len()];
         wave[lead..].copy_from_slice(&tones);
@@ -1171,17 +1202,17 @@ impl Mode for Ft2Mode {
             // Fortran supports are not reachable through this ABI.
             contest: false,
             structured_identity: true,
-            // ⭐ EARLY PASS AT 3.05 s — and the first on-air QSOs are why (operator,
+            // ⭐ EARLY PASS AT 2.6 s — and the first on-air QSOs are why (operator,
             // 2026-08-16: "the QSO timing feels off"). This slot originally shipped
             // with NO early pass on the reasoning that 3.75 s leaves nothing worth
             // splitting — which routed FT2 into service.rs's key-IMMEDIATELY branch,
             // where the boundary keys BEFORE the just-ended slot's decode folds in:
             // every answer slipped a full cycle and every message went out twice.
-            // The reasoning missed that FT2's tones END at 3.02 s, so a pass at
-            // 3.05 s decodes the COMPLETE signal (not a partial like FT8's 11.8 s
-            // pass) 0.70 s before the boundary — measured 510 ms at depth 3, so it
-            // fits. A pass that misses the window degrades to exactly the old
-            // ordering; it can never regress. Decodium reaches the same ordering by
+            // The reasoning missed that FT2's tones END at 2.52 s, so a pass at
+            // 2.6 s (tempo-audio `service.rs`) decodes the COMPLETE signal (not a
+            // partial like FT8's 11.8 s pass) 1.15 s before the boundary — measured
+            // 510 ms at depth 3, so it fits. A pass that misses the window degrades
+            // to exactly the old ordering; it can never regress. Decodium reaches the same ordering by
             // decoding asynchronously and arming TX 100 ms after the decode.
             early_decode: true,
             // Split Operation applies for the same reason it does on FT4: a ~167 Hz
@@ -2556,5 +2587,35 @@ fn js8_decode_row(r: &js8::RawDecode) -> Decode {
         rv: None,
         mode: Some(ModeKind::Js8 { speed: r.speed }),
         raw: Some(*r.word.as_bytes()),
+    }
+}
+
+#[cfg(test)]
+mod slot_over_geometry_tests {
+    use super::*;
+
+    /// The geometry [`slot_over_samples_12k`] states is where each mode's real wave puts its
+    /// tones: the first non-zero sample at the lead-in (the shaped ramp starts on a zero sample,
+    /// so within a couple of samples of it) and the last at lead-in + tones (within one symbol's
+    /// shaped tail of it, the wave's own ramp-down).
+    #[test]
+    fn the_slot_over_geometry_is_where_the_real_wave_puts_its_tones() {
+        for kind in [ModeKind::Ft8, ModeKind::Ft4, ModeKind::Ft2] {
+            let (lead, tones) = slot_over_samples_12k(kind).expect("geometry");
+            let m = make_mode(kind);
+            let wave = m.gen_wave(&m.encode("CQ KD9TAW EN52"), 12_000.0, 1_500.0);
+            let first = wave.iter().position(|&s| s != 0.0).expect("tones");
+            let last = wave.iter().rposition(|&s| s != 0.0).expect("tones") + 1;
+            assert!(
+                first >= lead && first <= lead + 2,
+                "{kind:?}: first tone at {first}, lead-in {lead}"
+            );
+            assert!(
+                last.abs_diff(lead + tones) <= 12,
+                "{kind:?}: last tone ends at {last}, lead-in + tones {}",
+                lead + tones
+            );
+        }
+        assert_eq!(slot_over_samples_12k(ModeKind::TempoFast), None);
     }
 }

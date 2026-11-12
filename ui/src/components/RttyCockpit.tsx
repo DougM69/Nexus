@@ -12,6 +12,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AppSnapshot, BandChannel, KeyboardMacroProfile, RttyState, Settings } from '../types'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitTxStrip, keepInSight, revealAfterPress } from './CockpitTxStrip'
+import { TxAlarmBanner } from './TxAlarmBanner'
+import { TxMeters } from './TxMeters'
+import { useCompactChrome } from '../features/compactChrome'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { PaneSeam } from './PaneSeam'
 import { WATERFALL_SPLIT_MAX, WATERFALL_SPLIT_MIN } from '../features/paneSeam'
@@ -87,6 +90,8 @@ import {
   type RttySetId,
 } from '../features/rttyMacros'
 import { pushToast, withErrorToast } from '../toast'
+import { patchSettings } from '../settings/patch'
+import { RttyBaudPicker } from './RttyBaudPicker'
 import { pollSingleFlight } from '../singleFlight'
 import { IS_MAC, FN_KEY_HINT } from '../platform'
 import { usePinnedScroll } from '../usePinnedScroll'
@@ -339,6 +344,9 @@ function knownCode(domain: string | undefined, value: string): boolean {
  * operator is on another section.
  */
 export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, onOpenLogbook, onEntryCall, panels, macros, onMacrosSaved, onOpenSettings, esmSetting }: Props) {
+  // md and up, the read-only TX meters in the strip's meters cell (SSTV's, JS8's and Phone's
+  // arrangement, #489): the audio drive is set against the radio's ALC, and Po shows the carrier.
+  const chrome = useCompactChrome()
   // Panels (Phase 3): the waterfall, the header, the auto-seq strip, the macros and the compose
   // bar are pinned; only the decoded-text stream is removable, filling the space between them.
   // NOT "all TX chrome is pinned" — the `stream` pane hosts the Auto toggle, whose off-click is
@@ -612,19 +620,20 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     }
     return { onAir: macro ? frameForAir(expanded.text) : expanded.text }
   }
-  // It answers whether the line went to `rtty_send` (true) or was refused here (false), for the
-  // editor's Send once, which keeps the operator's draft open when the send was refused.
-  const send = (line: string, macro = false): boolean => {
+  // It answers false when the line was refused here, and otherwise whether `rtty_send` took it,
+  // for the editor's Send once, which keeps the operator's draft open when the send was refused,
+  // here or by the engine's own TX gates.
+  const send = (line: string, macro = false): false | Promise<boolean> => {
     if (!line.trim()) return false
     const ready = prepare(line, macro, hisCall)
     if ('refusal' in ready) {
       pushToast(ready.refusal, 'info', ready.ms)
       return false
     }
-    void withErrorToast(() => rttySend(ready.onAir), t('rtty.send.failed')).then((s) => {
+    return withErrorToast(() => rttySend(ready.onAir), t('rtty.send.failed')).then((s) => {
       if (s) setRtty(s)
+      return s !== null
     })
-    return true
   }
   const sendTyped = () => {
     send(text)
@@ -825,6 +834,13 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   })
   const esmLit = esmLitKeys(esm.preview)
   const [editing, setEditing] = useState<RttyMacroKey | null>(null)
+  const editingRef = useRef(editing)
+  editingRef.current = editing
+  /** The editor a Send once is in flight from (its `editorSeq`), or null: ONE at a time, since a
+   *  second press while the engine answers would key the message twice. */
+  const sendingOnce = useRef<number | null>(null)
+  /** Counts the editor's openings, so a Send once answered late never closes a later one. */
+  const editorSeq = useRef(0)
   const [editorFocus, setEditorFocus] = useState<MacroEditorFocus>('title')
   const [editorLeft, setEditorLeft] = useState(0)
   const [confirmSetReset, setConfirmSetReset] = useState(false)
@@ -837,6 +853,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     setEditorLeft(el?.offsetLeft ?? 0)
     setConfirmSetReset(false)
     setEditorFocus(focus)
+    editorSeq.current += 1
     setEditing(key)
   }
   const closeEditor = () => {
@@ -889,7 +906,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
     setEditing(null)
     void saveMacroSets(withRttySetReset(macroSets.profiles, macroSet), macroSets.active)
   }
-  const sendMacro = (slot: RttyMacroSlot): boolean => {
+  const sendMacro = (slot: RttyMacroSlot): false | Promise<boolean> => {
     if (isEmptyRttySlot(slot)) return false
     const sent = send(slot.text, true)
     esm.noteKey(slot.key)
@@ -898,10 +915,19 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // SEND ONCE, from the editor: the message as it stands, through `sendMacro` exactly as the key
   // goes (its tokens, its framing, every refusal, the engine's every TX gate, Enter Sends
   // Message hearing the key), and the saved key left as it was. Sent, the editor closes; refused,
-  // it stays open with the draft, as a failed Save does.
+  // here or by the engine once it was handed over (TX off, a clock repair), it stays open with the
+  // draft, as a failed Save does. A press while one is in flight sends nothing.
   const sendOnce = (key: RttyMacroKey, message: string) => {
+    if (sendingOnce.current !== null) return
     const slot = slots.find((s) => s.key === key)
-    if (slot && sendMacro({ ...slot, text: message })) closeEditor()
+    const sent = slot ? sendMacro({ ...slot, text: message }) : false
+    if (!sent) return
+    const seq = editorSeq.current
+    sendingOnce.current = seq
+    void sent.then((ok) => {
+      sendingOnce.current = null
+      if (ok && editorSeq.current === seq && editingRef.current === key) closeEditor()
+    })
   }
   /** A key's hover text: the message with what is known filled in, tokens left where not — and,
    *  on a Mac, how to press its F-key there (keys 13–16 have none). */
@@ -948,9 +974,11 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
   // Esc's stop (and the editor's exception) rides the shared capture listener (useEscStop,
   // operator 2026-10-01), so no control on the screen can swallow it; this listener still cancels
   // the key's default, as it always did.
+  // A Send once the engine has not answered yet counts as live: the editor is still open, and the
+  // over it handed over may be about to key.
   useEscStop(active, () => {
     const k = keys.current
-    if (k.editorOpen && !k.live) k.closeEditor()
+    if (k.editorOpen && !k.live && sendingOnce.current === null) k.closeEditor()
     else stop()
   })
   useEffect(() => {
@@ -1217,6 +1245,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           here (set_tx_enabled(false) arms rtty_abort). */}
       {snap && (
         <CockpitTxStrip
+          alarm={<TxAlarmBanner alarms={snap.txAlarms} onSnap={onSnap} />}
           radio={snap.radio}
           onStopTx={stop}
           onSetTxEnabled={onSetTxEnabled}
@@ -1231,6 +1260,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
               .then((s) => onSnap?.(s))
               .catch((e) => pushToast(String(e), 'error'))
           }
+          meters={chrome.wide ? <TxMeters radio={snap.radio} strip /> : undefined}
         />
       )}
 
@@ -1323,6 +1353,21 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           >
             {auto ? 'Auto on' : 'Auto'}
           </button>
+          {/* #488: the baud, picked on this screen (the same setting as Settings ▸ RTTY). In this
+              pane's head, not the cockpit header: the header is at its wrap point at 1366×768, and
+              a wider header moves the TX dock. Disabled while an over or the latch is up: the baud
+              is the transmitter's bit clock. */}
+          {rtty && (
+            <RttyBaudPicker
+              baud={rtty.baud}
+              disabled={sending || latched}
+              onPick={(b) =>
+                void withErrorToast(() => patchSettings(() => ({ rttyBaud: b })), t('settings.save.failed')).then((s) => {
+                  if (s) onSnap?.(s)
+                })
+              }
+            />
+          )}
           {armed && rtty && (
             <span
               className={`rtty-afc-pill${rtty.afcLocked ? ' locked' : ''}`}
@@ -1574,6 +1619,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
               <button
                 type="button"
                 className="cw-macro rtty-auto-stop"
+                data-stop-control="sequencer-abort"
                 onClick={autoAbort}
                 title="Abort the auto QSO — stop the sequencer, drop the queue, unkey"
               >
@@ -1740,6 +1786,7 @@ export function RttyCockpit({ snap, onSnap, active = true, onSetFrequency, onSet
           <button
             type="button"
             className="cw-macro rtty-stop send-row-stop"
+            data-stop-control="esc-stop"
             onClick={stop}
             // `sending || latched`, NOT `sending` alone. `sending` is stamped by the
             // radio loop from the audio actually in flight, so it is false for the

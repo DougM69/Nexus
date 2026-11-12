@@ -9,6 +9,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AppSnapshot, BandChannel, KeyboardMacroProfile, PskState, Settings } from '../types'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitTxStrip, keepInSight, revealAfterPress } from './CockpitTxStrip'
+import { TxAlarmBanner } from './TxAlarmBanner'
+import { TxMeters } from './TxMeters'
+import { useCompactChrome } from '../features/compactChrome'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { PaneSeam } from './PaneSeam'
 import { WATERFALL_SPLIT_MAX, WATERFALL_SPLIT_MIN } from '../features/paneSeam'
@@ -162,6 +165,9 @@ function fmtAfc(hz: number): string {
  * accumulating while the operator is on another section.
  */
 export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetTxEnabled, theme = 'dark', wheelSensitivity, onOpenLogbook, onEntryCall, panels, macros, onMacrosSaved, onOpenSettings }: Props) {
+  // md and up, the read-only TX meters in the strip's meters cell (SSTV's, JS8's and Phone's
+  // arrangement, #489): the audio drive is set against the radio's ALC, and Po shows the carrier.
+  const chrome = useCompactChrome()
   const host = panels
     ? panelHost(panels, { menu: PSK_PANEL_IDS, side: [], main: 'stream', labels: pskPanelLabels(), shipsHidden: PSK_PANELS.defaultRemoved })
     : null
@@ -284,9 +290,10 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   // `line`, not `t` — the catalog lookup is `t()` in every migrated file, so a parameter by
   // that name would shadow it here and nowhere else (the RTTY cockpit reads the same).
   //
-  // It answers whether the line went to `psk_send` (true) or was refused here (false), for the
-  // editor's Send once, which keeps the operator's draft open when the send was refused.
-  const send = (line: string): boolean => {
+  // It answers false when the line was refused here, and otherwise whether `psk_send` took it, for
+  // the editor's Send once, which keeps the operator's draft open when the send was refused, here
+  // or by the engine's own TX gates.
+  const send = (line: string): false | Promise<boolean> => {
     if (!line.trim()) return false
     const mycall = snapRef.current?.mycall?.trim() ?? ''
     if (line.includes('{MYCALL}') && !mycall) {
@@ -304,10 +311,10 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
     const expanded = line
       .replace(/\{MYCALL\}/g, mycall)
       .replace(/\{CALL\}/g, hisCall.trim().toUpperCase())
-    void withErrorToast(() => pskSend(expanded), t('psk.send.failed')).then((s) => {
+    return withErrorToast(() => pskSend(expanded), t('psk.send.failed')).then((s) => {
       if (s) setPsk(s)
+      return s !== null
     })
-    return true
   }
   const sendTyped = () => {
     send(text)
@@ -422,6 +429,13 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   // a saved key past the count is kept, hidden, and is never sent by a key or a press.
   const slots = resolvePskSet(macroSets.profiles, macroSet, t, macroCount(macros?.pskMacroCount))
   const [editing, setEditing] = useState<PskMacroKey | null>(null)
+  const editingRef = useRef(editing)
+  editingRef.current = editing
+  /** The editor a Send once is in flight from (its `editorSeq`), or null: ONE at a time, since a
+   *  second press while the engine answers would key the message twice. */
+  const sendingOnce = useRef<number | null>(null)
+  /** Counts the editor's openings, so a Send once answered late never closes a later one. */
+  const editorSeq = useRef(0)
   const [editorFocus, setEditorFocus] = useState<MacroEditorFocus>('title')
   const [editorLeft, setEditorLeft] = useState(0)
   const [confirmSetReset, setConfirmSetReset] = useState(false)
@@ -434,6 +448,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
     setEditorLeft(el?.offsetLeft ?? 0)
     setConfirmSetReset(false)
     setEditorFocus(focus)
+    editorSeq.current += 1
     setEditing(key)
   }
   const closeEditor = () => {
@@ -491,7 +506,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   // is the one deliberate difference from RTTY: PSK31's varicode carries braces, so text typed
   // in the compose bar has always gone on the air exactly as typed, braces and all, and it still
   // does. Only a macro is token-checked, because only a macro's braces were meant as tokens.
-  const sendMacro = (slot: PskMacroSlot): boolean => {
+  const sendMacro = (slot: PskMacroSlot): false | Promise<boolean> => {
     if (isEmptyPskSlot(slot)) return false
     // {EXCH} IS THE RUNNING CONTEST'S SENT EXCHANGE, off the session itself — never Field Day's
     // two Settings fields. Empty outside a contest, so an empty one is "there is none": refused
@@ -516,11 +531,20 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   }
   // SEND ONCE, from the editor: the message as it stands, through `sendMacro` exactly as the key
   // goes (its tokens, every refusal, `send()`'s guards and the engine's every TX gate), and the
-  // saved key left as it was. Sent, the editor closes; refused, it stays open with the draft, as
-  // a failed Save does.
+  // saved key left as it was. Sent, the editor closes; refused, here or by the engine once it was
+  // handed over (TX off, a clock repair), it stays open with the draft, as a failed Save does. A
+  // press while one is in flight sends nothing.
   const sendOnce = (key: PskMacroKey, message: string) => {
+    if (sendingOnce.current !== null) return
     const slot = slots.find((s) => s.key === key)
-    if (slot && sendMacro({ ...slot, text: message })) closeEditor()
+    const sent = slot ? sendMacro({ ...slot, text: message }) : false
+    if (!sent) return
+    const seq = editorSeq.current
+    sendingOnce.current = seq
+    void sent.then((ok) => {
+      sendingOnce.current = null
+      if (ok && editorSeq.current === seq && editingRef.current === key) closeEditor()
+    })
   }
   /** A key's hover text: the message with what is known filled in, tokens left where not — and,
    *  on a Mac, how to press its F-key there (keys 13–16 have none). */
@@ -566,9 +590,11 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
   // Esc's stop (and the editor's exception) rides the shared capture listener (useEscStop,
   // operator 2026-10-01), so no control on the screen can swallow it; this listener still cancels
   // the key's default, as it always did.
+  // A Send once the engine has not answered yet counts as live: the editor is still open, and the
+  // over it handed over may be about to key.
   useEscStop(active, () => {
     const k = keys.current
-    if (k.editorOpen && !k.live) k.closeEditor()
+    if (k.editorOpen && !k.live && sendingOnce.current === null) k.closeEditor()
     else stop()
   })
   useEffect(() => {
@@ -786,6 +812,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           only when the rig reports a tuner, and a refusal comes back as the backend's reason. */}
       {snap && (
         <CockpitTxStrip
+          alarm={<TxAlarmBanner alarms={snap.txAlarms} onSnap={onSnap} />}
           radio={snap.radio}
           onStopTx={stop}
           onSetTxEnabled={onSetTxEnabled}
@@ -800,6 +827,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
               .then((s) => onSnap?.(s))
               .catch((e) => pushToast(String(e), 'error'))
           }
+          meters={chrome.wide ? <TxMeters radio={snap.radio} strip /> : undefined}
         />
       )}
 
@@ -1186,6 +1214,7 @@ export function PskCockpit({ snap, onSnap, active = true, onSetFrequency, onSetT
           <button
             type="button"
             className="cw-macro rtty-stop psk-stop send-row-stop"
+            data-stop-control="esc-stop"
             onClick={stop}
             // `sending || latched`, NOT `sending` alone — RTTY's rule: this is on
             // the PSK stop-line census, and it must be live from the instant the

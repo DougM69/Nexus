@@ -65,7 +65,8 @@ import { TX_SPLIT_MAX, TX_SPLIT_MIN } from '../features/paneSeam'
 import { buildHighlightMap, OperateDecodes } from './OperateDecodes'
 import { DecodeHistory, type DecodeSort } from '../decodeHistory'
 import { OperateQsoStrip } from './OperateQsoStrip'
-import { TxMetersCell, TX_METERS_WHEN } from './TxMeters'
+import { TxAlarmBanner } from './TxAlarmBanner'
+import { TxMetersCell, TxMetersPane, TX_METERS_WHEN } from './TxMeters'
 import { SpotDialog } from './SpotDialog'
 import { DEFAULT_ROSTER_SORT, OperateRoster, type RosterSort } from './OperateRoster'
 import { RecallPanel } from './RecallPanel'
@@ -318,6 +319,7 @@ const panelLabels = (): Record<Exclude<OperatePanelId, BoxId>, string> => ({
   txmsgs: t('operate.panel.txmsgs'),
   stations: t('operate.panel.stations'),
   txmeters: t('operate.panel.txmeters'),
+  txMetersPane: t('meters.tx.pane.title'),
   recall: t('operate.panel.recall'),
   stats: t('callStats.pane.title'),
   recent: t('recentQsos.pane.title'),
@@ -328,8 +330,8 @@ const panelLabels = (): Record<Exclude<OperatePanelId, BoxId>, string> => ({
  *  pick, 2026-10-07), each also lists the panes only the other draws in stock (OPERATE_ARRANGE `extra`):
  *  the Call Roster in Classic, the Tx messages and Stations in Roster, unticked until added. */
 const LAYOUT_PANELS: Record<'classic' | 'roster', readonly OperatePanelId[]> = {
-  classic: ['waterfall', 'rfScope', 'bandActivity', 'txmsgs', 'rxfreq', 'stations', 'callRoster', 'recall', 'stats', 'recent', 'txmeters'],
-  roster: ['waterfall', 'rfScope', 'callRoster', 'bandActivity', 'rxfreq', 'txmsgs', 'stations', 'recall', 'stats', 'recent', 'txmeters'],
+  classic: ['waterfall', 'rfScope', 'bandActivity', 'txmsgs', 'rxfreq', 'stations', 'callRoster', 'recall', 'stats', 'recent', 'txmeters', 'txMetersPane'],
+  roster: ['waterfall', 'rfScope', 'callRoster', 'bandActivity', 'rxfreq', 'txmsgs', 'stations', 'recall', 'stats', 'recent', 'txmeters', 'txMetersPane'],
 }
 
 /** Where the rail side is stored (per surface): 'left', or anything else for the stock right. */
@@ -368,7 +370,7 @@ const CLASSIC_COLUMNS: readonly (readonly OperatePanelId[])[] = [
 
 /** ⊞ ARRANGE'S FILL PANES (2026-10-07): the four feeds, which share their column's height by weight in the
  *  arranged columns. The Tx1–Tx6 machine and the callsign card are content-sized there, as everywhere. */
-const FILL_PANES = ['bandActivity', 'rxfreq', 'callRoster', 'stations'] as const
+const FILL_PANES = ['bandActivity', 'rxfreq', 'callRoster', 'stations', 'txMetersPane'] as const
 type FillPane = (typeof FILL_PANES)[number]
 const isFillPane = (id: OperatePanelId): id is FillPane => (FILL_PANES as readonly string[]).includes(id)
 
@@ -451,8 +453,8 @@ export function OperateCockpit({
   boxes,
 }: Props) {
   // The waterfall strip its height divider sizes: the divider sets its CSS var on the strip's
-  // container (.cockpit-body) and measures the range the layout honours (the sheet caps the strip
-  // at 60 % of the body).
+  // parent (.cockpit-body, a box-less `.cockpit-flat` wrapper) and measures the range the layout
+  // honours in the box the strip is laid out in, the shell (the sheet caps the strip at 60 % of it).
   const wfRef = useRef<HTMLElement>(null)
   // The two resizable side-rail panes in roster mode (Band Activity above, Rx Frequency
   // below) + the seam that splits them. A sole survivor auto-fills because flex-grow is
@@ -479,6 +481,7 @@ export function OperateCockpit({
       rxfreq: createRef<HTMLDivElement>(),
       callRoster: createRef<HTMLDivElement>(),
       stations: createRef<HTMLDivElement>(),
+      txMetersPane: createRef<HTMLDivElement>(),
     }),
     [],
   )
@@ -1478,6 +1481,17 @@ export function OperateCockpit({
             />
           </div>
         )
+      case 'txMetersPane':
+        return (
+          <TxMetersPane
+            radio={snap.radio}
+            paneRef={fillRefs.txMetersPane as RefObject<HTMLElement>}
+            weight={weightOf(id)}
+            split={split}
+            share={split != null && share != null ? share * split : undefined}
+            close={closeProps(id)}
+          />
+        )
       case 'recall':
         return recallCard
       case 'stats':
@@ -1873,14 +1887,16 @@ export function OperateCockpit({
               DXpedition pile-up is actually worked, and "UP 5" is the ordinary case: the spot
               parser already reads the offset out of the comment and commands it, but an
               operator who tuned to the DX by hand had no control at all. NOT a stop control —
-              see SplitControl's header. */}
-          {snap.radio.catOk === true && (
-            <SplitControl
-              snap={snap}
-              onSnap={onSnap}
-              onError={(m) => pushToast(m, 'error')}
-            />
-          )}
+              see SplitControl's header.
+              DRAWN WHATEVER CAT SAYS, disabled without it (2026-11-07): this header stands above
+              the QSO strip, and the control coming and going with `catOk` re-wrapped it and moved
+              Stop TX 26 to 56 px every time CAT dropped. */}
+          <SplitControl
+            snap={snap}
+            onSnap={onSnap}
+            onError={(m) => pushToast(m, 'error')}
+            unavailable={snap.radio.catOk === true ? undefined : { title: t('cockpit.header.cat.bad.title') }}
+          />
           <div className="cockpit-layout-toggle" role="group" aria-label={t('operate.header.layout.aria')}>
             <button
               type="button"
@@ -1941,7 +1957,11 @@ export function OperateCockpit({
           the QSO strip's; its protected controls (period, Skip Tx1, next-Ns, HOUND
           badge, rotor) merged INTO the strip below. ~42px of the reported blank gray
           space lived here. */}
-      <div className="cockpit-body">
+      {/* NO BOX (`.cockpit-flat`, cockpit-panes.css): the waterfall, its divider, the QSO strip and the lower region
+          are flex items of the shell itself, so the strip's sticky edge is measured against the shell. In a box of its
+          own it could not leave that box, and at 150–175 % on a small window the header alone ran past the window's
+          foot, so Stop TX was off screen until the operator scrolled (`.cockpit-ftstrip`). */}
+      <div className="cockpit-body cockpit-flat">
         {/* Waterfall: a short full-width strip (not a tall column) — the spectrum
             is a glance tool; the real estate goes to the decode lists + roster. */}
         {wfState === 'popped' && (
@@ -2052,6 +2072,7 @@ export function OperateCockpit({
             controls absorbed from the deleted status row (period, Skip Tx1, next-Ns,
             HOUND badge, rotor) and the fixed-width TX telemetry cell. */}
         <OperateQsoStrip
+          alarm={<TxAlarmBanner alarms={snap.txAlarms} onSnap={onSnap} ownLine />}
           qso={snap.qso}
           contestRunning={snap.fieldDay?.running}
           radio={snap.radio}
@@ -2137,7 +2158,14 @@ export function OperateCockpit({
           // now render into the strip's fixed-width telemetry cell, so the FT TX
           // cycle still cannot bounce the layout. Still a ⊞ Panels entry. #446: the cell opens
           // the same live meters at full size in a dialog (TxMetersCell), a readout as the cell is.
-          telemetry={shown('txmeters') ? <TxMetersCell radio={snap.radio} /> : undefined}
+          telemetry={
+            shown('txmeters') ? (
+              <TxMetersCell
+                radio={snap.radio}
+                pane={{ shown: shown('txMetersPane'), onToggle: () => layoutSetPanelState('txMetersPane', shown('txMetersPane') ? 'removed' : 'docked') }}
+              />
+            ) : undefined
+          }
         />
 
         {/* data-cols collapses the grid to ONE column once the main cell or the whole

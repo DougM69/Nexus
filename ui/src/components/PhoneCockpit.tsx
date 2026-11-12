@@ -19,7 +19,7 @@ import { panelHost } from '../features/panelHost'
 import { composingText } from '../features/contestExchange'
 import type { AppSnapshot, FieldDayStatus, NeedTag, Settings, SpotRow } from '../types'
 import { PhoneScope } from './PhoneScope'
-import { TxMeters, TX_METERS_WHEN } from './TxMeters'
+import { TxMeters, TxMetersPane, TX_METERS_WHEN } from './TxMeters'
 import { BandStrip } from './BandStrip'
 import { PanelsMenu } from './PanelsMenu'
 import { ArrangePanes } from './panes/ArrangePanes'
@@ -28,6 +28,7 @@ import { SpotDialog } from './SpotDialog'
 import { TuningStrip } from './TuningStrip'
 import { CockpitHeader } from './CockpitHeader'
 import { CockpitTxStrip } from './CockpitTxStrip'
+import { TxAlarmBanner } from './TxAlarmBanner'
 import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 import { FreedvPane } from './FreedvPane'
 import { RegionColumnSeams } from './panes/RegionColumnSeams'
@@ -273,6 +274,9 @@ interface Props {
   /** Open the Logbook filtered to a callsign (#192) — handed to the log strip's recall card,
    *  whose previous-contact rows become clickable when it is present. Omitted ⇒ inert rows. */
   onOpenLogbook?: (call: string, id?: string | null) => void
+  /** Open the Satellites screen on a bird by NORAD id — the band picker's QO-100 row. Omitted ⇒
+   *  the picker lists no QO-100 row. */
+  onOpenSatellite?: (norad: number) => void
   /** The call in this cockpit's log strip, for the Rotor box beside it (LogEntry `onEntryCall`). */
   onEntryCall?: (call: string) => void
   /** The Spots board exactly as App wires the Spots VIEW (#345) — its handlers, not a copy of
@@ -327,6 +331,7 @@ const phonePanelLabels = (): Record<Exclude<PhonePanelId, BoxId>, string> => ({
   scope: t('phone.panel.scope'),
   rigscope: t('phone.panel.rigscope'),
   txmeters: t('phone.panel.txmeters'),
+  txMetersPane: t('meters.tx.pane.title'),
   receiver: t('phone.panel.receiver'),
   transmitter: t('phone.panel.transmitter'),
   bandActivity: t('phone.panel.bandActivity'),
@@ -713,7 +718,7 @@ const YAESU_SPANS = [
  *  notch, the scope references and the scope's G and Z move one of their own steps. */
 const LEVEL_WHEEL_STEP = 2
 
-export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeContest, active = true, snap, theme, pendingWork, freedvPane, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, tciSpots, onTciSpot, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, onEntryCall, panels, spotsBoard, neededBoard, boxes }: Props) {
+export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeContest, active = true, snap, theme, pendingWork, freedvPane, onConsumeWork, onSnap, fieldDay, phoneMode, wheelSensitivity, spots, tciSpots, onTciSpot, needByCall, typeByCall, onWorkSpot, onRecallMemory, onOpenMemories, onOpenSettings, onOpenLogbook, onOpenSatellite, onEntryCall, panels, spotsBoard, neededBoard, boxes }: Props) {
   // The compact chrome (features/compactChrome): md and up, the meters stand in the TX strip and the
   // dock is one row.
   const chrome = useCompactChrome()
@@ -1727,6 +1732,8 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
   // THE STATS PANE under the log form, in the station's own window (CallStatsPane). It ships hidden, so
   // with no panel record at all (no ⊞, nothing ticked) it stays hidden, as its vocabulary says.
   const hasStatsPane = host != null && shown('stats')
+  // THE LARGE TX METERS PANE: ships hidden, so with no panel record it stays hidden (the Stats pane's rule).
+  const hasMetersPane = host != null && shown('txMetersPane')
   // THE RECENT CONTACTS PANE, the same way (RecentQsosPane): inside the log pane, under the form.
   const hasRecentPane = host != null && shown('recent')
   // FreeDV's pane (receive only): hidden until added, like the two feeds, and like them offered only
@@ -1764,6 +1771,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
           receiver: hasReceiverPane,
           transmitter: hasTransmitterPane,
           stats: hasStatsPane,
+          txMetersPane: hasMetersPane,
         })[id as string] ?? false)
   // ── THE LEFT SIDE (operator's pick, 2026-10-03: ⊞ Arrange's "Left side") ───────────────────────
   // A column beside the region, under the full-width scope and TX strip (2026-10-26), above the
@@ -1790,7 +1798,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
   const folded = boxes?.rail?.folded?.boxes ?? []
   const boxInA = placed3[0].ids.some(isBoxId) || folded.length > 0
   const boxInB = placed3[1].ids.some(isBoxId)
-  const leadPresent = inRegion('bandActivity') || hasKeyerPane || auxPresent || inRegion('spots') || inRegion('needed') || inRegion('freedv') || boxInA || boxInB
+  const leadPresent = inRegion('txMetersPane') || inRegion('bandActivity') || hasKeyerPane || auxPresent || inRegion('spots') || inRegion('needed') || inRegion('freedv') || boxInA || boxInB
   // An arranged region offers a track per column that holds something; the stock one keeps its own
   // rule above (a keyer alone does not earn the leading track its own column).
   const { ref: panesRef, cols, flow } = useRegionCols<HTMLDivElement>(
@@ -1800,7 +1808,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
         : placed3[0].ids.length + folded.length + placed3[1].ids.length > 0
           ? 2
           : 1
-      : (auxPresent || inRegion('needed') || boxInB) && (inRegion('bandActivity') || inRegion('spots') || inRegion('freedv') || boxInA)
+      : (auxPresent || inRegion('txMetersPane') || inRegion('needed') || boxInB) && (inRegion('bandActivity') || inRegion('spots') || inRegion('freedv') || boxInA)
         ? 3
         : leadPresent
           ? 2
@@ -2217,13 +2225,19 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
   }
   const feedsAdjacent = cols >= 2 && groups.some((g) => spotsOverNeeded(g.ids))
   const feedsSplit = hasSpotsPane && hasNeededPane && (feedsAdjacent || spotsOverNeeded(sideGroup)) && panels != null
+  // The large TX meters pane shares a divider with a feed directly under it, as the feeds do with each other.
+  // Each pane stands in one pair at most, so a feed already in the feeds' pair is not its partner.
+  const metersGroup = cols >= 2 && hasMetersPane && panels != null ? groups.find((g) => g.ids.includes('txMetersPane'))?.ids : undefined
+  const underMeters = metersGroup?.[metersGroup.indexOf('txMetersPane') + 1]
+  const metersWith = !feedsSplit && (underMeters === 'spots' || underMeters === 'needed') ? underMeters : null
+  const metersFrameRef = useRef<HTMLElement>(null)
   const spotsPane =
     hasSpotsPane && spotsBoard ? (
       <CockpitPaneFrame
         title={t('phone.pane.spots.title')}
         paneId="spots"
-        split={feedsSplit ? 1 : undefined}
-        share={feedsSplit ? panels?.layout.share.spots : undefined}
+        split={feedsSplit || metersWith === 'spots' ? 1 : undefined}
+        share={feedsSplit || metersWith === 'spots' ? panels?.layout.share.spots : undefined}
         paneRef={spotsFrameRef}
         {...closeProps('spots')}
       >
@@ -2242,8 +2256,8 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
       <CockpitPaneFrame
         title={t('phone.pane.needed.title')}
         paneId="needed"
-        split={feedsSplit ? 1 : undefined}
-        share={feedsSplit ? panels?.layout.share.needed : undefined}
+        split={feedsSplit || metersWith === 'needed' ? 1 : undefined}
+        share={feedsSplit || metersWith === 'needed' ? panels?.layout.share.needed : undefined}
         paneRef={neededFrameRef}
         {...closeProps('needed')}
       >
@@ -2759,7 +2773,28 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
   // Each placed pane by its id, KEYED by it (layout L3): a pane that moves up or down in its column
   // is moved by React, not remounted, and only a change of column remounts one — which the voice
   // keyer (pinned) and the log form (no id) never make. The feeds' divider rides with Spots.
+  const metersSeam =
+    metersWith && panels ? (
+      <PaneSeam
+        above={metersFrameRef}
+        below={metersWith === 'spots' ? spotsFrameRef : neededFrameRef}
+        varName="--pane-share"
+        onCommit={(av, bv) => panels.setShares({ txMetersPane: av, [metersWith]: bv })}
+        onReset={() => panels.setShares({ txMetersPane: null, [metersWith]: null })}
+        label={t('operate.seam.pair.label', { above: labels.txMetersPane, below: labels[metersWith] })}
+        className="in-column"
+      />
+    ) : null
   const paneEls: Partial<Record<PhonePanelId, React.ReactNode>> = {
+    txMetersPane: hasMetersPane ? (
+      <TxMetersPane
+        radio={snap.radio}
+        paneRef={metersFrameRef}
+        split={metersWith ? 1 : undefined}
+        share={metersWith ? panels?.layout.share.txMetersPane : undefined}
+        close={closeProps('txMetersPane')}
+      />
+    ) : null,
     bandActivity: bandPane,
     voiceKeyer: keyerPane,
     spots: spotsPane,
@@ -2800,6 +2835,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
     <Fragment key={id}>
       {paneEls[id]}
       {id === 'spots' && feedSeam}
+      {id === 'txMetersPane' && metersSeam}
     </Fragment>
   )
 
@@ -2818,6 +2854,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
   const [tuneNoteOpen, setTuneNoteOpen] = useState(false)
   const txStrip = (
     <CockpitTxStrip
+      alarm={<TxAlarmBanner alarms={snap.txAlarms} onSnap={onSnap} />}
       radio={snap.radio}
       onSetTxEnabled={
         driving
@@ -2849,6 +2886,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
       // THE COMPACT DOCK (md and up): the read-only meters stand in the strip's empty right side, as
       // in Operate's QSO strip, and the dock loses their row. They keep their ⊞ id — a readout.
       meters={chrome.wide && shown('txmeters') ? <TxMeters radio={snap.radio} strip controls={txMeterControls} /> : undefined}
+      metersPane={panels?.setPanelState ? { shown: hasMetersPane, onToggle: () => panels.setPanelState('txMetersPane', hasMetersPane ? 'removed' : 'docked') } : undefined}
       // #441: Phone keys plain USB/LSB, so these Yaesus take their audio from the SSB MOD SOURCE menu;
       // on MIC, Tune's USB-audio tone keys the radio with no RF. Nexus changes no menu.
       tuneHint={
@@ -2906,6 +2944,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
         <MemoryStrip
           dialMhz={snap.radio.dialMhz}
           mode={commandedMode}
+          screen="phone"
           onRecall={onRecallMemory}
           onManage={onOpenMemories}
         />
@@ -3111,7 +3150,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
             })}
           </div>
         }
-        bandControl={<BandPicker snap={snap} mode="phone" onSnap={onSnap} />}
+        bandControl={<BandPicker snap={snap} mode="phone" onSnap={onSnap} onOpenSatellite={onOpenSatellite} />}
         onCommitDial={commitDial}
         actions={
           host && panels ? (
@@ -3176,31 +3215,7 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
           },
         }}
       >
-        {micOffForDax && (
-          <span className="ph-mode-mismatch" title={t('phone.micDax.title')}>
-            {t('phone.micDax.label')}
-          </span>
-        )}
-        {modeMismatch && (
-          <span
-            className="ph-mode-mismatch"
-            title={t('phone.rigMismatch.title', {
-              rigMode: modeMismatch,
-              mode: commandedMode,
-            })}
-          >
-            {t('phone.rigMismatch.chip', { mode: modeMismatch })}
-          </span>
-        )}
         {!chrome.fold && splitEl}
-        {!catOk && (
-          <span
-            className="ph-nocat"
-            title={(snap.radio.catDetail && catDetailText(localizeRefusal(snap.radio.catDetail))) || t('phone.noCat.title')}
-          >
-            {t('phone.noCat.label')}
-          </span>
-        )}
         {!chrome.fold && memoryEl}
         {!chrome.fold && rotorEl}
         {/* The Spot button, as Operate's header has had it (OperateCockpit 📢): one click opens
@@ -3248,6 +3263,39 @@ export function PhoneCockpit({ esmSetting, flexDaxNote, yaesuTuneNote, onResumeC
         <label className="ph-rxmeter" title={t('phone.rxMeter.label')}>
           <LiveLevelMeter active={active} label={t('phone.rxMeter.label')} variant="compact" />
         </label>
+        {/* THE STATE WORDS: the mic held off for DAX, the rig on a mode it was not told, and no rig
+            control. They come and go with the radio, and this header stands above Stop TX: as
+            items of the row with their own width, each one that appeared on a full line re-wrapped
+            the header and moved Stop TX 32 px (1920x1080, measured). In `.ch-statecell` they take
+            only the room left on the row's last line and shorten to an ellipsis, with the whole
+            words on hover; the cell is always drawn and adds nothing to the row's line breaking
+            (cockpit-panes.css). Last, before power and the CAT pill, which says CAT ✗ in full. */}
+        <span className="ch-statecell">
+          {micOffForDax && (
+            <span className="ph-mode-mismatch ch-stateword" title={t('phone.micDax.title')}>
+              {t('phone.micDax.label')}
+            </span>
+          )}
+          {modeMismatch && (
+            <span
+              className="ph-mode-mismatch ch-stateword"
+              title={t('phone.rigMismatch.title', {
+                rigMode: modeMismatch,
+                mode: commandedMode,
+              })}
+            >
+              {t('phone.rigMismatch.chip', { mode: modeMismatch })}
+            </span>
+          )}
+          {!catOk && (
+            <span
+              className="ph-nocat ch-stateword"
+              title={(snap.radio.catDetail && catDetailText(localizeRefusal(snap.radio.catDetail))) || t('phone.noCat.title')}
+            >
+              {t('phone.noCat.label')}
+            </span>
+          )}
+        </span>
       </CockpitHeader>
 
       {/* THE SCOPE STRIP, ⊞-hideable since 2026-08-16. The shell's four-child census is

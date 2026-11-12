@@ -10,8 +10,9 @@ import { FtStopControl } from './FtStopControl'
 //
 // The readings are all data: the sequencer state, the DX call, the report, the message on the
 // air, the rig's mode and filter width, and every count.
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { t } from '../i18n'
+import { catSaysTxOff } from '../features/catDetail'
 import { requestWindowAttention } from '../api'
 import type { ModeRequest, QsoStatus, RadioStatus } from '../types'
 import { isOnAir } from '../types'
@@ -19,6 +20,7 @@ import { modeMismatch } from './TopBar'
 import { RadioTuneNote } from './RadioTuneNote'
 import { AtuSwitchOutMenu, useAtuSwitchOutMenu } from './AtuSwitchOutMenu'
 import { upperTyped } from '../typedInput'
+import { useTxMeterStyle } from '../txMeterStyle'
 
 /** `TX` on the now-sending label and `AUTO-CQ` on the run pill are annunciator tokens, not
  *  words — `CQ` is a Q-code, and the word joiners keep the pill from breaking mid-token in a
@@ -105,6 +107,75 @@ interface Props {
   specialOpBadge?: ReactNode
   rotor?: ReactNode
   telemetry?: ReactNode
+  /** THE TRANSMITTER ALARM CELL (`TxAlarmBanner`), first on the strip's second line, after the break (2026-11-07):
+   *  always drawn at one minimum width, so an alarm or a critical lane item coming or going moves nothing.
+   *  OperateCockpit passes it (`snap.txAlarms` is not in `radio`); stop-line.test.tsx checks FT. */
+  alarm?: ReactNode
+}
+
+/** STOP TX IS ON SCREEN AS FT OPENS (`.cockpit-ftstrip`, cockpit-panes.css). The strip parks at the foot of the shell's
+ *  scrollport where its own place is below it, but only its FIRST LINE: the TX cluster, Stop TX in it. Parked whole, a
+ *  strip taller than the scrollport (300–400 px on a small window at 175 %, where the shell has 120–250) put its top,
+ *  and Stop TX, above the window. So the rest of the strip under that line is written here as a placement input
+ *  (`--cockpit-ftstrip-rest`, layout px; CSS cannot read where a child's line ends), and the strip parks that far past
+ *  the scrollport's foot.
+ *  · THE ALARM CELL'S LINE PARKS TOO, where the strip draws one (`.ch-txalarm`, the transmitter alarm, first on the
+ *    strip's second line) and the two lines fit the scrollport: a critical alarm stands with Stop TX, and a
+ *    `scrollIntoView` of it is not spent on the sticky offset (the strip, and the cell with it, did not move). The cell
+ *    has one height empty or full, so an alarm coming or going moves nothing. Where the two do not fit, only the first
+ *    line parks: Stop TX must never be pushed above the window to make room for the words.
+ *  · WHAT PARKS IS CLEARED BY A FOCUS: its rendered height goes on the shell (`--cockpit-ftstrip-park-h`, read by the
+ *    shells' `scroll-padding-bottom`, styles.css `.layout.single`), so Tab never stops on a control behind the parked line
+ *    (36 controls at 900×600 / 175 %, measured). RENDERED, for the TX strip's reason: Chrome applies `scroll-padding`
+ *    unzoomed.
+ *  Re-read on every render as well as on a resize of the strip or the shell. */
+function useParkLine(ref: RefObject<HTMLElement | null>) {
+  const apply = () => {
+    const strip = ref.current
+    if (!strip) return
+    const shell = strip.closest<HTMLElement>('main')
+    const line = strip.querySelector<HTMLElement>(':scope > .cq-txctl')
+    const q = strip.getBoundingClientRect()
+    if (!line || strip.offsetHeight === 0 || q.height === 0) {
+      strip.style.removeProperty('--cockpit-ftstrip-rest')
+      shell?.style.removeProperty('--cockpit-ftstrip-park-h')
+      return
+    }
+    const cs = getComputedStyle(strip)
+    const z = q.height / strip.offsetHeight
+    // How far down the strip parks, layout px from its top: to the foot of a line, and the strip's own bottom padding
+    // and border under it.
+    const tail = (parseFloat(cs.paddingBottom) || 0) + (parseFloat(cs.borderBottomWidth) || 0)
+    const reachOf = (el: HTMLElement) => (el.getBoundingClientRect().bottom - q.top) / z + tail
+    let reach = reachOf(line)
+    const alarm = strip.querySelector<HTMLElement>(':scope > .ch-txalarm')
+    if (alarm && shell && alarm.getBoundingClientRect().height > 0) {
+      const ss = getComputedStyle(shell)
+      const room = shell.clientHeight - (parseFloat(ss.paddingTop) || 0) - (parseFloat(ss.paddingBottom) || 0)
+      const both = reachOf(alarm)
+      if (both > reach && both <= room) reach = both
+    }
+    const px = `${Math.max(0, Math.floor(strip.offsetHeight - reach))}px`
+    if (strip.style.getPropertyValue('--cockpit-ftstrip-rest') !== px) strip.style.setProperty('--cockpit-ftstrip-rest', px)
+    const park = `${Math.ceil(reach * z)}px`
+    if (shell && shell.style.getPropertyValue('--cockpit-ftstrip-park-h') !== park) shell.style.setProperty('--cockpit-ftstrip-park-h', park)
+  }
+  useLayoutEffect(apply)
+  useLayoutEffect(() => {
+    const strip = ref.current
+    if (!strip || typeof ResizeObserver === 'undefined') return
+    const shell = strip.closest<HTMLElement>('main')
+    const observer = new ResizeObserver(apply)
+    observer.observe(strip)
+    // The guard reads the shell's room: a shorter window may leave room for the first line only.
+    if (shell) observer.observe(shell)
+    return () => {
+      observer.disconnect()
+      shell?.style.removeProperty('--cockpit-ftstrip-park-h')
+    }
+    // `apply` reads only the ref and the DOM; the observer is set up once per mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ref])
 }
 
 function reportLabel(rx: number | null | undefined): string | null {
@@ -142,6 +213,7 @@ export function OperateQsoStrip({
   onSetHoldTxFreq,
   rxOnly,
   beacon,
+  alarm,
   onSetTxEven,
   onSetTxCycleAuto,
   skipTx1,
@@ -151,6 +223,9 @@ export function OperateQsoStrip({
   rotor,
   telemetry,
 }: Props) {
+  const meterStyle = useTxMeterStyle()
+  const stripRef = useRef<HTMLElement>(null)
+  useParkLine(stripRef)
   // ⚠️ cqRunning, NOT qso.running. `running` is also true through a directed S&P call (the
   // engine's own comment at call_station_ctx says so) and nothing clears it after the QSO —
   // so this strip lit Call CQ solid through every S&P contact and forever after, and the
@@ -221,8 +296,11 @@ export function OperateQsoStrip({
     setFree('')
   }
 
+  // A CAT outage turned transmit off: said in the TX state, after the controls (`catSaysTxOff`).
+  const catOff = radio && !radio.txEnabled ? catSaysTxOff(radio.catDetail) : null
+
   return (
-    <section className={`cockpit-qso panel${radio ? (onAir ? ' tx' : ' rx') : ''}`}>
+    <section ref={stripRef} className={`cockpit-qso cockpit-ftstrip panel${radio ? (onAir ? ' tx' : ' rx') : ''}`}>
       {/* POSITION-STABILITY ORDER (OperateQsoStrip.geometry.test): the two button
           clusters render FIRST, so the six panic-adjacent controls are anchored at
           the strip's start. Every state-variable readout member (state cap,
@@ -338,7 +416,21 @@ export function OperateQsoStrip({
           screens' TX strip does (`CockpitTxStrip`), rather than "Receiving" over a Call CQ that
           cannot key. What is on the air is still shown first. */}
       {radio && (
-        <span className="cq-statecap" title={!onAir && radio.txRefusal ? radio.txRefusal : undefined}>
+        <span
+          // #482: the state rides on the caption itself, as on every other screen's strip
+          // (CockpitTxStrip): the strip's `rx` wash means "not on the air", TX off included, so
+          // painting the caption from it made "TX off" green here and white everywhere else.
+          className={`cq-statecap ${onAir ? 'tx' : radio.txRefusal ? 'off' : radio.txEnabled ? 'rx' : 'off'}`}
+          title={
+            !onAir && radio.txRefusal
+              ? radio.txRefusal
+              : !onAir && catOff === 'lost'
+                ? t('settings.rigControl.catSilentTxOff')
+                : !onAir && catOff === 'back'
+                  ? t('settings.rigControl.catBackTxOff')
+                  : undefined
+          }
+        >
           {onAir
             ? t('operate.strip.state.transmitting')
             : radio.txRefusal
@@ -396,6 +488,14 @@ export function OperateQsoStrip({
           below) instead of a content-dependent wrap mid-QSO. lg includes the
           1366x768 laptop (85 % auto-fit → effective 1607). */}
       <span className="cq-break" aria-hidden="true" />
+      {/* THE TRANSMITTER ALARM CELL (`TxAlarmBanner`): the FIRST cell of the strip's second line, right under
+          the cluster and Stop TX, always drawn at one minimum width. First on a line the break always starts,
+          so nothing before it can push it to a line of its own: the first line's words change with the
+          contact (the sequencer state, the DX call, the report, the rig-mode chip), and a cell at its end was
+          pushed off it and grew the strip, moving Stop TX. Not the row's last cell either: where the strip is
+          taller than the room the shell gives it (FT, ru, 900x600 pinned) its last line is below the fold,
+          and a critical alarm shown only there was on screen nowhere. */}
+      {alarm}
 
       <div className={`cq-now${stalled ? ' stalled' : ''}`} role="status">
         <span className="cq-now-label">{stalled ? t('operate.strip.now.stalled') : TX_LABEL}</span>
@@ -476,7 +576,18 @@ export function OperateQsoStrip({
         </span>
       </form>
 
-      <span className="cq-spacer" />
+      {/* The strip's one absorber. Why transmit is off after a CAT outage rides in it: it is already a
+          zero-basis grower, so the words can never wrap the strip or move a control (`.cq-catnote`). */}
+      {catOff && !onAir && !radio?.txRefusal ? (
+        <span
+          className="cq-spacer cq-catnote cat-txoff-note"
+          title={catOff === 'lost' ? t('settings.rigControl.catSilentTxOff') : t('settings.rigControl.catBackTxOff')}
+        >
+          {catOff === 'lost' ? t('operate.strip.state.txOffCatLost') : t('operate.strip.state.txOffCatBack')}
+        </span>
+      ) : (
+        <span className="cq-spacer" />
+      )}
       {/* Active DXpedition mode badge — prominent, next to the period controls. */}
       {specialOpBadge}
       {rotor}
@@ -517,7 +628,7 @@ export function OperateQsoStrip({
           {t('operate.strip.nextSlot.label', { secs: nextSlotSec })}
         </span>
       )}
-      {telemetry != null && <div className="cq-telemetry">{telemetry}</div>}
+      {telemetry != null && <div className={`cq-telemetry${meterStyle === 'needle' ? ' needle' : ''}`}>{telemetry}</div>}
       {/* What the radio reports beside Tune while Tune is the Flex radio's own carrier: the last
           child, on a line of its own, so it never moves the clusters or the readouts. */}
       {radio && <RadioTuneNote radio={radio} />}

@@ -163,6 +163,13 @@ impl Engine {
         self.mic.keyed()
     }
 
+    /// The radio answered the Remote microphone over's key at `at`: with an amplifier TX delay, how
+    /// long from then the loop holds PTT before the over's first sample, in ms
+    /// ([`crate::mic::MicLatch::keyed_at`]); `None` without one.
+    pub fn remote_mic_keyed_at(&mut self, at: Instant) -> Option<u64> {
+        self.mic.keyed_at(at)
+    }
+
     /// End the microphone over NOW: the ONE kill path. The feed closes FIRST, so nothing sent to
     /// the dead over can reach the next one (M12); the abort is armed only when the rig was keyed,
     /// because an armed over has put nothing on the air and a one-shot abort armed for nothing
@@ -271,6 +278,8 @@ impl Engine {
             now_secs: now_unix_secs(),
             watchdog_limit_secs: self.settings.tx_watchdog_min as u64 * 60,
             watchdog_start_secs: self.tx_watchdog_start,
+            // The amplifier TX delay: the over's first sample waits it, from the radio's answer.
+            amp_delay_ms: self.amp_tx_delay_ms() as u64,
         };
         let arrived = self
             .mic_feed
@@ -817,6 +826,15 @@ mod tests {
         assert!(
             !shown(&mut s),
             "the page was shown a warning with no power reading"
+        );
+
+        // A derived share of 0 (#489) is never evidence: the Kenwoods read 0 whenever Hamlib's
+        // PTT cache says unkeyed.
+        let mut s = fed(0.5, 2_200);
+        s.e.observe_rig_tx_po_share(0.0);
+        assert!(
+            !s.e.mic_no_power_out(),
+            "a derived share of 0 raised the no-power warning"
         );
 
         // No voice arriving (the operator holding PTT in silence): no warning, whatever the meter.

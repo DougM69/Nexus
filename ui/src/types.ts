@@ -398,9 +398,31 @@ export interface PathGradingStatus {
   last30Days?: PathValidation
 }
 /** Per-path HF prediction (the PathPredictor seam): operator↔DX, best-first. */
+/** The storm correction laid over a P.533 answer (`propagation::storm::StormNote`). */
+export interface StormNote {
+  /** The highest Kp that lowered any hour. */
+  kp: number
+  /** Some hour had no Kp, measured or forecast, and was left as P.533 gave it. */
+  hoursWithoutKp: boolean
+}
+
+/** The transmit power a prediction assumes (`propagation::AssumedPower`). */
+export interface AssumedPower {
+  watts: number
+  source: 'setting' | 'rig' | 'amplifier' | 'default'
+  /** An amplifier is set up on the radio. */
+  amplifier: boolean
+}
+
 export interface PathPrediction {
-  /** Engine that produced it: "heuristic" today; "voacap"/"p533" later. */
+  /** Engine that produced it: "p533" or "heuristic". */
   engine: string
+  /** P.533 could not run, so `engine` is the heuristic that answered. Absent when false. */
+  engineFallback?: boolean
+  /** The storm correction laid over this P.533 answer. Absent when it changed nothing. */
+  storm?: StormNote
+  /** The transmit power the answer assumes and where it came from. */
+  power?: AssumedPower
   bands: BandOutlook[]
   /** Controlling MUF (MHz) on the path now — the band ceiling. */
   mufNow: number
@@ -523,6 +545,86 @@ export interface PathDay {
   bands: { band: string; cells: PathDayCell[] }[]
   hours: PathDayHour[]
 }
+/** A word the path model gives an hour (never a number: the figures are relative). */
+export type Workability = 'Closed' | 'Marginal' | 'Fair' | 'Good' | 'Excellent'
+/** The mode a Best times answer is for. */
+export type BestMode = 'FT8' | 'FT4' | 'CW' | 'SSB'
+/** A band and its word (`get_best_times`). */
+export interface BestBandWord {
+  band: string
+  word: Workability
+}
+/** Estimated absorption now (a flare, a proton event) on one band, whole dB. */
+export interface BestAbsorbed {
+  band: string
+  db: number
+}
+/** What "now" says in a Best times answer. */
+export interface BestNow {
+  kind: 'try' | 'longShot' | 'notNow'
+  band?: string
+  word?: Workability
+  route?: 'short' | 'long'
+  /** The top of the hour the band's run ends (unix seconds); absent with `allDay`. */
+  untilUnix?: number
+  allDay: boolean
+  runnerUp?: BestBandWord
+  passedOver?: BestAbsorbed
+  absorbed?: BestAbsorbed
+}
+/** One window over the next 24 hours: a run of hours at Fair or better on one band. */
+export interface BestWindow {
+  band: string
+  fromUnix: number
+  toUnix: number
+  word: Workability
+  route?: 'short' | 'long'
+  greyline: boolean
+  longShot: boolean
+  stormKp?: number
+}
+/** The answer folded from the path prediction (`propagation::besttimes`). */
+export interface BestTimes {
+  engine: string
+  mode: BestMode
+  perMode: boolean
+  now: BestNow
+  windows: BestWindow[]
+  week: { forecastUntilUnix?: number; flags: { dayUnix: number; kp: number }[] }
+  /** Highest band first; cells by UTC hour. */
+  chart: { band: string; licensed: boolean; cells: { word: Workability; route?: 'short' | 'long' }[] }[]
+  hours: PathDayHour[]
+  nowHour: number
+  longUsed: boolean
+  /** The licence has no transmit band in this mode: the answer is empty for that, not the path. */
+  noTxBand?: boolean
+}
+/** What an answer's location rests on. */
+export interface BestBasis {
+  kind: 'grid' | 'position' | 'entity'
+  from?: 'typed' | 'logForm' | 'heard' | 'callbook' | 'callbookBase' | 'logged'
+  grid?: string
+  /** The home call whose callbook record answered a stroked call: used (`callbookBase`), or left out
+   *  because it is in another country (with an entity centre). */
+  base?: string
+}
+/** `get_best_times`: an answer, or the code of a case with no answer. */
+export interface BestTimesView {
+  state: 'answer' | 'noGrid' | 'enterCall' | 'unplaceable' | 'sameEntity' | 'maritime' | 'you' | 'tooClose'
+  call: string
+  entity?: string
+  basis?: BestBasis
+  km?: number
+  bearing?: number
+  answer?: BestTimes
+  engine: string
+  engineFallback?: boolean
+  power?: AssumedPower
+  /** The antenna gain (dBi, transmit plus receive) the answer assumed. */
+  antGainDbi?: number
+  storm?: StormNote
+  spaceNow?: SpaceNow
+}
 /** One of the ten fixed DX regions with its path over the day (`get_path_regions`). */
 export interface RegionPathDay {
   id: string
@@ -534,6 +636,10 @@ export interface RegionPathDay {
 }
 export interface PathRegions {
   engine: string
+  /** P.533 could not run, so `engine` is the heuristic that answered. Absent when false. */
+  engineFallback?: boolean
+  storm?: StormNote
+  power?: AssumedPower
   /** When the model part was computed (unix s); the hours are current at every ask. */
   computedUnix: number
   regions: RegionPathDay[]
@@ -606,6 +712,9 @@ export interface DxpedWindow {
   call: string
   /** Which model produced it: "p533" → the badge shows P.533, else modelled. */
   engine: string
+  /** P.533 could not run, so `engine` is the heuristic that answered. Absent when false. */
+  engineFallback?: boolean
+  storm?: StormNote
   /** One-line headline, e.g. "17m Good 0230–0430Z" (same format as CalendarEntry.best). */
   best: string
   /** Top bands' 24 h outlooks, best first — feeds LikelihoodHeatmap. */
@@ -1919,6 +2028,10 @@ export interface RadioStatus {
    * the top of the zone. Display only: it moves the bar's colours, never the bar. */
   txAlcZone?: number | null
   txPoW?: number | null
+  /** `txPoW` is DERIVED (#489): the radio's Hamlib backend reports its power only as a share of
+   * its meter (`RFPOWER_METER`, no watts), shown as that share of `ratedWatts`. The meter marks
+   * it as an estimate; it is never written to the log. Absent = the radio's own watts. */
+  txPoDerived?: boolean
   txCompDb?: number | null
   /** The radio's own PA (finals) temperature in °C, as its CAT interface last reported it.
    * Absent where the radio reports none (most do not). Read while receiving and kept across
@@ -2056,6 +2169,11 @@ export interface RadioStatus {
   /** The licence lock is the phone MODE alone: LSB, AM or FM on 60 m, where a USB pick would key.
    *  Name that rule instead of the frequency. `txAllowed` is false with it. Absent when false. */
   phoneModeRefused?: boolean
+  /** The licence lock is the data MODE alone: the same over in another mode would key. `rule`
+   *  names why — wider than 2.8 kHz below 28.3 MHz, faster than 300 baud on 2200 m and 630 m, or
+   *  MSK144's signal at its fixed 1500 Hz centre — and `mode` is the mode as picked ("Q65-30E").
+   *  `txAllowed` is false with it. Absent otherwise. */
+  dataModeRefusal?: { rule: 'tooWide' | 'tooFast' | 'fixedCentre'; mode: string } | null
   /** The rig is held on an FM channel at or above 29 MHz, so FM is commanded whatever the
    *  section's own policy says: in Phone, the FM channel kept from the SSTV screen. The Phone
    *  cockpit's AUTO reads FM from it. Absent when false. */
@@ -2110,6 +2228,10 @@ export interface RadioStatus {
    *  at the shack with native audio on, where a message waits for the radio to take DAX). Cleared by
    *  the next message the keyer accepts; absent otherwise, and from a station older than it. */
   voiceDropped?: VoiceDropped | null
+  /** The last ATU press that came to nothing after the button accepted it: dropped before it was
+   *  sent, refused by the radio, or sent with no answer. Cleared by the next press the button
+   *  accepts; absent otherwise, and from a station older than it. */
+  atuFailed?: AtuFailed | null
   /** FT8/FT4 decode depth (1=Fast, 2=Normal, 3=Deep) — live-settable from the Operate cockpit. */
   decodeDepth: number
   /** Whether a QSO recording (audio bridge) is streaming live RX to disk. Persists across
@@ -4441,6 +4563,9 @@ export interface ImportStats {
   total: number
   /** The import's run in the log's history: what its Undo undoes, and nothing else. */
   run?: string | null
+  /** The confirmations of a LoTW report that match no contact in the log: reported, and added
+   *  only when the operator presses Add. 0 for any other file; absent from an older station. */
+  unmatched?: number
 }
 
 /** Sequencer status for a 1:1 QSO. */
@@ -5099,7 +5224,7 @@ export interface KeyboardMacroProfile {
 }
 
 /** Persistent operator + radio settings. */
-/** The seven settings a contest weekend changes, as they were before it changed them (Rust
+/** The eight settings a contest weekend changes, as they were before it changed them (Rust
  *  `ContestBefore`). Each field is the Settings field of the same name. */
 export interface ContestBefore {
   mycall: string
@@ -5108,6 +5233,8 @@ export interface ContestBefore {
   contestCategoryOperator: string
   contestEntryClass: string
   contestCategoryPower: string
+  /** Blank in a note an earlier build wrote: the band category's own "not declared". */
+  contestCategoryBand: string
   unassistedMode: boolean
 }
 
@@ -5548,6 +5675,8 @@ export interface Settings {
   ampModel?: string
   ampPort?: string
   ampFollowBand?: boolean
+  /** Amplifier TX delay in ms, 0 = off (flat mirror of the ACTIVE radio's). */
+  ampTxDelayMs?: number
   /** ADVANCED: external rotctld host:port override (wins over the integrated
    * spawn). Empty + model 0 = no rotator. */
   rotatorHost: string
@@ -5931,6 +6060,13 @@ export interface Settings {
   /** PLANNED FD bonus ids — the club's intent, never the score. `fdBonuses` above stays
    *  the EARNED set scoring reads; nothing on any scoring path reads this one. */
   fdBonusesPlanned?: string[]
+  /** The count typed beside each per-unit bonus (transmitters on emergency power, youth
+   *  participants, messages handled), by bonus id. Read only for a claimed id; a claimed box
+   *  with no count is one unit. */
+  fdBonusCounts?: Record<string, number>
+  /** This station is on natural power now: each contact logged is marked for ARRL Field
+   *  Day 7.3.8's separate list. This laptop's own. */
+  fdNaturalPower?: boolean
   /** Ticked OBJECTIVE ids — Winter Field Day's completed objectives, what its claimed score
    *  multiplies by. Its own list: a bonus adds points, an objective multiplies them. */
   fdObjectives?: string[]
@@ -6262,9 +6398,12 @@ export interface Settings {
   /** Watch near-region spots (not just your own paths) so opening detection can
    *  flag "a band is open around you" before you've worked anyone. */
   openingRegional: boolean
-  /** Path-prediction engine: 'heuristic' (physics-lite default) or 'p533'
+  /** Path-prediction engine: 'p533' (the default) or 'heuristic' (physics-lite)
    * (native ITU-R P.533 — real circuit-reliability physics). */
   propEngine: string
+  /** The one-time move to P.533 changed this station's engine and its note is still to be
+   *  dismissed. Set by the shack alone; no form changes it. */
+  propEngineNoteDue?: boolean
   /** Save each RX period as a WAV: 'none' | 'all' | 'decodes' (WSJT-X Save menu). */
   saveWav?: string
   /** LoTW-user highlight window (days; default 365) — calls with an ARRL
@@ -6456,6 +6595,7 @@ export interface RadioProfile {
   ampModel: string
   ampPort: string
   ampFollowBand: boolean
+  ampTxDelayMs: number
   rotatorHost: string
   rotctldPort: number
   /** Bands this radio covers (empty = all) — for auto band-routing (P4). */
@@ -6879,6 +7019,20 @@ export interface VoiceDropped {
    *  no longer took it when the message was to key. `keyed`: something else keyed the radio, or held
    *  the transmitter, before the message could key. */
   cause: 'noDax' | 'keyed'
+}
+
+/** An ATU press the button accepted that came to nothing in the radio loop (mirror of the Rust
+ *  AtuFailed). The words are the UI's, in features/atuFailed.ts. */
+export interface AtuFailed {
+  /** When it happened (unix seconds). */
+  at: number
+  /** `dropped`: nothing was sent (stale, a gate closed, the connection was changing over).
+   *  `refused`: the radio answered with an error. `noAnswer`: it went out and nothing came back. */
+  cause: 'dropped' | 'refused' | 'noAnswer'
+  /** Why a dropped press was dropped, in the station's words (English, as the gate wrote it). */
+  why?: string | null
+  /** `noAnswer` only: the Digital section stood transmit down in case the radio is tuning. */
+  stoodDown?: boolean
 }
 
 /** A slot over's unkey the radio did not accept (mirror of the Rust SlotUnkeyFailed). The words

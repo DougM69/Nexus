@@ -308,7 +308,7 @@ done that you have not ticked:
 - **Export the Cabrillo log to Downloads**: the same file the Contest screen's Export Cabrillo
   writes.
 - **Put back what the contest changed**: each of Callsign on the air, Operator at the key, Position
-  name, Entry category, Entry class, Power category and Unassisted entry that the contest changed,
+  name, Entry category, Entry class, Power category, Band category and Unassisted entry that the contest changed,
   shown as it is now and as it was before. Tick the ones you want back.
 
 At a club it also says how many of this laptop's contacts the club's log does not have yet. They
@@ -593,6 +593,24 @@ export), and **Post QRT** (once you have spotted) to spot QRT after its usual co
 it reminds you of a `K-` reference, contacts that carried no grid, a state line with no state
 picked, and that the files are yours to upload at pota.app. Nothing is ticked to begin with;
 **Keep activating** changes nothing.
+
+### Sending the file to POTA
+
+**Logbook ▸ Export activation** writes the same file for the park-day you pick. Once it has,
+**Open POTA's upload page** appears beside it. One click opens POTA's *My Log Uploads* page in your
+browser and shows the file in its folder, on Windows, Mac and Linux, with nothing to set up. Some
+Linux desktops open the folder without selecting the file.
+
+The next step is yours: log in to POTA there and drop the file on the page, or choose it. Nexus
+holds no POTA login and sends nothing to POTA, so it never hears whether the log arrived. POTA's
+page is where you find that out.
+
+You don't need this button at the park. With no internet the browser just can't load the page, and
+the file stays in Downloads for when you are back online. The button shows only for the activation
+you just exported; if it has gone, pick that activation and export it again. If the file
+has been moved, renamed or deleted, Nexus says so, and **Export activation** writes it again. If
+Nexus can't open a browser, it gives you the address to type; if it can't open a file manager, it
+tells you where the file is.
 
 ## Honest limits
 

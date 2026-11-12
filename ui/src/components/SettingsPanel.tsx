@@ -13,7 +13,7 @@ import { js8CqTextRefused } from '../js8Compose'
 import { confirmDialog } from '../confirm'
 import { Js8FrequencySettings } from './Js8FrequencySettings'
 import { DraftNumberInput } from './DraftNumberInput'
-import { checkRigForm, blocks, dataModePickerShown, APRS_DATA_FM_MODELS, ICOM_LAN_MODELS, NATIVE_CIV_MODELS, NO_CAT_PTT_TRANSCEIVERS, nativeCivBlockedReason, type RigCheck } from '../rigFormChecks'
+import { checkRigForm, blocks, netRigctlSerialPort, dataModePickerShown, APRS_DATA_FM_MODELS, ICOM_LAN_MODELS, NATIVE_CIV_MODELS, NO_CAT_PTT_TRANSCEIVERS, nativeCivBlockedReason, type RigCheck } from '../rigFormChecks'
 import {
   confirmSatUplink,
   clearDataFolder,
@@ -961,6 +961,14 @@ export function omnirigChoice(): { disabled: boolean; label: string } {
 /** Pick just the per-radio CAT/audio/PTT/rotator/native fields — the flat rig form and a radio
  * profile share these exact field names, so this serves BOTH directions: build the save patch
  * from the form, and load a radio's profile into the form (`{...form, ...radioPatch(profile)}`). */
+/** The amplifier TX delay a typed value stands for: whole 10 ms steps from 0 to 500, and 0 for
+ * anything that is not a number, so the form can only ever hold a value the radio loop takes. */
+export function ampTxDelayFromInput(raw: string): number {
+  const n = Number(raw)
+  if (!Number.isFinite(n)) return 0
+  return Math.min(500, Math.max(0, Math.round(n / 10) * 10))
+}
+
 export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
   // `??` only fills genuinely-absent (null/undefined) fields — 0 / '' legit values are preserved.
   return {
@@ -1014,6 +1022,7 @@ export function radioPatch(s: Partial<RadioProfilePatch>): RadioProfilePatch {
     ampModel: s.ampModel ?? '',
     ampPort: s.ampPort ?? '',
     ampFollowBand: s.ampFollowBand ?? false,
+    ampTxDelayMs: s.ampTxDelayMs ?? 0,
     // ⚠️ THE FLEX THREE BELONG HERE, and their absence was silent data loss (2026-08-17 Flex
     // audit). Every save of the rig form while EDITING a non-active radio routes through
     // `persistRadioForm` → `updateRadioProfile(radioPatch(form))`, so a field this function does
@@ -1570,6 +1579,15 @@ export function SettingsPanel({
   const [detecting, setDetecting] = useState(false)
   const [catTesting, setCatTesting] = useState(false)
   const [catResult, setCatResult] = useState<CatTestResult | null>(null)
+  // Seconds into a port Auto-test, null when none runs. It waits for each throwaway rigctld to
+  // listen, so a port nothing answers on takes over a minute: a counting line says it is working.
+  const [autoTestSecs, setAutoTestSecs] = useState<number | null>(null)
+  const autoTesting = autoTestSecs != null
+  useEffect(() => {
+    if (!autoTesting) return
+    const id = window.setInterval(() => setAutoTestSecs((s) => (s == null ? s : s + 1)), 1000)
+    return () => window.clearInterval(id)
+  }, [autoTesting])
   // Connections visibility: stored-credential status + the rolling event log —
   // the answer to "I hit save and couldn't tell anything happened".
   const [creds, setCreds] = useState<CredStatus[]>([])
@@ -3528,6 +3546,7 @@ export function SettingsPanel({
     const f = base ?? form
     if (!f) return
     setCatTesting(true)
+    setAutoTestSecs(0)
     setCatResult(null)
     setError(null)
     try {
@@ -3560,6 +3579,7 @@ export function SettingsPanel({
       setCatResult({ ok: false, detail: msg || t('settings.cat.autoTest.failed') })
     } finally {
       setCatTesting(false)
+      setAutoTestSecs(null)
     }
   }
 
@@ -4469,6 +4489,7 @@ export function SettingsPanel({
   // native client and DAX audio run on Serial and Network alike, but not on OmniRig, the Icom
   // network connection or TCI (`flex_client_reachable`; `flexClientNotHere` below).
   const flexPanNeedsNetwork = [2036, 23005].includes(form.rigModel) && form.rigConn !== 'network'
+  const netRigctlPort = netRigctlSerialPort(form)
   // A Flex model on OmniRig or TCI: those connections hand CAT to another program, and the CAT
   // daemon starts that connection's own driver before it ever asks for the Flex client
   // (`spawn_cat_daemon`), so the client, its DAX audio and its CW/Tune/ATU setting do nothing
@@ -6585,6 +6606,11 @@ export function SettingsPanel({
                 <span className="settings-hint">
                   <T k="settings.rigControl.conn.hint" tags={{ b: <strong /> }} />
                 </span>
+                {netRigctlPort !== null && (
+                  <span className="settings-hint" role="status">
+                    {t('settings.radio.check.netRigctlPort', { port: netRigctlPort })}
+                  </span>
+                )}
                 <span className="settings-hint">
                   <T
                     k="settings.rigControl.conn.omnirig.hint"
@@ -7596,6 +7622,12 @@ export function SettingsPanel({
                   : t('settings.rigControl.testCat.action')}
               </button>
               {(() => {
+                if (autoTestSecs != null)
+                  return (
+                    <span className="cat-result na" role="status">
+                      {t('settings.cat.autoTest.busy', { seconds: autoTestSecs })}
+                    </span>
+                  )
                 // Show the just-run test result, else the live CAT status from the snapshot.
                 const ok = catResult ? catResult.ok : radio?.catOk
                 const raw = catResult ? catResult.detail : radio?.catDetail
@@ -8687,6 +8719,31 @@ export function SettingsPanel({
                   <span className="settings-hint">{t('settings.amplifier.follow.hint')}</span>
                 </div>
               )}
+              {/* The amplifier TX delay: how long after the key the radio loop holds Nexus's audio
+                  back, so an amplifier keyed from the radio switches before RF reaches it. Shown
+                  whatever the model above: an amplifier keyed from the radio's TX/linear jack needs
+                  no amplifier control in Nexus. 0 to 500 in steps of 10 (Rust holds it to 500 on
+                  read too); set at the station only. */}
+              <label className="settings-field">
+                <span className="settings-label">
+                  {t('settings.amplifier.txDelay.label')}{' '}
+                  <span className="settings-value">
+                    {t('settings.amplifier.txDelay.value', { ms: form.ampTxDelayMs ?? 0 })}
+                  </span>
+                </span>
+                <input disabled={locked('ampTxDelayMs')} data-setting="ampTxDelayMs"
+                  className="settings-slider"
+                  type="range"
+                  min="0"
+                  max="500"
+                  step="10"
+                  value={String(form.ampTxDelayMs ?? 0)}
+                  onChange={(e) => updateNum('ampTxDelayMs', ampTxDelayFromInput(e.target.value))}
+                  aria-label={t('settings.amplifier.txDelay.label')}
+                />
+                {setAtStation('ampTxDelayMs')}
+                <span className="settings-hint">{t('settings.amplifier.txDelay.hint')}</span>
+              </label>
             </div>
           </fieldset>
 
@@ -13288,7 +13345,7 @@ export function SettingsPanel({
                   </span>
                   <select disabled={locked('propEngine')}
                     className="settings-input"
-                    value={form.propEngine || 'heuristic'}
+                    value={form.propEngine || 'p533'}
                     onChange={(e) => update('propEngine', e.target.value)}
                   >
                     <option value="heuristic">

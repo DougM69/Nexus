@@ -48,7 +48,7 @@ set -u
 usage() {
   cat >&2 <<USAGE
 usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
-       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|radiosetup|toastcorner|logwaiting|topbar|header|rttyfit|digishell|firstrun|journeys|clublog|aprsmap|logbook|profiles
+       scripts/browser-probe --desktop rotor|contestlog|spots|callcard|besttimes|activation|voicenote|contactcard|atu|jtty|waterfalls|txmeters|radioswitch|radiosetup|toastcorner|logwaiting|topbar|header|rttyfit|digishell|alarmcell|firstrun|journeys|clublog|aprsmap|logbook|profiles|sstvlayout|menustop|stopabove|stopvisible
        scripts/browser-probe --desktop-shard <n> <of>
 
   --desktop-shard <n> <of>
@@ -86,12 +86,16 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         first rows are on screen and the last row is reached by scrolling,
                         with a control below the smallest that must come back clipped
                         (ui/probe/spots-probe.mjs; it builds nothing)
-  --desktop callcard    the station card beside the transmit controls: a call just above
+  --desktop callcard    the station card and the Best times card beside the transmit controls: a call just above
                         the TX strip and dock, and one above FT's QSO strip, clicked at
                         1366×768 and 1024×768, asserting the card is drawn and covers no
                         point of the strip, Stop TX, the dock or the QSO strip, with a
                         control (the transmit classes removed) where it must cover one
                         (ui/probe/callcard-probe.mjs; it builds nothing)
+  --desktop besttimes   the Best times box in the dashboard rail beside a TX strip and dock, at
+                        1366×768, 1024×768 (and 175%) and 1920×1080: no transmit control moves or
+                        is covered when its answer lands, with a control (the box bare above the
+                        strip) where Stop TX must move (ui/probe/besttimes-probe.mjs)
   --desktop activation  the Activation pane in the dashboard rail beside a TX strip and dock,
                         in its own window, and the "Activation over?" checklist, at 1024×768
                         and 1920×1080, asserting nothing scrolls sideways, the pane's lines
@@ -108,7 +112,11 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         window, scrolls nowhere sideways, draws the callbook photo, keeps
                         Save and Cancel on screen at its top and foot and lists ten recent
                         contacts, with a control (the Save bar in the flow) that must hide
-                        Save (ui/probe/contactcard-probe.mjs)
+                        Save; and the Add form's IOTA box filled from a spot under a very long
+                        group name at 1024×768 and 1920×1080 at 65 % and 175 %, the name drawn
+                        whole covering nothing, nothing sideways, Log reachable, with a control
+                        (the name kept on one line) that must be caught
+                        (ui/probe/contactcard-probe.mjs)
   --desktop atu         the TX strip's ATU button and its "Switch tuner out" menu at 1024×768
                         and 1920×1080 in both themes, asserting nothing scrolls sideways, the
                         strip's four controls are on screen, Stop TX does not move for ATU ON,
@@ -165,6 +173,22 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         and a pick reaches the switch, the bar keeps its height, nothing runs
                         sideways or past the window, and Stop TX and Tune do not move, with a
                         planted overflow that must be caught (ui/probe/profiles-probe.mjs)
+  --desktop stopabove   Stop TX above every overlay: with a ui/Dialog, a confirmation, the prompt
+                        to log, the launch radio picker, a Logbook scrim or the band pill's menu
+                        open over the real top bar, at 700×800 (xs) and 2560×1440 (xl), Stop TX
+                        is on top where it is drawn and unmoved, one real click stops once and the
+                        overlay stays open with the keyboard where it was, with the stop layer
+                        taken away as the control; and the prompt to log's and the log strip's
+                        IOTA box filled from a spot under a very long group name at 1024×768 and
+                        1920×1080 at 65 % and 175 %, the name whole covering nothing, no sideways
+                        scroll added, Log in the window and on top, with a control (the name kept
+                        on one line) that must be caught (ui/probe/stopabove-probe.mjs; it builds
+                        nothing)
+  --desktop menustop    with a menu open (Help, and the band pill's where the screen draws it),
+                        on the Logbook and on Operate at 700×800 (xs) and 2560×1440 (xl): one
+                        real click on Stop TX stops once, closes the menu and leaves the keyboard
+                        on Stop TX, with the modal menu's pointer lock planted as the control
+                        that must swallow the click (ui/probe/menustop-probe.mjs; it builds nothing)
   --desktop topbar      the top bar on the FT screen and on CW at the common full-screen sizes
                         and 125/150 % on a 1080p screen, without and with a status-lane message,
                         asserting the message changes neither the bar's height nor the line any
@@ -194,6 +218,27 @@ usage: scripts/browser-probe [--scenario <pattern>] [--no-build]
                         on Operate): opened by real clicks and by real Tab + Enter, and with the
                         shell walked while it is open. Seven planted faults must be caught
                         (ui/probe/digishell-probe.mjs; it builds nothing)
+  --desktop alarmcell   the transmitter alarm cell on every operating screen's TX strip (FT, Phone,
+                        CW, RTTY, PSK, JTTY, SSTV, JS8) in the real app, at 150 and 175 % from 700×800
+                        to 1366×768, in all eight languages (switched live): an alarm coming and going
+                        leaves the strip the same height and Stop TX where it was, and the alarm's
+                        words are on screen and topmost. The cell without its one height must move
+                        Stop TX (control). ALARMCELL_SCREENS=FT,RTTY narrows a local run
+                        (ui/probe/alarmcell-probe.mjs; it builds nothing)
+  --desktop sstvlayout  the SSTV screen in the real app at every size class (xs to xl) at 100 % and
+                        175 %, in English and Russian: the composer stands at the foot of the panes
+                        under the gallery and the meters pane, Stop TX and Stop do not move when the
+                        large meters pane is ticked or a picture is loaded, every control is on screen
+                        and topmost once scrolled to, the composer's warning and the bar's alert are
+                        seen, and the waterfall's divider still sizes it, with three planted faults
+                        that must be caught (ui/probe/sstvlayout-probe.mjs; it builds nothing)
+  --desktop stopvisible every cockpit in the real app (FT, Tempo, Phone, CW, RTTY, PSK, JTTY, SSTV, APRS,
+                        JS8) from 700×800 at 175 % up to 3440×1440, plain, with CAT lost, under transmitter
+                        alarms and a critical status message, on the air, and all of them at once with SSTV's
+                        dropped-picture sentence and JTTY's refusal: with nothing scrolled, a Stop TX is wholly
+                        inside the window and the topmost thing over its whole face. A box planted over FT's
+                        Stop TX must be caught. STOPVIS_FULL=1 runs every size, scale and language
+                        (ui/probe/stopvisible-probe.mjs; it builds nothing)
   --desktop firstrun    a fresh install's first-run wizard in the real app, at 1024×768 and
                         1920×1080: the About-you question and its answers on screen, Finish
                         writes the answer, the Getting started guide then the first-contact
@@ -240,8 +285,8 @@ USAGE
 # job, which deals this list round-robin over its shards with --desktop-shard. Slowest first, so the
 # deal balances (local seconds on 2026-11-05: toastcorner 299, digishell 330, topbar 96, waterfalls 92, logbook 67,
 # header 62, journeys 42, rttyfit 39, the rest 7-27); keep a new probe near its cost when you add it.
-DESKTOP_ALL=(toastcorner digishell topbar waterfalls logbook header journeys rttyfit profiles firstrun radiosetup contestlog
-  logwaiting spots atu radioswitch jtty activation clublog aprsmap callcard voicenote rotor contactcard txmeters)
+DESKTOP_ALL=(toastcorner digishell alarmcell sstvlayout stopvisible topbar waterfalls logbook header journeys rttyfit menustop stopabove profiles firstrun radiosetup contestlog
+  logwaiting spots atu radioswitch jtty activation clublog aprsmap callcard voicenote rotor contactcard txmeters besttimes)
 
 SCENARIO='stream'
 SHARD=''
@@ -325,6 +370,7 @@ if [ -n "$DESKTOP" ]; then
   [ "$DESKTOP" = contestlog ] && exec node "$ROOT/ui/probe/contestlog-probe.mjs"
   [ "$DESKTOP" = spots ] && exec node "$ROOT/ui/probe/spots-probe.mjs"
   [ "$DESKTOP" = callcard ] && exec node "$ROOT/ui/probe/callcard-probe.mjs"
+  [ "$DESKTOP" = besttimes ] && exec node "$ROOT/ui/probe/besttimes-probe.mjs"
   [ "$DESKTOP" = activation ] && exec node "$ROOT/ui/probe/activation-probe.mjs"
   [ "$DESKTOP" = voicenote ] && exec node "$ROOT/ui/probe/voicenote-probe.mjs"
   [ "$DESKTOP" = contactcard ] && exec node "$ROOT/ui/probe/contactcard-probe.mjs"
@@ -342,10 +388,15 @@ if [ -n "$DESKTOP" ]; then
   [ "$DESKTOP" = header ] && exec node "$ROOT/ui/probe/header-probe.mjs"
   [ "$DESKTOP" = rttyfit ] && exec node "$ROOT/ui/probe/rttyfit-probe.mjs"
   [ "$DESKTOP" = digishell ] && exec node "$ROOT/ui/probe/digishell-probe.mjs"
+  [ "$DESKTOP" = alarmcell ] && exec node "$ROOT/ui/probe/alarmcell-probe.mjs"
   [ "$DESKTOP" = clublog ] && exec node "$ROOT/ui/probe/clublog-probe.mjs"
   [ "$DESKTOP" = aprsmap ] && exec node "$ROOT/ui/probe/aprsmap-probe.mjs"
   [ "$DESKTOP" = logbook ] && exec node "$ROOT/ui/probe/logbook-probe.mjs"
   [ "$DESKTOP" = profiles ] && exec node "$ROOT/ui/probe/profiles-probe.mjs"
+  [ "$DESKTOP" = sstvlayout ] && exec node "$ROOT/ui/probe/sstvlayout-probe.mjs"
+  [ "$DESKTOP" = stopvisible ] && exec node "$ROOT/ui/probe/stopvisible-probe.mjs"
+  [ "$DESKTOP" = menustop ] && exec node "$ROOT/ui/probe/menustop-probe.mjs"
+  [ "$DESKTOP" = stopabove ] && exec node "$ROOT/ui/probe/stopabove-probe.mjs"
   exec node "$ROOT/ui/probe/desktop-probe.mjs" "$DESKTOP"
 fi
 

@@ -5,15 +5,18 @@
 //
 // These are READOUTS, not transmit controls: nothing here keys, gates or stops anything.
 import { useRef, useState } from 'react'
-import type { KeyboardEvent, MutableRefObject, PointerEvent } from 'react'
+import type { ComponentProps, KeyboardEvent, MutableRefObject, PointerEvent, Ref } from 'react'
+import { Maximize2 } from 'lucide-react'
 import type { RadioStatus } from '../types'
 import { isOnAir } from '../types'
 import { t } from '../i18n'
 import { fmtTempC, useUnits } from '../units'
 import { useTxMeterStyle } from '../txMeterStyle'
+import { useSwrCutoff } from '../swrCutoff'
 import { NEEDLE_KEYS, TxNeedles, type NeedleKey, type NeedleRow } from './TxNeedles'
 import { useFocusReturn } from '../focusReturn'
 import { Dialog } from './ui/Dialog'
+import { CockpitPaneFrame } from './panes/CockpitPaneFrame'
 
 /** The rig's own meter names, as they are printed on a radio's front panel — technical tokens
  *  exactly as a mode name is, gathered here so the catalog guard reads them as the deliberate
@@ -39,6 +42,11 @@ const COMP_KEY_STEP = 5
  *  the Operate cell's fixed width are all untouched, which is what the anti-bounce ruling below
  *  is actually about. Locale-independent, exactly as the token it marks is. */
 const SWR_UNSCALED = 'SWR?'
+
+/** The PO token with the mark that says the watts are DERIVED, not the radio's own (#489): the
+ *  radio reports its power only as a share of its meter, and Nexus shows that share of the rated
+ *  output. On the label for `SWR?`'s reason above, and with its rule: only over a reading. */
+const PO_DERIVED = 'PO≈'
 
 /** Transmit meters (SWR / ALC / Po / COMP) — the mirror image of the RX S-meter: only the
  *  meters the rig actually reports over CAT (each independently capability-gated, so a rig
@@ -182,6 +190,7 @@ export function TxMeters({
   pinned = false,
   inline: inlineProp = false,
   strip = false,
+  pane = false,
   controls,
   memory,
 }: {
@@ -202,6 +211,9 @@ export function TxMeters({
   /** The TX strip's cell (Phone and CW, the compact dock): the inline variant's semantics, laid
    *  out in at most two rows that grow sideways, so the strip is never taller than its buttons. */
   strip?: boolean
+  /** The large TX meters pane (`TxMetersPane`): PO, ALC and SWR alone, as large needle faces, whichever way
+   *  Settings draws the strip's meters. No COMP and no temperatures: those stay with the strip's. */
+  pane?: boolean
 }) {
   const inline = inlineProp || strip
   // Retain the last live readings so the pinned strip has something to show between overs.
@@ -226,6 +238,8 @@ export function TxMeters({
   // #343: Settings ▸ Workspace ▸ TX meters. Needle draws PO, ALC and SWR as needles (TxNeedles) in
   // place of their bars; COMP and the temperatures stay bars. Bars is the default.
   const needle = useTxMeterStyle() === 'needle'
+  // #476: the operator's own high-SWR cutoff, when they have one switched on (swrCutoff.ts).
+  const swrCutoff = useSwrCutoff()
   // The radio's ALC zone as it came with the last ALC reading. The engine sends the zone with each
   // ALC reading and clears both on unkey, and an over's first polls read other meters before ALC,
   // so the live value says "default scale" between overs and for the start of each over. The bars
@@ -276,7 +290,13 @@ export function TxMeters({
       // wearing it reads as a doubt about whether the meter EXISTS, which is the ⊘'s
       // question and a different one.
       label: bar == null || verified ? SWR : SWR_UNSCALED,
-      title: verified ? t('meters.tx.swr.title') : t('meters.tx.swr.unverified'),
+      // #476: with the cutoff on, the number in the tip is the one Nexus will act on, not the
+      // fixed 2:1 rule of thumb. Only on a verified scale: elsewhere the engine never arms it.
+      title: !verified
+        ? t('meters.tx.swr.unverified')
+        : swrCutoff != null
+          ? t('meters.tx.swr.cutoff', { ratio: swrCutoff.toFixed(1) })
+          : t('meters.tx.swr.title'),
       bar: bar == null || verified ? bar : { ...bar, zone: 'unknown' },
     })
   }
@@ -286,12 +306,15 @@ export function TxMeters({
     title: t('meters.tx.alc.title'),
     bar: radio.txAlc == null ? null : alcBar(radio.txAlc, radio.txAlcZone ?? 1),
   })
-  rows.push({
-    key: 'po',
-    label: PO,
-    title: t('meters.tx.po.title'),
-    bar: radio.txPoW == null ? null : poBar(radio.txPoW, radio.ratedWatts ?? 100),
-  })
+  {
+    const derived = radio.txPoW != null && radio.txPoDerived === true
+    rows.push({
+      key: 'po',
+      label: derived ? PO_DERIVED : PO,
+      title: derived ? t('meters.tx.po.derived') : t('meters.tx.po.title'),
+      bar: radio.txPoW == null ? null : poBar(radio.txPoW, radio.ratedWatts ?? 100),
+    })
+  }
   rows.push({
     key: 'comp',
     label: COMP,
@@ -319,13 +342,19 @@ export function TxMeters({
   // in the operator's units. The amplifier's beside it, reusing the reading its own pane shows.
   // Neither has a zone colour: a safe temperature is the radio's own business, and its limits
   // differ by model, so a red bar here would be a threshold Nexus cannot stand behind.
+  //
+  // THE AMPLIFIER'S ROW IS DRAWN WHENEVER AN AMPLIFIER IS SET UP (`radio.amp` present), with "—" while it
+  // has no reading: before its first answer, with the link down, or between readings. Drawn only while
+  // linked with a temperature, the row came with the first answer and went with a dropped link, and the
+  // dock under Stop TX grew or shrank a line and moved it (Phone and CW at 900x600). The radio's own row
+  // is labelled RIG beside it for the same reason, so neither label changes with the amplifier's state.
   const temps: TempRow[] = []
-  const amp = radio.amp?.linked ? radio.amp : null
-  const ampTemp = amp?.temp ?? null
+  const amp = radio.amp ?? null
+  const ampTemp = amp?.linked ? amp.temp ?? null : null
   if (radio.paTempC != null) {
     temps.push({
       key: 'rigTemp',
-      label: ampTemp != null ? RIG : TEMP,
+      label: amp ? RIG : TEMP,
       title: t('meters.tx.temp.rig.title'),
       frac: Math.max(0, Math.min(1, radio.paTempC / 100)),
       value: fmtTempC(radio.paTempC, units),
@@ -335,13 +364,15 @@ export function TxMeters({
     // from it would be a number the radio never stated.
     temps.push({
       key: 'rigTemp',
-      label: ampTemp != null ? RIG : TEMP,
+      label: amp ? RIG : TEMP,
       title: t('meters.tx.temp.meter.title'),
       frac: Math.max(0, Math.min(1, radio.paTempMeter)),
       value: `${Math.round(radio.paTempMeter * 100)}%`,
     })
   }
-  if (amp && ampTemp != null) {
+  if (amp && ampTemp == null) {
+    temps.push({ key: 'ampTemp', label: AMP, title: t('meters.tx.temp.amp.title'), frac: 0, value: '—' })
+  } else if (amp && ampTemp != null) {
     // SPE's protocol does not say whether its number is °C or °F (the amplifier sends whatever
     // its own panel is set to), so that number is shown bare, unconverted and unbarred — the
     // amplifier pane's rule. The KPA's is documented Celsius and converts like the radio's.
@@ -452,7 +483,7 @@ export function TxMeters({
     </>
   )
 
-  const pin = pinned || inline
+  const pin = pinned || inline || pane
   if (!pin) {
     // Default (Phone/CW's old shape): appear only while keyed, exactly as before. It has no
     // caller left in the app — both cockpits pass `pinned` — so it deliberately does NOT
@@ -475,7 +506,8 @@ export function TxMeters({
   // `inline` keeps the compact geometry THROUGH a key-down: that cell is fixed-width chrome
   // in the Operate strip and the anti-bounce ruling is that the TX cycle costs it nothing.
   const compact = inline || !live
-  const variant = `${compact ? ' pinned' : ''}${inline ? ' inline' : ''}${strip ? ' strip' : ''}`
+  // `cockpit-txstrip-meters-grid`: the TX strip's grid, whose column cap is cockpit-panes.css's (structure).
+  const variant = `${compact ? ' pinned' : ''}${inline ? ' inline' : ''}${strip ? ' strip cockpit-txstrip-meters-grid' : ''}`
   const shown = live || lastRows.current.length === 0 ? rows : lastRows.current
 
   // ⛔ THE FOUR-ROWS-ALWAYS CONTRACT IS THE DOCK'S, AND IT DOES NOT REACH THIS CELL.
@@ -503,6 +535,18 @@ export function TxMeters({
   // BEFORE the first over. So the strip keeps the dock's four slots from the start, in the compact
   // geometry, without the hint line (a cell of its own in the strip's two rows); the rows' dashes
   // and their titles say the same until a reading arrives.
+  if (pane) {
+    return (
+      <TxNeedles
+        rows={rows.filter((r): r is NeedleRow => isNeedle(r.key))}
+        live={live}
+        swrVerified={radio.swrScaleVerified === true}
+        alcZoneTop={alcZone.current}
+        unreported={overJudged.current ? NEEDLE_KEYS.filter((k) => !seen.current.has(k)) : []}
+        large={{ ratedWatts: radio.ratedWatts ?? 100 }}
+      />
+    )
+  }
   if (inline && !strip && !keyedOnce.current) {
     return (
       <div className={`ph-txmeters${variant} idle`} role="group" aria-label={t('meters.tx.aria')}>
@@ -531,6 +575,11 @@ export function TxMeters({
       {shown.filter((r) => !needle || (!isNeedle(r.key) && !(r.key === 'comp' && inline && !strip))).map((r) => {
         const slider = r.key === 'comp' && levelPct != null
         const hasCtl = r.key === 'comp' && (slider || procOn != null || bwSteps.length > 1)
+        const unreported = overJudged.current && !seen.current.has(r.key)
+        // ⊘ IN PLACE OF THE BAR. A meter the radio does not report has an empty track and a dash, and
+        // beside them the note was wider than Operate's half of its fixed cell, which clipped it. A row
+        // with no controls says it with the note alone; one with them keeps its track, the slider.
+        const noteOnly = unreported && !hasCtl
         return (
         <div
           key={r.key}
@@ -540,6 +589,7 @@ export function TxMeters({
           <span className="ph-txmeter-label">{r.label}</span>
           {/* A display well (styles.css DISPLAY WELLS), in all three hosts alike: the zone colours
               above resolve to the dark theme's inks on a track that is dark in both themes. */}
+          {!noteOnly && <>
           <div
             className="ph-txmeter-track well"
             {...(slider
@@ -569,12 +619,13 @@ export function TxMeters({
             {slider && <div className="ph-txmeter-mark" style={{ left: `${levelPct}%` }} />}
           </div>
           <span className="ph-txmeter-value">{r.bar?.value ?? '—'}</span>
+          </>}
           {r.key === 'comp' && compControls}
           {/* ⊘ ONLY ONCE WE COULD HAVE KNOWN. The rig has keyed and this meter stayed
               silent through it, so it is one the radio does not report — as against the
               blank rows before the first over, which say nothing about the radio and are
               answered by the hint below instead. */}
-          {overJudged.current && !seen.current.has(r.key) && (
+          {unreported && (
             <span className="ph-unavail" role="note" title={t('phone.unavail.meter', { meter: r.label })}>
               <span aria-hidden="true">⊘</span> {t('phone.unavail.mark')}
             </span>
@@ -614,7 +665,7 @@ const isNeedle = (k: MeterKey): k is NeedleKey => (NEEDLE_KEYS as readonly strin
  *
  *  The dialog's panel shares the cell's memory (`useTxMeterMemory`): live while keyed, and between
  *  overs the same held last readings the cell shows, however late it is opened. */
-export function TxMetersCell({ radio }: { radio: RadioStatus }) {
+export function TxMetersCell({ radio, pane }: { radio: RadioStatus; pane?: TxMetersPaneToggleProps }) {
   const [open, setOpen] = useState(false)
   // One memory for the cell and the dialog: opened between overs, the dialog holds the readings the
   // cell holds, so the two never disagree.
@@ -649,11 +700,81 @@ export function TxMetersCell({ radio }: { radio: RadioStatus }) {
           <TxMeters radio={radio} pinned memory={memory} />
         </div>
         <div className="txmeters-actions">
+          {pane && !pane.shown && (
+            <button
+              type="button"
+              className="export-btn"
+              onClick={() => {
+                pane.onToggle()
+                setOpen(false)
+                revealTxMetersPane()
+              }}
+            >
+              {t('meters.tx.pane.fromDialog')}
+            </button>
+          )}
           <button type="button" className="export-btn" aria-label={t('meters.tx.enlarge.close')} onClick={() => setOpen(false)}>
             ✕ {t('meters.tx.enlarge.close')}
           </button>
         </div>
       </Dialog>
     </>
+  )
+}
+
+/** The way to the large pane from the meters: whether it is on screen, and the same write its ⊞ tick makes. */
+export interface TxMetersPaneToggleProps {
+  shown: boolean
+  onToggle: () => void
+}
+
+/** THE LARGE TX METERS PANE: the fill pane an operator can make as big as the grid lets a pane be, ticked in ⊞
+ *  Panels or opened from the strip's meters. A READOUT through and through: its body holds no control, so
+ *  its ✕ and its place in the vocabulary reach nothing that keys or stops (THE STOP LINE). It keeps its
+ *  own memory across overs, and until its first over it says nothing it does not know. */
+export function TxMetersPane({
+  radio,
+  paneRef,
+  weight,
+  split,
+  share,
+  close,
+}: {
+  radio: RadioStatus
+  paneRef?: Ref<HTMLElement>
+  weight?: number
+  split?: number
+  share?: number
+  /** The cockpit's `closeProps`: the frame's ✕, absent with no panel record. */
+  close?: Pick<ComponentProps<typeof CockpitPaneFrame>, 'onRemove' | 'hideNote'>
+}) {
+  return (
+    <CockpitPaneFrame title={t('meters.tx.pane.title')} paneId="txMetersPane" weight={weight ?? 1} split={split} share={share} paneRef={paneRef} {...close}>
+      <TxMeters radio={radio} pane />
+    </CockpitPaneFrame>
+  )
+}
+
+/** A pane opened from the strip may land below the fold (Phone at 1366×768), where the click would seem to
+ *  have done nothing: bring it into view, the next frame, once it is there. Never on a pane ticked or
+ *  restored any other way: only the operator's asking for it here moves the view. */
+function revealTxMetersPane() {
+  requestAnimationFrame(() => {
+    const on = [...document.querySelectorAll('[data-pane="txMetersPane"]')].find((el) => el.getBoundingClientRect().width > 0)
+    on?.scrollIntoView({ block: 'nearest' })
+  })
+}
+
+/** The small toggle after the TX strip's meters cell (Phone and CW; Operate's is in its larger dialog). */
+export function TxMetersPaneToggle({ shown, onToggle }: TxMetersPaneToggleProps) {
+  const label = shown ? t('meters.tx.pane.hide') : t('meters.tx.pane.open')
+  const toggle = () => {
+    onToggle()
+    if (!shown) revealTxMetersPane()
+  }
+  return (
+    <button type="button" className="txmeters-pane-toggle" aria-label={label} title={label} aria-pressed={shown} onClick={toggle}>
+      <Maximize2 size="1em" aria-hidden />
+    </button>
   )
 }
